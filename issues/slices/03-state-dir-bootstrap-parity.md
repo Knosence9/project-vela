@@ -1,9 +1,9 @@
 # Parity slice — State directory bootstrap parity
 
 ## Behavior target
-The Rust runtime creates and uses state directories with the same semantics Hermes expects.
+The Rust runtime creates and uses state directories with the same semantics Vela expects.
 
-## Current Hermes source
+## Current Vela source
 - source: startup/bootstrap and persistence setup
 - flow: first run, repeated run, missing directory, partial state cases
 

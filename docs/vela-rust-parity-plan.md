@@ -1,7 +1,7 @@
-# Hermes Rust Parity Plan
+# Vela Rust Parity Plan
 
 ## Goal
-Rewrite `NousResearch/hermes-agent` in Rust with **behavior preservation first** and architectural cleanup later.
+Rewrite `NousResearch/vela-agent` in Rust with **behavior preservation first** and architectural cleanup later.
 
 ## Operating rule
 When parity and elegance conflict, choose parity.
@@ -55,7 +55,7 @@ Do not move to the next milestone until the current one passes.
 - [ ] Freeze compatibility target docs
 
 ### Exit gate
-- All public Hermes surfaces are enumerated.
+- All public Vela surfaces are enumerated.
 - No rewrite work begins without a target behavior list.
 
 ---
@@ -63,7 +63,7 @@ Do not move to the next milestone until the current one passes.
 ## Milestone 1 — Rust bootstrap shell
 ### Scope
 - Rust workspace
-- `hermes` binary entrypoint
+- `vela` binary entrypoint
 - config loading
 - env resolution
 - logging/bootstrap
@@ -72,16 +72,16 @@ Do not move to the next milestone until the current one passes.
 
 ### Checklist
 - [ ] Create Rust workspace
-- [ ] Create `hermes` binary
+- [ ] Create `vela` binary
 - [ ] Implement config loading parity
 - [ ] Implement env resolution parity
 - [ ] Implement logging/bootstrap parity
 - [ ] Implement state-dir bootstrap parity
 - [ ] Expose same top-level commands
-- [ ] Verify startup behavior matches Hermes
+- [ ] Verify startup behavior matches Vela
 
 ### Exit gate
-- Basic startup behavior matches Hermes.
+- Basic startup behavior matches Vela.
 - Config resolution is parity-checked.
 - Same command names are exposed.
 
@@ -108,7 +108,7 @@ Do not move to the next milestone until the current one passes.
 - [ ] Verify restart continuity parity
 
 ### Exit gate
-- Rust can preserve or migrate Hermes state.
+- Rust can preserve or migrate Vela state.
 - Restart behavior is acceptably equivalent.
 
 ---
@@ -127,11 +127,11 @@ Do not move to the next milestone until the current one passes.
 - [ ] Implement cancellation semantics
 - [ ] Implement context assembly path
 - [ ] Implement runtime state transitions
-- [ ] Verify one complete turn matches Hermes
+- [ ] Verify one complete turn matches Vela
 - [ ] Verify interrupt/resume parity
 
 ### Exit gate
-- One complete turn behaves like Hermes.
+- One complete turn behaves like Vela.
 - Interruption and resume semantics match.
 
 ---
@@ -183,7 +183,7 @@ Then extend to:
 
 ### Exit gate
 - One real gateway path works end-to-end.
-- Attach/resume/delivery behavior matches Hermes.
+- Attach/resume/delivery behavior matches Vela.
 
 ---
 
@@ -204,7 +204,7 @@ Then extend to:
 
 ### Exit gate
 - Scheduled tasks fire with equivalent semantics.
-- Restart persistence matches Hermes expectations.
+- Restart persistence matches Vela expectations.
 
 ---
 
@@ -245,7 +245,7 @@ Recommended order:
 - [ ] Verify user-visible memory behavior parity
 
 ### Exit gate
-- Memory behavior matches Hermes from the user view.
+- Memory behavior matches Vela from the user view.
 
 ---
 
@@ -281,7 +281,7 @@ Recommended order:
 - [ ] Verify Rust is the primary execution path
 
 ### Exit gate
-- Rust owns the critical Hermes path.
+- Rust owns the critical Vela path.
 
 ---
 
@@ -306,7 +306,7 @@ Recommended order:
 
 ## GitHub issue structure
 ### Suggested trackers
-1. Hermes Rust parity rewrite
+1. Vela Rust parity rewrite
 2. Bootstrap shell parity
 3. State and persistence parity
 4. Runtime parity
@@ -330,7 +330,7 @@ Recommended order:
 Use all of:
 - golden tests
 - fixture replay
-- side-by-side Hermes vs Rust comparisons
+- side-by-side Vela vs Rust comparisons
 - state transition assertions
 
 ### Milestone-specific proof examples
@@ -340,7 +340,7 @@ Use all of:
 - compare startup side effects
 
 #### State and persistence
-- create state in Python Hermes
+- create state in Python Vela
 - load or migrate it into Rust
 - verify continuity, transcripts, and approvals
 

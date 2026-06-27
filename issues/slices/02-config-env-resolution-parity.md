@@ -1,11 +1,11 @@
 # Parity slice — Config and env resolution parity
 
 ## Behavior target
-The Rust runtime resolves config files, env vars, defaults, and precedence the same way Hermes does.
+The Rust runtime resolves config files, env vars, defaults, and precedence the same way Vela does.
 
-## Current Hermes source
+## Current Vela source
 - source: config loading/bootstrap code
-- flow: run Hermes under representative env/config combinations
+- flow: run Vela under representative env/config combinations
 
 ## Rust target
 - crate/module: config/bootstrap layer

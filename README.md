@@ -1,14 +1,14 @@
-# hermes-rs-plan
+# vela-rs-plan
 
-Planning workspace for a **behavior-first Rust rewrite** of `NousResearch/hermes-agent`.
+Planning workspace for a **behavior-first Rust rewrite** of `NousResearch/vela-agent`.
 
 ## Priority
-1. preserve Hermes behavior
+1. preserve Vela behavior
 2. prove parity
 3. improve Rust architecture later
 
 ## Contents
-- `docs/hermes-rust-parity-plan.md` — milestone-based rewrite plan
+- `docs/vela-rust-parity-plan.md` — milestone-based rewrite plan
 - `.github/ISSUE_TEMPLATE/` — issue templates for milestones, slices, regressions, and parity proof
 
 ## Working style

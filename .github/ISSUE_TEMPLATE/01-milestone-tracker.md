@@ -1,6 +1,6 @@
 ---
 name: Milestone tracker
-about: Track a major parity milestone in the Hermes Rust rewrite
+about: Track a major parity milestone in the Vela Rust rewrite
 labels: [milestone, parity]
 ---
 
@@ -17,7 +17,7 @@ What behavior boundary does this milestone preserve?
 - 
 
 ## Compatibility contract
-Link the source of truth for the Hermes behavior this milestone must match.
+Link the source of truth for the Vela behavior this milestone must match.
 
 ## Child slices
 - [ ] 

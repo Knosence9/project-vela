@@ -1,0 +1,117 @@
+# CLI compatibility notes
+
+## Exact entrypoints confirmed
+Python package scripts declared in `pyproject.toml`:
+- `vela -> vela_cli.main:main`
+- `vela-agent -> run_agent:main`
+- `vela-acp -> acp_adapter.entry:main`
+
+Installed `vela` command behavior is driven by `vela_cli.main` and `vela_cli._parser`.
+
+## Confirmed user-facing flows
+README-visible flows to preserve:
+- `vela`
+- `vela gateway setup`
+- `vela gateway start`
+- `vela claw migrate`
+- `vela claw migrate --dry-run`
+- `vela claw migrate --preset user-data`
+- `vela claw migrate --overwrite`
+
+README-visible shared slash commands:
+- `/new`
+- `/reset`
+- `/model [provider:model]`
+- `/personality [name]`
+- `/retry`
+- `/undo`
+- `/compress`
+- `/usage`
+- `/insights [--days N]`
+- `/skills`
+- `/<skill-name>`
+- `/stop`
+- `/platforms`
+- `/status`
+- `/sethome`
+
+## Confirmed top-level parser behavior
+- `--profile` / `-p` is consumed before argparse, sets `VELA_HOME`, and is stripped from `sys.argv`.
+- Bare `vela` defaults to the `chat` path.
+- `vela_cli._parser` owns the top-level parser plus the `chat` subparser.
+- Most other subcommands are added inline in `vela_cli.main`.
+
+## Confirmed built-in top-level subcommands
+`vela_cli.main` declares these built-in command groups:
+- `chat`
+- `setup`
+- `gateway`
+- `sessions`
+- `logs`
+- `model`
+- `config`
+- `skills`
+- `tools`
+- `memory`
+- `cron`
+- `mcp`
+- `status`
+- `update`
+- `dashboard`
+- `auth`
+- `pairing`
+- `version`
+- plus many others including `backup`, `claw`, `doctor`, `fallback`, `kanban`, `profile`, `security`, `send`, `webhook`, `whatsapp`, and `help`
+
+## Confirmed top-level flags worth matching first
+- `--profile`, `-p`
+- `--oneshot`, `-z`
+- `--model`, `-m`
+- `--provider`
+- `--toolsets`, `-t`
+- `--resume`, `-r`
+- `--skills`, `-s`
+- `--continue`, `-c`
+- `--worktree`, `-w`
+- `--accept-hooks`
+- `--yolo`
+- `--pass-session-id`
+- `--ignore-user-config`
+- `--ignore-rules`
+- `--safe-mode`
+- `--version`
+- `--cli`
+- `--tui`
+
+## Confirmed chat-subparser flags worth matching first
+- `--query`, `-q`
+- `--image`
+- `--model`, `-m`
+- `--toolsets`, `-t`
+- `--skills`, `-s`
+- `--provider`
+- `--verbose`, `-v`
+- `--resume`, `-r`
+- `--continue`, `-c`
+- `--worktree`, `-w`
+- `--accept-hooks`
+- `--checkpoints`
+- `--max-turns`
+- `--yolo`
+- `--pass-session-id`
+
+## Bootstrap behavior visible in source
+- `cli.py` uses `fire.Fire(main)` in its direct `__main__` path.
+- `cli.py` sets `VELA_QUIET=1` for a clean CLI startup path.
+- `cli.py` loads `.env` from `~/.vela/.env` first, then falls back to project `.env` for development.
+- `run_agent.py` also loads env through `vela_cli.env_loader.load_vela_dotenv(...)`.
+- `run_agent.py` logs which `.env` files were loaded, or logs that none were found.
+- `vela_cli.main` imports `vela_bootstrap` first for Windows UTF-8 safety.
+- `vela_cli.main` can set `VELA_DEFER_AGENT_STARTUP=1` on fast chat paths.
+
+## Still needed
+- exact subcommands under groups like `gateway`, `sessions`, `auth`, `cron`, and `dashboard`
+- help output shape and wording
+- exit code semantics
+- interactive vs non-interactive behavior
+- exact relaunch behavior across `vela`, `cli.py`, and `vela_cli.main`

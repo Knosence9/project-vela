@@ -1,7 +1,7 @@
 # Milestone 2 — State and persistence parity
 
 ## Goal
-Preserve Hermes continuity across sessions and restarts.
+Preserve Vela continuity across sessions and restarts.
 
 ## Scope
 - sessions
@@ -23,5 +23,5 @@ Preserve Hermes continuity across sessions and restarts.
 - [ ] verify restart continuity parity
 
 ## Exit gate
-- Rust can preserve or migrate Hermes state
+- Rust can preserve or migrate Vela state
 - restart behavior is acceptably equivalent

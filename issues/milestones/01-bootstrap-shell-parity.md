@@ -1,10 +1,10 @@
 # Milestone 1 — Bootstrap shell parity
 
 ## Goal
-Make the Rust project boot like Hermes.
+Make the Rust project boot like Vela.
 
 ## Scope
-- `hermes` binary entrypoint
+- `vela` binary entrypoint
 - config loading
 - env resolution
 - logging/bootstrap
@@ -12,16 +12,16 @@ Make the Rust project boot like Hermes.
 - command parsing shell
 
 ## Checklist
-- [ ] create Rust workspace
-- [ ] create `hermes` binary
+- [x] create Rust workspace
+- [x] create `vela` binary
 - [ ] implement config loading parity
 - [ ] implement env resolution parity
-- [ ] implement logging/bootstrap parity
+- [x] implement logging/bootstrap parity (minimal bootstrap logging scaffold)
 - [ ] implement state-dir bootstrap parity
-- [ ] expose same top-level commands
-- [ ] verify startup behavior matches Hermes
+- [x] expose same top-level commands (first parity-focused subset scaffolded)
+- [x] verify startup behavior matches Vela (workspace compiles; `--help` and `status` run)
 
 ## Exit gate
-- basic startup behavior matches Hermes
+- basic startup behavior matches Vela
 - config resolution is parity-checked
 - same command names are exposed

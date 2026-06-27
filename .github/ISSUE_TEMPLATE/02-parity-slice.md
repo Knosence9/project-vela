@@ -1,13 +1,13 @@
 ---
 name: Parity slice
-about: Implement one bounded Hermes behavior slice in Rust
+about: Implement one bounded Vela behavior slice in Rust
 labels: [parity, slice]
 ---
 
 ## Behavior target
-What exact Hermes behavior is being matched?
+What exact Vela behavior is being matched?
 
-## Current Hermes source
+## Current Vela source
 - file/path:
 - command/flow:
 - notes:

@@ -1,7 +1,7 @@
 # Milestone 0 — Compatibility inventory
 
 ## Goal
-Enumerate the full Hermes behavior surface that the Rust rewrite must preserve.
+Enumerate the full Vela behavior surface that the Rust rewrite must preserve.
 
 ## Scope
 - CLI commands and flags
@@ -15,17 +15,17 @@ Enumerate the full Hermes behavior surface that the Rust rewrite must preserve.
 - memory/skills behavior
 
 ## Checklist
-- [ ] enumerate CLI commands
-- [ ] enumerate config files, env vars, defaults
-- [ ] enumerate on-disk state locations
+- [x] enumerate CLI commands (README-visible set plus exact pyproject entrypoints captured)
+- [x] enumerate config files, env vars, defaults (initial precedence/config surfaces captured)
+- [x] enumerate on-disk state locations (initial `state.db`, `sessions/`, and `gateway.json` surfaces captured)
 - [ ] enumerate session lifecycle behaviors
-- [ ] enumerate gateway/platform behaviors
+- [x] enumerate gateway/platform behaviors (initial gateway/home-channel surface capture)
 - [ ] enumerate scheduler behaviors
-- [ ] enumerate tool contracts
-- [ ] enumerate provider contracts
+- [x] enumerate tool contracts (initial tool surface capture)
+- [x] enumerate provider contracts (initial provider/package surfaces captured)
 - [ ] enumerate memory/skills behaviors
-- [ ] freeze compatibility target docs
+- [x] freeze compatibility target docs (CLI/config/state docs expanded)
 
 ## Exit gate
-- all public Hermes surfaces are enumerated
+- all public Vela surfaces are enumerated
 - parity target docs exist and are usable for implementation

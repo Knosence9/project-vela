@@ -1,10 +1,10 @@
 ---
 name: Parity regression
-about: Report a Rust behavior mismatch against Hermes
+about: Report a Rust behavior mismatch against Vela
 labels: [bug, parity-regression]
 ---
 
-## Expected Hermes behavior
+## Expected Vela behavior
 What should happen?
 
 ## Actual Rust behavior
@@ -16,7 +16,7 @@ What happened instead?
 3. 
 
 ## Comparison evidence
-- Hermes output/state:
+- Vela output/state:
 - Rust output/state:
 - diff summary:
 

@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Hermes Rust parity plan
-    url: ../docs/hermes-rust-parity-plan.md
+  - name: Vela Rust parity plan
+    url: ../docs/vela-rust-parity-plan.md
     about: Review the behavior-first rewrite plan before opening new work.
