@@ -135,8 +135,13 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    let (argv, preparse_profile) = vela_runtime::preparse_profile_override(std::env::args())?;
     tracing_subscriber::fmt::init();
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(argv);
+    let bootstrap = vela_runtime::initialize_bootstrap(
+        preparse_profile.or_else(|| cli.profile.clone()),
+        cli.ignore_user_config,
+    )?;
 
     if cli.version {
         println!("vela-rs 0.1.0-parity");
@@ -149,7 +154,34 @@ fn main() -> Result<()> {
             Cli::command().print_help()?;
             println!();
         }
-        Some(Commands::Status) => println!("vela-rs shell: bootstrap parity scaffold ready"),
+        Some(Commands::Status) => {
+            println!("{}", bootstrap.summary_line());
+            if bootstrap.loaded_env_paths.is_empty() {
+                println!("loaded env: none");
+            } else {
+                for path in &bootstrap.loaded_env_paths {
+                    println!("loaded env: {}", path.display());
+                }
+            }
+            for source in &bootstrap.config_sources {
+                println!("config source [{}]: {}", source.kind.label(), source.path.display());
+            }
+            println!(
+                "resolved config: display.interface={:?} hooks_auto_accept={:?} security.redact_secrets={:?} network.force_ipv4={:?}",
+                bootstrap.resolved_config.display_interface,
+                bootstrap.resolved_config.hooks_auto_accept,
+                bootstrap.resolved_config.security_redact_secrets,
+                bootstrap.resolved_config.network_force_ipv4,
+            );
+            println!(
+                "persistence: state_db={} existed_before={} bootstrap_runs={} sessions_dir={} snapshot_pattern={}",
+                bootstrap.persistence.state_db_path.display(),
+                bootstrap.persistence.state_db_existed_before,
+                bootstrap.persistence.bootstrap_runs,
+                bootstrap.persistence.sessions_dir.display(),
+                bootstrap.persistence.snapshot_pattern,
+            );
+        }
         Some(Commands::Plan) => println!("docs/vela-rust-parity-plan.md"),
         Some(Commands::Gateway(args)) => println!("gateway placeholder: setup={} start={}", args.setup, args.start),
         Some(Commands::Sessions(args)) => println!("sessions placeholder: list={} browse={}", args.list, args.browse),

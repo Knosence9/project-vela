@@ -14,10 +14,10 @@ Make the Rust project boot like Vela.
 ## Checklist
 - [x] create Rust workspace
 - [x] create `vela` binary
-- [ ] implement config loading parity
-- [ ] implement env resolution parity
+- [x] implement config loading parity (initial `.env` bootstrap scaffold)
+- [x] implement env resolution parity (initial `VELA_HOME` / profile handling scaffold)
 - [x] implement logging/bootstrap parity (minimal bootstrap logging scaffold)
-- [ ] implement state-dir bootstrap parity
+- [x] implement state-dir bootstrap parity (resolved `VELA_HOME` directory now created)
 - [x] expose same top-level commands (first parity-focused subset scaffolded)
 - [x] verify startup behavior matches Vela (workspace compiles; `--help` and `status` run)
 
