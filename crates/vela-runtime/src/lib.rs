@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_yaml::Value;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 pub struct BootstrapReport {
@@ -14,6 +15,57 @@ pub struct BootstrapReport {
     pub config_sources: Vec<ConfigSource>,
     pub resolved_config: ResolvedConfig,
     pub persistence: PersistenceReport,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionRequest {
+    pub command_name: String,
+    pub query_present: bool,
+    pub image_present: bool,
+    pub resume: Option<String>,
+    pub continue_last: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionRuntimeReport {
+    pub session_id: String,
+    pub action: SessionAction,
+    pub interaction_mode: InteractionMode,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SessionAction {
+    Created,
+    ResumedById,
+    ResumedByTitle,
+    ResumedLatest,
+}
+
+impl SessionAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::ResumedById => "resumed-by-id",
+            Self::ResumedByTitle => "resumed-by-title",
+            Self::ResumedLatest => "resumed-latest",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum InteractionMode {
+    Interactive,
+    SingleTurn,
+}
+
+impl InteractionMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Interactive => "interactive",
+            Self::SingleTurn => "single-turn",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -155,6 +207,72 @@ pub fn bootstrap_banner() {
     tracing::debug!("vela-runtime bootstrap initialized");
 }
 
+pub fn current_session_identity(bootstrap: &BootstrapReport) -> Result<Option<(String, String)>> {
+    let conn = Connection::open(&bootstrap.persistence.state_db_path)
+        .with_context(|| format!("failed to open {}", bootstrap.persistence.state_db_path.display()))?;
+    Ok(latest_session(&conn)?.map(|session| (session.id, session.title)))
+}
+
+pub fn resolve_runtime_session(bootstrap: &BootstrapReport, request: &SessionRequest) -> Result<SessionRuntimeReport> {
+    let conn = Connection::open(&bootstrap.persistence.state_db_path)
+        .with_context(|| format!("failed to open {}", bootstrap.persistence.state_db_path.display()))?;
+
+    let interaction_mode = if request.query_present || request.image_present {
+        InteractionMode::SingleTurn
+    } else {
+        InteractionMode::Interactive
+    };
+
+    if let Some(resume) = request.resume.as_deref() {
+        let session = find_session_by_id_or_title(&conn, resume)?
+            .with_context(|| format!("session not found for resume target {resume}"))?;
+        let action = if session.id == resume {
+            SessionAction::ResumedById
+        } else {
+            SessionAction::ResumedByTitle
+        };
+        touch_session(&conn, &session.id)?;
+        return Ok(SessionRuntimeReport {
+            session_id: session.id,
+            action,
+            interaction_mode,
+            title: session.title,
+        });
+    }
+
+    if let Some(target) = request.continue_last.as_deref() {
+        let session = if target.trim().is_empty() {
+            latest_session(&conn)?
+        } else {
+            find_session_by_title(&conn, target)?
+        }
+        .with_context(|| format!("session not found for continue target {target}"))?;
+        touch_session(&conn, &session.id)?;
+        return Ok(SessionRuntimeReport {
+            session_id: session.id,
+            action: if target.trim().is_empty() { SessionAction::ResumedLatest } else { SessionAction::ResumedByTitle },
+            interaction_mode,
+            title: session.title,
+        });
+    }
+
+    let now = unix_timestamp();
+    let session_id = format!("session-{}", now);
+    let title = format!("{}-{}", request.command_name, now);
+    conn.execute(
+        "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
+        params![session_id, title, request.command_name, interaction_mode.label(), now],
+    )?;
+
+    Ok(SessionRuntimeReport {
+        session_id,
+        action: SessionAction::Created,
+        interaction_mode,
+        title,
+    })
+}
+
 fn initialize_persistence(vela_home: &Path) -> Result<PersistenceReport> {
     let sessions_dir = vela_home.join("sessions");
     std::fs::create_dir_all(&sessions_dir)
@@ -169,6 +287,14 @@ fn initialize_persistence(vela_home: &Path) -> Result<PersistenceReport> {
         CREATE TABLE IF NOT EXISTS state_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            command_name TEXT NOT NULL,
+            interaction_mode TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
         );
         ",
     )?;
@@ -205,6 +331,76 @@ fn initialize_persistence(vela_home: &Path) -> Result<PersistenceReport> {
         state_db_existed_before: existed_before,
         bootstrap_runs: next_runs,
     })
+}
+
+#[derive(Debug, Clone)]
+struct StoredSession {
+    id: String,
+    title: String,
+}
+
+fn latest_session(conn: &Connection) -> Result<Option<StoredSession>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, title FROM sessions ORDER BY updated_at DESC LIMIT 1",
+            [],
+            |row| {
+                Ok(StoredSession {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn find_session_by_title(conn: &Connection, title: &str) -> Result<Option<StoredSession>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, title FROM sessions WHERE title = ?1 ORDER BY updated_at DESC LIMIT 1",
+            params![title],
+            |row| {
+                Ok(StoredSession {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn find_session_by_id_or_title(conn: &Connection, value: &str) -> Result<Option<StoredSession>> {
+    if let Some(session) = conn
+        .query_row(
+            "SELECT id, title FROM sessions WHERE id = ?1 LIMIT 1",
+            params![value],
+            |row| {
+                Ok(StoredSession {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                })
+            },
+        )
+        .optional()?
+    {
+        return Ok(Some(session));
+    }
+    find_session_by_title(conn, value)
+}
+
+fn touch_session(conn: &Connection, session_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        params![session_id, unix_timestamp()],
+    )?;
+    Ok(())
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 fn load_vela_dotenv(vela_home: &Path) -> Result<Vec<PathBuf>> {
