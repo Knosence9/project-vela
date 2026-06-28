@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "vela")]
@@ -150,9 +150,43 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Some(Commands::Chat(_)) | None => {
-            Cli::command().print_help()?;
-            println!();
+        Some(Commands::Chat(args)) => {
+            let report = vela_runtime::resolve_runtime_session(
+                &bootstrap,
+                &vela_runtime::SessionRequest {
+                    command_name: "chat".to_string(),
+                    query_present: args.query.is_some(),
+                    image_present: args.image.is_some(),
+                    resume: args.resume.clone(),
+                    continue_last: args.continue_last.clone(),
+                },
+            )?;
+            println!(
+                "runtime session: action={} id={} title={} mode={}",
+                report.action.label(),
+                report.session_id,
+                report.title,
+                report.interaction_mode.label(),
+            );
+        }
+        None => {
+            let report = vela_runtime::resolve_runtime_session(
+                &bootstrap,
+                &vela_runtime::SessionRequest {
+                    command_name: "chat".to_string(),
+                    query_present: false,
+                    image_present: false,
+                    resume: cli.resume.clone(),
+                    continue_last: cli.continue_last.clone(),
+                },
+            )?;
+            println!(
+                "runtime session: action={} id={} title={} mode={}",
+                report.action.label(),
+                report.session_id,
+                report.title,
+                report.interaction_mode.label(),
+            );
         }
         Some(Commands::Status) => {
             println!("{}", bootstrap.summary_line());
@@ -191,6 +225,10 @@ fn main() -> Result<()> {
                 bootstrap.persistence.sessions_dir.display(),
                 bootstrap.persistence.snapshot_pattern,
             );
+            match vela_runtime::current_session_identity(&bootstrap)? {
+                Some((id, title)) => println!("active session: id={} title={}", id, title),
+                None => println!("active session: none"),
+            }
         }
         Some(Commands::Plan) => println!("docs/vela-rust-parity-plan.md"),
         Some(Commands::Gateway(args)) => println!("gateway placeholder: setup={} start={}", args.setup, args.start),
