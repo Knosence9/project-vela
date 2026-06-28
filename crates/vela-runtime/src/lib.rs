@@ -254,6 +254,7 @@ pub fn stage_memory_review_candidate(
     reason: &str,
     source: Option<&str>,
 ) -> Result<vela_review::ReviewCandidate> {
+    let origin = vela_state::current_session_identity(&bootstrap.persistence.state_db_path)?;
     let candidate = vela_review::stage_memory_candidate(
         &bootstrap.vela_home,
         target,
@@ -262,18 +263,26 @@ pub fn stage_memory_review_candidate(
         new_text,
         reason,
         source,
+        origin.as_ref().map(|(id, _)| id.as_str()),
     )?;
-    let _ = vela_state::append_event_to_latest_session(
-        &bootstrap.persistence.state_db_path,
-        "review_candidate_created",
-        json!({
-            "candidate_id": candidate.id,
-            "kind": candidate.kind.label(),
-            "source": candidate.source,
-            "reason": candidate.reason,
-        })
-        .to_string(),
-    );
+    if let Some(session_id) = candidate.session_id.as_deref() {
+        let logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            session_id,
+            "review_candidate_created",
+            json!({
+                "candidate_id": candidate.id,
+                "kind": candidate.kind.label(),
+                "source": candidate.source,
+                "reason": candidate.reason,
+                "session_id": candidate.session_id,
+            })
+            .to_string(),
+        )?;
+        if !logged {
+            tracing::warn!("failed to append review_candidate_created event to originating session");
+        }
+    }
     Ok(candidate)
 }
 
@@ -286,6 +295,7 @@ pub fn stage_skill_review_candidate(
     reason: &str,
     source: Option<&str>,
 ) -> Result<vela_review::ReviewCandidate> {
+    let origin = vela_state::current_session_identity(&bootstrap.persistence.state_db_path)?;
     let candidate = vela_review::stage_skill_candidate(
         &bootstrap.vela_home,
         action,
@@ -294,46 +304,70 @@ pub fn stage_skill_review_candidate(
         body,
         reason,
         source,
+        origin.as_ref().map(|(id, _)| id.as_str()),
     )?;
-    let _ = vela_state::append_event_to_latest_session(
-        &bootstrap.persistence.state_db_path,
-        "review_candidate_created",
-        json!({
-            "candidate_id": candidate.id,
-            "kind": candidate.kind.label(),
-            "source": candidate.source,
-            "reason": candidate.reason,
-        })
-        .to_string(),
-    );
+    if let Some(session_id) = candidate.session_id.as_deref() {
+        let logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            session_id,
+            "review_candidate_created",
+            json!({
+                "candidate_id": candidate.id,
+                "kind": candidate.kind.label(),
+                "source": candidate.source,
+                "reason": candidate.reason,
+                "session_id": candidate.session_id,
+            })
+            .to_string(),
+        )?;
+        if !logged {
+            tracing::warn!("failed to append review_candidate_created event to originating session");
+        }
+    }
     Ok(candidate)
 }
 
 pub fn promote_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<vela_review::PromotionReport> {
+    let candidate = vela_review::get_candidate(&bootstrap.vela_home, id)?;
     let report = vela_review::promote_candidate(&bootstrap.vela_home, id)?;
-    let _ = vela_state::append_event_to_latest_session(
-        &bootstrap.persistence.state_db_path,
-        "review_candidate_promoted",
-        json!({
-            "candidate_id": report.candidate_id,
-            "kind": report.kind.label(),
-            "pending_id": report.pending_id,
-        })
-        .to_string(),
-    );
+    if let Some(session_id) = candidate.session_id.as_deref() {
+        let logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            session_id,
+            "review_candidate_promoted",
+            json!({
+                "candidate_id": report.candidate_id,
+                "kind": report.kind.label(),
+                "pending_id": report.pending_id,
+                "session_id": candidate.session_id,
+            })
+            .to_string(),
+        )?;
+        if !logged {
+            tracing::warn!("failed to append review_candidate_promoted event to originating session");
+        }
+    }
     Ok(report)
 }
 
 pub fn reject_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
+    let candidate = vela_review::get_candidate(&bootstrap.vela_home, id)?;
     vela_review::reject_candidate(&bootstrap.vela_home, id)?;
-    let _ = vela_state::append_event_to_latest_session(
-        &bootstrap.persistence.state_db_path,
-        "review_candidate_rejected",
-        json!({
-            "candidate_id": id,
-        })
-        .to_string(),
-    );
+    if let Some(session_id) = candidate.session_id.as_deref() {
+        let logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            session_id,
+            "review_candidate_rejected",
+            json!({
+                "candidate_id": id,
+                "session_id": candidate.session_id,
+            })
+            .to_string(),
+        )?;
+        if !logged {
+            tracing::warn!("failed to append review_candidate_rejected event to originating session");
+        }
+    }
     Ok(())
 }
 
@@ -366,14 +400,19 @@ pub fn emit_review_signals_from_latest_session(
     };
     let report = vela_review::infer_signals(&input)?;
     for signal in &report.signals {
-        let _ = vela_state::append_event_to_latest_session(
+        let logged = vela_state::append_event_to_session(
             &bootstrap.persistence.state_db_path,
+            &report.session_id,
             &signal.event_type,
             signal.payload_json.clone(),
-        );
+        )?;
+        if !logged {
+            tracing::warn!("failed to append review signal to inspected session");
+        }
     }
-    let _ = vela_state::append_event_to_latest_session(
+    let logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
+        &report.session_id,
         "review_signals_emitted",
         json!({
             "session_id": report.session_id,
@@ -381,7 +420,10 @@ pub fn emit_review_signals_from_latest_session(
             "skipped": report.skipped,
         })
         .to_string(),
-    );
+    )?;
+    if !logged {
+        tracing::warn!("failed to append review_signals_emitted event to inspected session");
+    }
     Ok(Some(report))
 }
 
@@ -415,8 +457,9 @@ pub fn generate_review_candidates_from_latest_session(
                 .collect(),
         },
     )?;
-    let _ = vela_state::append_event_to_latest_session(
+    let logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
+        &report.session_id,
         "review_candidates_generated",
         json!({
             "session_id": report.session_id,
@@ -424,7 +467,10 @@ pub fn generate_review_candidates_from_latest_session(
             "skipped": report.skipped,
         })
         .to_string(),
-    );
+    )?;
+    if !logged {
+        tracing::warn!("failed to append review_candidates_generated event to inspected session");
+    }
     Ok(Some(report))
 }
 

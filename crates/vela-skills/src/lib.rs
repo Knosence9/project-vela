@@ -239,6 +239,7 @@ pub fn list_pending(vela_home: &Path) -> Result<Vec<PendingSkillWrite>> {
 }
 
 pub fn get_pending(vela_home: &Path, id: &str) -> Result<PendingSkillWrite> {
+    let id = validate_pending_id(id)?;
     let path = pending_dir(vela_home).join(format!("{id}.json"));
     let text = fs::read_to_string(&path)
         .with_context(|| format!("pending skill write {:?} not found", id))?;
@@ -247,6 +248,7 @@ pub fn get_pending(vela_home: &Path, id: &str) -> Result<PendingSkillWrite> {
 }
 
 pub fn reject_pending(vela_home: &Path, id: &str) -> Result<()> {
+    let id = validate_pending_id(id)?;
     let path = pending_dir(vela_home).join(format!("{id}.json"));
     fs::remove_file(&path).with_context(|| format!("pending skill write {:?} not found", id))?;
     Ok(())
@@ -291,10 +293,13 @@ fn skill_md_path(vela_home: &Path, name: &str) -> PathBuf {
     vela_home.join("skills").join(name).join("SKILL.md")
 }
 
-fn normalize_skill_name(name: &str) -> Result<String> {
+pub fn normalize_skill_name(name: &str) -> Result<String> {
     let normalized = name.trim();
     if normalized.is_empty() {
         bail!("skill name cannot be empty");
+    }
+    if normalized == "." || normalized == ".." {
+        bail!("skill name cannot be a path traversal component");
     }
     if normalized.contains('/') || normalized.contains('\\') {
         bail!("skill name cannot contain path separators");
@@ -336,6 +341,14 @@ fn extract_description(path: &Path) -> Result<Option<String>> {
         }
     }
     Ok(None)
+}
+
+fn validate_pending_id(id: &str) -> Result<&str> {
+    let id = id.trim();
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        bail!("invalid pending skill id");
+    }
+    Ok(id)
 }
 
 fn new_pending_id(prefix: &str) -> String {

@@ -97,6 +97,7 @@ pub struct PendingMemoryWrite {
     pub target: MemoryTarget,
     pub action: String,
     pub old_text: Option<String>,
+    pub matched_entry: Option<String>,
     pub new_text: Option<String>,
     pub created_at: i64,
 }
@@ -178,6 +179,7 @@ pub fn stage_add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &
             target,
             action: "add".to_string(),
             old_text: None,
+            matched_entry: None,
             new_text: Some(content.trim().to_string()),
             created_at: unix_timestamp(),
         },
@@ -207,6 +209,8 @@ pub fn stage_replace_memory_entry(
         bail!("match text cannot be empty");
     }
     sanitize_entry(content)?;
+    let entries = load_entries(vela_home, target)?;
+    let idx = unique_match_index(&entries, old_text)?;
     stage_write(
         vela_home,
         PendingMemoryWrite {
@@ -214,6 +218,7 @@ pub fn stage_replace_memory_entry(
             target,
             action: "replace".to_string(),
             old_text: Some(old_text.trim().to_string()),
+            matched_entry: Some(entries[idx].clone()),
             new_text: Some(content.trim().to_string()),
             created_at: unix_timestamp(),
         },
@@ -228,10 +233,33 @@ pub fn remove_memory_entry(vela_home: &Path, target: MemoryTarget, old_text: &st
     report(target, "remove", &entries)
 }
 
+fn replace_exact_memory_entry(
+    vela_home: &Path,
+    target: MemoryTarget,
+    matched_entry: &str,
+    content: &str,
+) -> Result<MemoryMutationReport> {
+    let mut entries = load_entries(vela_home, target)?;
+    let idx = exact_match_index(&entries, matched_entry)?;
+    entries[idx] = sanitize_entry(content)?;
+    save_entries(vela_home, target, &entries)?;
+    report(target, "replace", &entries)
+}
+
+fn remove_exact_memory_entry(vela_home: &Path, target: MemoryTarget, matched_entry: &str) -> Result<MemoryMutationReport> {
+    let mut entries = load_entries(vela_home, target)?;
+    let idx = exact_match_index(&entries, matched_entry)?;
+    entries.remove(idx);
+    save_entries(vela_home, target, &entries)?;
+    report(target, "remove", &entries)
+}
+
 pub fn stage_remove_memory_entry(vela_home: &Path, target: MemoryTarget, old_text: &str) -> Result<PendingMemoryWrite> {
     if old_text.trim().is_empty() {
         bail!("match text cannot be empty");
     }
+    let entries = load_entries(vela_home, target)?;
+    let idx = unique_match_index(&entries, old_text)?;
     stage_write(
         vela_home,
         PendingMemoryWrite {
@@ -239,6 +267,7 @@ pub fn stage_remove_memory_entry(vela_home: &Path, target: MemoryTarget, old_tex
             target,
             action: "remove".to_string(),
             old_text: Some(old_text.trim().to_string()),
+            matched_entry: Some(entries[idx].clone()),
             new_text: None,
             created_at: unix_timestamp(),
         },
@@ -264,6 +293,7 @@ pub fn list_pending(vela_home: &Path) -> Result<Vec<PendingMemoryWrite>> {
 }
 
 pub fn get_pending(vela_home: &Path, id: &str) -> Result<PendingMemoryWrite> {
+    let id = validate_pending_id(id)?;
     let path = pending_dir(vela_home).join(format!("{id}.json"));
     let text = fs::read_to_string(&path)
         .with_context(|| format!("pending memory write {:?} not found", id))?;
@@ -272,6 +302,7 @@ pub fn get_pending(vela_home: &Path, id: &str) -> Result<PendingMemoryWrite> {
 }
 
 pub fn reject_pending(vela_home: &Path, id: &str) -> Result<()> {
+    let id = validate_pending_id(id)?;
     let path = pending_dir(vela_home).join(format!("{id}.json"));
     fs::remove_file(&path).with_context(|| format!("pending memory write {:?} not found", id))?;
     Ok(())
@@ -285,16 +316,16 @@ pub fn approve_pending(vela_home: &Path, id: &str) -> Result<MemoryMutationRepor
             pending.target,
             pending.new_text.as_deref().ok_or_else(|| anyhow!("pending add missing new_text"))?,
         )?,
-        "replace" => replace_memory_entry(
+        "replace" => replace_exact_memory_entry(
             vela_home,
             pending.target,
-            pending.old_text.as_deref().ok_or_else(|| anyhow!("pending replace missing old_text"))?,
+            pending.matched_entry.as_deref().ok_or_else(|| anyhow!("pending replace missing matched_entry"))?,
             pending.new_text.as_deref().ok_or_else(|| anyhow!("pending replace missing new_text"))?,
         )?,
-        "remove" => remove_memory_entry(
+        "remove" => remove_exact_memory_entry(
             vela_home,
             pending.target,
-            pending.old_text.as_deref().ok_or_else(|| anyhow!("pending remove missing old_text"))?,
+            pending.matched_entry.as_deref().ok_or_else(|| anyhow!("pending remove missing matched_entry"))?,
         )?,
         other => bail!("unknown pending memory action {other:?}"),
     };
@@ -396,6 +427,19 @@ fn sanitize_entry(content: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
+fn exact_match_index(entries: &[String], expected: &str) -> Result<usize> {
+    let matches: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, entry)| (entry == expected).then_some(idx))
+        .collect();
+    match matches.as_slice() {
+        [idx] => Ok(*idx),
+        [] => Err(anyhow!("staged memory entry no longer exists exactly as reviewed")),
+        _ => Err(anyhow!("staged memory entry became ambiguous; resolve manually")),
+    }
+}
+
 fn unique_match_index(entries: &[String], needle: &str) -> Result<usize> {
     let needle = needle.trim();
     if needle.is_empty() {
@@ -411,6 +455,14 @@ fn unique_match_index(entries: &[String], needle: &str) -> Result<usize> {
         [] => Err(anyhow!("no memory entry matched {needle:?}")),
         _ => Err(anyhow!("memory match {needle:?} was ambiguous; use a more specific substring")),
     }
+}
+
+fn validate_pending_id(id: &str) -> Result<&str> {
+    let id = id.trim();
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        bail!("invalid pending memory id");
+    }
+    Ok(id)
 }
 
 fn ensure_file(path: &Path) -> Result<()> {

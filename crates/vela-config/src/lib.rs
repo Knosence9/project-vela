@@ -72,7 +72,7 @@ where
             profile = Some(value);
             continue;
         }
-        if let Some((_, value)) = arg.split_once("--profile=") {
+        if let Some(value) = arg.strip_prefix("--profile=") {
             profile = Some(value.to_string());
             continue;
         }
@@ -92,12 +92,13 @@ pub fn initialize_config(active_profile: Option<String>, ignore_user_config: boo
     std::fs::create_dir_all(&vela_home)
         .with_context(|| format!("failed to create {}", vela_home.display()))?;
 
+    let loaded_env_paths = load_vela_dotenv(&vela_home)?;
+
     let effective_ignore_user_config = ignore_user_config || is_truthy_env("VELA_IGNORE_USER_CONFIG");
     if effective_ignore_user_config {
         env::set_var("VELA_IGNORE_USER_CONFIG", "1");
     }
 
-    let loaded_env_paths = load_vela_dotenv(&vela_home)?;
     let mut config_sources = resolve_config_sources(&vela_home, effective_ignore_user_config)?;
     let resolved_config = load_resolved_config(&mut config_sources)?;
 

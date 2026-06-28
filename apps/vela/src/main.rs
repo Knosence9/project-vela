@@ -115,15 +115,15 @@ struct DashboardArgs {
 
 #[derive(Debug, Default, Args)]
 struct SkillsArgs {
-    #[arg(long = "list", default_value_t = false)]
+    #[arg(long = "list", default_value_t = false, group = "action")]
     list: bool,
-    #[arg(long = "view")]
+    #[arg(long = "view", group = "action")]
     view: Option<String>,
-    #[arg(long = "create")]
+    #[arg(long = "create", group = "action")]
     create: Option<String>,
-    #[arg(long = "write")]
+    #[arg(long = "write", group = "action")]
     write: Option<String>,
-    #[arg(long = "delete")]
+    #[arg(long = "delete", group = "action")]
     delete: Option<String>,
     #[arg(long = "description")]
     description: Option<String>,
@@ -131,49 +131,49 @@ struct SkillsArgs {
     body: Option<String>,
     #[arg(long = "stage", default_value_t = false)]
     stage: bool,
-    #[arg(long = "pending", default_value_t = false)]
+    #[arg(long = "pending", default_value_t = false, group = "action")]
     pending: bool,
-    #[arg(long = "approve")]
+    #[arg(long = "approve", group = "action")]
     approve: Option<String>,
-    #[arg(long = "reject")]
+    #[arg(long = "reject", group = "action")]
     reject: Option<String>,
-    #[arg(long = "show")]
+    #[arg(long = "show", group = "action")]
     show: Option<String>,
 }
 
 #[derive(Debug, Default, Args)]
 struct ReviewArgs {
-    #[arg(long = "list", default_value_t = false)]
+    #[arg(long = "list", default_value_t = false, group = "action")]
     list: bool,
-    #[arg(long = "emit-signals", default_value_t = false)]
+    #[arg(long = "emit-signals", default_value_t = false, group = "action")]
     emit_signals: bool,
-    #[arg(long = "suggest", default_value_t = false)]
+    #[arg(long = "suggest", default_value_t = false, group = "action")]
     suggest: bool,
-    #[arg(long = "auto", default_value_t = false)]
+    #[arg(long = "auto", default_value_t = false, group = "action")]
     auto: bool,
     #[arg(long = "limit", default_value_t = 20)]
     limit: usize,
-    #[arg(long = "show")]
+    #[arg(long = "show", group = "action")]
     show: Option<String>,
-    #[arg(long = "promote")]
+    #[arg(long = "promote", group = "action")]
     promote: Option<String>,
-    #[arg(long = "reject")]
+    #[arg(long = "reject", group = "action")]
     reject: Option<String>,
     #[arg(long = "target", default_value = "memory")]
     target: String,
-    #[arg(long = "memory-add")]
+    #[arg(long = "memory-add", group = "action")]
     memory_add: Option<String>,
-    #[arg(long = "memory-replace")]
+    #[arg(long = "memory-replace", group = "action")]
     memory_replace: Option<String>,
-    #[arg(long = "memory-remove")]
+    #[arg(long = "memory-remove", group = "action")]
     memory_remove: Option<String>,
     #[arg(long = "match")]
     match_text: Option<String>,
-    #[arg(long = "skill-create")]
+    #[arg(long = "skill-create", group = "action")]
     skill_create: Option<String>,
-    #[arg(long = "skill-write")]
+    #[arg(long = "skill-write", group = "action")]
     skill_write: Option<String>,
-    #[arg(long = "skill-delete")]
+    #[arg(long = "skill-delete", group = "action")]
     skill_delete: Option<String>,
     #[arg(long = "description")]
     description: Option<String>,
@@ -189,27 +189,27 @@ struct ReviewArgs {
 struct MemoryArgs {
     #[arg(long = "target", default_value = "memory")]
     target: String,
-    #[arg(long = "view", default_value_t = false)]
+    #[arg(long = "view", default_value_t = false, group = "action")]
     view: bool,
-    #[arg(long = "prompt-snapshot", default_value_t = false)]
+    #[arg(long = "prompt-snapshot", default_value_t = false, group = "action")]
     prompt_snapshot: bool,
-    #[arg(long = "add")]
+    #[arg(long = "add", group = "action")]
     add: Option<String>,
-    #[arg(long = "replace")]
+    #[arg(long = "replace", group = "action")]
     replace: Option<String>,
     #[arg(long = "match")]
     match_text: Option<String>,
-    #[arg(long = "remove")]
+    #[arg(long = "remove", group = "action")]
     remove: Option<String>,
     #[arg(long = "stage", default_value_t = false)]
     stage: bool,
-    #[arg(long = "pending", default_value_t = false)]
+    #[arg(long = "pending", default_value_t = false, group = "action")]
     pending: bool,
-    #[arg(long = "approve")]
+    #[arg(long = "approve", group = "action")]
     approve: Option<String>,
-    #[arg(long = "reject")]
+    #[arg(long = "reject", group = "action")]
     reject: Option<String>,
-    #[arg(long = "show")]
+    #[arg(long = "show", group = "action")]
     show: Option<String>,
 }
 
@@ -241,16 +241,17 @@ fn main() -> Result<()> {
     let (argv, preparse_profile) = vela_runtime::preparse_profile_override(std::env::args())?;
     tracing_subscriber::fmt::init();
     let cli = Cli::parse_from(argv);
-    let bootstrap = vela_runtime::initialize_bootstrap(
-        preparse_profile.or_else(|| cli.profile.clone()),
-        cli.ignore_user_config,
-    )?;
 
     if cli.version {
         println!("vela-rs 0.1.0-kernel");
         vela_runtime::bootstrap_banner();
         return Ok(());
     }
+
+    let bootstrap = vela_runtime::initialize_bootstrap(
+        preparse_profile.or_else(|| cli.profile.clone()),
+        cli.ignore_user_config,
+    )?;
 
     match cli.command {
         Some(Commands::Chat(args)) => {
@@ -368,7 +369,6 @@ fn main() -> Result<()> {
             if args.prompt_snapshot {
                 println!("{}", vela_runtime::render_memory_snapshot(&bootstrap)?);
             } else {
-                let target = vela_runtime::MemoryTarget::parse(&args.target)?;
                 if args.pending {
                     let pending = vela_runtime::list_pending_memory(&bootstrap)?;
                     println!("pending memory writes [{}]:", pending.len());
@@ -392,6 +392,7 @@ fn main() -> Result<()> {
                     vela_runtime::reject_pending_memory(&bootstrap, id)?;
                     println!("memory reject: {}", id);
                 } else if let Some(content) = args.add.as_deref() {
+                    let target = vela_runtime::MemoryTarget::parse(&args.target)?;
                     if args.stage {
                         let item = vela_runtime::stage_add_memory_entry(&bootstrap, target, content)?;
                         println!("memory staged: {} action={} target={}", item.id, item.action, item.target.label());
@@ -407,6 +408,7 @@ fn main() -> Result<()> {
                         );
                     }
                 } else if let Some(content) = args.replace.as_deref() {
+                    let target = vela_runtime::MemoryTarget::parse(&args.target)?;
                     let old_text = args
                         .match_text
                         .as_deref()
@@ -426,6 +428,7 @@ fn main() -> Result<()> {
                         );
                     }
                 } else if let Some(old_text) = args.remove.as_deref() {
+                    let target = vela_runtime::MemoryTarget::parse(&args.target)?;
                     if args.stage {
                         let item = vela_runtime::stage_remove_memory_entry(&bootstrap, target, old_text)?;
                         println!("memory staged: {} action={} target={}", item.id, item.action, item.target.label());
@@ -441,6 +444,7 @@ fn main() -> Result<()> {
                         );
                     }
                 } else {
+                    let target = vela_runtime::MemoryTarget::parse(&args.target)?;
                     let view = vela_runtime::view_memory(&bootstrap, target)?;
                     println!(
                         "{} [{} entries, {}/{} chars]",

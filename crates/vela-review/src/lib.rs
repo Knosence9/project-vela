@@ -36,6 +36,7 @@ pub struct ReviewCandidate {
     pub source: String,
     pub reason: String,
     pub created_at: i64,
+    pub session_id: Option<String>,
     pub memory: Option<MemoryCandidate>,
     pub skill: Option<SkillCandidate>,
 }
@@ -128,6 +129,7 @@ pub fn stage_memory_candidate(
     new_text: Option<&str>,
     reason: &str,
     source: Option<&str>,
+    session_id: Option<&str>,
 ) -> Result<ReviewCandidate> {
     let action = normalize_action(action, &["add", "replace", "remove"], "memory")?;
     if action == "replace" && old_text.unwrap_or_default().trim().is_empty() {
@@ -145,6 +147,7 @@ pub fn stage_memory_candidate(
         source: normalize_source(source),
         reason: normalize_reason(reason),
         created_at: unix_timestamp(),
+        session_id: session_id.map(|s| s.to_string()),
         memory: Some(MemoryCandidate {
             action,
             target,
@@ -165,10 +168,10 @@ pub fn stage_skill_candidate(
     body: Option<&str>,
     reason: &str,
     source: Option<&str>,
+    session_id: Option<&str>,
 ) -> Result<ReviewCandidate> {
-    if name.trim().is_empty() {
-        bail!("skill review requires a name");
-    }
+    let normalized_name = vela_skills::normalize_skill_name(name)
+        .context("skill review requires a valid promotable skill name")?;
     let action = normalize_action(action, &["create", "write", "delete"], "skill")?;
     let candidate = ReviewCandidate {
         id: new_candidate_id(),
@@ -176,10 +179,11 @@ pub fn stage_skill_candidate(
         source: normalize_source(source),
         reason: normalize_reason(reason),
         created_at: unix_timestamp(),
+        session_id: session_id.map(|s| s.to_string()),
         memory: None,
         skill: Some(SkillCandidate {
             action,
-            name: name.trim().to_string(),
+            name: normalized_name,
             description: description.map(|s| s.to_string()),
             body: body.map(|s| s.to_string()),
         }),
@@ -207,6 +211,7 @@ pub fn list_candidates(vela_home: &Path) -> Result<Vec<ReviewCandidate>> {
 }
 
 pub fn get_candidate(vela_home: &Path, id: &str) -> Result<ReviewCandidate> {
+    let id = validate_candidate_id(id)?;
     let path = candidates_dir(vela_home).join(format!("{id}.json"));
     let text = fs::read_to_string(&path)
         .with_context(|| format!("review candidate {:?} not found", id))?;
@@ -215,6 +220,7 @@ pub fn get_candidate(vela_home: &Path, id: &str) -> Result<ReviewCandidate> {
 }
 
 pub fn reject_candidate(vela_home: &Path, id: &str) -> Result<()> {
+    let id = validate_candidate_id(id)?;
     let path = candidates_dir(vela_home).join(format!("{id}.json"));
     fs::remove_file(&path).with_context(|| format!("review candidate {:?} not found", id))?;
     Ok(())
@@ -356,6 +362,7 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                     Some(&candidate_text),
                     &format!("Transcript-derived preference from session {}.", input.session_title),
                     Some("session-transcript"),
+                    Some(&input.session_id),
                 )?;
                 memory_seen.insert(key);
                 candidate_ids.push(candidate.id);
@@ -393,6 +400,7 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                         .and_then(Value::as_str)
                         .unwrap_or("Structured memory signal from session event."),
                     payload.get("source").and_then(Value::as_str),
+                    Some(&input.session_id),
                 )?;
                 if let Some(text) = new_text {
                     memory_seen.insert(normalize_dedupe_text(text));
@@ -403,7 +411,14 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
             if let Some(payload) = parse_event_payload(&event.payload_json) {
                 let action = payload.get("action").and_then(Value::as_str).unwrap_or("create");
                 let name = payload.get("name").and_then(Value::as_str).unwrap_or("");
-                if name.trim().is_empty() || (action == "create" && skill_seen.contains(name)) {
+                let normalized_name = match vela_skills::normalize_skill_name(name) {
+                    Ok(name) => name,
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                if action == "create" && skill_seen.contains(&normalized_name) {
                     skipped += 1;
                     continue;
                 }
@@ -418,8 +433,9 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                         .and_then(Value::as_str)
                         .unwrap_or("Structured skill signal from session event."),
                     payload.get("source").and_then(Value::as_str),
+                    Some(&input.session_id),
                 )?;
-                skill_seen.insert(name.to_string());
+                skill_seen.insert(candidate.skill.as_ref().map(|s| s.name.clone()).unwrap_or_default());
                 candidate_ids.push(candidate.id);
             }
         }
@@ -576,6 +592,14 @@ fn parse_event_payload(payload_json: &str) -> Option<Value> {
 
 fn normalize_dedupe_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
+}
+
+fn validate_candidate_id(id: &str) -> Result<&str> {
+    let id = id.trim();
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        bail!("invalid review candidate id");
+    }
+    Ok(id)
 }
 
 fn write_candidate(vela_home: &Path, candidate: &ReviewCandidate) -> Result<()> {

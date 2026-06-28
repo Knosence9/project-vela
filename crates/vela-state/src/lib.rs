@@ -155,6 +155,7 @@ pub fn current_session_summary(state_db_path: &Path) -> Result<Option<SessionSum
 pub fn search_session_history(state_db_path: &Path, query: &str, limit: usize) -> Result<Vec<SessionSearchHit>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    let query = fts_query(query);
     let mut stmt = conn.prepare(
         "SELECT session_id, title, message_id, snippet(message_fts, 3, '[', ']', '…', 12)
          FROM message_fts
@@ -183,6 +184,21 @@ pub fn inspect_latest_session(state_db_path: &Path, limit: usize) -> Result<Opti
         return Ok(None);
     };
     Ok(Some(load_session_inspection(&conn, &session.id, &session.title, limit)?))
+}
+
+pub fn append_event_to_session(
+    state_db_path: &Path,
+    session_id: &str,
+    event_type: &str,
+    payload_json: String,
+) -> Result<bool> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    if session_title(&conn, session_id)?.is_none() {
+        return Ok(false);
+    }
+    append_event(&conn, session_id, event_type, payload_json)?;
+    Ok(true)
 }
 
 pub fn append_event_to_latest_session(state_db_path: &Path, event_type: &str, payload_json: String) -> Result<bool> {
@@ -381,20 +397,22 @@ fn append_message(
     content: &str,
     metadata_json: Option<String>,
 ) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
     let now = unix_timestamp();
     let id = format!("msg-{}-{}", session_id, unix_timestamp_nanos());
-    conn.execute(
+    tx.execute(
         "INSERT INTO messages(id, session_id, role, content, created_at, metadata_json)
          VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
         params![id, session_id, role, content, now, metadata_json],
     )?;
-    let session_title = session_title(conn, session_id)?.unwrap_or_else(|| session_id.to_string());
-    conn.execute(
+    let session_title = session_title(&tx, session_id)?.unwrap_or_else(|| session_id.to_string());
+    tx.execute(
         "INSERT INTO message_fts(message_id, session_id, title, content)
          VALUES(?1, ?2, ?3, ?4)",
         params![id, session_id, session_title, content],
     )?;
-    touch_session_at(conn, session_id, now)?;
+    touch_session_at(&tx, session_id, now)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -415,7 +433,7 @@ fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, lim
         "SELECT id, role, content, created_at
          FROM messages
          WHERE session_id = ?1
-         ORDER BY created_at DESC
+         ORDER BY created_at DESC, id DESC
          LIMIT ?2",
     )?;
     let message_rows = message_stmt.query_map(params![session_id, limit as i64], |row| {
@@ -436,7 +454,7 @@ fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, lim
         "SELECT id, event_type, payload_json, created_at
          FROM session_events
          WHERE session_id = ?1
-         ORDER BY created_at DESC
+         ORDER BY created_at DESC, id DESC
          LIMIT ?2",
     )?;
     let event_rows = event_stmt.query_map(params![session_id, limit as i64], |row| {
@@ -569,6 +587,14 @@ fn touch_session_at(conn: &Connection, session_id: &str, timestamp: i64) -> Resu
         params![session_id, timestamp],
     )?;
     Ok(())
+}
+
+fn fts_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 fn unix_timestamp() -> i64 {
