@@ -21,6 +21,25 @@
 - `gateway/config.py` explicitly documents legacy fallback from `~/.vela/gateway.json` into `config.yaml` processing.
 - `gateway/config.py` says failed `config.yaml` processing falls back to `.env` / `gateway.json` values.
 
+## Implemented in the Rust scaffold
+- pre-argparse `--profile` / `-p` handling now runs before clap parsing
+- profile override sets `VELA_HOME` before the main parser runs
+- sticky profile fallback reads `~/.vela/active_profile` if present
+- bootstrap creates the resolved `VELA_HOME` directory
+- env loading prefers `{VELA_HOME}/.env`
+- project `.env` is only used as fallback when `{VELA_HOME}/.env` is absent
+- user config is discovered at `{VELA_HOME}/config.yaml`
+- project fallback config is discovered at `./cli-config.yaml`
+- `--ignore-user-config` and `VELA_IGNORE_USER_CONFIG=1` suppress the user config and allow project fallback to become active
+- when both configs exist and user config is not ignored, project config is marked lower precedence
+- YAML parsing and merge scaffolding now resolves these fields:
+  - `display.interface`
+  - `hooks_auto_accept`
+  - `security.redact_secrets`
+  - `network.force_ipv4`
+- resolved `hooks_auto_accept` and `security.redact_secrets` are also bridged into env vars
+- `status` prints the resolved home path, loaded env files, config-source decisions, and resolved config fields for parity checking
+
 ## Confirmed env vars and config knobs worth preserving first
 - `VELA_IGNORE_USER_CONFIG`
 - `VELA_DEFER_AGENT_STARTUP`
@@ -51,8 +70,9 @@
 - `API_SERVER_PORT`
 
 ## Still needed
-- exact config precedence order across `.env`, user config, project config, and legacy gateway config
+- exact config precedence order including legacy `gateway.json`
 - default values for key settings
-- profile/account behavior
+- profile/account behavior beyond path selection
 - invalid-config failure behavior
-- exact mapping from config keys to env vars
+- exact mapping from config keys to env vars beyond the currently bridged fields
+- broader YAML coverage beyond the first resolved field set

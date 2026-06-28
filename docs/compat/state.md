@@ -29,15 +29,29 @@ Behavior-relevant state modules observed:
 - `vela_state.py` contains automatic repair paths for malformed `state.db` FTS/schema cases.
 - The code explicitly treats `state.db` and `kanban.db` as behavior-relevant durability surfaces.
 
+## Implemented in the Rust scaffold
+- persistence bootstrap now creates `{VELA_HOME}/sessions`
+- persistence bootstrap now creates and opens `{VELA_HOME}/state.db`
+- `state.db` currently initializes a minimal `state_meta` table
+- bootstrap writes and increments a durable `bootstrap_runs` counter in `state.db`
+- bootstrap records the snapshot compatibility pattern `sessions/session_<id>.json` in `state.db`
+- `status` reports:
+  - `state.db` path
+  - whether the DB existed before startup
+  - bootstrap run count
+  - sessions directory path
+  - snapshot pattern
+- repeated startup against the same `VELA_HOME` now proves first-step restart continuity by incrementing `bootstrap_runs`
+
 ## README-visible migration behavior to preserve
 - OpenClaw migration via `vela claw migrate`
 - imports can include settings, memories, skills, API keys, allowlists, messaging settings, TTS assets, and AGENTS.md workspace instructions
 
 ## Still needed
-- exact on-disk directory layout under `~/.vela`
-- complete session persistence format and schema
+- complete session persistence format and schema beyond `state_meta`
 - transcript/history query behavior
 - approval persistence behavior
 - pairing/auth persistence behavior
 - scheduler persistence behavior
-- restart continuity semantics across CLI and gateway
+- WAL/DELETE durability behavior
+- restart continuity semantics across CLI and gateway beyond the bootstrap counter
