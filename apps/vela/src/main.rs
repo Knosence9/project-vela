@@ -698,17 +698,6 @@ fn main() -> Result<()> {
         }
         Some(Commands::Plan) => println!("docs/vela-rust-agentic-os-plan.md"),
         Some(Commands::Gateway(args)) => {
-            if args.setup {
-                let report = vela_runtime::setup_gateway(&bootstrap)?;
-                println!(
-                    "gateway setup: dir={} config={} existed_before={} inbox={} outbox={}",
-                    report.gateway_dir.display(),
-                    report.config_path.display(),
-                    report.config_existed_before,
-                    report.inbox_dir.display(),
-                    report.outbox_dir.display(),
-                );
-            }
             if args.start {
                 let report = vela_runtime::start_gateway(&bootstrap)?;
                 println!(
@@ -717,6 +706,16 @@ fn main() -> Result<()> {
                     report.session.action.label(),
                     report.session.title,
                     report.setup.config_path.display(),
+                );
+            } else if args.setup {
+                let report = vela_runtime::setup_gateway(&bootstrap)?;
+                println!(
+                    "gateway setup: dir={} config={} existed_before={} inbox={} outbox={}",
+                    report.gateway_dir.display(),
+                    report.config_path.display(),
+                    report.config_existed_before,
+                    report.inbox_dir.display(),
+                    report.outbox_dir.display(),
                 );
             }
             if !args.setup && !args.start {

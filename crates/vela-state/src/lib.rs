@@ -348,9 +348,10 @@ pub fn resolve_command_session(
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
 
     if let Some(session) = latest_session_for_command(&conn, command_name)? {
-        touch_session(&conn, &session.id)?;
+        let tx = conn.unchecked_transaction()?;
+        touch_session(&tx, &session.id)?;
         append_event(
-            &conn,
+            &tx,
             &session.id,
             "session_resumed",
             json!({
@@ -361,6 +362,7 @@ pub fn resolve_command_session(
             })
             .to_string(),
         )?;
+        tx.commit()?;
         return Ok(SessionRuntimeReport {
             session_id: session.id,
             action: SessionAction::ResumedLatest,
@@ -369,17 +371,18 @@ pub fn resolve_command_session(
         });
     }
 
+    let tx = conn.unchecked_transaction()?;
     let now = unix_timestamp();
     let unique = unix_timestamp_nanos();
     let session_id = format!("session-{}", unique);
     let title = format!("{}-{}", command_name, unique);
-    conn.execute(
+    tx.execute(
         "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at)
          VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
         params![session_id, title, command_name, interaction_mode.label(), now],
     )?;
     append_event(
-        &conn,
+        &tx,
         &session_id,
         "session_created",
         json!({
@@ -391,6 +394,7 @@ pub fn resolve_command_session(
         })
         .to_string(),
     )?;
+    tx.commit()?;
 
     Ok(SessionRuntimeReport {
         session_id,
