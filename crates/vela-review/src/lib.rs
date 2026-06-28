@@ -36,7 +36,9 @@ pub struct ReviewCandidate {
     pub source: String,
     pub reason: String,
     pub created_at: i64,
-    pub session_id: Option<String>,
+    #[serde(alias = "session_id")]
+    pub origin_session_id: Option<String>,
+    pub origin_session_title: Option<String>,
     pub memory: Option<MemoryCandidate>,
     pub skill: Option<SkillCandidate>,
 }
@@ -129,7 +131,8 @@ pub fn stage_memory_candidate(
     new_text: Option<&str>,
     reason: &str,
     source: Option<&str>,
-    session_id: Option<&str>,
+    origin_session_id: Option<&str>,
+    origin_session_title: Option<&str>,
 ) -> Result<ReviewCandidate> {
     let action = normalize_action(action, &["add", "replace", "remove"], "memory")?;
     if action == "replace" && old_text.unwrap_or_default().trim().is_empty() {
@@ -147,7 +150,8 @@ pub fn stage_memory_candidate(
         source: normalize_source(source),
         reason: normalize_reason(reason),
         created_at: unix_timestamp(),
-        session_id: session_id.map(|s| s.to_string()),
+        origin_session_id: origin_session_id.map(|s| s.to_string()),
+        origin_session_title: origin_session_title.map(|s| s.to_string()),
         memory: Some(MemoryCandidate {
             action,
             target,
@@ -168,7 +172,8 @@ pub fn stage_skill_candidate(
     body: Option<&str>,
     reason: &str,
     source: Option<&str>,
-    session_id: Option<&str>,
+    origin_session_id: Option<&str>,
+    origin_session_title: Option<&str>,
 ) -> Result<ReviewCandidate> {
     let normalized_name = vela_skills::normalize_skill_name(name)
         .context("skill review requires a valid promotable skill name")?;
@@ -179,7 +184,8 @@ pub fn stage_skill_candidate(
         source: normalize_source(source),
         reason: normalize_reason(reason),
         created_at: unix_timestamp(),
-        session_id: session_id.map(|s| s.to_string()),
+        origin_session_id: origin_session_id.map(|s| s.to_string()),
+        origin_session_title: origin_session_title.map(|s| s.to_string()),
         memory: None,
         skill: Some(SkillCandidate {
             action,
@@ -219,11 +225,12 @@ pub fn get_candidate(vela_home: &Path, id: &str) -> Result<ReviewCandidate> {
         .with_context(|| format!("failed to parse {}", path.display()))?)
 }
 
-pub fn reject_candidate(vela_home: &Path, id: &str) -> Result<()> {
+pub fn reject_candidate(vela_home: &Path, id: &str) -> Result<ReviewCandidate> {
+    let candidate = get_candidate(vela_home, id)?;
     let id = validate_candidate_id(id)?;
     let path = candidates_dir(vela_home).join(format!("{id}.json"));
     fs::remove_file(&path).with_context(|| format!("review candidate {:?} not found", id))?;
-    Ok(())
+    Ok(candidate)
 }
 
 pub fn infer_signals(input: &SuggestionInput) -> Result<SignalReport> {
@@ -363,6 +370,7 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                     &format!("Transcript-derived preference from session {}.", input.session_title),
                     Some("session-transcript"),
                     Some(&input.session_id),
+                    Some(&input.session_title),
                 )?;
                 memory_seen.insert(key);
                 candidate_ids.push(candidate.id);
@@ -401,6 +409,7 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                         .unwrap_or("Structured memory signal from session event."),
                     payload.get("source").and_then(Value::as_str),
                     Some(&input.session_id),
+                    Some(&input.session_title),
                 )?;
                 if let Some(text) = new_text {
                     memory_seen.insert(normalize_dedupe_text(text));
@@ -444,6 +453,7 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                         .unwrap_or("Structured skill signal from session event."),
                     payload.get("source").and_then(Value::as_str),
                     Some(&input.session_id),
+                    Some(&input.session_title),
                 )?;
                 skill_seen.insert(candidate.skill.as_ref().map(|s| s.name.clone()).unwrap_or_default());
                 candidate_ids.push(candidate.id);

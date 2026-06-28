@@ -610,3 +610,61 @@ fn unix_timestamp_nanos() -> u128 {
         .unwrap_or_default()
         .as_nanos()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_event_targets_requested_session() {
+        let vela_home = std::env::temp_dir().join(format!("vela-state-test-{}", unix_timestamp_nanos()));
+        let report = initialize_persistence(&vela_home).unwrap();
+
+        let first = resolve_runtime_session(
+            &report.state_db_path,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("first".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+        )
+        .unwrap();
+        let _second = resolve_runtime_session(
+            &report.state_db_path,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("second".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+        )
+        .unwrap();
+
+        assert!(append_event_to_session(
+            &report.state_db_path,
+            &first.session_id,
+            "review_candidate_created",
+            "{}".to_string(),
+        )
+        .unwrap());
+
+        let conn = Connection::open(&report.state_db_path).unwrap();
+        let first_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_events WHERE session_id = ?1 AND event_type = 'review_candidate_created'",
+                params![first.session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_count, 1);
+
+        let _ = fs::remove_dir_all(&vela_home);
+    }
+}
