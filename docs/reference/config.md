@@ -38,7 +38,7 @@
   - `security.redact_secrets`
   - `network.force_ipv4`
 - resolved `hooks_auto_accept` and `security.redact_secrets` are also bridged into env vars
-- `status` prints the resolved home path, loaded env files, config-source decisions, and resolved config fields for parity checking
+- `status` prints the resolved home path, loaded env files, config-source decisions, and resolved config fields for compatibility checking
 
 ## Confirmed env vars and config knobs worth preserving first
 - `VELA_IGNORE_USER_CONFIG`

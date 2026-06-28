@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Vela Rust parity plan
-    url: ../docs/vela-rust-parity-plan.md
-    about: Review the behavior-first rewrite plan before opening new work.
+  - name: Vela Rust agentic OS plan
+    url: ../docs/vela-rust-agentic-os-plan.md
+    about: Review the Rust-first agentic OS plan before opening new work.

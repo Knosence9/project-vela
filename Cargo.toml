@@ -2,8 +2,12 @@
 members = [
   "apps/vela",
   "crates/vela-compat",
+  "crates/vela-config",
   "crates/vela-runtime",
   "crates/vela-state",
+  "crates/vela-memory",
+  "crates/vela-skills",
+  "crates/vela-review",
   "crates/vela-tools",
   "crates/vela-models",
 ]
