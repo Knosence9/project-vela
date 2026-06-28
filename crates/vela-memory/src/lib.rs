@@ -8,6 +8,7 @@ pub const MEMORY_CHAR_LIMIT: usize = 2_200;
 pub const USER_CHAR_LIMIT: usize = 1_375;
 const LEGACY_ENTRY_SEPARATOR: &str = "§";
 const ENTRY_GAP: &str = "\n\n";
+const STORAGE_FORMAT_MARKER: &str = "<!-- vela-memory-format: v2 -->";
 
 #[derive(Debug, Clone)]
 pub struct MemoryReport {
@@ -122,10 +123,8 @@ pub fn initialize_memory(vela_home: &Path) -> Result<MemoryReport> {
     migrate_legacy_file(&memory_path)?;
     migrate_legacy_file(&user_path)?;
 
-    let memory_text = fs::read_to_string(&memory_path)
-        .with_context(|| format!("failed to read {}", memory_path.display()))?;
-    let user_text = fs::read_to_string(&user_path)
-        .with_context(|| format!("failed to read {}", user_path.display()))?;
+    let memory_text = render_entries(&load_entries(vela_home, MemoryTarget::Memory)?);
+    let user_text = render_entries(&load_entries(vela_home, MemoryTarget::User)?);
 
     Ok(MemoryReport {
         memories_dir,
@@ -142,11 +141,8 @@ pub fn initialize_memory(vela_home: &Path) -> Result<MemoryReport> {
 }
 
 pub fn load_snapshot(vela_home: &Path, target: MemoryTarget) -> Result<MemorySnapshot> {
-    let path = target_path(vela_home, target);
-    ensure_file(&path)?;
-    migrate_legacy_file(&path)?;
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let entries = load_entries(vela_home, target)?;
+    let content = render_entries(&entries);
     Ok(MemorySnapshot {
         target,
         char_count: content.chars().count(),
@@ -404,16 +400,16 @@ fn save_entries(vela_home: &Path, target: MemoryTarget, entries: &[String]) -> R
         );
     }
     let path = target_path(vela_home, target);
-    fs::write(&path, rendered).with_context(|| format!("failed to write {}", path.display()))?;
+    fs::write(&path, render_storage(entries)).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
 
 fn parse_entries(content: &str) -> Vec<String> {
-    let trimmed = content.trim();
+    let trimmed = strip_storage_marker(content).trim();
     if trimmed.is_empty() {
         return Vec::new();
     }
-    if is_legacy_separator_format(trimmed) {
+    if is_legacy_separator_format(content) {
         return trimmed
             .split(LEGACY_ENTRY_SEPARATOR)
             .map(str::trim)
@@ -423,7 +419,7 @@ fn parse_entries(content: &str) -> Vec<String> {
     }
 
     trimmed
-        .split("\n\n")
+        .split(ENTRY_GAP)
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
         .map(ToOwned::to_owned)
@@ -432,6 +428,14 @@ fn parse_entries(content: &str) -> Vec<String> {
 
 fn render_entries(entries: &[String]) -> String {
     entries.join(ENTRY_GAP)
+}
+
+fn render_storage(entries: &[String]) -> String {
+    if entries.is_empty() {
+        format!("{STORAGE_FORMAT_MARKER}\n")
+    } else {
+        format!("{STORAGE_FORMAT_MARKER}{ENTRY_GAP}{}", render_entries(entries))
+    }
 }
 
 fn sanitize_entry(content: &str) -> Result<String> {
@@ -475,16 +479,29 @@ fn unique_match_index(entries: &[String], needle: &str) -> Result<usize> {
 fn migrate_legacy_file(path: &Path) -> Result<()> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    if !is_legacy_separator_format(content.trim()) {
+    if !is_legacy_separator_format(&content) {
         return Ok(());
     }
-    let migrated = render_entries(&parse_entries(&content));
+    let migrated = render_storage(&parse_entries(&content));
     fs::write(path, migrated).with_context(|| format!("failed to migrate {}", path.display()))?;
     Ok(())
 }
 
 fn is_legacy_separator_format(content: &str) -> bool {
-    content.contains(LEGACY_ENTRY_SEPARATOR)
+    let trimmed = content.trim();
+    !trimmed.is_empty()
+        && !trimmed.starts_with(STORAGE_FORMAT_MARKER)
+        && !trimmed.contains('\n')
+        && trimmed.contains(LEGACY_ENTRY_SEPARATOR)
+}
+
+fn strip_storage_marker(content: &str) -> &str {
+    let trimmed = content.trim_start();
+    if let Some(rest) = trimmed.strip_prefix(STORAGE_FORMAT_MARKER) {
+        rest.trim_start_matches(['\r', '\n', ' '])
+    } else {
+        content
+    }
 }
 
 fn validate_pending_id(id: &str) -> Result<&str> {
@@ -497,7 +514,8 @@ fn validate_pending_id(id: &str) -> Result<&str> {
 
 fn ensure_file(path: &Path) -> Result<()> {
     if !path.exists() {
-        fs::write(path, "").with_context(|| format!("failed to create {}", path.display()))?;
+        fs::write(path, format!("{STORAGE_FORMAT_MARKER}\n"))
+            .with_context(|| format!("failed to create {}", path.display()))?;
     }
     Ok(())
 }
@@ -543,6 +561,7 @@ mod tests {
         let rendered = render_entries(&entries);
         assert_eq!(rendered, "First memory entry\n\nSecond memory entry\nwith another line\n\nThird entry");
         assert_eq!(parse_entries(&rendered), entries);
+        assert_eq!(parse_entries(&render_storage(&entries)), entries);
     }
 
     #[test]
@@ -560,8 +579,36 @@ mod tests {
         let report = initialize_memory(&vela_home).unwrap();
         assert_eq!(report.memory_char_count, "alpha\n\nbeta\n\ngamma".chars().count());
         assert_eq!(report.user_char_count, "delta\n\nepsilon".chars().count());
-        assert_eq!(fs::read_to_string(memories_dir.join("MEMORY.md")).unwrap(), "alpha\n\nbeta\n\ngamma");
-        assert_eq!(fs::read_to_string(memories_dir.join("USER.md")).unwrap(), "delta\n\nepsilon");
+        assert_eq!(
+            fs::read_to_string(memories_dir.join("MEMORY.md")).unwrap(),
+            "<!-- vela-memory-format: v2 -->\n\nalpha\n\nbeta\n\ngamma"
+        );
+        assert_eq!(
+            fs::read_to_string(memories_dir.join("USER.md")).unwrap(),
+            "<!-- vela-memory-format: v2 -->\n\ndelta\n\nepsilon"
+        );
+
+        fs::remove_dir_all(&vela_home).unwrap();
+    }
+
+    #[test]
+    fn marker_prevents_false_legacy_migration_for_section_sign_entries() {
+        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-marker-{}", unix_timestamp_nanos()));
+        let memories_dir = vela_home.join("memories");
+        fs::create_dir_all(&memories_dir).unwrap();
+        fs::write(
+            memories_dir.join("MEMORY.md"),
+            "<!-- vela-memory-format: v2 -->\n\nentry with § symbol",
+        )
+        .unwrap();
+        fs::write(memories_dir.join("USER.md"), "<!-- vela-memory-format: v2 -->\n").unwrap();
+
+        let view = view_memory(&vela_home, MemoryTarget::Memory).unwrap();
+        assert_eq!(view.entries, vec!["entry with § symbol".to_string()]);
+        assert_eq!(
+            fs::read_to_string(memories_dir.join("MEMORY.md")).unwrap(),
+            "<!-- vela-memory-format: v2 -->\n\nentry with § symbol"
+        );
 
         fs::remove_dir_all(&vela_home).unwrap();
     }
