@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use vela_config::{BootstrapConfig, ConfigSource, ResolvedConfig};
 use vela_memory::MemoryReport;
@@ -25,6 +26,32 @@ pub struct GatewaySetupReport {
 pub struct GatewayStartReport {
     pub setup: GatewaySetupReport,
     pub session: SessionRuntimeReport,
+}
+
+#[derive(Debug, Clone)]
+pub struct SchedulerSetupReport {
+    pub scheduler_dir: std::path::PathBuf,
+    pub config_path: std::path::PathBuf,
+    pub jobs_path: std::path::PathBuf,
+    pub config_existed_before: bool,
+    pub jobs_existed_before: bool,
+    pub job_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SchedulerStartReport {
+    pub setup: SchedulerSetupReport,
+    pub session: SessionRuntimeReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledJob {
+    pub id: String,
+    pub schedule: String,
+    pub task: String,
+    pub source: String,
+    pub status: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -143,7 +170,7 @@ pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> 
         "gateway",
         InteractionMode::Interactive,
     )?;
-    let _ = vela_state::append_event_to_session(
+    let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         &session.session_id,
         "gateway_started",
@@ -156,21 +183,163 @@ pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> 
         })
         .to_string(),
     )?;
-    let _ = vela_state::append_message_to_session(
+    if !event_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append gateway_started event");
+    }
+    if matches!(session.action, SessionAction::Created) {
+        let message_logged = vela_state::append_message_to_session(
+            &bootstrap.persistence.state_db_path,
+            &session.session_id,
+            "system",
+            "Gateway bootstrap ready.",
+            Some(
+                json!({
+                    "source": "gateway",
+                    "direction": "egress",
+                    "config_path": setup.config_path,
+                })
+                .to_string(),
+            ),
+        )?;
+        if !message_logged {
+            tracing::warn!(session_id=%session.session_id, "failed to append gateway bootstrap message");
+        }
+    }
+    Ok(GatewayStartReport { setup, session })
+}
+
+pub fn setup_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerSetupReport> {
+    let scheduler_dir = bootstrap.vela_home.join("scheduler");
+    std::fs::create_dir_all(&scheduler_dir)?;
+
+    let config_path = scheduler_dir.join("config.json");
+    let jobs_path = scheduler_dir.join("jobs.json");
+    let config_existed_before = config_path.is_file();
+    let jobs_existed_before = jobs_path.is_file();
+
+    if !config_existed_before {
+        std::fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&json!({
+                "version": 1,
+                "default_source": "scheduler",
+                "session_command_name": "cron",
+                "active_profile": bootstrap.active_profile,
+                "transport_mode": "local-bootstrap",
+            }))?,
+        )?;
+    }
+    if !jobs_existed_before {
+        std::fs::write(&jobs_path, "[]")?;
+    }
+
+    let job_count = load_scheduler_jobs(&jobs_path)?.len();
+    Ok(SchedulerSetupReport {
+        scheduler_dir,
+        config_path,
+        jobs_path,
+        config_existed_before,
+        jobs_existed_before,
+        job_count,
+    })
+}
+
+pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartReport> {
+    let setup = setup_scheduler(bootstrap)?;
+    let session = vela_state::resolve_command_session(
+        &bootstrap.persistence.state_db_path,
+        "cron",
+        InteractionMode::Interactive,
+    )?;
+    let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         &session.session_id,
-        "system",
-        "Gateway bootstrap ready.",
-        Some(
-            json!({
-                "source": "gateway",
-                "direction": "egress",
-                "config_path": setup.config_path,
-            })
-            .to_string(),
-        ),
+        "scheduler_started",
+        json!({
+            "source": "scheduler",
+            "config_path": setup.config_path,
+            "jobs_path": setup.jobs_path,
+            "job_count": setup.job_count,
+            "action": session.action.label(),
+        })
+        .to_string(),
     )?;
-    Ok(GatewayStartReport { setup, session })
+    if !event_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append scheduler_started event");
+    }
+    if matches!(session.action, SessionAction::Created) {
+        let message_logged = vela_state::append_message_to_session(
+            &bootstrap.persistence.state_db_path,
+            &session.session_id,
+            "system",
+            "Scheduler bootstrap ready.",
+            Some(
+                json!({
+                    "source": "scheduler",
+                    "direction": "egress",
+                    "config_path": setup.config_path,
+                    "jobs_path": setup.jobs_path,
+                })
+                .to_string(),
+            ),
+        )?;
+        if !message_logged {
+            tracing::warn!(session_id=%session.session_id, "failed to append scheduler bootstrap message");
+        }
+    }
+    Ok(SchedulerStartReport { setup, session })
+}
+
+pub fn list_scheduled_jobs(bootstrap: &BootstrapReport) -> Result<Vec<ScheduledJob>> {
+    let setup = setup_scheduler(bootstrap)?;
+    load_scheduler_jobs(&setup.jobs_path)
+}
+
+pub fn get_scheduled_job(bootstrap: &BootstrapReport, id: &str) -> Result<ScheduledJob> {
+    let job_id = validate_scheduler_job_id(id)?;
+    list_scheduled_jobs(bootstrap)?
+        .into_iter()
+        .find(|job| job.id == job_id)
+        .ok_or_else(|| anyhow::anyhow!("scheduled job {:?} not found", job_id))
+}
+
+pub fn add_scheduled_job(
+    bootstrap: &BootstrapReport,
+    schedule: &str,
+    task: &str,
+    source: Option<&str>,
+) -> Result<ScheduledJob> {
+    let setup = setup_scheduler(bootstrap)?;
+    let schedule = normalize_scheduler_schedule(schedule)?;
+    let task = normalize_scheduler_task(task)?;
+    let source = normalize_scheduler_source(source);
+    let mut jobs = load_scheduler_jobs(&setup.jobs_path)?;
+    if jobs.iter().any(|job| job.schedule == schedule && job.task == task && job.source == source && job.status == "pending") {
+        bail!("matching scheduled job is already registered");
+    }
+    let job = ScheduledJob {
+        id: format!("job-{}", unix_timestamp_nanos()),
+        schedule,
+        task,
+        source,
+        status: "pending".to_string(),
+        created_at: unix_timestamp(),
+    };
+    jobs.push(job.clone());
+    save_scheduler_jobs(&setup.jobs_path, &jobs)?;
+
+    if let Some(session) = current_command_session_summary(bootstrap, "cron")? {
+        let event_logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            &session.id,
+            "scheduler_job_registered",
+            serde_json::to_string(&job)?,
+        )?;
+        if !event_logged {
+            tracing::warn!(session_id=%session.id, job_id=%job.id, "failed to append scheduler job event");
+        }
+    }
+    Ok(job)
 }
 
 pub fn search_session_history(bootstrap: &BootstrapReport, query: &str, limit: usize) -> Result<Vec<SessionSearchHit>> {
@@ -524,6 +693,68 @@ fn append_review_event(
     Ok(())
 }
 
+fn load_scheduler_jobs(path: &std::path::Path) -> Result<Vec<ScheduledJob>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&content)?)
+}
+
+fn save_scheduler_jobs(path: &std::path::Path, jobs: &[ScheduledJob]) -> Result<()> {
+    std::fs::write(path, serde_json::to_string_pretty(jobs)?)?;
+    Ok(())
+}
+
+fn normalize_scheduler_schedule(value: &str) -> Result<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        bail!("scheduler expression cannot be empty");
+    }
+    Ok(normalized)
+}
+
+fn normalize_scheduler_task(value: &str) -> Result<String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        bail!("scheduled task cannot be empty");
+    }
+    Ok(normalized.to_string())
+}
+
+fn normalize_scheduler_source(source: Option<&str>) -> String {
+    source
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("scheduler")
+        .to_string()
+}
+
+fn validate_scheduler_job_id(id: &str) -> Result<&str> {
+    let normalized = id.trim();
+    if normalized.is_empty() || normalized == "." || normalized == ".." || normalized.contains('/') || normalized.contains('\\') {
+        bail!("invalid scheduled job id");
+    }
+    Ok(normalized)
+}
+
+fn unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn unix_timestamp_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
 pub fn generate_review_candidates_from_latest_session(
     bootstrap: &BootstrapReport,
     limit: usize,
@@ -613,3 +844,38 @@ impl BootstrapReport {
 
 pub use vela_memory::{MemoryTarget, MEMORY_CHAR_LIMIT, USER_CHAR_LIMIT};
 pub use vela_state::SessionRequest;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduler_jobs_persist_and_dedupe() {
+        let vela_home = std::env::temp_dir().join(format!("vela-runtime-scheduler-test-{}", unix_timestamp_nanos()));
+        let bootstrap = BootstrapReport {
+            vela_home: vela_home.clone(),
+            active_profile: None,
+            loaded_env_paths: vec![],
+            ignored_user_config: false,
+            config_sources: vec![],
+            resolved_config: ResolvedConfig::default(),
+            persistence: vela_state::initialize_persistence(&vela_home).unwrap(),
+            memory: vela_memory::initialize_memory(&vela_home).unwrap(),
+            skills: vela_skills::initialize_skills(&vela_home).unwrap(),
+            reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
+        };
+
+        let first = add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None).unwrap();
+        let jobs = list_scheduled_jobs(&bootstrap).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, first.id);
+
+        let err = add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None).unwrap_err();
+        assert!(err.to_string().contains("already registered"));
+
+        let fetched = get_scheduled_job(&bootstrap, &first.id).unwrap();
+        assert_eq!(fetched.task, "ping status");
+
+        std::fs::remove_dir_all(&vela_home).unwrap();
+    }
+}
