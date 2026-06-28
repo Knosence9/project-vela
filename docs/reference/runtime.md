@@ -16,17 +16,18 @@
 - bare `--continue` resumes the latest session
 - interactive vs single-turn mode is derived from whether query/image input is present
 - `status` reports the latest active session identity
+- `gateway` now bootstraps durable gateway directories/config and can resume a gateway-specific runtime session
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session when no explicit resume target is given
 - `vela chat --query ...` creates a single-turn session
 - repeated resume/continue paths update `updated_at` on the matching session row
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
+- `vela gateway start` resumes the latest `gateway` command session when one already exists
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
-- transcript persistence
 - turn lifecycle persistence
 - session branching/compression semantics
