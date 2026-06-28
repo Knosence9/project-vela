@@ -697,7 +697,48 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::Plan) => println!("docs/vela-rust-agentic-os-plan.md"),
-        Some(Commands::Gateway(args)) => println!("gateway placeholder: setup={} start={}", args.setup, args.start),
+        Some(Commands::Gateway(args)) => {
+            if args.setup {
+                let report = vela_runtime::setup_gateway(&bootstrap)?;
+                println!(
+                    "gateway setup: dir={} config={} existed_before={} inbox={} outbox={}",
+                    report.gateway_dir.display(),
+                    report.config_path.display(),
+                    report.config_existed_before,
+                    report.inbox_dir.display(),
+                    report.outbox_dir.display(),
+                );
+            }
+            if args.start {
+                let report = vela_runtime::start_gateway(&bootstrap)?;
+                println!(
+                    "gateway started: session={} action={} title={} config={}",
+                    report.session.session_id,
+                    report.session.action.label(),
+                    report.session.title,
+                    report.setup.config_path.display(),
+                );
+            }
+            if !args.setup && !args.start {
+                let report = vela_runtime::setup_gateway(&bootstrap)?;
+                match vela_runtime::current_command_session_summary(&bootstrap, "gateway")? {
+                    Some(session) => println!(
+                        "gateway ready: config={} session={} title={} messages={} events={}",
+                        report.config_path.display(),
+                        session.id,
+                        session.title,
+                        session.message_count,
+                        session.event_count,
+                    ),
+                    None => println!(
+                        "gateway ready: config={} session=none inbox={} outbox={}",
+                        report.config_path.display(),
+                        report.inbox_dir.display(),
+                        report.outbox_dir.display(),
+                    ),
+                }
+            }
+        }
         Some(Commands::Sessions(args)) => {
             if let Some(query) = args.search.as_deref() {
                 let hits = vela_runtime::search_session_history(&bootstrap, query, 10)?;

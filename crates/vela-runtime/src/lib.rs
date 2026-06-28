@@ -13,6 +13,21 @@ pub use vela_state::{
 };
 
 #[derive(Debug, Clone)]
+pub struct GatewaySetupReport {
+    pub gateway_dir: std::path::PathBuf,
+    pub config_path: std::path::PathBuf,
+    pub inbox_dir: std::path::PathBuf,
+    pub outbox_dir: std::path::PathBuf,
+    pub config_existed_before: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct GatewayStartReport {
+    pub setup: GatewaySetupReport,
+    pub session: SessionRuntimeReport,
+}
+
+#[derive(Debug, Clone)]
 pub struct BootstrapReport {
     pub vela_home: std::path::PathBuf,
     pub active_profile: Option<String>,
@@ -77,8 +92,85 @@ pub fn current_session_summary(bootstrap: &BootstrapReport) -> Result<Option<Ses
     vela_state::current_session_summary(&bootstrap.persistence.state_db_path)
 }
 
+pub fn current_command_session_summary(
+    bootstrap: &BootstrapReport,
+    command_name: &str,
+) -> Result<Option<SessionSummary>> {
+    vela_state::current_command_session_summary(&bootstrap.persistence.state_db_path, command_name)
+}
+
 pub fn resolve_runtime_session(bootstrap: &BootstrapReport, request: &SessionRequest) -> Result<SessionRuntimeReport> {
     vela_state::resolve_runtime_session(&bootstrap.persistence.state_db_path, request)
+}
+
+pub fn setup_gateway(bootstrap: &BootstrapReport) -> Result<GatewaySetupReport> {
+    let gateway_dir = bootstrap.vela_home.join("gateway");
+    std::fs::create_dir_all(&gateway_dir)?;
+    let inbox_dir = gateway_dir.join("inbox");
+    let outbox_dir = gateway_dir.join("outbox");
+    std::fs::create_dir_all(&inbox_dir)?;
+    std::fs::create_dir_all(&outbox_dir)?;
+
+    let config_path = gateway_dir.join("config.json");
+    let config_existed_before = config_path.is_file();
+    if !config_existed_before {
+        std::fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&json!({
+                "version": 1,
+                "default_source": "gateway",
+                "session_command_name": "gateway",
+                "active_profile": bootstrap.active_profile,
+                "display_interface": bootstrap.resolved_config.display_interface,
+                "transport_mode": "local-bootstrap",
+            }))?,
+        )?;
+    }
+
+    Ok(GatewaySetupReport {
+        gateway_dir,
+        config_path,
+        inbox_dir,
+        outbox_dir,
+        config_existed_before,
+    })
+}
+
+pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> {
+    let setup = setup_gateway(bootstrap)?;
+    let session = vela_state::resolve_command_session(
+        &bootstrap.persistence.state_db_path,
+        "gateway",
+        InteractionMode::Interactive,
+    )?;
+    let _ = vela_state::append_event_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "gateway_started",
+        json!({
+            "source": "gateway",
+            "config_path": setup.config_path,
+            "inbox_dir": setup.inbox_dir,
+            "outbox_dir": setup.outbox_dir,
+            "action": session.action.label(),
+        })
+        .to_string(),
+    )?;
+    let _ = vela_state::append_message_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "system",
+        "Gateway bootstrap ready.",
+        Some(
+            json!({
+                "source": "gateway",
+                "direction": "egress",
+                "config_path": setup.config_path,
+            })
+            .to_string(),
+        ),
+    )?;
+    Ok(GatewayStartReport { setup, session })
 }
 
 pub fn search_session_history(bootstrap: &BootstrapReport, query: &str, limit: usize) -> Result<Vec<SessionSearchHit>> {

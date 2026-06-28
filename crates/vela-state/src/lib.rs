@@ -152,6 +152,15 @@ pub fn current_session_summary(state_db_path: &Path) -> Result<Option<SessionSum
     Ok(Some(load_summary(&conn, &session.id, &session.title)?))
 }
 
+pub fn current_command_session_summary(state_db_path: &Path, command_name: &str) -> Result<Option<SessionSummary>> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    let Some(session) = latest_session_for_command(&conn, command_name)? else {
+        return Ok(None);
+    };
+    Ok(Some(load_summary(&conn, &session.id, &session.title)?))
+}
+
 pub fn search_session_history(state_db_path: &Path, query: &str, limit: usize) -> Result<Vec<SessionSearchHit>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -198,6 +207,22 @@ pub fn append_event_to_session(
         return Ok(false);
     }
     append_event(&conn, session_id, event_type, payload_json)?;
+    Ok(true)
+}
+
+pub fn append_message_to_session(
+    state_db_path: &Path,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    metadata_json: Option<String>,
+) -> Result<bool> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    if session_title(&conn, session_id)?.is_none() {
+        return Ok(false);
+    }
+    append_message(&conn, session_id, role, content, metadata_json)?;
     Ok(true)
 }
 
@@ -305,6 +330,67 @@ pub fn resolve_runtime_session(state_db_path: &Path, request: &SessionRequest) -
         .to_string(),
     )?;
     append_request_message_if_present(&conn, &session_id, request)?;
+
+    Ok(SessionRuntimeReport {
+        session_id,
+        action: SessionAction::Created,
+        interaction_mode,
+        title,
+    })
+}
+
+pub fn resolve_command_session(
+    state_db_path: &Path,
+    command_name: &str,
+    interaction_mode: InteractionMode,
+) -> Result<SessionRuntimeReport> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+
+    if let Some(session) = latest_session_for_command(&conn, command_name)? {
+        touch_session(&conn, &session.id)?;
+        append_event(
+            &conn,
+            &session.id,
+            "session_resumed",
+            json!({
+                "action": SessionAction::ResumedLatest.label(),
+                "command_name": command_name,
+                "interaction_mode": interaction_mode.label(),
+                "source": "gateway",
+            })
+            .to_string(),
+        )?;
+        return Ok(SessionRuntimeReport {
+            session_id: session.id,
+            action: SessionAction::ResumedLatest,
+            interaction_mode,
+            title: session.title,
+        });
+    }
+
+    let now = unix_timestamp();
+    let unique = unix_timestamp_nanos();
+    let session_id = format!("session-{}", unique);
+    let title = format!("{}-{}", command_name, unique);
+    conn.execute(
+        "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
+        params![session_id, title, command_name, interaction_mode.label(), now],
+    )?;
+    append_event(
+        &conn,
+        &session_id,
+        "session_created",
+        json!({
+            "command_name": command_name,
+            "interaction_mode": interaction_mode.label(),
+            "query_present": false,
+            "image_present": false,
+            "source": "gateway",
+        })
+        .to_string(),
+    )?;
 
     Ok(SessionRuntimeReport {
         session_id,
@@ -533,6 +619,21 @@ fn latest_session(conn: &Connection) -> Result<Option<StoredSession>> {
         .optional()?)
 }
 
+fn latest_session_for_command(conn: &Connection, command_name: &str) -> Result<Option<StoredSession>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, title FROM sessions WHERE command_name = ?1 ORDER BY updated_at DESC, id DESC LIMIT 1",
+            params![command_name],
+            |row| {
+                Ok(StoredSession {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 fn find_session_by_title(conn: &Connection, title: &str) -> Result<Option<StoredSession>> {
     Ok(conn
         .query_row(
@@ -664,6 +765,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(first_count, 1);
+
+        let _ = fs::remove_dir_all(&vela_home);
+    }
+
+    #[test]
+    fn resolve_command_session_reuses_latest_matching_command() {
+        let vela_home = std::env::temp_dir().join(format!("vela-state-gateway-test-{}", unix_timestamp_nanos()));
+        let report = initialize_persistence(&vela_home).unwrap();
+
+        let first = resolve_command_session(&report.state_db_path, "gateway", InteractionMode::Interactive).unwrap();
+        let second = resolve_command_session(&report.state_db_path, "gateway", InteractionMode::Interactive).unwrap();
+
+        assert_eq!(first.session_id, second.session_id);
+        assert!(matches!(first.action, SessionAction::Created));
+        assert!(matches!(second.action, SessionAction::ResumedLatest));
+
+        assert!(append_message_to_session(
+            &report.state_db_path,
+            &second.session_id,
+            "system",
+            "Gateway bootstrap ready.",
+            Some(json!({"source": "gateway", "direction": "egress"}).to_string()),
+        )
+        .unwrap());
+
+        let summary = current_command_session_summary(&report.state_db_path, "gateway")
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.id, first.session_id);
+        assert_eq!(summary.message_count, 1);
 
         let _ = fs::remove_dir_all(&vela_home);
     }
