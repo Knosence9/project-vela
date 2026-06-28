@@ -14,7 +14,7 @@ This pass captures the first behavior-first inventory facts for `NousResearch/ve
   - package name: `vela-agent`
   - `private: true`
   - workspaces: `apps/*`, `ui-tui`, `ui-tui/packages/*`, `web`
-- The rewrite must preserve **two main entry surfaces** documented in the README:
+- The rewrite should continue to support **two main entry surfaces** documented in the README:
   - CLI via `vela`
   - messaging gateway via `vela gateway setup` and `vela gateway start`
 
@@ -145,11 +145,11 @@ Observed behavior-heavy modules include:
 - `credential_persistence.py`
 - `iteration_budget.py`
 
-## Packaging implications for parity
+## Packaging implications for the Rust migration
 - A Rust rewrite must treat Vela as more than a Python CLI; it includes Node workspace surfaces.
-- The first parity target should preserve the Python-visible entry behavior while leaving web/TUI/desktop surfaces as clients until later.
+- The first kernel target should preserve the Python-visible entry behavior while leaving web/TUI/desktop surfaces as clients until later.
 
-## Newly confirmed exact parity facts
+## Newly confirmed exact compatibility facts
 - `pyproject.toml` declares these Python entrypoints:
   - `vela -> vela_cli.main:main`
   - `vela-agent -> run_agent:main`

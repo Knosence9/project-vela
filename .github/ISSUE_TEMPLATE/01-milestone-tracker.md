@@ -1,11 +1,11 @@
 ---
 name: Milestone tracker
-about: Track a major parity milestone in the Vela Rust rewrite
-labels: [milestone, parity]
+about: Track a major Vela Rust agentic-OS milestone
+labels: [milestone]
 ---
 
 ## Goal
-What behavior boundary does this milestone preserve?
+What meaningful capability does this milestone add to a more alive Vela?
 
 ## Scope
 - 
@@ -16,19 +16,22 @@ What behavior boundary does this milestone preserve?
 - 
 - 
 
-## Compatibility contract
-Link the source of truth for the Vela behavior this milestone must match.
+## Why now
+Why is this the right next vertical slice instead of a larger rewrite?
+
+## Kernel / extension boundary
+What belongs in the Rust kernel here, and what should remain reloadable/configurable?
 
 ## Child slices
 - [ ] 
 - [ ] 
 - [ ] 
 
-## Parity proof required
-- [ ] Golden tests
-- [ ] Fixture replay
-- [ ] Side-by-side comparison
-- [ ] State transition verification
+## Verification required
+- [ ] End-to-end scenario works
+- [ ] State continuity verified
+- [ ] Failure behavior reviewed
+- [ ] Reload/config behavior reviewed (if applicable)
 
 ## Exit gate
 What must be true before this milestone can close?

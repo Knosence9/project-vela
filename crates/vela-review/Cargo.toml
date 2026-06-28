@@ -1,15 +1,12 @@
 [package]
-name = "vela-runtime"
+name = "vela-review"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
-vela-config = { path = "../vela-config" }
 vela-memory = { path = "../vela-memory" }
 vela-skills = { path = "../vela-skills" }
-vela-review = { path = "../vela-review" }
-vela-state = { path = "../vela-state" }
