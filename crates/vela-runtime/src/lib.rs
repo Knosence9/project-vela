@@ -264,25 +264,22 @@ pub fn stage_memory_review_candidate(
         reason,
         source,
         origin.as_ref().map(|(id, _)| id.as_str()),
+        origin.as_ref().map(|(_, title)| title.as_str()),
     )?;
-    if let Some(session_id) = candidate.session_id.as_deref() {
-        let logged = vela_state::append_event_to_session(
-            &bootstrap.persistence.state_db_path,
-            session_id,
-            "review_candidate_created",
-            json!({
-                "candidate_id": candidate.id,
-                "kind": candidate.kind.label(),
-                "source": candidate.source,
-                "reason": candidate.reason,
-                "session_id": candidate.session_id,
-            })
-            .to_string(),
-        )?;
-        if !logged {
-            tracing::warn!("failed to append review_candidate_created event to originating session");
-        }
-    }
+    append_review_event(
+        bootstrap,
+        candidate.origin_session_id.as_deref(),
+        "review_candidate_created",
+        json!({
+            "candidate_id": candidate.id,
+            "kind": candidate.kind.label(),
+            "source": candidate.source,
+            "reason": candidate.reason,
+            "origin_session_id": candidate.origin_session_id.clone(),
+            "origin_session_title": candidate.origin_session_title.clone(),
+        })
+        .to_string(),
+    )?;
     Ok(candidate)
 }
 
@@ -305,69 +302,57 @@ pub fn stage_skill_review_candidate(
         reason,
         source,
         origin.as_ref().map(|(id, _)| id.as_str()),
+        origin.as_ref().map(|(_, title)| title.as_str()),
     )?;
-    if let Some(session_id) = candidate.session_id.as_deref() {
-        let logged = vela_state::append_event_to_session(
-            &bootstrap.persistence.state_db_path,
-            session_id,
-            "review_candidate_created",
-            json!({
-                "candidate_id": candidate.id,
-                "kind": candidate.kind.label(),
-                "source": candidate.source,
-                "reason": candidate.reason,
-                "session_id": candidate.session_id,
-            })
-            .to_string(),
-        )?;
-        if !logged {
-            tracing::warn!("failed to append review_candidate_created event to originating session");
-        }
-    }
+    append_review_event(
+        bootstrap,
+        candidate.origin_session_id.as_deref(),
+        "review_candidate_created",
+        json!({
+            "candidate_id": candidate.id,
+            "kind": candidate.kind.label(),
+            "source": candidate.source,
+            "reason": candidate.reason,
+            "origin_session_id": candidate.origin_session_id.clone(),
+            "origin_session_title": candidate.origin_session_title.clone(),
+        })
+        .to_string(),
+    )?;
     Ok(candidate)
 }
 
 pub fn promote_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<vela_review::PromotionReport> {
     let candidate = vela_review::get_candidate(&bootstrap.vela_home, id)?;
     let report = vela_review::promote_candidate(&bootstrap.vela_home, id)?;
-    if let Some(session_id) = candidate.session_id.as_deref() {
-        let logged = vela_state::append_event_to_session(
-            &bootstrap.persistence.state_db_path,
-            session_id,
-            "review_candidate_promoted",
-            json!({
-                "candidate_id": report.candidate_id,
-                "kind": report.kind.label(),
-                "pending_id": report.pending_id,
-                "session_id": candidate.session_id,
-            })
-            .to_string(),
-        )?;
-        if !logged {
-            tracing::warn!("failed to append review_candidate_promoted event to originating session");
-        }
-    }
+    append_review_event(
+        bootstrap,
+        candidate.origin_session_id.as_deref(),
+        "review_candidate_promoted",
+        json!({
+            "candidate_id": report.candidate_id,
+            "kind": report.kind.label(),
+            "pending_id": report.pending_id,
+            "origin_session_id": candidate.origin_session_id.clone(),
+            "origin_session_title": candidate.origin_session_title.clone(),
+        })
+        .to_string(),
+    )?;
     Ok(report)
 }
 
 pub fn reject_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
-    let candidate = vela_review::get_candidate(&bootstrap.vela_home, id)?;
-    vela_review::reject_candidate(&bootstrap.vela_home, id)?;
-    if let Some(session_id) = candidate.session_id.as_deref() {
-        let logged = vela_state::append_event_to_session(
-            &bootstrap.persistence.state_db_path,
-            session_id,
-            "review_candidate_rejected",
-            json!({
-                "candidate_id": id,
-                "session_id": candidate.session_id,
-            })
-            .to_string(),
-        )?;
-        if !logged {
-            tracing::warn!("failed to append review_candidate_rejected event to originating session");
-        }
-    }
+    let candidate = vela_review::reject_candidate(&bootstrap.vela_home, id)?;
+    append_review_event(
+        bootstrap,
+        candidate.origin_session_id.as_deref(),
+        "review_candidate_rejected",
+        json!({
+            "candidate_id": id,
+            "origin_session_id": candidate.origin_session_id.clone(),
+            "origin_session_title": candidate.origin_session_title.clone(),
+        })
+        .to_string(),
+    )?;
     Ok(())
 }
 
@@ -427,6 +412,26 @@ pub fn emit_review_signals_from_latest_session(
     Ok(Some(report))
 }
 
+fn append_review_event(
+    bootstrap: &BootstrapReport,
+    session_id: Option<&str>,
+    event_type: &str,
+    payload_json: String,
+) -> Result<()> {
+    if let Some(session_id) = session_id {
+        let logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            session_id,
+            event_type,
+            payload_json,
+        )?;
+        if !logged {
+            tracing::warn!(%session_id, %event_type, "failed to append review event to originating session");
+        }
+    }
+    Ok(())
+}
+
 pub fn generate_review_candidates_from_latest_session(
     bootstrap: &BootstrapReport,
     limit: usize,
@@ -457,6 +462,23 @@ pub fn generate_review_candidates_from_latest_session(
                 .collect(),
         },
     )?;
+    for candidate_id in &report.candidate_ids {
+        let candidate = vela_review::get_candidate(&bootstrap.vela_home, candidate_id)?;
+        append_review_event(
+            bootstrap,
+            candidate.origin_session_id.as_deref(),
+            "review_candidate_created",
+            json!({
+                "candidate_id": candidate.id,
+                "kind": candidate.kind.label(),
+                "source": candidate.source,
+                "reason": candidate.reason,
+                "origin_session_id": candidate.origin_session_id.clone(),
+                "origin_session_title": candidate.origin_session_title.clone(),
+            })
+            .to_string(),
+        )?;
+    }
     let logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         &report.session_id,
