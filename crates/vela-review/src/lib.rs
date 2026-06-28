@@ -479,18 +479,21 @@ pub fn promote_candidate(vela_home: &Path, id: &str) -> Result<PromotionReport> 
                     vela_home,
                     memory.target,
                     memory.new_text.as_deref().context("memory add candidate missing new_text")?,
-                )?,
+                )
+                .with_context(|| format!("memory review candidate {} conflicted with existing or pending memory state", candidate.id))?,
                 "replace" => vela_memory::stage_replace_memory_entry(
                     vela_home,
                     memory.target,
                     memory.old_text.as_deref().context("memory replace candidate missing old_text")?,
                     memory.new_text.as_deref().context("memory replace candidate missing new_text")?,
-                )?,
+                )
+                .with_context(|| format!("memory review candidate {} became stale or conflicted before promotion", candidate.id))?,
                 "remove" => vela_memory::stage_remove_memory_entry(
                     vela_home,
                     memory.target,
                     memory.old_text.as_deref().context("memory remove candidate missing old_text")?,
-                )?,
+                )
+                .with_context(|| format!("memory review candidate {} became stale or conflicted before promotion", candidate.id))?,
                 other => bail!("unknown memory review action {other:?}"),
             };
             PromotionReport {
@@ -507,14 +510,17 @@ pub fn promote_candidate(vela_home: &Path, id: &str) -> Result<PromotionReport> 
                     &skill.name,
                     skill.description.as_deref(),
                     skill.body.as_deref(),
-                )?,
+                )
+                .with_context(|| format!("skill review candidate {} conflicted with existing or pending skill state", candidate.id))?,
                 "write" => vela_skills::stage_write_skill(
                     vela_home,
                     &skill.name,
                     skill.description.as_deref(),
                     skill.body.as_deref(),
-                )?,
-                "delete" => vela_skills::stage_delete_skill(vela_home, &skill.name)?,
+                )
+                .with_context(|| format!("skill review candidate {} conflicted with existing or pending skill state", candidate.id))?,
+                "delete" => vela_skills::stage_delete_skill(vela_home, &skill.name)
+                    .with_context(|| format!("skill review candidate {} conflicted with existing or pending skill state", candidate.id))?,
                 other => bail!("unknown skill review action {other:?}"),
             };
             PromotionReport {
@@ -677,4 +683,36 @@ fn unix_timestamp_nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_candidates_skips_duplicate_memory_work_on_repeat_passes() {
+        let vela_home = std::env::temp_dir().join(format!("vela-review-test-{}", unix_timestamp_nanos()));
+        vela_memory::initialize_memory(&vela_home).unwrap();
+        vela_skills::initialize_skills(&vela_home).unwrap();
+        initialize_reviews(&vela_home).unwrap();
+
+        let input = SuggestionInput {
+            session_id: "session-1".to_string(),
+            session_title: "Session 1".to_string(),
+            messages: vec![SuggestionMessage {
+                role: "user".to_string(),
+                content: "Please remember that I prefer concise responses.".to_string(),
+            }],
+            events: vec![],
+        };
+
+        let first = generate_candidates(&vela_home, input.clone()).unwrap();
+        assert_eq!(first.candidate_ids.len(), 1);
+
+        let second = generate_candidates(&vela_home, input).unwrap();
+        assert!(second.candidate_ids.is_empty());
+        assert!(second.skipped >= 1);
+
+        fs::remove_dir_all(&vela_home).unwrap();
+    }
 }

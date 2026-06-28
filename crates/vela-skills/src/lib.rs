@@ -136,6 +136,10 @@ pub fn stage_create_skill(
     body: Option<&str>,
 ) -> Result<PendingSkillWrite> {
     let normalized = normalize_skill_name(name)?;
+    if skill_md_path(vela_home, &normalized).is_file() {
+        bail!("skill {:?} already exists", normalized);
+    }
+    ensure_no_pending_conflict(vela_home, &normalized, &["create", "write", "delete"])?;
     stage_write(
         vela_home,
         PendingSkillWrite {
@@ -176,6 +180,10 @@ pub fn stage_write_skill(
     body: Option<&str>,
 ) -> Result<PendingSkillWrite> {
     let normalized = normalize_skill_name(name)?;
+    if !skill_md_path(vela_home, &normalized).is_file() {
+        bail!("skill {:?} not found", normalized);
+    }
+    ensure_no_pending_conflict(vela_home, &normalized, &["create", "write", "delete"])?;
     stage_write(
         vela_home,
         PendingSkillWrite {
@@ -207,6 +215,10 @@ pub fn delete_skill(vela_home: &Path, name: &str) -> Result<SkillMutationReport>
 
 pub fn stage_delete_skill(vela_home: &Path, name: &str) -> Result<PendingSkillWrite> {
     let normalized = normalize_skill_name(name)?;
+    if !skill_md_path(vela_home, &normalized).is_file() {
+        bail!("skill {:?} not found", normalized);
+    }
+    ensure_no_pending_conflict(vela_home, &normalized, &["create", "write", "delete"])?;
     stage_write(
         vela_home,
         PendingSkillWrite {
@@ -278,6 +290,21 @@ pub fn approve_pending(vela_home: &Path, id: &str) -> Result<SkillMutationReport
 
 fn pending_dir(vela_home: &Path) -> PathBuf {
     vela_home.join("pending").join("skills")
+}
+
+fn ensure_no_pending_conflict(vela_home: &Path, name: &str, conflicting_actions: &[&str]) -> Result<()> {
+    if let Some(conflict) = list_pending(vela_home)?
+        .into_iter()
+        .find(|pending| pending.name == name && conflicting_actions.contains(&pending.action.as_str()))
+    {
+        bail!(
+            "skill {:?} already has pending {} action {}",
+            name,
+            conflict.action,
+            conflict.id
+        );
+    }
+    Ok(())
 }
 
 fn stage_write(vela_home: &Path, pending: PendingSkillWrite) -> Result<PendingSkillWrite> {
@@ -367,4 +394,27 @@ fn unix_timestamp_nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_skill_actions_reject_duplicate_or_conflicting_pending_work() {
+        let vela_home = std::env::temp_dir().join(format!("vela-skills-test-{}", unix_timestamp_nanos()));
+        initialize_skills(&vela_home).unwrap();
+
+        let pending = stage_create_skill(&vela_home, "deploy-staging", Some("desc"), Some("body")).unwrap();
+        let err = stage_create_skill(&vela_home, "deploy-staging", Some("desc"), Some("body")).unwrap_err();
+        assert!(err.to_string().contains("already has pending create action"));
+
+        reject_pending(&vela_home, &pending.id).unwrap();
+        create_skill(&vela_home, "deploy-staging", Some("desc"), Some("body")).unwrap();
+        stage_write_skill(&vela_home, "deploy-staging", Some("desc2"), Some("body2")).unwrap();
+        let err = stage_delete_skill(&vela_home, "deploy-staging").unwrap_err();
+        assert!(err.to_string().contains("already has pending write action"));
+
+        fs::remove_dir_all(&vela_home).unwrap();
+    }
 }
