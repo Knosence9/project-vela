@@ -519,5 +519,5 @@ impl BootstrapReport {
     }
 }
 
-pub use vela_memory::{MemoryTarget, ENTRY_SEPARATOR, MEMORY_CHAR_LIMIT, USER_CHAR_LIMIT};
+pub use vela_memory::{MemoryTarget, MEMORY_CHAR_LIMIT, USER_CHAR_LIMIT};
 pub use vela_state::SessionRequest;

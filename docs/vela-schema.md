@@ -407,7 +407,7 @@ Vela's compact personal notes.
 Curated line- or paragraph-level durable facts.
 
 ### Storage format
-Human-readable Markdown/plain text list with entry separators.
+Human-readable Markdown/plain text with one durable entry per paragraph block (entries separated by a blank line).
 
 ### Rules
 - bounded to ~2200 chars
@@ -417,7 +417,11 @@ Human-readable Markdown/plain text list with entry separators.
 
 ### Example
 ```text
-This machine runs Ubuntu 22.04 and has Docker installed.§The user's main Rust workspace is ~/code/vela.§When editing plans, prefer incremental changes over clean-slate rewrites.
+This machine runs Ubuntu 22.04 and has Docker installed.
+
+The user's main Rust workspace is ~/code/vela.
+
+When editing plans, prefer incremental changes over clean-slate rewrites.
 ```
 
 ---
@@ -436,7 +440,11 @@ Preferences and expectations.
 
 ### Example
 ```text
-User prefers concise responses.§User likes Rust-first architectural decisions.§User wants Hermes-faithful behavior before experimentation.
+User prefers concise responses.
+
+User likes Rust-first architectural decisions.
+
+User wants Hermes-faithful behavior before experimentation.
 ```
 
 ---
@@ -446,10 +454,16 @@ At session start, the runtime should render a memory block like:
 
 ```text
 MEMORY (personal notes) [67% — 1474/2200 chars]
-entry§entry§entry
+entry one
+
+entry two
+
+entry three
 
 USER PROFILE [54% — 745/1375 chars]
-entry§entry§entry
+entry one
+
+entry two
 ```
 
 ### Important rule

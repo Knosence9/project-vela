@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MEMORY_CHAR_LIMIT: usize = 2_200;
 pub const USER_CHAR_LIMIT: usize = 1_375;
-pub const ENTRY_SEPARATOR: &str = "§";
+const LEGACY_ENTRY_SEPARATOR: &str = "§";
+const ENTRY_GAP: &str = "\n\n";
 
 #[derive(Debug, Clone)]
 pub struct MemoryReport {
@@ -118,6 +119,8 @@ pub fn initialize_memory(vela_home: &Path) -> Result<MemoryReport> {
 
     ensure_file(&memory_path)?;
     ensure_file(&user_path)?;
+    migrate_legacy_file(&memory_path)?;
+    migrate_legacy_file(&user_path)?;
 
     let memory_text = fs::read_to_string(&memory_path)
         .with_context(|| format!("failed to read {}", memory_path.display()))?;
@@ -141,6 +144,7 @@ pub fn initialize_memory(vela_home: &Path) -> Result<MemoryReport> {
 pub fn load_snapshot(vela_home: &Path, target: MemoryTarget) -> Result<MemorySnapshot> {
     let path = target_path(vela_home, target);
     ensure_file(&path)?;
+    migrate_legacy_file(&path)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     Ok(MemorySnapshot {
@@ -382,6 +386,7 @@ fn target_path(vela_home: &Path, target: MemoryTarget) -> PathBuf {
 fn load_entries(vela_home: &Path, target: MemoryTarget) -> Result<Vec<String>> {
     let path = target_path(vela_home, target);
     ensure_file(&path)?;
+    migrate_legacy_file(&path)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     Ok(parse_entries(&content))
@@ -404,8 +409,21 @@ fn save_entries(vela_home: &Path, target: MemoryTarget, entries: &[String]) -> R
 }
 
 fn parse_entries(content: &str) -> Vec<String> {
-    content
-        .split(ENTRY_SEPARATOR)
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if is_legacy_separator_format(trimmed) {
+        return trimmed
+            .split(LEGACY_ENTRY_SEPARATOR)
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+
+    trimmed
+        .split("\n\n")
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
         .map(ToOwned::to_owned)
@@ -413,16 +431,13 @@ fn parse_entries(content: &str) -> Vec<String> {
 }
 
 fn render_entries(entries: &[String]) -> String {
-    entries.join(ENTRY_SEPARATOR)
+    entries.join(ENTRY_GAP)
 }
 
 fn sanitize_entry(content: &str) -> Result<String> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         bail!("memory entry cannot be empty");
-    }
-    if trimmed.contains(ENTRY_SEPARATOR) {
-        bail!("memory entry cannot contain the reserved separator {ENTRY_SEPARATOR:?}");
     }
     Ok(trimmed.to_string())
 }
@@ -455,6 +470,21 @@ fn unique_match_index(entries: &[String], needle: &str) -> Result<usize> {
         [] => Err(anyhow!("no memory entry matched {needle:?}")),
         _ => Err(anyhow!("memory match {needle:?} was ambiguous; use a more specific substring")),
     }
+}
+
+fn migrate_legacy_file(path: &Path) -> Result<()> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if !is_legacy_separator_format(content.trim()) {
+        return Ok(());
+    }
+    let migrated = render_entries(&parse_entries(&content));
+    fs::write(path, migrated).with_context(|| format!("failed to migrate {}", path.display()))?;
+    Ok(())
+}
+
+fn is_legacy_separator_format(content: &str) -> bool {
+    content.contains(LEGACY_ENTRY_SEPARATOR)
 }
 
 fn validate_pending_id(id: &str) -> Result<&str> {
@@ -495,5 +525,44 @@ fn percent(count: usize, limit: usize) -> usize {
         0
     } else {
         ((count as f64 / limit as f64) * 100.0).round() as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_and_renders_round_trip_with_paragraph_entries() {
+        let entries = vec![
+            "First memory entry".to_string(),
+            "Second memory entry\nwith another line".to_string(),
+            "Third entry".to_string(),
+        ];
+
+        let rendered = render_entries(&entries);
+        assert_eq!(rendered, "First memory entry\n\nSecond memory entry\nwith another line\n\nThird entry");
+        assert_eq!(parse_entries(&rendered), entries);
+    }
+
+    #[test]
+    fn initialize_memory_migrates_legacy_separator_files() {
+        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-{}", unix_timestamp_nanos()));
+        let memories_dir = vela_home.join("memories");
+        fs::create_dir_all(&memories_dir).unwrap();
+        fs::write(
+            memories_dir.join("MEMORY.md"),
+            "alpha§beta§gamma",
+        )
+        .unwrap();
+        fs::write(memories_dir.join("USER.md"), "delta§epsilon").unwrap();
+
+        let report = initialize_memory(&vela_home).unwrap();
+        assert_eq!(report.memory_char_count, "alpha\n\nbeta\n\ngamma".chars().count());
+        assert_eq!(report.user_char_count, "delta\n\nepsilon".chars().count());
+        assert_eq!(fs::read_to_string(memories_dir.join("MEMORY.md")).unwrap(), "alpha\n\nbeta\n\ngamma");
+        assert_eq!(fs::read_to_string(memories_dir.join("USER.md")).unwrap(), "delta\n\nepsilon");
+
+        fs::remove_dir_all(&vela_home).unwrap();
     }
 }
