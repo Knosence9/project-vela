@@ -409,7 +409,17 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
             }
         } else if event.event_type == "skill_signal" {
             if let Some(payload) = parse_event_payload(&event.payload_json) {
-                let action = payload.get("action").and_then(Value::as_str).unwrap_or("create");
+                let action = match normalize_action(
+                    payload.get("action").and_then(Value::as_str).unwrap_or("create"),
+                    &["create", "write", "delete"],
+                    "skill",
+                ) {
+                    Ok(action) => action,
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
                 let name = payload.get("name").and_then(Value::as_str).unwrap_or("");
                 let normalized_name = match vela_skills::normalize_skill_name(name) {
                     Ok(name) => name,
@@ -424,7 +434,7 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                 }
                 let candidate = stage_skill_candidate(
                     vela_home,
-                    action,
+                    &action,
                     name,
                     payload.get("description").and_then(Value::as_str),
                     payload.get("body").and_then(Value::as_str),
