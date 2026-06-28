@@ -24,7 +24,7 @@ pub struct MemoryReport {
     pub user_char_limit: usize,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemoryTarget {
     Memory,
     User,
@@ -171,7 +171,18 @@ pub fn add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &str) -
 }
 
 pub fn stage_add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &str) -> Result<PendingMemoryWrite> {
-    sanitize_entry(content)?;
+    let new_entry = sanitize_entry(content)?;
+    let entries = load_entries(vela_home, target)?;
+    if entries.iter().any(|entry| entry == &new_entry) {
+        bail!("memory entry already exists for target {}", target.label());
+    }
+    if list_pending(vela_home)?.iter().any(|pending| {
+        pending.target == target
+            && pending.action == "add"
+            && pending.new_text.as_deref() == Some(new_entry.as_str())
+    }) {
+        bail!("matching memory add is already pending approval for target {}", target.label());
+    }
     stage_write(
         vela_home,
         PendingMemoryWrite {
@@ -180,7 +191,7 @@ pub fn stage_add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &
             action: "add".to_string(),
             old_text: None,
             matched_entry: None,
-            new_text: Some(content.trim().to_string()),
+            new_text: Some(new_entry),
             created_at: unix_timestamp(),
         },
     )
@@ -321,12 +332,14 @@ pub fn approve_pending(vela_home: &Path, id: &str) -> Result<MemoryMutationRepor
             pending.target,
             pending.matched_entry.as_deref().ok_or_else(|| anyhow!("pending replace missing matched_entry"))?,
             pending.new_text.as_deref().ok_or_else(|| anyhow!("pending replace missing new_text"))?,
-        )?,
+        )
+        .with_context(|| format!("pending replace {} became stale or conflicted", pending.id))?,
         "remove" => remove_exact_memory_entry(
             vela_home,
             pending.target,
             pending.matched_entry.as_deref().ok_or_else(|| anyhow!("pending remove missing matched_entry"))?,
-        )?,
+        )
+        .with_context(|| format!("pending remove {} became stale or conflicted", pending.id))?,
         other => bail!("unknown pending memory action {other:?}"),
     };
     reject_pending(vela_home, id)?;
@@ -609,6 +622,36 @@ mod tests {
             fs::read_to_string(memories_dir.join("MEMORY.md")).unwrap(),
             "<!-- vela-memory-format: v2 -->\n\nentry with § symbol"
         );
+
+        fs::remove_dir_all(&vela_home).unwrap();
+    }
+
+    #[test]
+    fn stage_add_rejects_duplicate_existing_or_pending_entries() {
+        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-dup-{}", unix_timestamp_nanos()));
+        initialize_memory(&vela_home).unwrap();
+        add_memory_entry(&vela_home, MemoryTarget::User, "remember this").unwrap();
+
+        let err = stage_add_memory_entry(&vela_home, MemoryTarget::User, "remember this").unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+
+        stage_add_memory_entry(&vela_home, MemoryTarget::User, "another memory").unwrap();
+        let err = stage_add_memory_entry(&vela_home, MemoryTarget::User, "another memory").unwrap_err();
+        assert!(err.to_string().contains("already pending approval"));
+
+        fs::remove_dir_all(&vela_home).unwrap();
+    }
+
+    #[test]
+    fn approve_pending_reports_stale_replace_clearly() {
+        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-stale-{}", unix_timestamp_nanos()));
+        initialize_memory(&vela_home).unwrap();
+        add_memory_entry(&vela_home, MemoryTarget::Memory, "old value").unwrap();
+        let pending = stage_replace_memory_entry(&vela_home, MemoryTarget::Memory, "old", "new value").unwrap();
+        replace_memory_entry(&vela_home, MemoryTarget::Memory, "old", "someone else changed it").unwrap();
+
+        let err = approve_pending(&vela_home, &pending.id).unwrap_err();
+        assert!(err.to_string().contains("became stale or conflicted"));
 
         fs::remove_dir_all(&vela_home).unwrap();
     }
