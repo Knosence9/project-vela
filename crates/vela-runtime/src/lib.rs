@@ -37,6 +37,7 @@ pub struct PersistenceReport {
 pub struct ConfigSource {
     pub path: PathBuf,
     pub kind: ConfigSourceKind,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -252,9 +253,11 @@ fn load_resolved_config(config_sources: &mut [ConfigSource]) -> Result<ResolvedC
         }
         if user_loaded {
             source.kind = ConfigSourceKind::SkippedLowerPrecedence;
+            source.detail = None;
             continue;
         }
         source.kind = ConfigSourceKind::ProjectFallback;
+        source.detail = None;
         if let Some(parsed) = read_config_source(source) {
             merge_yaml(&mut merged, parsed);
         }
@@ -272,18 +275,27 @@ fn load_resolved_config(config_sources: &mut [ConfigSource]) -> Result<ResolvedC
 fn read_config_source(source: &mut ConfigSource) -> Option<Value> {
     let text = match std::fs::read_to_string(&source.path) {
         Ok(text) => text,
-        Err(_) => {
+        Err(error) => {
             source.kind = ConfigSourceKind::SkippedUnreadable;
+            source.detail = Some(error.to_string());
             return None;
         }
     };
-    match serde_yaml::from_str(&text) {
-        Ok(parsed) => Some(parsed),
-        Err(_) => {
+    let parsed: Value = match serde_yaml::from_str(&text) {
+        Ok(parsed) => parsed,
+        Err(error) => {
             source.kind = ConfigSourceKind::SkippedInvalid;
-            None
+            source.detail = Some(error.to_string());
+            return None;
         }
+    };
+    if let Err(error) = serde_yaml::from_value::<PartialConfig>(parsed.clone()) {
+        source.kind = ConfigSourceKind::SkippedInvalid;
+        source.detail = Some(error.to_string());
+        return None;
     }
+    source.detail = None;
+    Some(parsed)
 }
 
 fn merge_yaml(base: &mut Value, overlay: Value) {
@@ -343,11 +355,13 @@ fn resolve_config_sources(vela_home: &Path, ignore_user_config: bool) -> Result<
             } else {
                 ConfigSourceKind::User
             },
+            detail: None,
         });
     } else {
         sources.push(ConfigSource {
             path: user_config.clone(),
             kind: ConfigSourceKind::Missing,
+            detail: None,
         });
     }
 
@@ -363,6 +377,7 @@ fn resolve_config_sources(vela_home: &Path, ignore_user_config: bool) -> Result<
     sources.push(ConfigSource {
         path: project_config,
         kind: project_kind,
+        detail: None,
     });
 
     Ok(sources)
@@ -419,16 +434,19 @@ mod tests {
             ConfigSource {
                 path: user.clone(),
                 kind: ConfigSourceKind::User,
+                detail: None,
             },
             ConfigSource {
                 path: project.clone(),
                 kind: ConfigSourceKind::SkippedLowerPrecedence,
+                detail: None,
             },
         ];
 
         let resolved = load_resolved_config(&mut sources).unwrap();
         assert_eq!(resolved.display_interface.as_deref(), Some("tui"));
         assert!(matches!(sources[0].kind, ConfigSourceKind::SkippedInvalid));
+        assert!(sources[0].detail.is_some());
         assert!(matches!(sources[1].kind, ConfigSourceKind::ProjectFallback));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -448,16 +466,19 @@ mod tests {
             ConfigSource {
                 path: missing_user,
                 kind: ConfigSourceKind::User,
+                detail: None,
             },
             ConfigSource {
                 path: project.clone(),
                 kind: ConfigSourceKind::SkippedLowerPrecedence,
+                detail: None,
             },
         ];
 
         let resolved = load_resolved_config(&mut sources).unwrap();
         assert_eq!(resolved.hooks_auto_accept, Some(true));
         assert!(matches!(sources[0].kind, ConfigSourceKind::SkippedUnreadable));
+        assert!(sources[0].detail.is_some());
         assert!(matches!(sources[1].kind, ConfigSourceKind::ProjectFallback));
 
         let _ = std::fs::remove_dir_all(&root);

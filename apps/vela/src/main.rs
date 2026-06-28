@@ -164,7 +164,17 @@ fn main() -> Result<()> {
                 }
             }
             for source in &bootstrap.config_sources {
-                println!("config source [{}]: {}", source.kind.label(), source.path.display());
+                let detail = source
+                    .detail
+                    .as_deref()
+                    .map(|d| format!(" :: {}", d))
+                    .unwrap_or_default();
+                println!(
+                    "config source [{}]: {}{}",
+                    source.kind.label(),
+                    source.path.display(),
+                    detail
+                );
             }
             println!(
                 "resolved config: display.interface={:?} hooks_auto_accept={:?} security.redact_secrets={:?} network.force_ipv4={:?}",
