@@ -655,4 +655,18 @@ mod tests {
 
         fs::remove_dir_all(&vela_home).unwrap();
     }
+
+    #[test]
+    fn approve_pending_reports_stale_remove_clearly() {
+        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-stale-remove-{}", unix_timestamp_nanos()));
+        initialize_memory(&vela_home).unwrap();
+        add_memory_entry(&vela_home, MemoryTarget::Memory, "old value").unwrap();
+        let pending = stage_remove_memory_entry(&vela_home, MemoryTarget::Memory, "old").unwrap();
+        replace_memory_entry(&vela_home, MemoryTarget::Memory, "old", "someone else changed it").unwrap();
+
+        let err = approve_pending(&vela_home, &pending.id).unwrap_err();
+        assert!(err.to_string().contains("became stale or conflicted"));
+
+        fs::remove_dir_all(&vela_home).unwrap();
+    }
 }

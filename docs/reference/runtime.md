@@ -17,6 +17,7 @@
 - interactive vs single-turn mode is derived from whether query/image input is present
 - `status` reports the latest active session identity
 - `gateway` now bootstraps durable gateway directories/config and can resume a gateway-specific runtime session
+- `cron` now bootstraps durable scheduler config/job state and can resume a scheduler-specific runtime session
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session when no explicit resume target is given
@@ -24,6 +25,7 @@
 - repeated resume/continue paths update `updated_at` on the matching session row
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
 - `vela gateway start` resumes the latest `gateway` command session when one already exists
+- `vela cron --start` resumes the latest `cron` command session when one already exists
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states
@@ -31,3 +33,4 @@
 - explicit continue semantics matching upstream lineage behavior
 - turn lifecycle persistence
 - session branching/compression semantics
+- actual recurring job execution and restart recovery beyond durable registration

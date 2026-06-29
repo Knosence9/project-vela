@@ -98,6 +98,24 @@ struct SessionsArgs {
 }
 
 #[derive(Debug, Default, Args)]
+struct CronArgs {
+    #[arg(long = "setup", default_value_t = false, group = "action")]
+    setup: bool,
+    #[arg(long = "start", default_value_t = false, group = "action")]
+    start: bool,
+    #[arg(long = "list", default_value_t = false, group = "action")]
+    list: bool,
+    #[arg(long = "add", group = "action")]
+    add: Option<String>,
+    #[arg(long = "show", group = "action")]
+    show: Option<String>,
+    #[arg(long = "schedule", requires = "add")]
+    schedule: Option<String>,
+    #[arg(long = "source", requires = "add")]
+    source: Option<String>,
+}
+
+#[derive(Debug, Default, Args)]
 struct LogsArgs {
     #[arg(short = 'f', long = "follow", default_value_t = false)]
     follow: bool,
@@ -226,7 +244,7 @@ enum Commands {
     Tools,
     Memory(MemoryArgs),
     Review(ReviewArgs),
-    Cron,
+    Cron(CronArgs),
     Mcp,
     Status,
     Update,
@@ -754,6 +772,74 @@ fn main() -> Result<()> {
                 }
             } else {
                 println!("sessions placeholder: list={} browse={}", args.list, args.browse);
+            }
+        }
+        Some(Commands::Cron(args)) => {
+            if args.start {
+                let report = vela_runtime::start_scheduler(&bootstrap)?;
+                println!(
+                    "scheduler started: session={} action={} title={} config={} jobs={} ",
+                    report.session.session_id,
+                    report.session.action.label(),
+                    report.session.title,
+                    report.setup.config_path.display(),
+                    report.setup.job_count,
+                );
+            } else if args.setup {
+                let report = vela_runtime::setup_scheduler(&bootstrap)?;
+                println!(
+                    "scheduler setup: dir={} config={} jobs={} config_existed_before={} jobs_existed_before={} job_count={}",
+                    report.scheduler_dir.display(),
+                    report.config_path.display(),
+                    report.jobs_path.display(),
+                    report.config_existed_before,
+                    report.jobs_existed_before,
+                    report.job_count,
+                );
+            } else if args.list {
+                let jobs = vela_runtime::list_scheduled_jobs(&bootstrap)?;
+                println!("scheduled jobs [{}]:", jobs.len());
+                for job in jobs {
+                    println!(
+                        "- {} :: schedule={} source={} status={} task={}",
+                        job.id, job.schedule, job.source, job.status, job.task
+                    );
+                }
+            } else if let Some(task) = args.add.as_deref() {
+                let schedule = args
+                    .schedule
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("--add requires --schedule <expr>"))?;
+                let job = vela_runtime::add_scheduled_job(&bootstrap, schedule, task, args.source.as_deref())?;
+                println!(
+                    "scheduled job added: {} schedule={} source={} status={} task={}",
+                    job.id, job.schedule, job.source, job.status, job.task
+                );
+            } else if let Some(id) = args.show.as_deref() {
+                let job = vela_runtime::get_scheduled_job(&bootstrap, id)?;
+                println!(
+                    "scheduled job: {} schedule={} source={} status={} created_at={} task={}",
+                    job.id, job.schedule, job.source, job.status, job.created_at, job.task
+                );
+            } else {
+                let report = vela_runtime::setup_scheduler(&bootstrap)?;
+                match vela_runtime::current_command_session_summary(&bootstrap, "cron")? {
+                    Some(session) => println!(
+                        "scheduler ready: config={} jobs={} session={} title={} messages={} events={}",
+                        report.config_path.display(),
+                        report.job_count,
+                        session.id,
+                        session.title,
+                        session.message_count,
+                        session.event_count,
+                    ),
+                    None => println!(
+                        "scheduler ready: config={} jobs={} session=none dir={}",
+                        report.config_path.display(),
+                        report.job_count,
+                        report.scheduler_dir.display(),
+                    ),
+                }
             }
         }
         Some(Commands::Logs(args)) => println!("logs placeholder: follow={} since={:?}", args.follow, args.since),

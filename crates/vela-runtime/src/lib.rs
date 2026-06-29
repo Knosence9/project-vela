@@ -1,5 +1,10 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
+use std::thread::sleep;
+use std::time::Duration;
 use vela_config::{BootstrapConfig, ConfigSource, ResolvedConfig};
 use vela_memory::MemoryReport;
 use vela_review::ReviewReport;
@@ -13,6 +18,7 @@ pub use vela_state::{
 };
 
 #[derive(Debug, Clone)]
+/// Describes the durable gateway paths ensured during bootstrap.
 pub struct GatewaySetupReport {
     pub gateway_dir: std::path::PathBuf,
     pub config_path: std::path::PathBuf,
@@ -22,12 +28,43 @@ pub struct GatewaySetupReport {
 }
 
 #[derive(Debug, Clone)]
+/// Captures gateway setup data plus the resolved runtime session.
 pub struct GatewayStartReport {
     pub setup: GatewaySetupReport,
     pub session: SessionRuntimeReport,
 }
 
 #[derive(Debug, Clone)]
+/// Describes the durable scheduler files ensured during bootstrap.
+pub struct SchedulerSetupReport {
+    pub scheduler_dir: std::path::PathBuf,
+    pub config_path: std::path::PathBuf,
+    pub jobs_path: std::path::PathBuf,
+    pub config_existed_before: bool,
+    pub jobs_existed_before: bool,
+    pub job_count: usize,
+}
+
+#[derive(Debug, Clone)]
+/// Captures scheduler setup data plus the resolved runtime session.
+pub struct SchedulerStartReport {
+    pub setup: SchedulerSetupReport,
+    pub session: SessionRuntimeReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents one durable scheduler registration stored in `jobs.json`.
+pub struct ScheduledJob {
+    pub id: String,
+    pub schedule: String,
+    pub task: String,
+    pub source: String,
+    pub status: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+/// Aggregates the initialized runtime subsystems and resolved configuration.
 pub struct BootstrapReport {
     pub vela_home: std::path::PathBuf,
     pub active_profile: Option<String>,
@@ -42,6 +79,7 @@ pub struct BootstrapReport {
 }
 
 impl BootstrapReport {
+    /// Renders a compact human-readable bootstrap summary.
     pub fn summary_line(&self) -> String {
         let profile = self
             .active_profile
@@ -71,6 +109,7 @@ impl BootstrapReport {
     }
 }
 
+/// Initializes config, persistence, memory, skills, and review subsystems.
 pub fn initialize_bootstrap(active_profile: Option<String>, ignore_user_config: bool) -> Result<BootstrapReport> {
     let config = vela_config::initialize_config(active_profile, ignore_user_config)?;
     let persistence = vela_state::initialize_persistence(&config.vela_home)?;
@@ -80,18 +119,22 @@ pub fn initialize_bootstrap(active_profile: Option<String>, ignore_user_config: 
     Ok(BootstrapReport::from_parts(config, persistence, memory, skills, reviews))
 }
 
+/// Emits a debug log once runtime bootstrap has completed.
 pub fn bootstrap_banner() {
     tracing::debug!("vela-runtime bootstrap initialized");
 }
 
+/// Returns the current session id and title when one is active.
 pub fn current_session_identity(bootstrap: &BootstrapReport) -> Result<Option<(String, String)>> {
     vela_state::current_session_identity(&bootstrap.persistence.state_db_path)
 }
 
+/// Returns the latest session summary when one exists.
 pub fn current_session_summary(bootstrap: &BootstrapReport) -> Result<Option<SessionSummary>> {
     vela_state::current_session_summary(&bootstrap.persistence.state_db_path)
 }
 
+/// Returns the latest session summary for a command-scoped runtime session.
 pub fn current_command_session_summary(
     bootstrap: &BootstrapReport,
     command_name: &str,
@@ -99,10 +142,12 @@ pub fn current_command_session_summary(
     vela_state::current_command_session_summary(&bootstrap.persistence.state_db_path, command_name)
 }
 
+/// Resolves or creates a runtime session for an interactive request.
 pub fn resolve_runtime_session(bootstrap: &BootstrapReport, request: &SessionRequest) -> Result<SessionRuntimeReport> {
     vela_state::resolve_runtime_session(&bootstrap.persistence.state_db_path, request)
 }
 
+/// Ensures the durable gateway directory structure and config file exist.
 pub fn setup_gateway(bootstrap: &BootstrapReport) -> Result<GatewaySetupReport> {
     let gateway_dir = bootstrap.vela_home.join("gateway");
     std::fs::create_dir_all(&gateway_dir)?;
@@ -136,6 +181,7 @@ pub fn setup_gateway(bootstrap: &BootstrapReport) -> Result<GatewaySetupReport> 
     })
 }
 
+/// Starts or resumes the durable gateway runtime session.
 pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> {
     let setup = setup_gateway(bootstrap)?;
     let session = vela_state::resolve_command_session(
@@ -143,7 +189,7 @@ pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> 
         "gateway",
         InteractionMode::Interactive,
     )?;
-    let _ = vela_state::append_event_to_session(
+    let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         &session.session_id,
         "gateway_started",
@@ -156,39 +202,194 @@ pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> 
         })
         .to_string(),
     )?;
-    let _ = vela_state::append_message_to_session(
-        &bootstrap.persistence.state_db_path,
-        &session.session_id,
-        "system",
-        "Gateway bootstrap ready.",
-        Some(
-            json!({
-                "source": "gateway",
-                "direction": "egress",
-                "config_path": setup.config_path,
-            })
-            .to_string(),
-        ),
-    )?;
+    if !event_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append gateway_started event");
+    }
+    if matches!(session.action, SessionAction::Created) {
+        let message_logged = vela_state::append_message_to_session(
+            &bootstrap.persistence.state_db_path,
+            &session.session_id,
+            "system",
+            "Gateway bootstrap ready.",
+            Some(
+                json!({
+                    "source": "gateway",
+                    "direction": "egress",
+                    "config_path": setup.config_path,
+                })
+                .to_string(),
+            ),
+        )?;
+        if !message_logged {
+            tracing::warn!(session_id=%session.session_id, "failed to append gateway bootstrap message");
+        }
+    }
     Ok(GatewayStartReport { setup, session })
 }
 
+/// Ensures the durable scheduler directory, config, and job registry exist.
+pub fn setup_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerSetupReport> {
+    let scheduler_dir = bootstrap.vela_home.join("scheduler");
+    std::fs::create_dir_all(&scheduler_dir)?;
+
+    let config_path = scheduler_dir.join("config.json");
+    let jobs_path = scheduler_dir.join("jobs.json");
+    let config_existed_before = config_path.is_file();
+    let jobs_existed_before = jobs_path.is_file();
+
+    if !config_existed_before {
+        std::fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&json!({
+                "version": 1,
+                "default_source": "scheduler",
+                "session_command_name": "cron",
+                "active_profile": bootstrap.active_profile,
+                "transport_mode": "local-bootstrap",
+            }))?,
+        )?;
+    }
+    if !jobs_existed_before {
+        std::fs::write(&jobs_path, "[]")?;
+    }
+
+    let job_count = load_scheduler_jobs(&jobs_path)?.len();
+    Ok(SchedulerSetupReport {
+        scheduler_dir,
+        config_path,
+        jobs_path,
+        config_existed_before,
+        jobs_existed_before,
+        job_count,
+    })
+}
+
+/// Starts or resumes the durable scheduler runtime session.
+pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartReport> {
+    let setup = setup_scheduler(bootstrap)?;
+    let session = vela_state::resolve_command_session(
+        &bootstrap.persistence.state_db_path,
+        "cron",
+        InteractionMode::Interactive,
+    )?;
+    let event_logged = vela_state::append_event_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "scheduler_started",
+        json!({
+            "source": "scheduler",
+            "config_path": setup.config_path,
+            "jobs_path": setup.jobs_path,
+            "job_count": setup.job_count,
+            "action": session.action.label(),
+        })
+        .to_string(),
+    )?;
+    if !event_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append scheduler_started event");
+    }
+    if matches!(session.action, SessionAction::Created) {
+        let message_logged = vela_state::append_message_to_session(
+            &bootstrap.persistence.state_db_path,
+            &session.session_id,
+            "system",
+            "Scheduler bootstrap ready.",
+            Some(
+                json!({
+                    "source": "scheduler",
+                    "direction": "egress",
+                    "config_path": setup.config_path,
+                    "jobs_path": setup.jobs_path,
+                })
+                .to_string(),
+            ),
+        )?;
+        if !message_logged {
+            tracing::warn!(session_id=%session.session_id, "failed to append scheduler bootstrap message");
+        }
+    }
+    Ok(SchedulerStartReport { setup, session })
+}
+
+/// Lists all durable scheduled jobs currently registered.
+pub fn list_scheduled_jobs(bootstrap: &BootstrapReport) -> Result<Vec<ScheduledJob>> {
+    let setup = setup_scheduler(bootstrap)?;
+    load_scheduler_jobs(&setup.jobs_path)
+}
+
+/// Loads one scheduled job by id from the durable registry.
+pub fn get_scheduled_job(bootstrap: &BootstrapReport, id: &str) -> Result<ScheduledJob> {
+    let job_id = validate_scheduler_job_id(id)?;
+    list_scheduled_jobs(bootstrap)?
+        .into_iter()
+        .find(|job| job.id == job_id)
+        .ok_or_else(|| anyhow::anyhow!("scheduled job {:?} not found", job_id))
+}
+
+/// Registers a new durable scheduled job after validation and deduplication.
+pub fn add_scheduled_job(
+    bootstrap: &BootstrapReport,
+    schedule: &str,
+    task: &str,
+    source: Option<&str>,
+) -> Result<ScheduledJob> {
+    let setup = setup_scheduler(bootstrap)?;
+    let schedule = normalize_scheduler_schedule(schedule)?;
+    let task = normalize_scheduler_task(task)?;
+    let source = normalize_scheduler_source(source);
+    let lock = acquire_scheduler_jobs_lock(&setup.jobs_path)?;
+    let mut jobs = load_scheduler_jobs(&setup.jobs_path)?;
+    if jobs.iter().any(|job| job.schedule == schedule && job.task == task && job.source == source && job.status == "pending") {
+        drop(lock);
+        bail!("matching scheduled job is already registered");
+    }
+    let job = ScheduledJob {
+        id: format!("job-{}", unix_timestamp_nanos()),
+        schedule,
+        task,
+        source,
+        status: "pending".to_string(),
+        created_at: unix_timestamp(),
+    };
+    jobs.push(job.clone());
+    save_scheduler_jobs(&setup.jobs_path, &jobs)?;
+    drop(lock);
+
+    if let Some(session) = current_command_session_summary(bootstrap, "cron")? {
+        let event_logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            &session.id,
+            "scheduler_job_registered",
+            serde_json::to_string(&job)?,
+        )?;
+        if !event_logged {
+            tracing::warn!(session_id=%session.id, job_id=%job.id, "failed to append scheduler job event");
+        }
+    }
+    Ok(job)
+}
+
+/// Searches persisted session history using the state FTS index.
 pub fn search_session_history(bootstrap: &BootstrapReport, query: &str, limit: usize) -> Result<Vec<SessionSearchHit>> {
     vela_state::search_session_history(&bootstrap.persistence.state_db_path, query, limit)
 }
 
+/// Inspects the latest persisted session with recent messages and events.
 pub fn inspect_latest_session(bootstrap: &BootstrapReport, limit: usize) -> Result<Option<SessionInspection>> {
     vela_state::inspect_latest_session(&bootstrap.persistence.state_db_path, limit)
 }
 
+/// Renders the always-on memory snapshot used for prompting.
 pub fn render_memory_snapshot(bootstrap: &BootstrapReport) -> Result<String> {
     vela_memory::render_prompt_snapshot(&bootstrap.vela_home)
 }
 
+/// Views the current durable memory contents for a target file.
 pub fn view_memory(bootstrap: &BootstrapReport, target: vela_memory::MemoryTarget) -> Result<vela_memory::MemoryView> {
     vela_memory::view_memory(&bootstrap.vela_home, target)
 }
 
+/// Appends a memory entry directly to durable memory storage.
 pub fn add_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -197,6 +398,7 @@ pub fn add_memory_entry(
     vela_memory::add_memory_entry(&bootstrap.vela_home, target, content)
 }
 
+/// Stages a memory add for later approval.
 pub fn stage_add_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -205,6 +407,7 @@ pub fn stage_add_memory_entry(
     vela_memory::stage_add_memory_entry(&bootstrap.vela_home, target, content)
 }
 
+/// Replaces a matching durable memory entry immediately.
 pub fn replace_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -214,6 +417,7 @@ pub fn replace_memory_entry(
     vela_memory::replace_memory_entry(&bootstrap.vela_home, target, old_text, content)
 }
 
+/// Stages a memory replacement for later approval.
 pub fn stage_replace_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -223,6 +427,7 @@ pub fn stage_replace_memory_entry(
     vela_memory::stage_replace_memory_entry(&bootstrap.vela_home, target, old_text, content)
 }
 
+/// Removes a matching durable memory entry immediately.
 pub fn remove_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -231,6 +436,7 @@ pub fn remove_memory_entry(
     vela_memory::remove_memory_entry(&bootstrap.vela_home, target, old_text)
 }
 
+/// Stages a memory removal for later approval.
 pub fn stage_remove_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -239,14 +445,17 @@ pub fn stage_remove_memory_entry(
     vela_memory::stage_remove_memory_entry(&bootstrap.vela_home, target, old_text)
 }
 
+/// Lists staged memory writes awaiting approval.
 pub fn list_pending_memory(bootstrap: &BootstrapReport) -> Result<Vec<vela_memory::PendingMemoryWrite>> {
     vela_memory::list_pending(&bootstrap.vela_home)
 }
 
+/// Loads one staged memory write by id.
 pub fn get_pending_memory(bootstrap: &BootstrapReport, id: &str) -> Result<vela_memory::PendingMemoryWrite> {
     vela_memory::get_pending(&bootstrap.vela_home, id)
 }
 
+/// Approves and applies one staged memory write.
 pub fn approve_pending_memory(
     bootstrap: &BootstrapReport,
     id: &str,
@@ -254,18 +463,22 @@ pub fn approve_pending_memory(
     vela_memory::approve_pending(&bootstrap.vela_home, id)
 }
 
+/// Rejects and deletes one staged memory write.
 pub fn reject_pending_memory(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
     vela_memory::reject_pending(&bootstrap.vela_home, id)
 }
 
+/// Lists durable skills available in the local skill store.
 pub fn list_skills(bootstrap: &BootstrapReport) -> Result<Vec<vela_skills::SkillSummary>> {
     vela_skills::list_skills(&bootstrap.vela_home)
 }
 
+/// Loads one durable skill by name.
 pub fn view_skill(bootstrap: &BootstrapReport, name: &str) -> Result<vela_skills::SkillView> {
     vela_skills::view_skill(&bootstrap.vela_home, name)
 }
 
+/// Creates a durable skill immediately.
 pub fn create_skill(
     bootstrap: &BootstrapReport,
     name: &str,
@@ -275,6 +488,7 @@ pub fn create_skill(
     vela_skills::create_skill(&bootstrap.vela_home, name, description, body)
 }
 
+/// Stages creation of a durable skill for later approval.
 pub fn stage_create_skill(
     bootstrap: &BootstrapReport,
     name: &str,
@@ -284,6 +498,7 @@ pub fn stage_create_skill(
     vela_skills::stage_create_skill(&bootstrap.vela_home, name, description, body)
 }
 
+/// Rewrites an existing durable skill immediately.
 pub fn write_skill(
     bootstrap: &BootstrapReport,
     name: &str,
@@ -293,6 +508,7 @@ pub fn write_skill(
     vela_skills::write_skill(&bootstrap.vela_home, name, description, body)
 }
 
+/// Stages a durable skill rewrite for later approval.
 pub fn stage_write_skill(
     bootstrap: &BootstrapReport,
     name: &str,
@@ -302,22 +518,27 @@ pub fn stage_write_skill(
     vela_skills::stage_write_skill(&bootstrap.vela_home, name, description, body)
 }
 
+/// Deletes a durable skill immediately.
 pub fn delete_skill(bootstrap: &BootstrapReport, name: &str) -> Result<vela_skills::SkillMutationReport> {
     vela_skills::delete_skill(&bootstrap.vela_home, name)
 }
 
+/// Stages deletion of a durable skill for later approval.
 pub fn stage_delete_skill(bootstrap: &BootstrapReport, name: &str) -> Result<vela_skills::PendingSkillWrite> {
     vela_skills::stage_delete_skill(&bootstrap.vela_home, name)
 }
 
+/// Lists staged skill writes awaiting approval.
 pub fn list_pending_skills(bootstrap: &BootstrapReport) -> Result<Vec<vela_skills::PendingSkillWrite>> {
     vela_skills::list_pending(&bootstrap.vela_home)
 }
 
+/// Loads one staged skill write by id.
 pub fn get_pending_skill(bootstrap: &BootstrapReport, id: &str) -> Result<vela_skills::PendingSkillWrite> {
     vela_skills::get_pending(&bootstrap.vela_home, id)
 }
 
+/// Approves and applies one staged skill write.
 pub fn approve_pending_skill(
     bootstrap: &BootstrapReport,
     id: &str,
@@ -325,18 +546,22 @@ pub fn approve_pending_skill(
     vela_skills::approve_pending(&bootstrap.vela_home, id)
 }
 
+/// Rejects and deletes one staged skill write.
 pub fn reject_pending_skill(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
     vela_skills::reject_pending(&bootstrap.vela_home, id)
 }
 
+/// Lists queued review candidates derived from user or background signals.
 pub fn list_review_candidates(bootstrap: &BootstrapReport) -> Result<Vec<vela_review::ReviewCandidate>> {
     vela_review::list_candidates(&bootstrap.vela_home)
 }
 
+/// Loads one review candidate by id.
 pub fn get_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<vela_review::ReviewCandidate> {
     vela_review::get_candidate(&bootstrap.vela_home, id)
 }
 
+/// Creates a review candidate for a proposed memory mutation.
 pub fn stage_memory_review_candidate(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -375,6 +600,7 @@ pub fn stage_memory_review_candidate(
     Ok(candidate)
 }
 
+/// Creates a review candidate for a proposed skill mutation.
 pub fn stage_skill_review_candidate(
     bootstrap: &BootstrapReport,
     action: &str,
@@ -413,6 +639,7 @@ pub fn stage_skill_review_candidate(
     Ok(candidate)
 }
 
+/// Promotes a review candidate into the appropriate pending approval queue.
 pub fn promote_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<vela_review::PromotionReport> {
     let candidate = vela_review::get_candidate(&bootstrap.vela_home, id)?;
     let report = vela_review::promote_candidate(&bootstrap.vela_home, id)?;
@@ -432,6 +659,7 @@ pub fn promote_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result
     Ok(report)
 }
 
+/// Rejects a queued review candidate.
 pub fn reject_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
     let candidate = vela_review::reject_candidate(&bootstrap.vela_home, id)?;
     append_review_event(
@@ -448,6 +676,7 @@ pub fn reject_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<
     Ok(())
 }
 
+/// Infers review signals from the latest session and appends them as events.
 pub fn emit_review_signals_from_latest_session(
     bootstrap: &BootstrapReport,
     limit: usize,
@@ -524,6 +753,96 @@ fn append_review_event(
     Ok(())
 }
 
+fn load_scheduler_jobs(path: &std::path::Path) -> Result<Vec<ScheduledJob>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&content)?)
+}
+
+fn save_scheduler_jobs(path: &std::path::Path, jobs: &[ScheduledJob]) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| anyhow::anyhow!("scheduler jobs path has no parent directory"))?;
+    let temp_path = parent.join(format!("{}.tmp-{}", path.file_name().and_then(|n| n.to_str()).unwrap_or("jobs.json"), unix_timestamp_nanos()));
+    std::fs::write(&temp_path, serde_json::to_string_pretty(jobs)?)?;
+    std::fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
+fn acquire_scheduler_jobs_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> {
+    let lock_path = path.with_extension("json.lock");
+    for _ in 0..100 {
+        match OpenOptions::new().write(true).create_new(true).open(&lock_path) {
+            Ok(_) => {
+                return Ok(SchedulerJobsLock { lock_path });
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => sleep(Duration::from_millis(25)),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    bail!("timed out waiting for scheduler jobs lock")
+}
+
+struct SchedulerJobsLock {
+    lock_path: std::path::PathBuf,
+}
+
+impl Drop for SchedulerJobsLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.lock_path);
+    }
+}
+
+fn normalize_scheduler_schedule(value: &str) -> Result<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        bail!("scheduler expression cannot be empty");
+    }
+    Ok(normalized)
+}
+
+fn normalize_scheduler_task(value: &str) -> Result<String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        bail!("scheduled task cannot be empty");
+    }
+    Ok(normalized.to_string())
+}
+
+fn normalize_scheduler_source(source: Option<&str>) -> String {
+    source
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("scheduler")
+        .to_string()
+}
+
+fn validate_scheduler_job_id(id: &str) -> Result<&str> {
+    let normalized = id.trim();
+    if normalized.is_empty() || normalized == "." || normalized == ".." || normalized.contains('/') || normalized.contains('\\') {
+        bail!("invalid scheduled job id");
+    }
+    Ok(normalized)
+}
+
+fn unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn unix_timestamp_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
+/// Generates review candidates from the latest persisted session.
 pub fn generate_review_candidates_from_latest_session(
     bootstrap: &BootstrapReport,
     limit: usize,
@@ -613,3 +932,38 @@ impl BootstrapReport {
 
 pub use vela_memory::{MemoryTarget, MEMORY_CHAR_LIMIT, USER_CHAR_LIMIT};
 pub use vela_state::SessionRequest;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduler_jobs_persist_and_dedupe() {
+        let vela_home = std::env::temp_dir().join(format!("vela-runtime-scheduler-test-{}", unix_timestamp_nanos()));
+        let bootstrap = BootstrapReport {
+            vela_home: vela_home.clone(),
+            active_profile: None,
+            loaded_env_paths: vec![],
+            ignored_user_config: false,
+            config_sources: vec![],
+            resolved_config: ResolvedConfig::default(),
+            persistence: vela_state::initialize_persistence(&vela_home).unwrap(),
+            memory: vela_memory::initialize_memory(&vela_home).unwrap(),
+            skills: vela_skills::initialize_skills(&vela_home).unwrap(),
+            reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
+        };
+
+        let first = add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None).unwrap();
+        let jobs = list_scheduled_jobs(&bootstrap).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, first.id);
+
+        let err = add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None).unwrap_err();
+        assert!(err.to_string().contains("already registered"));
+
+        let fetched = get_scheduled_job(&bootstrap, &first.id).unwrap();
+        assert_eq!(fetched.task, "ping status");
+
+        std::fs::remove_dir_all(&vela_home).unwrap();
+    }
+}
