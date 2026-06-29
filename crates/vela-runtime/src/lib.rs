@@ -825,6 +825,8 @@ impl RuntimeToolName {
     }
 }
 
+const MAX_RUNTIME_TOOL_STEPS: usize = 3;
+
 #[derive(Debug, Clone)]
 struct RuntimeExecutionConfig {
     provider: Option<RuntimeProviderChoice>,
@@ -1023,7 +1025,7 @@ fn resolve_runtime_execution(
     })
 }
 
-/// Executes one provider-backed Ollama turn and optionally completes one local tool loop.
+/// Executes one provider-backed Ollama turn and optionally completes a bounded local tool loop.
 fn execute_ollama_turn(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
@@ -1034,29 +1036,55 @@ fn execute_ollama_turn(
     memory: &str,
     skills: &[vela_skills::SkillSummary],
 ) -> Result<RenderedChatResponse> {
-    let first_response = call_ollama_generate(&execution.ollama_base_url, model, prompt, images.clone())?;
-    if let Some(tool_name) = parse_runtime_tool_request(&first_response)? {
-        persist_runtime_tool_request(bootstrap, &session.session_id, tool_name)?;
-        let tool_result = execute_runtime_tool(tool_name, memory, skills);
-        persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, &tool_result)?;
-        let followup = format!(
-            "{}\n\nTool result for {}:\n{}\n\nNow answer the user directly. Do not request another tool.",
-            prompt,
-            tool_name.as_str(),
-            tool_result,
-        );
-        let final_response = call_ollama_generate(&execution.ollama_base_url, model, &followup, images)?;
+    let mut current_prompt = prompt.to_string();
+    let mut used_tool_loop = false;
+
+    for step in 1..=MAX_RUNTIME_TOOL_STEPS {
+        let response = call_ollama_generate(&execution.ollama_base_url, model, &current_prompt, images.clone())?;
+        if let Some(tool_name) = parse_runtime_tool_request(&response)? {
+            used_tool_loop = true;
+            persist_runtime_tool_request(bootstrap, &session.session_id, tool_name, step)?;
+            let tool_result = execute_runtime_tool(tool_name, memory, skills);
+            persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, step, &tool_result)?;
+
+            let followup_instruction = if step == MAX_RUNTIME_TOOL_STEPS {
+                "You have reached the maximum number of tool steps. Answer the user directly without requesting another tool."
+            } else {
+                "You may either request another supported tool with ONLY JSON like {\"tool\":\"memory_snapshot\"} or {\"tool\":\"list_skills\"}, or answer directly."
+            };
+            current_prompt = format!(
+                "{}\n\nCompleted tool step {} of {}.\nTool result for {}:\n{}\n\n{}",
+                current_prompt,
+                step,
+                MAX_RUNTIME_TOOL_STEPS,
+                tool_name.as_str(),
+                tool_result,
+                followup_instruction,
+            );
+            continue;
+        }
+
         return Ok(RenderedChatResponse {
-            content: Some(final_response),
-            source: "runtime-ollama-tool-loop",
+            content: Some(response),
+            source: if used_tool_loop { "runtime-ollama-tool-loop" } else { "runtime-ollama" },
+            provider: execution.provider_label.clone(),
+            model: execution.model.clone(),
+        });
+    }
+
+    let final_response = call_ollama_generate(&execution.ollama_base_url, model, &current_prompt, images)?;
+    if parse_runtime_tool_request(&final_response)?.is_some() {
+        return Ok(RenderedChatResponse {
+            content: Some("Vela reached the maximum bounded tool steps and fell back to a deterministic runtime response instead of continuing indefinitely.".to_string()),
+            source: "runtime-kernel",
             provider: execution.provider_label.clone(),
             model: execution.model.clone(),
         });
     }
 
     Ok(RenderedChatResponse {
-        content: Some(first_response),
-        source: "runtime-ollama",
+        content: Some(final_response),
+        source: "runtime-ollama-tool-loop",
         provider: execution.provider_label.clone(),
         model: execution.model.clone(),
     })
@@ -1100,8 +1128,8 @@ fn execute_runtime_tool(tool: RuntimeToolName, memory: &str, skills: &[vela_skil
 }
 
 /// Persists the requested runtime tool before execution begins.
-fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName) -> Result<()> {
-    let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str()}).to_string();
+fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName, step: usize) -> Result<()> {
+    let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str(), "step": step}).to_string();
     let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
@@ -1125,8 +1153,8 @@ fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, t
 }
 
 /// Persists the completed runtime tool result and its metadata.
-fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName, result: &str) -> Result<()> {
-    let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str(), "result_length": result.len()}).to_string();
+fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName, step: usize, result: &str) -> Result<()> {
+    let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str(), "step": step, "result_length": result.len()}).to_string();
     let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
@@ -1769,19 +1797,25 @@ mod tests {
     }
 
     #[test]
-    /// Verifies that a configured provider turn can request a local tool and continue with the tool result.
+    /// Verifies that a configured provider turn can execute a bounded multi-step local tool sequence.
     fn execute_chat_turn_runs_first_runtime_tool_loop() {
         let (base_url, server) = spawn_mock_ollama_sequence(vec![
             MockOllamaExchange {
-                response_body: r#"{"tool":"list_skills"}"#,
+                response_body: r#"{"tool":"memory_snapshot"}"#,
                 expected_model: "gemma3:4b",
                 prompt_fragment: "need the tool loop",
                 expected_image_base64: None,
             },
             MockOllamaExchange {
+                response_body: r#"{"tool":"list_skills"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "Completed tool step 1 of 3.\nTool result for memory_snapshot:",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
                 response_body: "Tool-informed final answer.",
                 expected_model: "gemma3:4b",
-                prompt_fragment: "Tool result for list_skills:\ndeploy-staging",
+                prompt_fragment: "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
                 expected_image_base64: None,
             },
         ]);
@@ -1816,13 +1850,23 @@ mod tests {
         assert_eq!(report.response.as_deref(), Some("Tool-informed final answer."));
         assert_eq!(report.response_source, "runtime-ollama-tool-loop");
         let inspection = inspect_latest_session(&bootstrap, 10).unwrap().expect("tool loop inspection");
-        assert_eq!(inspection.messages.len(), 4);
+        assert_eq!(inspection.messages.len(), 6);
         assert_eq!(inspection.messages[1].role, "tool-request");
-        assert_eq!(inspection.messages[1].content, "list_skills");
+        assert_eq!(inspection.messages[1].content, "memory_snapshot");
         assert_eq!(inspection.messages[2].role, "tool-result");
-        assert!(inspection.messages[2].content.contains("deploy-staging"));
-        assert!(inspection.events.iter().any(|event| event.event_type == "runtime_tool_requested"));
-        assert!(inspection.events.iter().any(|event| event.event_type == "runtime_tool_completed"));
+        assert!(!inspection.messages[2].content.trim().is_empty());
+        let first_tool_result_metadata: serde_json::Value = serde_json::from_str(
+            inspection.messages[2].metadata_json.as_deref().expect("first tool-result metadata"),
+        )
+        .expect("decode first tool-result metadata");
+        assert_eq!(first_tool_result_metadata.get("tool").and_then(|v| v.as_str()), Some("memory_snapshot"));
+        assert_eq!(first_tool_result_metadata.get("step").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(inspection.messages[3].role, "tool-request");
+        assert_eq!(inspection.messages[3].content, "list_skills");
+        assert_eq!(inspection.messages[4].role, "tool-result");
+        assert!(inspection.messages[4].content.contains("deploy-staging"));
+        assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_requested").count(), 2);
+        assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_completed").count(), 2);
         let assistant = inspection.messages.last().expect("assistant message");
         let metadata: serde_json::Value = serde_json::from_str(
             assistant.metadata_json.as_deref().expect("assistant metadata"),
