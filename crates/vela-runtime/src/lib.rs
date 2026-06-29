@@ -937,6 +937,7 @@ pub use vela_state::SessionRequest;
 mod tests {
     use super::*;
 
+    /// Creates an isolated bootstrap report for runtime regression tests.
     fn test_bootstrap(prefix: &str) -> BootstrapReport {
         let vela_home = std::env::temp_dir().join(format!("vela-runtime-{prefix}-{}", unix_timestamp_nanos()));
         BootstrapReport {
@@ -953,6 +954,7 @@ mod tests {
         }
     }
 
+    /// Verifies that scheduler registrations persist and duplicate pending jobs are rejected.
     #[test]
     fn scheduler_jobs_persist_and_dedupe() {
         let bootstrap = test_bootstrap("scheduler-test");
@@ -971,6 +973,7 @@ mod tests {
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
 
+    /// Verifies gateway restart continuity without duplicating the bootstrap message.
     #[test]
     fn gateway_start_resumes_same_session_without_duplicate_bootstrap_message() {
         let bootstrap = test_bootstrap("gateway-resume");
@@ -992,6 +995,7 @@ mod tests {
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
 
+    /// Verifies scheduler restart continuity while preserving registered durable jobs.
     #[test]
     fn scheduler_start_resumes_same_session_and_preserves_registered_jobs() {
         let bootstrap = test_bootstrap("scheduler-resume");

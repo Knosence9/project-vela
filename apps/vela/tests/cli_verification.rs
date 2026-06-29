@@ -2,6 +2,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Creates an isolated VELA_HOME path for one CLI integration test.
 fn temp_vela_home(prefix: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "vela-cli-{prefix}-{}",
@@ -12,6 +13,7 @@ fn temp_vela_home(prefix: &str) -> std::path::PathBuf {
     ))
 }
 
+/// Runs the compiled `vela` binary against a temporary home with the given args.
 fn run_vela(vela_home: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_vela"))
         .env("VELA_HOME", vela_home)
@@ -20,19 +22,23 @@ fn run_vela(vela_home: &Path, args: &[&str]) -> std::process::Output {
         .expect("run vela")
 }
 
+/// Decodes captured stdout for assertions.
 fn stdout_text(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Decodes captured stderr for assertions.
 fn stderr_text(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// Extracts a `key=value` token from CLI output.
 fn parse_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     text.split_whitespace()
         .find_map(|part| part.strip_prefix(&format!("{key}=")))
 }
 
+/// Verifies that a default runtime session becomes visible through `vela status`.
 #[test]
 fn default_runtime_session_surfaces_in_status() {
     let vela_home = temp_vela_home("status");
@@ -50,6 +56,7 @@ fn default_runtime_session_surfaces_in_status() {
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
 
+/// Verifies that repeated gateway starts reuse the same command-scoped session.
 #[test]
 fn gateway_start_resumes_same_session_via_cli() {
     let vela_home = temp_vela_home("gateway");
@@ -69,6 +76,7 @@ fn gateway_start_resumes_same_session_via_cli() {
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
 
+/// Verifies cron job persistence and clap-level rejection of invalid flag combinations.
 #[test]
 fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     let vela_home = temp_vela_home("cron");
