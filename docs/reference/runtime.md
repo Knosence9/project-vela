@@ -24,7 +24,7 @@
 - `vela chat --query ...` creates a single-turn session and can call a configured local Ollama model for text turns
 - `vela chat --image ...` can call a configured local Ollama model for first-pass provider-backed image turns
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
-- when no provider is configured, query/image turns fall back to deterministic local-kernel responses
+- when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
 - repeated resume/continue paths update `updated_at` on the matching session row
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
 - `vela gateway --start` resumes the latest `gateway` command session when one already exists

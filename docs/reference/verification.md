@@ -32,7 +32,7 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - `vela chat --query ... --checkpoints` executes a runtime turn and produces review candidates
   - `vela chat --query ...` uses a configured Ollama provider when present
   - `vela chat --image ...` uses a configured Ollama provider when present
-  - `vela chat --image ...` still produces a runtime response when no provider is configured
+  - `vela chat --image ...` falls back to a deterministic local-kernel scaffold response when no provider is configured
   - `vela gateway --start` resumes the same gateway session
   - `vela cron` registration persists across `--show`/`--list`
   - invalid `vela cron --schedule ...` usage is rejected at CLI parse time

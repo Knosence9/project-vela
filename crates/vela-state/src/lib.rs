@@ -55,6 +55,7 @@ pub struct SessionMessageRecord {
     pub role: String,
     pub content: String,
     pub created_at: i64,
+    pub metadata_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -538,7 +539,7 @@ fn append_event(conn: &Connection, session_id: &str, event_type: &str, payload_j
 
 fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, limit: usize) -> Result<SessionInspection> {
     let mut message_stmt = conn.prepare(
-        "SELECT id, role, content, created_at
+        "SELECT id, role, content, created_at, metadata_json
          FROM messages
          WHERE session_id = ?1
          ORDER BY created_at DESC, id DESC
@@ -550,6 +551,7 @@ fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, lim
             role: row.get(1)?,
             content: row.get(2)?,
             created_at: row.get(3)?,
+            metadata_json: row.get(4)?,
         })
     })?;
     let mut messages = Vec::new();

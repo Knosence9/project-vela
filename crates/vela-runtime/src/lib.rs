@@ -849,6 +849,58 @@ fn render_chat_response(
     let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
     let memory_lines = memory.lines().count();
 
+    if request.image_present {
+        let image_path = request.image_path.as_deref().unwrap_or("(unspecified image path)");
+        if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
+            if let Some(image_path) = request.image_path.as_deref() {
+                let model = execution
+                    .model
+                    .as_deref()
+                    .context("runtime provider 'ollama' requires a model (for example a Gemma family model)")?;
+                let image_base64 = encode_image_as_base64(image_path)?;
+                let user_prompt = request
+                    .query_text
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "Please analyze the attached image and respond concisely with the most relevant details for the runtime session.".to_string());
+                let prompt = format!(
+                    "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image path: {}",
+                    session.title,
+                    session.session_id,
+                    memory,
+                    skills.len(),
+                    reviews.len(),
+                    user_prompt,
+                    image_path,
+                );
+                let response = call_ollama_generate(&execution.ollama_base_url, model, &prompt, Some(vec![image_base64]))?;
+                return Ok(RenderedChatResponse {
+                    content: Some(response),
+                    source: "runtime-ollama",
+                    provider: execution.provider_label,
+                    model: execution.model,
+                });
+            }
+        }
+
+        return Ok(RenderedChatResponse {
+            content: Some(format!(
+                "Vela executed a local image turn.\n\nImage: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo provider-backed image execution was available, so this deterministic local-kernel scaffold response kept persistence, review, and continuity live.",
+                image_path,
+                session.title,
+                session.session_id,
+                memory_lines,
+                skills.len(),
+                reviews.len(),
+            )),
+            source: "runtime-kernel",
+            provider: execution.provider_label,
+            model: execution.model,
+        });
+    }
+
     if let Some(query) = request.query_text.as_deref() {
         if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
             let model = execution
@@ -875,7 +927,7 @@ fn render_chat_response(
 
         return Ok(RenderedChatResponse {
             content: Some(format!(
-                "Vela executed a local kernel turn.\n\nQuery: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo external model provider is wired yet, so this reply comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
+                "Vela executed a local kernel turn.\n\nQuery: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo provider-backed execution was available, so this deterministic local-kernel scaffold response kept persistence, review, and continuity live.",
                 query.trim(),
                 session.title,
                 session.session_id,
@@ -886,50 +938,6 @@ fn render_chat_response(
             source: "runtime-kernel",
             provider: None,
             model: None,
-        });
-    }
-
-    if request.image_present {
-        let image_path = request.image_path.as_deref().unwrap_or("(unspecified image path)");
-        if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
-            if let Some(image_path) = request.image_path.as_deref() {
-                let model = execution
-                    .model
-                    .as_deref()
-                    .context("runtime provider 'ollama' requires a model (for example a Gemma family model)")?;
-                let image_base64 = encode_image_as_base64(image_path)?;
-                let prompt = format!(
-                    "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser attached image path: {}\nPlease analyze the attached image and respond concisely with the most relevant details for the runtime session.",
-                    session.title,
-                    session.session_id,
-                    memory,
-                    skills.len(),
-                    reviews.len(),
-                    image_path,
-                );
-                let response = call_ollama_generate(&execution.ollama_base_url, model, &prompt, Some(vec![image_base64]))?;
-                return Ok(RenderedChatResponse {
-                    content: Some(response),
-                    source: "runtime-ollama",
-                    provider: execution.provider_label,
-                    model: execution.model,
-                });
-            }
-        }
-
-        return Ok(RenderedChatResponse {
-            content: Some(format!(
-                "Vela executed a local image turn.\n\nImage: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nImage understanding is not wired to a local model yet, so this response comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
-                image_path,
-                session.title,
-                session.session_id,
-                memory_lines,
-                skills.len(),
-                reviews.len(),
-            )),
-            source: "runtime-kernel",
-            provider: execution.provider_label,
-            model: execution.model,
         });
     }
 
@@ -1269,7 +1277,7 @@ mod tests {
         response_body: &str,
         expected_model: &str,
         prompt_fragment: &str,
-        expect_images: bool,
+        expected_image_base64: Option<&str>,
     ) -> (String, std::thread::JoinHandle<()>) {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -1279,11 +1287,38 @@ mod tests {
         let body = response_body.to_string();
         let expected_model = expected_model.to_string();
         let prompt_fragment = prompt_fragment.to_string();
+        let expected_image_base64 = expected_image_base64.map(str::to_string);
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = [0u8; 16384];
-            let size = stream.read(&mut buf).unwrap();
-            let request = String::from_utf8_lossy(&buf[..size]).into_owned();
+            let mut request_bytes = Vec::new();
+            let mut buf = [0u8; 4096];
+            let header_end;
+            let expected_total_len;
+            loop {
+                let read = stream.read(&mut buf).expect("read mock Ollama request");
+                assert!(read > 0, "mock Ollama request closed before full payload arrived");
+                request_bytes.extend_from_slice(&buf[..read]);
+                if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let end = end + 4;
+                    let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
+                    let content_length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: ")))
+                        .expect("Content-Length header")
+                        .trim()
+                        .parse::<usize>()
+                        .expect("parse Content-Length");
+                    header_end = end;
+                    expected_total_len = header_end + content_length;
+                    break;
+                }
+            }
+            while request_bytes.len() < expected_total_len {
+                let read = stream.read(&mut buf).expect("read mock Ollama request body");
+                assert!(read > 0, "mock Ollama request closed before body finished");
+                request_bytes.extend_from_slice(&buf[..read]);
+            }
+            let request = String::from_utf8_lossy(&request_bytes[..expected_total_len]).into_owned();
             let (head, body_text) = request.split_once("\r\n\r\n").expect("split HTTP request");
             let request_line = head.lines().next().expect("HTTP request line");
             assert!(request_line.starts_with("POST /api/generate HTTP/1.1"));
@@ -1293,12 +1328,12 @@ mod tests {
             let prompt = payload_json.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
             assert!(prompt.contains(&prompt_fragment));
             let images = payload_json.get("images").and_then(|v| v.as_array());
-            if expect_images {
+            if let Some(expected_image_base64) = expected_image_base64.as_deref() {
                 let images = images.expect("images field");
                 assert_eq!(images.len(), 1);
-                assert!(images[0].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+                assert_eq!(images[0].as_str(), Some(expected_image_base64));
             } else {
-                assert!(images.is_none());
+                assert!(payload_json.get("images").is_none(), "images field should be absent when no image is expected");
             }
             let payload = serde_json::json!({ "response": body }).to_string();
             let reply = format!(
@@ -1443,7 +1478,7 @@ mod tests {
             "Gemma inspected the image.",
             "gemma3:4b",
             "Please analyze the attached image",
-            true,
+            Some("ZmFrZS1wbmctYnl0ZXM="),
         );
         let mut bootstrap = test_bootstrap("ollama-image-turn");
         bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
@@ -1472,6 +1507,55 @@ mod tests {
 
         assert_eq!(report.response.as_deref(), Some("Gemma inspected the image."));
         assert_eq!(report.response_source, "runtime-ollama");
+        let inspection = inspect_latest_session(&bootstrap, 10).unwrap().expect("image session inspection");
+        let assistant = inspection.messages.last().expect("assistant message");
+        let metadata: serde_json::Value = serde_json::from_str(
+            assistant.metadata_json.as_deref().expect("assistant metadata"),
+        )
+        .expect("decode assistant metadata");
+        assert_eq!(metadata.get("source").and_then(|v| v.as_str()), Some("runtime-ollama"));
+        assert_eq!(metadata.get("provider").and_then(|v| v.as_str()), Some("ollama"));
+        assert_eq!(metadata.get("model").and_then(|v| v.as_str()), Some("gemma3:4b"));
+        server.join().unwrap();
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    /// Verifies that mixed text+image requests still forward the image payload to Ollama.
+    fn execute_chat_turn_routes_mixed_text_and_image_requests_through_ollama_image_path() {
+        let (base_url, server) = spawn_mock_ollama(
+            "Gemma handled both prompt and image.",
+            "gemma3:4b",
+            "what is happening in this image?",
+            Some("ZmFrZS1wbmctYnl0ZXM="),
+        );
+        let mut bootstrap = test_bootstrap("ollama-mixed-turn");
+        bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
+        bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
+        bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
+        let image_path = bootstrap.vela_home.join("diagram.png");
+        std::fs::create_dir_all(&bootstrap.vela_home).unwrap();
+        std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("what is happening in this image?".to_string()),
+                image_present: true,
+                image_path: Some(image_path.to_string_lossy().into_owned()),
+                resume: None,
+                continue_last: None,
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.response.as_deref(), Some("Gemma handled both prompt and image."));
+        assert_eq!(report.response_source, "runtime-ollama");
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
@@ -1479,7 +1563,7 @@ mod tests {
     #[test]
     /// Verifies that configured Ollama execution is used for text chat turns.
     fn execute_chat_turn_uses_ollama_provider_when_configured() {
-        let (base_url, server) = spawn_mock_ollama("Gemma says hi.", "gemma3:4b", "hello there", false);
+        let (base_url, server) = spawn_mock_ollama("Gemma says hi.", "gemma3:4b", "hello there", None);
         let mut bootstrap = test_bootstrap("ollama-turn");
         bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
         bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
