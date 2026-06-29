@@ -1,6 +1,10 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
+use std::thread::sleep;
+use std::time::Duration;
 use vela_config::{BootstrapConfig, ConfigSource, ResolvedConfig};
 use vela_memory::MemoryReport;
 use vela_review::ReviewReport;
@@ -313,8 +317,10 @@ pub fn add_scheduled_job(
     let schedule = normalize_scheduler_schedule(schedule)?;
     let task = normalize_scheduler_task(task)?;
     let source = normalize_scheduler_source(source);
+    let lock = acquire_scheduler_jobs_lock(&setup.jobs_path)?;
     let mut jobs = load_scheduler_jobs(&setup.jobs_path)?;
     if jobs.iter().any(|job| job.schedule == schedule && job.task == task && job.source == source && job.status == "pending") {
+        drop(lock);
         bail!("matching scheduled job is already registered");
     }
     let job = ScheduledJob {
@@ -327,6 +333,7 @@ pub fn add_scheduled_job(
     };
     jobs.push(job.clone());
     save_scheduler_jobs(&setup.jobs_path, &jobs)?;
+    drop(lock);
 
     if let Some(session) = current_command_session_summary(bootstrap, "cron")? {
         let event_logged = vela_state::append_event_to_session(
@@ -705,8 +712,35 @@ fn load_scheduler_jobs(path: &std::path::Path) -> Result<Vec<ScheduledJob>> {
 }
 
 fn save_scheduler_jobs(path: &std::path::Path, jobs: &[ScheduledJob]) -> Result<()> {
-    std::fs::write(path, serde_json::to_string_pretty(jobs)?)?;
+    let parent = path.parent().ok_or_else(|| anyhow::anyhow!("scheduler jobs path has no parent directory"))?;
+    let temp_path = parent.join(format!("{}.tmp-{}", path.file_name().and_then(|n| n.to_str()).unwrap_or("jobs.json"), unix_timestamp_nanos()));
+    std::fs::write(&temp_path, serde_json::to_string_pretty(jobs)?)?;
+    std::fs::rename(&temp_path, path)?;
     Ok(())
+}
+
+fn acquire_scheduler_jobs_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> {
+    let lock_path = path.with_extension("json.lock");
+    for _ in 0..100 {
+        match OpenOptions::new().write(true).create_new(true).open(&lock_path) {
+            Ok(_) => {
+                return Ok(SchedulerJobsLock { lock_path });
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => sleep(Duration::from_millis(25)),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    bail!("timed out waiting for scheduler jobs lock")
+}
+
+struct SchedulerJobsLock {
+    lock_path: std::path::PathBuf,
+}
+
+impl Drop for SchedulerJobsLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.lock_path);
+    }
 }
 
 fn normalize_scheduler_schedule(value: &str) -> Result<String> {
