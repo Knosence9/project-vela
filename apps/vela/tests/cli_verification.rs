@@ -3,7 +3,12 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Spawns a one-shot mock Ollama server that validates the request contract.
-fn spawn_mock_ollama(response_body: &str, expected_model: &str, prompt_fragment: &str) -> (String, std::thread::JoinHandle<()>) {
+fn spawn_mock_ollama(
+    response_body: &str,
+    expected_model: &str,
+    prompt_fragment: &str,
+    expect_images: bool,
+) -> (String, std::thread::JoinHandle<()>) {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
@@ -14,7 +19,7 @@ fn spawn_mock_ollama(response_body: &str, expected_model: &str, prompt_fragment:
     let prompt_fragment = prompt_fragment.to_string();
     let handle = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept mock ollama request");
-        let mut buf = [0u8; 8192];
+        let mut buf = [0u8; 16384];
         let size = stream.read(&mut buf).expect("read mock ollama request");
         let request = String::from_utf8_lossy(&buf[..size]).into_owned();
         let (head, body_text) = request
@@ -27,6 +32,14 @@ fn spawn_mock_ollama(response_body: &str, expected_model: &str, prompt_fragment:
         assert_eq!(payload.get("stream").and_then(|v| v.as_bool()), Some(false));
         let prompt = payload.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
         assert!(prompt.contains(&prompt_fragment), "prompt missing fragment: {prompt_fragment}");
+        let images = payload.get("images").and_then(|v| v.as_array());
+        if expect_images {
+            let images = images.expect("images field");
+            assert_eq!(images.len(), 1);
+            assert!(images[0].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        } else {
+            assert!(images.is_none());
+        }
         let payload = format!("{{\"response\":\"{}\"}}", body);
         let reply = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -145,7 +158,7 @@ fn chat_query_executes_runtime_turn_and_generates_candidates() {
 /// Verifies that a configured Ollama provider is used for chat text turns.
 fn chat_query_uses_configured_ollama_provider() {
     let vela_home = temp_vela_home("ollama-chat");
-    let (base_url, server) = spawn_mock_ollama("Gemma local reply.", "gemma3:4b", "hello from cli");
+    let (base_url, server) = spawn_mock_ollama("Gemma local reply.", "gemma3:4b", "hello from cli", false);
     std::fs::create_dir_all(&vela_home).unwrap();
     std::fs::write(
         vela_home.join("config.yaml"),
@@ -175,6 +188,37 @@ fn chat_image_executes_runtime_turn() {
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Vela executed a local image turn."));
     assert!(turn_stdout.contains("Image: diagram.png"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured Ollama provider is used for chat image turns.
+fn chat_image_uses_configured_ollama_provider() {
+    let vela_home = temp_vela_home("ollama-image");
+    let (base_url, server) = spawn_mock_ollama(
+        "Gemma inspected the image.",
+        "gemma3:4b",
+        "Please analyze the attached image",
+        true,
+    );
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let image_path = vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: {}\n",
+            base_url
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(&vela_home, &["chat", "--image", image_path.to_str().expect("image path")]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Gemma inspected the image."));
+    server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
