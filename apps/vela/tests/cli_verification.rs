@@ -299,20 +299,26 @@ fn chat_image_uses_configured_ollama_provider() {
 }
 
 #[test]
-/// Verifies that a configured provider turn can run the first local tool loop through the CLI.
+/// Verifies that a configured provider turn can run a bounded multi-step local tool loop through the CLI.
 fn chat_query_uses_configured_ollama_tool_loop() {
     let vela_home = temp_vela_home("ollama-tool-loop");
     let (base_url, server) = spawn_mock_ollama_sequence(vec![
         MockOllamaExchange {
-            response_body: r#"{"tool":"list_skills"}"#,
+            response_body: r#"{"tool":"memory_snapshot"}"#,
             expected_model: "gemma3:4b",
             prompt_fragment: "need the tool loop",
             expected_image_base64: None,
         },
         MockOllamaExchange {
+            response_body: r#"{"tool":"list_skills"}"#,
+            expected_model: "gemma3:4b",
+            prompt_fragment: "Completed tool step 1 of 3.\nTool result for memory_snapshot:",
+            expected_image_base64: None,
+        },
+        MockOllamaExchange {
             response_body: "Tool-informed final answer.",
             expected_model: "gemma3:4b",
-            prompt_fragment: "Tool result for list_skills:\ndeploy-staging",
+            prompt_fragment: "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
             expected_image_base64: None,
         },
     ]);
