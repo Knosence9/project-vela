@@ -805,9 +805,24 @@ struct RenderedChatResponse {
     model: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum RuntimeProviderChoice {
     Ollama,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RuntimeToolName {
+    MemorySnapshot,
+    ListSkills,
+}
+
+impl RuntimeToolName {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MemorySnapshot => "memory_snapshot",
+            Self::ListSkills => "list_skills",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -830,6 +845,11 @@ struct OllamaGenerateRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct OllamaGenerateResponse {
     response: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeToolRequest {
+    tool: String,
 }
 
 fn render_chat_response(
@@ -866,22 +886,25 @@ fn render_chat_response(
                     .map(str::to_string)
                     .unwrap_or_else(|| "Please analyze the attached image and respond concisely with the most relevant details for the runtime session.".to_string());
                 let prompt = format!(
-                    "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image path: {}",
+                    "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\nIf you need one tool before answering, respond with ONLY JSON like {{\"tool\":\"memory_snapshot\"}} or {{\"tool\":\"list_skills\"}}. Otherwise answer directly.",
                     session.title,
                     session.session_id,
                     memory,
                     skills.len(),
                     reviews.len(),
                     user_prompt,
-                    image_path,
+                    std::path::Path::new(image_path).file_name().and_then(|n| n.to_str()).unwrap_or("attachment"),
                 );
-                let response = call_ollama_generate(&execution.ollama_base_url, model, &prompt, Some(vec![image_base64]))?;
-                return Ok(RenderedChatResponse {
-                    content: Some(response),
-                    source: "runtime-ollama",
-                    provider: execution.provider_label,
-                    model: execution.model,
-                });
+                return execute_ollama_turn(
+                    bootstrap,
+                    session,
+                    &execution,
+                    model,
+                    &prompt,
+                    Some(vec![image_base64]),
+                    &memory,
+                    &skills,
+                );
             }
         }
 
@@ -908,7 +931,7 @@ fn render_chat_response(
                 .as_deref()
                 .context("runtime provider 'ollama' requires a model (for example a Gemma family model)")?;
             let prompt = format!(
-                "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}",
+                "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\nIf you need one tool before answering, respond with ONLY JSON like {{\"tool\":\"memory_snapshot\"}} or {{\"tool\":\"list_skills\"}}. Otherwise answer directly.",
                 session.title,
                 session.session_id,
                 memory,
@@ -916,13 +939,16 @@ fn render_chat_response(
                 reviews.len(),
                 query.trim(),
             );
-            let response = call_ollama_generate(&execution.ollama_base_url, model, &prompt, None)?;
-            return Ok(RenderedChatResponse {
-                content: Some(response),
-                source: "runtime-ollama",
-                provider: execution.provider_label,
-                model: execution.model,
-            });
+            return execute_ollama_turn(
+                bootstrap,
+                session,
+                &execution,
+                model,
+                &prompt,
+                None,
+                &memory,
+                &skills,
+            );
         }
 
         return Ok(RenderedChatResponse {
@@ -995,6 +1021,132 @@ fn resolve_runtime_execution(
         model,
         ollama_base_url,
     })
+}
+
+/// Executes one provider-backed Ollama turn and optionally completes one local tool loop.
+fn execute_ollama_turn(
+    bootstrap: &BootstrapReport,
+    session: &SessionRuntimeReport,
+    execution: &RuntimeExecutionConfig,
+    model: &str,
+    prompt: &str,
+    images: Option<Vec<String>>,
+    memory: &str,
+    skills: &[vela_skills::SkillSummary],
+) -> Result<RenderedChatResponse> {
+    let first_response = call_ollama_generate(&execution.ollama_base_url, model, prompt, images.clone())?;
+    if let Some(tool_name) = parse_runtime_tool_request(&first_response)? {
+        persist_runtime_tool_request(bootstrap, &session.session_id, tool_name)?;
+        let tool_result = execute_runtime_tool(tool_name, memory, skills);
+        persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, &tool_result)?;
+        let followup = format!(
+            "{}\n\nTool result for {}:\n{}\n\nNow answer the user directly. Do not request another tool.",
+            prompt,
+            tool_name.as_str(),
+            tool_result,
+        );
+        let final_response = call_ollama_generate(&execution.ollama_base_url, model, &followup, images)?;
+        return Ok(RenderedChatResponse {
+            content: Some(final_response),
+            source: "runtime-ollama-tool-loop",
+            provider: execution.provider_label.clone(),
+            model: execution.model.clone(),
+        });
+    }
+
+    Ok(RenderedChatResponse {
+        content: Some(first_response),
+        source: "runtime-ollama",
+        provider: execution.provider_label.clone(),
+        model: execution.model.clone(),
+    })
+}
+
+/// Parses a model response for a supported runtime tool request envelope.
+fn parse_runtime_tool_request(response: &str) -> Result<Option<RuntimeToolName>> {
+    let trimmed = response.trim();
+    let json_body = trimmed
+        .strip_prefix("```json")
+        .and_then(|value| value.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    let Ok(request) = serde_json::from_str::<RuntimeToolRequest>(json_body) else {
+        return Ok(None);
+    };
+    let tool = match request.tool.trim() {
+        "memory_snapshot" => RuntimeToolName::MemorySnapshot,
+        "list_skills" => RuntimeToolName::ListSkills,
+        other => bail!("unsupported runtime tool request {:?}", other),
+    };
+    Ok(Some(tool))
+}
+
+/// Executes one approved read-only runtime tool and returns its textual result.
+fn execute_runtime_tool(tool: RuntimeToolName, memory: &str, skills: &[vela_skills::SkillSummary]) -> String {
+    match tool {
+        RuntimeToolName::MemorySnapshot => memory.to_string(),
+        RuntimeToolName::ListSkills => {
+            if skills.is_empty() {
+                "(no loaded skills)".to_string()
+            } else {
+                skills
+                    .iter()
+                    .map(|skill| skill.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
+    }
+}
+
+/// Persists the requested runtime tool before execution begins.
+fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName) -> Result<()> {
+    let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str()}).to_string();
+    let event_logged = vela_state::append_event_to_session(
+        &bootstrap.persistence.state_db_path,
+        session_id,
+        "runtime_tool_requested",
+        metadata.clone(),
+    )?;
+    if !event_logged {
+        bail!("failed to persist runtime tool request event for session {:?}", session_id);
+    }
+    let message_logged = vela_state::append_message_to_session(
+        &bootstrap.persistence.state_db_path,
+        session_id,
+        "tool-request",
+        tool.as_str(),
+        Some(metadata),
+    )?;
+    if !message_logged {
+        bail!("failed to persist runtime tool request message for session {:?}", session_id);
+    }
+    Ok(())
+}
+
+/// Persists the completed runtime tool result and its metadata.
+fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName, result: &str) -> Result<()> {
+    let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str(), "result_length": result.len()}).to_string();
+    let event_logged = vela_state::append_event_to_session(
+        &bootstrap.persistence.state_db_path,
+        session_id,
+        "runtime_tool_completed",
+        metadata.clone(),
+    )?;
+    if !event_logged {
+        bail!("failed to persist runtime tool completion event for session {:?}", session_id);
+    }
+    let message_logged = vela_state::append_message_to_session(
+        &bootstrap.persistence.state_db_path,
+        session_id,
+        "tool-result",
+        result,
+        Some(metadata),
+    )?;
+    if !message_logged {
+        bail!("failed to persist runtime tool result message for session {:?}", session_id);
+    }
+    Ok(())
 }
 
 fn call_ollama_generate(base_url: &str, model: &str, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
@@ -1273,78 +1425,102 @@ mod tests {
         }
     }
 
-    fn spawn_mock_ollama(
-        response_body: &str,
-        expected_model: &str,
-        prompt_fragment: &str,
-        expected_image_base64: Option<&str>,
-    ) -> (String, std::thread::JoinHandle<()>) {
-        use std::io::{Read, Write};
+    struct MockOllamaExchange<'a> {
+        response_body: &'a str,
+        expected_model: &'a str,
+        prompt_fragment: &'a str,
+        expected_image_base64: Option<&'a str>,
+    }
+
+    fn read_mock_http_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+
+        let mut request_bytes = Vec::new();
+        let mut buf = [0u8; 4096];
+        let header_end;
+        let expected_total_len;
+        loop {
+            let read = stream.read(&mut buf).expect("read mock Ollama request");
+            assert!(read > 0, "mock Ollama request closed before full payload arrived");
+            request_bytes.extend_from_slice(&buf[..read]);
+            if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                let end = end + 4;
+                let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
+                let content_length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: ")))
+                    .expect("Content-Length header")
+                    .trim()
+                    .parse::<usize>()
+                    .expect("parse Content-Length");
+                header_end = end;
+                expected_total_len = header_end + content_length;
+                break;
+            }
+        }
+        while request_bytes.len() < expected_total_len {
+            let read = stream.read(&mut buf).expect("read mock Ollama request body");
+            assert!(read > 0, "mock Ollama request closed before body finished");
+            request_bytes.extend_from_slice(&buf[..read]);
+        }
+        String::from_utf8_lossy(&request_bytes[..expected_total_len]).into_owned()
+    }
+
+    fn assert_mock_ollama_request(request: &str, exchange: &MockOllamaExchange<'_>) {
+        let (head, body_text) = request.split_once("\r\n\r\n").expect("split HTTP request");
+        let request_line = head.lines().next().expect("HTTP request line");
+        assert!(request_line.starts_with("POST /api/generate HTTP/1.1"));
+        let payload_json: serde_json::Value = serde_json::from_str(body_text).expect("decode request body");
+        assert_eq!(payload_json.get("model").and_then(|v| v.as_str()), Some(exchange.expected_model));
+        assert_eq!(payload_json.get("stream").and_then(|v| v.as_bool()), Some(false));
+        let prompt = payload_json.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
+        assert!(prompt.contains(exchange.prompt_fragment));
+        let images = payload_json.get("images").and_then(|v| v.as_array());
+        if let Some(expected_image_base64) = exchange.expected_image_base64 {
+            let images = images.expect("images field");
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].as_str(), Some(expected_image_base64));
+        } else {
+            assert!(payload_json.get("images").is_none(), "images field should be absent when no image is expected");
+        }
+    }
+
+    fn spawn_mock_ollama_sequence(exchanges: Vec<MockOllamaExchange<'static>>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::Write;
         use std::net::TcpListener;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("http://{}", listener.local_addr().unwrap());
-        let body = response_body.to_string();
-        let expected_model = expected_model.to_string();
-        let prompt_fragment = prompt_fragment.to_string();
-        let expected_image_base64 = expected_image_base64.map(str::to_string);
         let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request_bytes = Vec::new();
-            let mut buf = [0u8; 4096];
-            let header_end;
-            let expected_total_len;
-            loop {
-                let read = stream.read(&mut buf).expect("read mock Ollama request");
-                assert!(read > 0, "mock Ollama request closed before full payload arrived");
-                request_bytes.extend_from_slice(&buf[..read]);
-                if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                    let end = end + 4;
-                    let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
-                    let content_length = head
-                        .lines()
-                        .find_map(|line| line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: ")))
-                        .expect("Content-Length header")
-                        .trim()
-                        .parse::<usize>()
-                        .expect("parse Content-Length");
-                    header_end = end;
-                    expected_total_len = header_end + content_length;
-                    break;
-                }
+            for exchange in exchanges {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_mock_http_request(&mut stream);
+                assert_mock_ollama_request(&request, &exchange);
+                let payload = serde_json::json!({ "response": exchange.response_body }).to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                );
+                stream.write_all(reply.as_bytes()).unwrap();
+                stream.flush().unwrap();
             }
-            while request_bytes.len() < expected_total_len {
-                let read = stream.read(&mut buf).expect("read mock Ollama request body");
-                assert!(read > 0, "mock Ollama request closed before body finished");
-                request_bytes.extend_from_slice(&buf[..read]);
-            }
-            let request = String::from_utf8_lossy(&request_bytes[..expected_total_len]).into_owned();
-            let (head, body_text) = request.split_once("\r\n\r\n").expect("split HTTP request");
-            let request_line = head.lines().next().expect("HTTP request line");
-            assert!(request_line.starts_with("POST /api/generate HTTP/1.1"));
-            let payload_json: serde_json::Value = serde_json::from_str(body_text).expect("decode request body");
-            assert_eq!(payload_json.get("model").and_then(|v| v.as_str()), Some(expected_model.as_str()));
-            assert_eq!(payload_json.get("stream").and_then(|v| v.as_bool()), Some(false));
-            let prompt = payload_json.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
-            assert!(prompt.contains(&prompt_fragment));
-            let images = payload_json.get("images").and_then(|v| v.as_array());
-            if let Some(expected_image_base64) = expected_image_base64.as_deref() {
-                let images = images.expect("images field");
-                assert_eq!(images.len(), 1);
-                assert_eq!(images[0].as_str(), Some(expected_image_base64));
-            } else {
-                assert!(payload_json.get("images").is_none(), "images field should be absent when no image is expected");
-            }
-            let payload = serde_json::json!({ "response": body }).to_string();
-            let reply = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                payload.len(),
-                payload
-            );
-            stream.write_all(reply.as_bytes()).unwrap();
-            stream.flush().unwrap();
         });
         (addr, handle)
+    }
+
+    fn spawn_mock_ollama(
+        response_body: &'static str,
+        expected_model: &'static str,
+        prompt_fragment: &'static str,
+        expected_image_base64: Option<&'static str>,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        spawn_mock_ollama_sequence(vec![MockOllamaExchange {
+            response_body,
+            expected_model,
+            prompt_fragment,
+            expected_image_base64,
+        }])
     }
 
     #[test]
@@ -1588,6 +1764,71 @@ mod tests {
 
         assert_eq!(report.response.as_deref(), Some("Gemma says hi."));
         assert_eq!(report.response_source, "runtime-ollama");
+        server.join().unwrap();
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    /// Verifies that a configured provider turn can request a local tool and continue with the tool result.
+    fn execute_chat_turn_runs_first_runtime_tool_loop() {
+        let (base_url, server) = spawn_mock_ollama_sequence(vec![
+            MockOllamaExchange {
+                response_body: r#"{"tool":"list_skills"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "need the tool loop",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: "Tool-informed final answer.",
+                expected_model: "gemma3:4b",
+                prompt_fragment: "Tool result for list_skills:\ndeploy-staging",
+                expected_image_base64: None,
+            },
+        ]);
+        let mut bootstrap = test_bootstrap("ollama-tool-loop");
+        bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
+        bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
+        bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
+        std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
+        std::fs::write(
+            bootstrap.vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+            "# deploy-staging\n\nDeploys staging.",
+        )
+        .unwrap();
+
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("need the tool loop".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.response.as_deref(), Some("Tool-informed final answer."));
+        assert_eq!(report.response_source, "runtime-ollama-tool-loop");
+        let inspection = inspect_latest_session(&bootstrap, 10).unwrap().expect("tool loop inspection");
+        assert_eq!(inspection.messages.len(), 4);
+        assert_eq!(inspection.messages[1].role, "tool-request");
+        assert_eq!(inspection.messages[1].content, "list_skills");
+        assert_eq!(inspection.messages[2].role, "tool-result");
+        assert!(inspection.messages[2].content.contains("deploy-staging"));
+        assert!(inspection.events.iter().any(|event| event.event_type == "runtime_tool_requested"));
+        assert!(inspection.events.iter().any(|event| event.event_type == "runtime_tool_completed"));
+        let assistant = inspection.messages.last().expect("assistant message");
+        let metadata: serde_json::Value = serde_json::from_str(
+            assistant.metadata_json.as_deref().expect("assistant metadata"),
+        )
+        .expect("decode assistant metadata");
+        assert_eq!(metadata.get("source").and_then(|v| v.as_str()), Some("runtime-ollama-tool-loop"));
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }

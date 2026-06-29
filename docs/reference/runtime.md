@@ -22,6 +22,7 @@
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
 - `vela chat --query ...` creates a single-turn session and can call a configured local Ollama model for text turns
+- configured provider-backed turns can run a first local tool loop with approved read-only runtime tools before producing the final assistant reply
 - `vela chat --image ...` can call a configured local Ollama model for first-pass provider-backed image turns
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
@@ -32,7 +33,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states
-- broader external provider/model execution beyond the first Ollama text/image-turn slices
+- broader external provider/model execution beyond the first Ollama text/image-turn slices and minimal tool loop
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - turn lifecycle persistence

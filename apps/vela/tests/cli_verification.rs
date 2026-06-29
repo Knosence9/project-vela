@@ -2,81 +2,129 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Spawns a one-shot mock Ollama server that validates the request contract.
-fn spawn_mock_ollama(
-    response_body: &str,
-    expected_model: &str,
-    prompt_fragment: &str,
-    expected_image_base64: Option<&str>,
-) -> (String, std::thread::JoinHandle<()>) {
-    use std::io::{Read, Write};
+/// Describes one expected mock Ollama request/response exchange.
+struct MockOllamaExchange<'a> {
+    response_body: &'a str,
+    expected_model: &'a str,
+    prompt_fragment: &'a str,
+    expected_image_base64: Option<&'a str>,
+}
+
+/// Reads a full mock HTTP request body using the advertised content length.
+fn read_mock_http_request(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+
+    let mut request_bytes = Vec::new();
+    let mut buf = [0u8; 4096];
+    let header_end;
+    let expected_total_len;
+    loop {
+        let read = stream.read(&mut buf).expect("read mock ollama request");
+        assert!(read > 0, "mock Ollama request closed before full payload arrived");
+        request_bytes.extend_from_slice(&buf[..read]);
+        if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            let end = end + 4;
+            let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
+            let content_length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: ")))
+                .expect("Content-Length header")
+                .trim()
+                .parse::<usize>()
+                .expect("parse Content-Length");
+            header_end = end;
+            expected_total_len = header_end + content_length;
+            break;
+        }
+    }
+    while request_bytes.len() < expected_total_len {
+        let read = stream.read(&mut buf).expect("read mock Ollama request body");
+        assert!(read > 0, "mock Ollama request closed before body finished");
+        request_bytes.extend_from_slice(&buf[..read]);
+    }
+    String::from_utf8_lossy(&request_bytes[..expected_total_len]).into_owned()
+}
+
+/// Verifies that a captured mock Ollama request matches the expected exchange contract.
+fn assert_mock_ollama_request(request: &str, exchange: &MockOllamaExchange<'_>) {
+    let (head, body_text) = request
+        .split_once("\r\n\r\n")
+        .expect("split HTTP headers/body");
+    let request_line = head.lines().next().expect("HTTP request line");
+    assert!(request_line.starts_with("POST /api/generate HTTP/1.1"), "unexpected request line: {request_line}");
+    let payload: serde_json::Value = serde_json::from_str(body_text).expect("decode mock ollama JSON body");
+    assert_eq!(payload.get("model").and_then(|v| v.as_str()), Some(exchange.expected_model));
+    assert_eq!(payload.get("stream").and_then(|v| v.as_bool()), Some(false));
+    let prompt = payload.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
+    assert!(prompt.contains(exchange.prompt_fragment), "prompt missing fragment: {}", exchange.prompt_fragment);
+    let images = payload.get("images").and_then(|v| v.as_array());
+    if let Some(expected_image_base64) = exchange.expected_image_base64 {
+        let images = images.expect("images field");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].as_str(), Some(expected_image_base64));
+    } else {
+        assert!(payload.get("images").is_none(), "images field should be absent when no image is expected");
+    }
+}
+
+/// Spawns a mock Ollama server that validates one or more request/response exchanges.
+fn spawn_mock_ollama_sequence(exchanges: Vec<MockOllamaExchange<'static>>) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::Write;
     use std::net::TcpListener;
+    use std::time::{Duration, Instant};
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock ollama");
+    listener
+        .set_nonblocking(true)
+        .expect("configure mock ollama listener nonblocking mode");
     let addr = format!("http://{}", listener.local_addr().expect("mock ollama addr"));
-    let body = response_body.to_string();
-    let expected_model = expected_model.to_string();
-    let prompt_fragment = prompt_fragment.to_string();
-    let expected_image_base64 = expected_image_base64.map(str::to_string);
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept mock ollama request");
-        let mut request_bytes = Vec::new();
-        let mut buf = [0u8; 4096];
-        let header_end;
-        let expected_total_len;
-        loop {
-            let read = stream.read(&mut buf).expect("read mock ollama request");
-            assert!(read > 0, "mock Ollama request closed before full payload arrived");
-            request_bytes.extend_from_slice(&buf[..read]);
-            if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                let end = end + 4;
-                let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
-                let content_length = head
-                    .lines()
-                    .find_map(|line| line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: ")))
-                    .expect("Content-Length header")
-                    .trim()
-                    .parse::<usize>()
-                    .expect("parse Content-Length");
-                header_end = end;
-                expected_total_len = header_end + content_length;
-                break;
-            }
+        for exchange in exchanges {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "timed out waiting for mock Ollama request");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept mock ollama request: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("set mock ollama read timeout");
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .expect("set mock ollama write timeout");
+            let request = read_mock_http_request(&mut stream);
+            assert_mock_ollama_request(&request, &exchange);
+            let payload = serde_json::json!({ "response": exchange.response_body }).to_string();
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            stream.write_all(reply.as_bytes()).expect("write mock ollama response");
+            stream.flush().expect("flush mock ollama response");
         }
-        while request_bytes.len() < expected_total_len {
-            let read = stream.read(&mut buf).expect("read mock Ollama request body");
-            assert!(read > 0, "mock Ollama request closed before body finished");
-            request_bytes.extend_from_slice(&buf[..read]);
-        }
-        let request = String::from_utf8_lossy(&request_bytes[..expected_total_len]).into_owned();
-        let (head, body_text) = request
-            .split_once("\r\n\r\n")
-            .expect("split HTTP headers/body");
-        let request_line = head.lines().next().expect("HTTP request line");
-        assert!(request_line.starts_with("POST /api/generate HTTP/1.1"), "unexpected request line: {request_line}");
-        let payload: serde_json::Value = serde_json::from_str(body_text).expect("decode mock ollama JSON body");
-        assert_eq!(payload.get("model").and_then(|v| v.as_str()), Some(expected_model.as_str()));
-        assert_eq!(payload.get("stream").and_then(|v| v.as_bool()), Some(false));
-        let prompt = payload.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
-        assert!(prompt.contains(&prompt_fragment), "prompt missing fragment: {prompt_fragment}");
-        let images = payload.get("images").and_then(|v| v.as_array());
-        if let Some(expected_image_base64) = expected_image_base64.as_deref() {
-            let images = images.expect("images field");
-            assert_eq!(images.len(), 1);
-            assert_eq!(images[0].as_str(), Some(expected_image_base64));
-        } else {
-            assert!(payload.get("images").is_none(), "images field should be absent when no image is expected");
-        }
-        let payload = format!("{{\"response\":\"{}\"}}", body);
-        let reply = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-            payload.len(),
-            payload
-        );
-        stream.write_all(reply.as_bytes()).expect("write mock ollama response");
-        stream.flush().expect("flush mock ollama response");
     });
     (addr, handle)
+}
+
+/// Spawns a one-shot mock Ollama server that validates the request contract.
+fn spawn_mock_ollama(
+    response_body: &'static str,
+    expected_model: &'static str,
+    prompt_fragment: &'static str,
+    expected_image_base64: Option<&'static str>,
+) -> (String, std::thread::JoinHandle<()>) {
+    spawn_mock_ollama_sequence(vec![MockOllamaExchange {
+        response_body,
+        expected_model,
+        prompt_fragment,
+        expected_image_base64,
+    }])
 }
 
 /// Creates an isolated VELA_HOME path for one CLI integration test.
@@ -245,6 +293,48 @@ fn chat_image_uses_configured_ollama_provider() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Gemma inspected the image."));
+    server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured provider turn can run the first local tool loop through the CLI.
+fn chat_query_uses_configured_ollama_tool_loop() {
+    let vela_home = temp_vela_home("ollama-tool-loop");
+    let (base_url, server) = spawn_mock_ollama_sequence(vec![
+        MockOllamaExchange {
+            response_body: r#"{"tool":"list_skills"}"#,
+            expected_model: "gemma3:4b",
+            prompt_fragment: "need the tool loop",
+            expected_image_base64: None,
+        },
+        MockOllamaExchange {
+            response_body: "Tool-informed final answer.",
+            expected_model: "gemma3:4b",
+            prompt_fragment: "Tool result for list_skills:\ndeploy-staging",
+            expected_image_base64: None,
+        },
+    ]);
+    std::fs::create_dir_all(vela_home.join("skills").join("deploy-staging")).unwrap();
+    std::fs::write(
+        vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+        "# deploy-staging\n\nDeploys staging.",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: {}\n",
+            base_url
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(&vela_home, &["chat", "--query", "need the tool loop"]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Tool-informed final answer."));
     server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();
