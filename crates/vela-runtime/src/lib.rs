@@ -1023,6 +1023,7 @@ fn resolve_runtime_execution(
     })
 }
 
+/// Executes one provider-backed Ollama turn and optionally completes one local tool loop.
 fn execute_ollama_turn(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
@@ -1061,6 +1062,7 @@ fn execute_ollama_turn(
     })
 }
 
+/// Parses a model response for a supported runtime tool request envelope.
 fn parse_runtime_tool_request(response: &str) -> Result<Option<RuntimeToolName>> {
     let trimmed = response.trim();
     let json_body = trimmed
@@ -1079,6 +1081,7 @@ fn parse_runtime_tool_request(response: &str) -> Result<Option<RuntimeToolName>>
     Ok(Some(tool))
 }
 
+/// Executes one approved read-only runtime tool and returns its textual result.
 fn execute_runtime_tool(tool: RuntimeToolName, memory: &str, skills: &[vela_skills::SkillSummary]) -> String {
     match tool {
         RuntimeToolName::MemorySnapshot => memory.to_string(),
@@ -1096,39 +1099,53 @@ fn execute_runtime_tool(tool: RuntimeToolName, memory: &str, skills: &[vela_skil
     }
 }
 
+/// Persists the requested runtime tool before execution begins.
 fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName) -> Result<()> {
     let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str()}).to_string();
-    let _ = vela_state::append_event_to_session(
+    let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
         "runtime_tool_requested",
         metadata.clone(),
     )?;
-    let _ = vela_state::append_message_to_session(
+    if !event_logged {
+        bail!("failed to persist runtime tool request event for session {:?}", session_id);
+    }
+    let message_logged = vela_state::append_message_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
         "tool-request",
         tool.as_str(),
         Some(metadata),
     )?;
+    if !message_logged {
+        bail!("failed to persist runtime tool request message for session {:?}", session_id);
+    }
     Ok(())
 }
 
+/// Persists the completed runtime tool result and its metadata.
 fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName, result: &str) -> Result<()> {
     let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str(), "result_length": result.len()}).to_string();
-    let _ = vela_state::append_event_to_session(
+    let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
         "runtime_tool_completed",
-        json!({"tool": tool.as_str(), "result": result}).to_string(),
+        metadata.clone(),
     )?;
-    let _ = vela_state::append_message_to_session(
+    if !event_logged {
+        bail!("failed to persist runtime tool completion event for session {:?}", session_id);
+    }
+    let message_logged = vela_state::append_message_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
         "tool-result",
         result,
         Some(metadata),
     )?;
+    if !message_logged {
+        bail!("failed to persist runtime tool result message for session {:?}", session_id);
+    }
     Ok(())
 }
 

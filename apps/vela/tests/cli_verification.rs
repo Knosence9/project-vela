@@ -2,6 +2,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Describes one expected mock Ollama request/response exchange.
 struct MockOllamaExchange<'a> {
     response_body: &'a str,
     expected_model: &'a str,
@@ -9,6 +10,7 @@ struct MockOllamaExchange<'a> {
     expected_image_base64: Option<&'a str>,
 }
 
+/// Reads a full mock HTTP request body using the advertised content length.
 fn read_mock_http_request(stream: &mut std::net::TcpStream) -> String {
     use std::io::Read;
 
@@ -43,6 +45,7 @@ fn read_mock_http_request(stream: &mut std::net::TcpStream) -> String {
     String::from_utf8_lossy(&request_bytes[..expected_total_len]).into_owned()
 }
 
+/// Verifies that a captured mock Ollama request matches the expected exchange contract.
 fn assert_mock_ollama_request(request: &str, exchange: &MockOllamaExchange<'_>) {
     let (head, body_text) = request
         .split_once("\r\n\r\n")
@@ -68,12 +71,32 @@ fn assert_mock_ollama_request(request: &str, exchange: &MockOllamaExchange<'_>) 
 fn spawn_mock_ollama_sequence(exchanges: Vec<MockOllamaExchange<'static>>) -> (String, std::thread::JoinHandle<()>) {
     use std::io::Write;
     use std::net::TcpListener;
+    use std::time::{Duration, Instant};
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock ollama");
+    listener
+        .set_nonblocking(true)
+        .expect("configure mock ollama listener nonblocking mode");
     let addr = format!("http://{}", listener.local_addr().expect("mock ollama addr"));
     let handle = std::thread::spawn(move || {
         for exchange in exchanges {
-            let (mut stream, _) = listener.accept().expect("accept mock ollama request");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "timed out waiting for mock Ollama request");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept mock ollama request: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("set mock ollama read timeout");
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .expect("set mock ollama write timeout");
             let request = read_mock_http_request(&mut stream);
             assert_mock_ollama_request(&request, &exchange);
             let payload = serde_json::json!({ "response": exchange.response_body }).to_string();
