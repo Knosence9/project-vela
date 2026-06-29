@@ -2,7 +2,7 @@
 
 ## Implemented in the Rust scaffold
 - bare `vela` now bootstraps a runtime session instead of only printing help
-- `chat` also bootstraps a runtime session
+- `chat` now executes a local kernel turn instead of only bootstrapping a session
 - runtime session bootstrap persists into `state.db`
 - session rows currently store:
   - `id`
@@ -20,8 +20,9 @@
 - `cron` now bootstraps durable scheduler config/job state and can resume a scheduler-specific runtime session
 
 ## Current runtime behavior
-- bare `vela` creates an interactive chat session when no explicit resume target is given
-- `vela chat --query ...` creates a single-turn session
+- bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
+- `vela chat --query ...` creates a single-turn session and appends a deterministic local-kernel assistant response
+- `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - repeated resume/continue paths update `updated_at` on the matching session row
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
 - `vela gateway start` resumes the latest `gateway` command session when one already exists
@@ -29,6 +30,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states
+- real external provider/model execution instead of deterministic kernel responses
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - turn lifecycle persistence

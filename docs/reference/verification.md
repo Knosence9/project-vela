@@ -22,13 +22,16 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - scheduler job persistence and dedupe
   - gateway restart continuity avoids duplicate bootstrap messages
   - scheduler restart continuity reuses the same command session and preserves registered jobs
+  - chat turn execution appends an assistant response and can generate checkpoint artifacts
 - `apps/vela/tests/cli_verification.rs`
   - bare `vela` creates a runtime session visible in `vela status`
+  - bare `vela` emits an interactive runtime-ready message on first creation
+  - `vela chat --query ... --checkpoints` executes a local kernel turn and produces review candidates
   - `vela gateway --start` resumes the same gateway session
   - `vela cron` registration persists across `--show`/`--list`
   - invalid `vela cron --schedule ...` usage is rejected at CLI parse time
 
 ## Remaining gaps
-- end-to-end live runtime loop behavior beyond bootstrap/session continuity
+- end-to-end live runtime loop behavior beyond the current deterministic kernel response path
 - broader review-pipeline integration from transcript -> candidate -> pending -> approval via CLI-only tests
 - model/tool execution verification once runtime behavior moves beyond the current shell scaffolding

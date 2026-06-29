@@ -475,7 +475,25 @@ fn append_request_message_if_present(conn: &Connection, session_id: &str, reques
                     .to_string(),
                 ),
             )?;
+            return Ok(());
         }
+    }
+
+    if request.image_present {
+        append_message(
+            conn,
+            session_id,
+            "user",
+            request.image_path.as_deref().unwrap_or("[image]"),
+            Some(
+                json!({
+                    "command_name": request.command_name,
+                    "image_path": request.image_path,
+                    "image_only": true,
+                })
+                .to_string(),
+            ),
+        )?;
     }
     Ok(())
 }
