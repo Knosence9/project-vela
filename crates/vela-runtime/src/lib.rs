@@ -937,10 +937,9 @@ pub use vela_state::SessionRequest;
 mod tests {
     use super::*;
 
-    #[test]
-    fn scheduler_jobs_persist_and_dedupe() {
-        let vela_home = std::env::temp_dir().join(format!("vela-runtime-scheduler-test-{}", unix_timestamp_nanos()));
-        let bootstrap = BootstrapReport {
+    fn test_bootstrap(prefix: &str) -> BootstrapReport {
+        let vela_home = std::env::temp_dir().join(format!("vela-runtime-{prefix}-{}", unix_timestamp_nanos()));
+        BootstrapReport {
             vela_home: vela_home.clone(),
             active_profile: None,
             loaded_env_paths: vec![],
@@ -951,7 +950,12 @@ mod tests {
             memory: vela_memory::initialize_memory(&vela_home).unwrap(),
             skills: vela_skills::initialize_skills(&vela_home).unwrap(),
             reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
-        };
+        }
+    }
+
+    #[test]
+    fn scheduler_jobs_persist_and_dedupe() {
+        let bootstrap = test_bootstrap("scheduler-test");
 
         let first = add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None).unwrap();
         let jobs = list_scheduled_jobs(&bootstrap).unwrap();
@@ -964,6 +968,50 @@ mod tests {
         let fetched = get_scheduled_job(&bootstrap, &first.id).unwrap();
         assert_eq!(fetched.task, "ping status");
 
-        std::fs::remove_dir_all(&vela_home).unwrap();
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    fn gateway_start_resumes_same_session_without_duplicate_bootstrap_message() {
+        let bootstrap = test_bootstrap("gateway-resume");
+
+        let first = start_gateway(&bootstrap).unwrap();
+        let first_summary = current_command_session_summary(&bootstrap, "gateway")
+            .unwrap()
+            .expect("initial gateway session summary");
+        let second = start_gateway(&bootstrap).unwrap();
+
+        assert_eq!(first.session.session_id, second.session.session_id);
+        let summary = current_command_session_summary(&bootstrap, "gateway")
+            .unwrap()
+            .expect("gateway session summary");
+        assert_eq!(first_summary.message_count, 1);
+        assert_eq!(summary.message_count, 1);
+        assert_eq!(summary.event_count, first_summary.event_count + 2);
+
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    fn scheduler_start_resumes_same_session_and_preserves_registered_jobs() {
+        let bootstrap = test_bootstrap("scheduler-resume");
+
+        let first = start_scheduler(&bootstrap).unwrap();
+        let first_summary = current_command_session_summary(&bootstrap, "cron")
+            .unwrap()
+            .expect("initial cron session summary");
+        add_scheduled_job(&bootstrap, "*/5 * * * *", "ping status", Some("test")).unwrap();
+        let second = start_scheduler(&bootstrap).unwrap();
+
+        assert_eq!(first.session.session_id, second.session.session_id);
+        assert_eq!(second.setup.job_count, 1);
+        let summary = current_command_session_summary(&bootstrap, "cron")
+            .unwrap()
+            .expect("cron session summary");
+        assert_eq!(first_summary.message_count, 1);
+        assert_eq!(summary.message_count, 1);
+        assert_eq!(summary.event_count, first_summary.event_count + 3);
+
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
 }
