@@ -1876,4 +1876,88 @@ mod tests {
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
+
+    #[test]
+    /// Verifies that the iterative tool loop trips the max-step guard and falls back deterministically.
+    fn execute_chat_turn_stops_at_max_runtime_tool_steps() {
+        let (base_url, server) = spawn_mock_ollama_sequence(vec![
+            MockOllamaExchange {
+                response_body: r#"{"tool":"memory_snapshot"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "trip the max-step guard",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: r#"{"tool":"list_skills"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "Completed tool step 1 of 3.\nTool result for memory_snapshot:",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: r#"{"tool":"memory_snapshot"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: r#"{"tool":"list_skills"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "Completed tool step 3 of 3.\nTool result for memory_snapshot:",
+                expected_image_base64: None,
+            },
+        ]);
+        let mut bootstrap = test_bootstrap("ollama-tool-loop-max-step");
+        bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
+        bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
+        bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
+        std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
+        std::fs::write(
+            bootstrap.vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+            "# deploy-staging\n\nDeploys staging.",
+        )
+        .unwrap();
+
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("trip the max-step guard".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.response_source, "runtime-kernel");
+        assert!(report
+            .response
+            .as_deref()
+            .unwrap_or_default()
+            .contains("maximum bounded tool steps"));
+        let inspection = inspect_latest_session(&bootstrap, 12).unwrap().expect("max-step inspection");
+        assert_eq!(inspection.messages.len(), 8);
+        assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_requested").count(), 3);
+        assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_completed").count(), 3);
+        let third_tool_result_metadata: serde_json::Value = serde_json::from_str(
+            inspection.messages[6].metadata_json.as_deref().expect("third tool-result metadata"),
+        )
+        .expect("decode third tool-result metadata");
+        assert_eq!(inspection.messages[6].role, "tool-result");
+        assert_eq!(third_tool_result_metadata.get("tool").and_then(|v| v.as_str()), Some("memory_snapshot"));
+        assert_eq!(third_tool_result_metadata.get("step").and_then(|v| v.as_u64()), Some(3));
+        let assistant = inspection.messages.last().expect("assistant message");
+        let assistant_metadata: serde_json::Value = serde_json::from_str(
+            assistant.metadata_json.as_deref().expect("assistant metadata"),
+        )
+        .expect("decode assistant metadata");
+        assert_eq!(assistant_metadata.get("source").and_then(|v| v.as_str()), Some("runtime-kernel"));
+        server.join().unwrap();
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
 }
