@@ -954,8 +954,8 @@ mod tests {
         }
     }
 
-    /// Verifies that scheduler registrations persist and duplicate pending jobs are rejected.
     #[test]
+    /// Verifies that scheduler registrations persist and duplicate pending jobs are rejected.
     fn scheduler_jobs_persist_and_dedupe() {
         let bootstrap = test_bootstrap("scheduler-test");
 
@@ -973,8 +973,8 @@ mod tests {
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
 
-    /// Verifies gateway restart continuity without duplicating the bootstrap message.
     #[test]
+    /// Verifies gateway restart continuity without duplicating the bootstrap message.
     fn gateway_start_resumes_same_session_without_duplicate_bootstrap_message() {
         let bootstrap = test_bootstrap("gateway-resume");
 
@@ -995,8 +995,8 @@ mod tests {
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
 
-    /// Verifies scheduler restart continuity while preserving registered durable jobs.
     #[test]
+    /// Verifies scheduler restart continuity while preserving registered durable jobs.
     fn scheduler_start_resumes_same_session_and_preserves_registered_jobs() {
         let bootstrap = test_bootstrap("scheduler-resume");
 
