@@ -18,6 +18,7 @@ pub use vela_state::{
 };
 
 #[derive(Debug, Clone)]
+/// Describes the durable gateway paths ensured during bootstrap.
 pub struct GatewaySetupReport {
     pub gateway_dir: std::path::PathBuf,
     pub config_path: std::path::PathBuf,
@@ -27,12 +28,14 @@ pub struct GatewaySetupReport {
 }
 
 #[derive(Debug, Clone)]
+/// Captures gateway setup data plus the resolved runtime session.
 pub struct GatewayStartReport {
     pub setup: GatewaySetupReport,
     pub session: SessionRuntimeReport,
 }
 
 #[derive(Debug, Clone)]
+/// Describes the durable scheduler files ensured during bootstrap.
 pub struct SchedulerSetupReport {
     pub scheduler_dir: std::path::PathBuf,
     pub config_path: std::path::PathBuf,
@@ -43,12 +46,14 @@ pub struct SchedulerSetupReport {
 }
 
 #[derive(Debug, Clone)]
+/// Captures scheduler setup data plus the resolved runtime session.
 pub struct SchedulerStartReport {
     pub setup: SchedulerSetupReport,
     pub session: SessionRuntimeReport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents one durable scheduler registration stored in `jobs.json`.
 pub struct ScheduledJob {
     pub id: String,
     pub schedule: String,
@@ -59,6 +64,7 @@ pub struct ScheduledJob {
 }
 
 #[derive(Debug, Clone)]
+/// Aggregates the initialized runtime subsystems and resolved configuration.
 pub struct BootstrapReport {
     pub vela_home: std::path::PathBuf,
     pub active_profile: Option<String>,
@@ -73,6 +79,7 @@ pub struct BootstrapReport {
 }
 
 impl BootstrapReport {
+    /// Renders a compact human-readable bootstrap summary.
     pub fn summary_line(&self) -> String {
         let profile = self
             .active_profile
@@ -102,6 +109,7 @@ impl BootstrapReport {
     }
 }
 
+/// Initializes config, persistence, memory, skills, and review subsystems.
 pub fn initialize_bootstrap(active_profile: Option<String>, ignore_user_config: bool) -> Result<BootstrapReport> {
     let config = vela_config::initialize_config(active_profile, ignore_user_config)?;
     let persistence = vela_state::initialize_persistence(&config.vela_home)?;
@@ -111,18 +119,22 @@ pub fn initialize_bootstrap(active_profile: Option<String>, ignore_user_config: 
     Ok(BootstrapReport::from_parts(config, persistence, memory, skills, reviews))
 }
 
+/// Emits a debug log once runtime bootstrap has completed.
 pub fn bootstrap_banner() {
     tracing::debug!("vela-runtime bootstrap initialized");
 }
 
+/// Returns the current session id and title when one is active.
 pub fn current_session_identity(bootstrap: &BootstrapReport) -> Result<Option<(String, String)>> {
     vela_state::current_session_identity(&bootstrap.persistence.state_db_path)
 }
 
+/// Returns the latest session summary when one exists.
 pub fn current_session_summary(bootstrap: &BootstrapReport) -> Result<Option<SessionSummary>> {
     vela_state::current_session_summary(&bootstrap.persistence.state_db_path)
 }
 
+/// Returns the latest session summary for a command-scoped runtime session.
 pub fn current_command_session_summary(
     bootstrap: &BootstrapReport,
     command_name: &str,
@@ -130,10 +142,12 @@ pub fn current_command_session_summary(
     vela_state::current_command_session_summary(&bootstrap.persistence.state_db_path, command_name)
 }
 
+/// Resolves or creates a runtime session for an interactive request.
 pub fn resolve_runtime_session(bootstrap: &BootstrapReport, request: &SessionRequest) -> Result<SessionRuntimeReport> {
     vela_state::resolve_runtime_session(&bootstrap.persistence.state_db_path, request)
 }
 
+/// Ensures the durable gateway directory structure and config file exist.
 pub fn setup_gateway(bootstrap: &BootstrapReport) -> Result<GatewaySetupReport> {
     let gateway_dir = bootstrap.vela_home.join("gateway");
     std::fs::create_dir_all(&gateway_dir)?;
@@ -167,6 +181,7 @@ pub fn setup_gateway(bootstrap: &BootstrapReport) -> Result<GatewaySetupReport> 
     })
 }
 
+/// Starts or resumes the durable gateway runtime session.
 pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> {
     let setup = setup_gateway(bootstrap)?;
     let session = vela_state::resolve_command_session(
@@ -212,6 +227,7 @@ pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> 
     Ok(GatewayStartReport { setup, session })
 }
 
+/// Ensures the durable scheduler directory, config, and job registry exist.
 pub fn setup_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerSetupReport> {
     let scheduler_dir = bootstrap.vela_home.join("scheduler");
     std::fs::create_dir_all(&scheduler_dir)?;
@@ -248,6 +264,7 @@ pub fn setup_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerSetupRepo
     })
 }
 
+/// Starts or resumes the durable scheduler runtime session.
 pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartReport> {
     let setup = setup_scheduler(bootstrap)?;
     let session = vela_state::resolve_command_session(
@@ -294,11 +311,13 @@ pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartRepo
     Ok(SchedulerStartReport { setup, session })
 }
 
+/// Lists all durable scheduled jobs currently registered.
 pub fn list_scheduled_jobs(bootstrap: &BootstrapReport) -> Result<Vec<ScheduledJob>> {
     let setup = setup_scheduler(bootstrap)?;
     load_scheduler_jobs(&setup.jobs_path)
 }
 
+/// Loads one scheduled job by id from the durable registry.
 pub fn get_scheduled_job(bootstrap: &BootstrapReport, id: &str) -> Result<ScheduledJob> {
     let job_id = validate_scheduler_job_id(id)?;
     list_scheduled_jobs(bootstrap)?
@@ -307,6 +326,7 @@ pub fn get_scheduled_job(bootstrap: &BootstrapReport, id: &str) -> Result<Schedu
         .ok_or_else(|| anyhow::anyhow!("scheduled job {:?} not found", job_id))
 }
 
+/// Registers a new durable scheduled job after validation and deduplication.
 pub fn add_scheduled_job(
     bootstrap: &BootstrapReport,
     schedule: &str,
@@ -349,22 +369,27 @@ pub fn add_scheduled_job(
     Ok(job)
 }
 
+/// Searches persisted session history using the state FTS index.
 pub fn search_session_history(bootstrap: &BootstrapReport, query: &str, limit: usize) -> Result<Vec<SessionSearchHit>> {
     vela_state::search_session_history(&bootstrap.persistence.state_db_path, query, limit)
 }
 
+/// Inspects the latest persisted session with recent messages and events.
 pub fn inspect_latest_session(bootstrap: &BootstrapReport, limit: usize) -> Result<Option<SessionInspection>> {
     vela_state::inspect_latest_session(&bootstrap.persistence.state_db_path, limit)
 }
 
+/// Renders the always-on memory snapshot used for prompting.
 pub fn render_memory_snapshot(bootstrap: &BootstrapReport) -> Result<String> {
     vela_memory::render_prompt_snapshot(&bootstrap.vela_home)
 }
 
+/// Views the current durable memory contents for a target file.
 pub fn view_memory(bootstrap: &BootstrapReport, target: vela_memory::MemoryTarget) -> Result<vela_memory::MemoryView> {
     vela_memory::view_memory(&bootstrap.vela_home, target)
 }
 
+/// Appends a memory entry directly to durable memory storage.
 pub fn add_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -373,6 +398,7 @@ pub fn add_memory_entry(
     vela_memory::add_memory_entry(&bootstrap.vela_home, target, content)
 }
 
+/// Stages a memory add for later approval.
 pub fn stage_add_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -381,6 +407,7 @@ pub fn stage_add_memory_entry(
     vela_memory::stage_add_memory_entry(&bootstrap.vela_home, target, content)
 }
 
+/// Replaces a matching durable memory entry immediately.
 pub fn replace_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -390,6 +417,7 @@ pub fn replace_memory_entry(
     vela_memory::replace_memory_entry(&bootstrap.vela_home, target, old_text, content)
 }
 
+/// Stages a memory replacement for later approval.
 pub fn stage_replace_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -399,6 +427,7 @@ pub fn stage_replace_memory_entry(
     vela_memory::stage_replace_memory_entry(&bootstrap.vela_home, target, old_text, content)
 }
 
+/// Removes a matching durable memory entry immediately.
 pub fn remove_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -407,6 +436,7 @@ pub fn remove_memory_entry(
     vela_memory::remove_memory_entry(&bootstrap.vela_home, target, old_text)
 }
 
+/// Stages a memory removal for later approval.
 pub fn stage_remove_memory_entry(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -415,14 +445,17 @@ pub fn stage_remove_memory_entry(
     vela_memory::stage_remove_memory_entry(&bootstrap.vela_home, target, old_text)
 }
 
+/// Lists staged memory writes awaiting approval.
 pub fn list_pending_memory(bootstrap: &BootstrapReport) -> Result<Vec<vela_memory::PendingMemoryWrite>> {
     vela_memory::list_pending(&bootstrap.vela_home)
 }
 
+/// Loads one staged memory write by id.
 pub fn get_pending_memory(bootstrap: &BootstrapReport, id: &str) -> Result<vela_memory::PendingMemoryWrite> {
     vela_memory::get_pending(&bootstrap.vela_home, id)
 }
 
+/// Approves and applies one staged memory write.
 pub fn approve_pending_memory(
     bootstrap: &BootstrapReport,
     id: &str,
@@ -430,18 +463,22 @@ pub fn approve_pending_memory(
     vela_memory::approve_pending(&bootstrap.vela_home, id)
 }
 
+/// Rejects and deletes one staged memory write.
 pub fn reject_pending_memory(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
     vela_memory::reject_pending(&bootstrap.vela_home, id)
 }
 
+/// Lists durable skills available in the local skill store.
 pub fn list_skills(bootstrap: &BootstrapReport) -> Result<Vec<vela_skills::SkillSummary>> {
     vela_skills::list_skills(&bootstrap.vela_home)
 }
 
+/// Loads one durable skill by name.
 pub fn view_skill(bootstrap: &BootstrapReport, name: &str) -> Result<vela_skills::SkillView> {
     vela_skills::view_skill(&bootstrap.vela_home, name)
 }
 
+/// Creates a durable skill immediately.
 pub fn create_skill(
     bootstrap: &BootstrapReport,
     name: &str,
@@ -451,6 +488,7 @@ pub fn create_skill(
     vela_skills::create_skill(&bootstrap.vela_home, name, description, body)
 }
 
+/// Stages creation of a durable skill for later approval.
 pub fn stage_create_skill(
     bootstrap: &BootstrapReport,
     name: &str,
@@ -460,6 +498,7 @@ pub fn stage_create_skill(
     vela_skills::stage_create_skill(&bootstrap.vela_home, name, description, body)
 }
 
+/// Rewrites an existing durable skill immediately.
 pub fn write_skill(
     bootstrap: &BootstrapReport,
     name: &str,
@@ -469,6 +508,7 @@ pub fn write_skill(
     vela_skills::write_skill(&bootstrap.vela_home, name, description, body)
 }
 
+/// Stages a durable skill rewrite for later approval.
 pub fn stage_write_skill(
     bootstrap: &BootstrapReport,
     name: &str,
@@ -478,22 +518,27 @@ pub fn stage_write_skill(
     vela_skills::stage_write_skill(&bootstrap.vela_home, name, description, body)
 }
 
+/// Deletes a durable skill immediately.
 pub fn delete_skill(bootstrap: &BootstrapReport, name: &str) -> Result<vela_skills::SkillMutationReport> {
     vela_skills::delete_skill(&bootstrap.vela_home, name)
 }
 
+/// Stages deletion of a durable skill for later approval.
 pub fn stage_delete_skill(bootstrap: &BootstrapReport, name: &str) -> Result<vela_skills::PendingSkillWrite> {
     vela_skills::stage_delete_skill(&bootstrap.vela_home, name)
 }
 
+/// Lists staged skill writes awaiting approval.
 pub fn list_pending_skills(bootstrap: &BootstrapReport) -> Result<Vec<vela_skills::PendingSkillWrite>> {
     vela_skills::list_pending(&bootstrap.vela_home)
 }
 
+/// Loads one staged skill write by id.
 pub fn get_pending_skill(bootstrap: &BootstrapReport, id: &str) -> Result<vela_skills::PendingSkillWrite> {
     vela_skills::get_pending(&bootstrap.vela_home, id)
 }
 
+/// Approves and applies one staged skill write.
 pub fn approve_pending_skill(
     bootstrap: &BootstrapReport,
     id: &str,
@@ -501,18 +546,22 @@ pub fn approve_pending_skill(
     vela_skills::approve_pending(&bootstrap.vela_home, id)
 }
 
+/// Rejects and deletes one staged skill write.
 pub fn reject_pending_skill(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
     vela_skills::reject_pending(&bootstrap.vela_home, id)
 }
 
+/// Lists queued review candidates derived from user or background signals.
 pub fn list_review_candidates(bootstrap: &BootstrapReport) -> Result<Vec<vela_review::ReviewCandidate>> {
     vela_review::list_candidates(&bootstrap.vela_home)
 }
 
+/// Loads one review candidate by id.
 pub fn get_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<vela_review::ReviewCandidate> {
     vela_review::get_candidate(&bootstrap.vela_home, id)
 }
 
+/// Creates a review candidate for a proposed memory mutation.
 pub fn stage_memory_review_candidate(
     bootstrap: &BootstrapReport,
     target: vela_memory::MemoryTarget,
@@ -551,6 +600,7 @@ pub fn stage_memory_review_candidate(
     Ok(candidate)
 }
 
+/// Creates a review candidate for a proposed skill mutation.
 pub fn stage_skill_review_candidate(
     bootstrap: &BootstrapReport,
     action: &str,
@@ -589,6 +639,7 @@ pub fn stage_skill_review_candidate(
     Ok(candidate)
 }
 
+/// Promotes a review candidate into the appropriate pending approval queue.
 pub fn promote_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<vela_review::PromotionReport> {
     let candidate = vela_review::get_candidate(&bootstrap.vela_home, id)?;
     let report = vela_review::promote_candidate(&bootstrap.vela_home, id)?;
@@ -608,6 +659,7 @@ pub fn promote_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result
     Ok(report)
 }
 
+/// Rejects a queued review candidate.
 pub fn reject_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
     let candidate = vela_review::reject_candidate(&bootstrap.vela_home, id)?;
     append_review_event(
@@ -624,6 +676,7 @@ pub fn reject_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<
     Ok(())
 }
 
+/// Infers review signals from the latest session and appends them as events.
 pub fn emit_review_signals_from_latest_session(
     bootstrap: &BootstrapReport,
     limit: usize,
@@ -789,6 +842,7 @@ fn unix_timestamp_nanos() -> u128 {
         .as_nanos()
 }
 
+/// Generates review candidates from the latest persisted session.
 pub fn generate_review_candidates_from_latest_session(
     bootstrap: &BootstrapReport,
     limit: usize,
