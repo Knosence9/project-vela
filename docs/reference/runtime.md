@@ -23,6 +23,9 @@
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
 - `vela chat --query ...` creates a single-turn session and can call a configured local Ollama model for text turns
 - configured provider-backed turns can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
+- each live runtime turn now persists ordered lifecycle phases (`receive`, `deliberate`, `tool-request`, `tool-result`, `respond`, `finish`, plus `failed` on error paths)
+- session inspection now surfaces parsed runtime lifecycle records alongside raw messages and events
+- runtime CLI turn output now reports the durable `turn_id`, lifecycle phase count, and final phase
 - `vela chat --image ...` can call a configured local Ollama model for first-pass provider-backed image turns
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
@@ -32,10 +35,10 @@
 - `vela cron --start` resumes the latest `cron` command session when one already exists
 
 ## Still needed
-- richer runtime state transitions beyond created/resumed shell states
+- richer runtime state transitions beyond created/resumed shell states at the session level
 - broader external provider/model execution beyond the first Ollama text/image-turn slices and bounded iterative tool loop
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
-- turn lifecycle persistence
+- lifecycle-driven branching, retry, and compression semantics built on the new per-turn phase records
 - session branching/compression semantics
 - actual recurring job execution and restart recovery beyond durable registration

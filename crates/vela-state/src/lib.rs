@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -67,11 +68,23 @@ pub struct SessionEventRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct RuntimeTurnLifecycleRecord {
+    pub event_id: String,
+    pub turn_id: String,
+    pub phase: String,
+    pub sequence: u64,
+    pub step: Option<u64>,
+    pub detail_json: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct SessionInspection {
     pub session_id: String,
     pub title: String,
     pub messages: Vec<SessionMessageRecord>,
     pub events: Vec<SessionEventRecord>,
+    pub lifecycle: Vec<RuntimeTurnLifecycleRecord>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -112,6 +125,17 @@ impl InteractionMode {
 struct StoredSession {
     id: String,
     title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeTurnLifecyclePayload {
+    turn_id: String,
+    phase: String,
+    sequence: u64,
+    #[serde(default)]
+    step: Option<u64>,
+    #[serde(default)]
+    detail: Option<Value>,
 }
 
 pub fn initialize_persistence(vela_home: &Path) -> Result<PersistenceReport> {
@@ -594,11 +618,30 @@ fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, lim
     }
     events.reverse();
 
+    let mut lifecycle = Vec::new();
+    for event in &events {
+        if event.event_type != "runtime_turn_phase" {
+            continue;
+        }
+        let payload: RuntimeTurnLifecyclePayload = serde_json::from_str(&event.payload_json)
+            .with_context(|| format!("failed to decode runtime lifecycle payload for event {:?}", event.id))?;
+        lifecycle.push(RuntimeTurnLifecycleRecord {
+            event_id: event.id.clone(),
+            turn_id: payload.turn_id,
+            phase: payload.phase,
+            sequence: payload.sequence,
+            step: payload.step,
+            detail_json: payload.detail.map(|value| value.to_string()),
+            created_at: event.created_at,
+        });
+    }
+
     Ok(SessionInspection {
         session_id: session_id.to_string(),
         title: title.to_string(),
         messages,
         events,
+        lifecycle,
     })
 }
 

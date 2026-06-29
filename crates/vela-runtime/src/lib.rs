@@ -15,8 +15,8 @@ use vela_state::{PersistenceReport, SessionRuntimeReport};
 
 pub use vela_config::preparse_profile_override;
 pub use vela_state::{
-    InteractionMode, SessionAction, SessionEventRecord, SessionInspection, SessionMessageRecord,
-    SessionSearchHit, SessionSummary,
+    InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionEventRecord, SessionInspection,
+    SessionMessageRecord, SessionSearchHit, SessionSummary,
 };
 
 #[derive(Debug, Clone)]
@@ -58,8 +58,11 @@ pub struct SchedulerStartReport {
 /// Captures one executed chat/runtime turn plus any operator-triggered review work.
 pub struct ChatTurnReport {
     pub session: SessionRuntimeReport,
+    pub turn_id: String,
     pub response: Option<String>,
     pub response_source: String,
+    pub lifecycle_phase_count: usize,
+    pub final_phase: String,
     pub emitted_signal_count: usize,
     pub generated_candidate_count: usize,
 }
@@ -332,8 +335,47 @@ pub fn execute_chat_turn(
     checkpoints: bool,
 ) -> Result<ChatTurnReport> {
     let session = resolve_runtime_session(bootstrap, request)?;
-    let rendered = render_chat_response(bootstrap, &session, request, provider_override, model_override)?;
+    let mut lifecycle = RuntimeTurnRecorder::new();
+    lifecycle.record_phase(
+        bootstrap,
+        &session.session_id,
+        "receive",
+        None,
+        json!({
+            "action": session.action.label(),
+            "interaction_mode": session.interaction_mode.label(),
+            "query_present": request.query_present,
+            "image_present": request.image_present,
+            "resume": request.resume,
+            "continue_last": request.continue_last,
+        }),
+    )?;
+    lifecycle.record_phase(
+        bootstrap,
+        &session.session_id,
+        "deliberate",
+        None,
+        json!({
+            "provider_override": provider_override,
+            "model_override": model_override,
+            "checkpoints": checkpoints,
+        }),
+    )?;
+    let rendered = match render_chat_response(bootstrap, &session, request, provider_override, model_override, &mut lifecycle) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            let _ = lifecycle.record_phase(
+                bootstrap,
+                &session.session_id,
+                "failed",
+                None,
+                json!({"error": error.to_string()}),
+            );
+            return Err(error);
+        }
+    };
 
+    let mut assistant_persisted = false;
     if let Some(content) = rendered.content.as_deref() {
         let logged = vela_state::append_message_to_session(
             &bootstrap.persistence.state_db_path,
@@ -347,14 +389,29 @@ pub fn execute_chat_turn(
                     "model": rendered.model,
                     "checkpoints": checkpoints,
                     "interaction_mode": session.interaction_mode.label(),
+                    "turn_id": lifecycle.turn_id,
                 })
                 .to_string(),
             ),
         )?;
+        assistant_persisted = logged;
         if !logged {
             tracing::warn!(session_id=%session.session_id, "failed to append assistant runtime response");
         }
     }
+    lifecycle.record_phase(
+        bootstrap,
+        &session.session_id,
+        "respond",
+        None,
+        json!({
+            "source": rendered.source,
+            "provider": rendered.provider,
+            "model": rendered.model,
+            "content_present": rendered.content.is_some(),
+            "assistant_persisted": assistant_persisted,
+        }),
+    )?;
 
     let mut emitted_signal_count = 0usize;
     let mut generated_candidate_count = 0usize;
@@ -366,11 +423,25 @@ pub fn execute_chat_turn(
             generated_candidate_count = report.candidate_ids.len();
         }
     }
+    lifecycle.record_phase(
+        bootstrap,
+        &session.session_id,
+        "finish",
+        None,
+        json!({
+            "response_source": rendered.source,
+            "emitted_signal_count": emitted_signal_count,
+            "generated_candidate_count": generated_candidate_count,
+        }),
+    )?;
 
     Ok(ChatTurnReport {
         session,
+        turn_id: lifecycle.turn_id.clone(),
         response: rendered.content,
         response_source: rendered.source.to_string(),
+        lifecycle_phase_count: lifecycle.phase_count(),
+        final_phase: lifecycle.final_phase().to_string(),
         emitted_signal_count,
         generated_candidate_count,
     })
@@ -835,6 +906,60 @@ struct RuntimeExecutionConfig {
     ollama_base_url: String,
 }
 
+struct RuntimeTurnRecorder {
+    turn_id: String,
+    next_sequence: u64,
+    final_phase: Option<String>,
+}
+
+impl RuntimeTurnRecorder {
+    fn new() -> Self {
+        Self {
+            turn_id: format!("turn-{}", unix_timestamp_nanos()),
+            next_sequence: 0,
+            final_phase: None,
+        }
+    }
+
+    fn record_phase(
+        &mut self,
+        bootstrap: &BootstrapReport,
+        session_id: &str,
+        phase: &str,
+        step: Option<usize>,
+        detail: serde_json::Value,
+    ) -> Result<()> {
+        self.next_sequence += 1;
+        let payload = json!({
+            "turn_id": self.turn_id,
+            "sequence": self.next_sequence,
+            "phase": phase,
+            "step": step,
+            "detail": detail,
+        })
+        .to_string();
+        let logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            session_id,
+            "runtime_turn_phase",
+            payload,
+        )?;
+        if !logged {
+            bail!("failed to persist runtime turn lifecycle phase {:?} for session {:?}", phase, session_id);
+        }
+        self.final_phase = Some(phase.to_string());
+        Ok(())
+    }
+
+    fn phase_count(&self) -> usize {
+        self.next_sequence as usize
+    }
+
+    fn final_phase(&self) -> &str {
+        self.final_phase.as_deref().unwrap_or("unknown")
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct OllamaGenerateRequest<'a> {
     model: &'a str,
@@ -860,6 +985,7 @@ fn render_chat_response(
     request: &SessionRequest,
     provider_override: Option<&str>,
     model_override: Option<&str>,
+    lifecycle: &mut RuntimeTurnRecorder,
 ) -> Result<RenderedChatResponse> {
     let execution = resolve_runtime_execution(&bootstrap.resolved_config, provider_override, model_override)?;
     if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
@@ -906,6 +1032,7 @@ fn render_chat_response(
                     Some(vec![image_base64]),
                     &memory,
                     &skills,
+                    lifecycle,
                 );
             }
         }
@@ -950,6 +1077,7 @@ fn render_chat_response(
                 None,
                 &memory,
                 &skills,
+                lifecycle,
             );
         }
 
@@ -1035,6 +1163,7 @@ fn execute_ollama_turn(
     images: Option<Vec<String>>,
     memory: &str,
     skills: &[vela_skills::SkillSummary],
+    lifecycle: &mut RuntimeTurnRecorder,
 ) -> Result<RenderedChatResponse> {
     let mut current_prompt = prompt.to_string();
     let mut used_tool_loop = false;
@@ -1044,8 +1173,22 @@ fn execute_ollama_turn(
         if let Some(tool_name) = parse_runtime_tool_request(&response)? {
             used_tool_loop = true;
             persist_runtime_tool_request(bootstrap, &session.session_id, tool_name, step)?;
+            lifecycle.record_phase(
+                bootstrap,
+                &session.session_id,
+                "tool-request",
+                Some(step),
+                json!({"tool": tool_name.as_str(), "provider": execution.provider_label, "model": execution.model}),
+            )?;
             let tool_result = execute_runtime_tool(tool_name, memory, skills);
             persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, step, &tool_result)?;
+            lifecycle.record_phase(
+                bootstrap,
+                &session.session_id,
+                "tool-result",
+                Some(step),
+                json!({"tool": tool_name.as_str(), "result_length": tool_result.len()}),
+            )?;
 
             let followup_instruction = if step == MAX_RUNTIME_TOOL_STEPS {
                 "You have reached the maximum number of tool steps. Answer the user directly without requesting another tool."
@@ -1638,10 +1781,21 @@ mod tests {
         .unwrap();
 
         assert!(report.response.as_deref().unwrap_or_default().contains("Vela executed a local kernel turn"));
+        assert!(report.turn_id.starts_with("turn-"));
+        assert_eq!(report.lifecycle_phase_count, 4);
+        assert_eq!(report.final_phase, "finish");
         assert_eq!(report.emitted_signal_count, 1);
         assert_eq!(report.generated_candidate_count, 1);
         let summary = current_session_summary(&bootstrap).unwrap().expect("chat session summary");
         assert_eq!(summary.message_count, 2);
+        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("chat session inspection");
+        let lifecycle: Vec<_> = inspection
+            .lifecycle
+            .iter()
+            .filter(|record| record.turn_id == report.turn_id)
+            .map(|record| record.phase.as_str())
+            .collect();
+        assert_eq!(lifecycle, vec!["receive", "deliberate", "respond", "finish"]);
         assert!(list_review_candidates(&bootstrap).unwrap().len() >= 1);
 
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
@@ -1849,7 +2003,9 @@ mod tests {
 
         assert_eq!(report.response.as_deref(), Some("Tool-informed final answer."));
         assert_eq!(report.response_source, "runtime-ollama-tool-loop");
-        let inspection = inspect_latest_session(&bootstrap, 10).unwrap().expect("tool loop inspection");
+        assert_eq!(report.lifecycle_phase_count, 8);
+        assert_eq!(report.final_phase, "finish");
+        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("tool loop inspection");
         assert_eq!(inspection.messages.len(), 6);
         assert_eq!(inspection.messages[1].role, "tool-request");
         assert_eq!(inspection.messages[1].content, "memory_snapshot");
@@ -1867,6 +2023,25 @@ mod tests {
         assert!(inspection.messages[4].content.contains("deploy-staging"));
         assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_requested").count(), 2);
         assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_completed").count(), 2);
+        let lifecycle: Vec<_> = inspection
+            .lifecycle
+            .iter()
+            .filter(|record| record.turn_id == report.turn_id)
+            .map(|record| (record.phase.as_str(), record.step))
+            .collect();
+        assert_eq!(
+            lifecycle,
+            vec![
+                ("receive", None),
+                ("deliberate", None),
+                ("tool-request", Some(1)),
+                ("tool-result", Some(1)),
+                ("tool-request", Some(2)),
+                ("tool-result", Some(2)),
+                ("respond", None),
+                ("finish", None),
+            ]
+        );
         let assistant = inspection.messages.last().expect("assistant message");
         let metadata: serde_json::Value = serde_json::from_str(
             assistant.metadata_json.as_deref().expect("assistant metadata"),
@@ -1935,12 +2110,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.response_source, "runtime-kernel");
+        assert_eq!(report.lifecycle_phase_count, 10);
+        assert_eq!(report.final_phase, "finish");
         assert!(report
             .response
             .as_deref()
             .unwrap_or_default()
             .contains("maximum bounded tool steps"));
-        let inspection = inspect_latest_session(&bootstrap, 12).unwrap().expect("max-step inspection");
+        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("max-step inspection");
         assert_eq!(inspection.messages.len(), 8);
         assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_requested").count(), 3);
         assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_completed").count(), 3);
@@ -1951,6 +2128,27 @@ mod tests {
         assert_eq!(inspection.messages[6].role, "tool-result");
         assert_eq!(third_tool_result_metadata.get("tool").and_then(|v| v.as_str()), Some("memory_snapshot"));
         assert_eq!(third_tool_result_metadata.get("step").and_then(|v| v.as_u64()), Some(3));
+        let lifecycle: Vec<_> = inspection
+            .lifecycle
+            .iter()
+            .filter(|record| record.turn_id == report.turn_id)
+            .map(|record| (record.sequence, record.phase.as_str(), record.step))
+            .collect();
+        assert_eq!(
+            lifecycle,
+            vec![
+                (1, "receive", None),
+                (2, "deliberate", None),
+                (3, "tool-request", Some(1)),
+                (4, "tool-result", Some(1)),
+                (5, "tool-request", Some(2)),
+                (6, "tool-result", Some(2)),
+                (7, "tool-request", Some(3)),
+                (8, "tool-result", Some(3)),
+                (9, "respond", None),
+                (10, "finish", None),
+            ]
+        );
         let assistant = inspection.messages.last().expect("assistant message");
         let assistant_metadata: serde_json::Value = serde_json::from_str(
             assistant.metadata_json.as_deref().expect("assistant metadata"),
