@@ -1077,8 +1077,8 @@ fn execute_ollama_turn(
         return Ok(RenderedChatResponse {
             content: Some("Vela reached the maximum bounded tool steps and fell back to a deterministic runtime response instead of continuing indefinitely.".to_string()),
             source: "runtime-kernel",
-            provider: execution.provider_label.clone(),
-            model: execution.model.clone(),
+            provider: None,
+            model: None,
         });
     }
 
@@ -1957,6 +1957,8 @@ mod tests {
         )
         .expect("decode assistant metadata");
         assert_eq!(assistant_metadata.get("source").and_then(|v| v.as_str()), Some("runtime-kernel"));
+        assert_eq!(assistant_metadata.get("provider").and_then(|v| v.as_str()), None);
+        assert_eq!(assistant_metadata.get("model").and_then(|v| v.as_str()), None);
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
