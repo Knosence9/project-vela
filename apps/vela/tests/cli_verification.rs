@@ -105,6 +105,20 @@ fn chat_query_executes_runtime_turn_and_generates_candidates() {
 }
 
 #[test]
+/// Verifies that an image-only chat turn still produces an assistant response.
+fn chat_image_executes_runtime_turn() {
+    let vela_home = temp_vela_home("image-turn");
+
+    let turn = run_vela(&vela_home, &["chat", "--image", "diagram.png"]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Vela executed a local image turn."));
+    assert!(turn_stdout.contains("Image: diagram.png"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies cron job persistence and clap-level rejection of invalid flag combinations.
 fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     let vela_home = temp_vela_home("cron");

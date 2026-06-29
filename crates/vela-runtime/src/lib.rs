@@ -795,11 +795,12 @@ fn render_chat_response(
     session: &SessionRuntimeReport,
     request: &SessionRequest,
 ) -> Result<Option<String>> {
+    let memory = vela_memory::render_prompt_snapshot(&bootstrap.vela_home)?;
+    let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
+    let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
+    let memory_lines = memory.lines().count();
+
     if let Some(query) = request.query_text.as_deref() {
-        let memory = vela_memory::render_prompt_snapshot(&bootstrap.vela_home)?;
-        let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
-        let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
-        let memory_lines = memory.lines().count();
         return Ok(Some(format!(
             "Vela executed a local kernel turn.\n\nQuery: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo external model provider is wired yet, so this reply comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
             query.trim(),
@@ -811,9 +812,20 @@ fn render_chat_response(
         )));
     }
 
+    if request.image_present {
+        let image_path = request.image_path.as_deref().unwrap_or("(unspecified image path)");
+        return Ok(Some(format!(
+            "Vela executed a local image turn.\n\nImage: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nImage understanding is not wired to a local model yet, so this response comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
+            image_path,
+            session.title,
+            session.session_id,
+            memory_lines,
+            skills.len(),
+            reviews.len(),
+        )));
+    }
+
     if matches!(session.action, SessionAction::Created) {
-        let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
-        let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
         return Ok(Some(format!(
             "Interactive Vela runtime ready. Session: {} ({}). Loaded skills: {}. Pending review candidates: {}.",
             session.title,
@@ -1137,6 +1149,32 @@ mod tests {
         let summary = current_session_summary(&bootstrap).unwrap().expect("chat session summary");
         assert_eq!(summary.message_count, 2);
         assert!(list_review_candidates(&bootstrap).unwrap().len() >= 1);
+
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    /// Verifies that image-only turns still append an assistant response.
+    fn execute_chat_turn_handles_image_only_requests() {
+        let bootstrap = test_bootstrap("image-turn");
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: false,
+                query_text: None,
+                image_present: true,
+                image_path: Some("diagram.png".to_string()),
+                resume: None,
+                continue_last: None,
+            },
+            false,
+        )
+        .unwrap();
+
+        assert!(report.response.as_deref().unwrap_or_default().contains("Vela executed a local image turn"));
+        let summary = current_session_summary(&bootstrap).unwrap().expect("image chat session summary");
+        assert_eq!(summary.message_count, 2);
 
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
