@@ -375,76 +375,92 @@ pub fn execute_chat_turn(
         }
     };
 
-    let mut assistant_persisted = false;
-    if let Some(content) = rendered.content.as_deref() {
-        let logged = vela_state::append_message_to_session(
-            &bootstrap.persistence.state_db_path,
+    let post_render = (|| -> Result<ChatTurnReport> {
+        let mut assistant_persisted = false;
+        if let Some(content) = rendered.content.as_deref() {
+            let logged = vela_state::append_message_to_session(
+                &bootstrap.persistence.state_db_path,
+                &session.session_id,
+                "assistant",
+                content,
+                Some(
+                    json!({
+                        "source": rendered.source,
+                        "provider": rendered.provider,
+                        "model": rendered.model,
+                        "checkpoints": checkpoints,
+                        "interaction_mode": session.interaction_mode.label(),
+                        "turn_id": lifecycle.turn_id,
+                    })
+                    .to_string(),
+                ),
+            )?;
+            assistant_persisted = logged;
+            if !logged {
+                tracing::warn!(session_id=%session.session_id, "failed to append assistant runtime response");
+            }
+        }
+        lifecycle.record_phase(
+            bootstrap,
             &session.session_id,
-            "assistant",
-            content,
-            Some(
-                json!({
-                    "source": rendered.source,
-                    "provider": rendered.provider,
-                    "model": rendered.model,
-                    "checkpoints": checkpoints,
-                    "interaction_mode": session.interaction_mode.label(),
-                    "turn_id": lifecycle.turn_id,
-                })
-                .to_string(),
-            ),
+            "respond",
+            None,
+            json!({
+                "source": rendered.source,
+                "provider": rendered.provider,
+                "model": rendered.model,
+                "content_present": rendered.content.is_some(),
+                "assistant_persisted": assistant_persisted,
+            }),
         )?;
-        assistant_persisted = logged;
-        if !logged {
-            tracing::warn!(session_id=%session.session_id, "failed to append assistant runtime response");
+
+        let mut emitted_signal_count = 0usize;
+        let mut generated_candidate_count = 0usize;
+        if checkpoints {
+            if let Some(report) = emit_review_signals_from_latest_session(bootstrap, 50)? {
+                emitted_signal_count = report.signals.len();
+            }
+            if let Some(report) = generate_review_candidates_from_latest_session(bootstrap, 50)? {
+                generated_candidate_count = report.candidate_ids.len();
+            }
+        }
+        lifecycle.record_phase(
+            bootstrap,
+            &session.session_id,
+            "finish",
+            None,
+            json!({
+                "response_source": rendered.source,
+                "emitted_signal_count": emitted_signal_count,
+                "generated_candidate_count": generated_candidate_count,
+            }),
+        )?;
+
+        Ok(ChatTurnReport {
+            session: session.clone(),
+            turn_id: lifecycle.turn_id.clone(),
+            response: rendered.content,
+            response_source: rendered.source.to_string(),
+            lifecycle_phase_count: lifecycle.phase_count(),
+            final_phase: lifecycle.final_phase().to_string(),
+            emitted_signal_count,
+            generated_candidate_count,
+        })
+    })();
+
+    match post_render {
+        Ok(report) => Ok(report),
+        Err(error) => {
+            let _ = lifecycle.record_phase(
+                bootstrap,
+                &session.session_id,
+                "failed",
+                None,
+                json!({"error": error.to_string()}),
+            );
+            Err(error)
         }
     }
-    lifecycle.record_phase(
-        bootstrap,
-        &session.session_id,
-        "respond",
-        None,
-        json!({
-            "source": rendered.source,
-            "provider": rendered.provider,
-            "model": rendered.model,
-            "content_present": rendered.content.is_some(),
-            "assistant_persisted": assistant_persisted,
-        }),
-    )?;
-
-    let mut emitted_signal_count = 0usize;
-    let mut generated_candidate_count = 0usize;
-    if checkpoints {
-        if let Some(report) = emit_review_signals_from_latest_session(bootstrap, 50)? {
-            emitted_signal_count = report.signals.len();
-        }
-        if let Some(report) = generate_review_candidates_from_latest_session(bootstrap, 50)? {
-            generated_candidate_count = report.candidate_ids.len();
-        }
-    }
-    lifecycle.record_phase(
-        bootstrap,
-        &session.session_id,
-        "finish",
-        None,
-        json!({
-            "response_source": rendered.source,
-            "emitted_signal_count": emitted_signal_count,
-            "generated_candidate_count": generated_candidate_count,
-        }),
-    )?;
-
-    Ok(ChatTurnReport {
-        session,
-        turn_id: lifecycle.turn_id.clone(),
-        response: rendered.content,
-        response_source: rendered.source.to_string(),
-        lifecycle_phase_count: lifecycle.phase_count(),
-        final_phase: lifecycle.final_phase().to_string(),
-        emitted_signal_count,
-        generated_candidate_count,
-    })
 }
 
 /// Lists all durable scheduled jobs currently registered.

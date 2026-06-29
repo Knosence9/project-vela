@@ -623,8 +623,13 @@ fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, lim
         if event.event_type != "runtime_turn_phase" {
             continue;
         }
-        let payload: RuntimeTurnLifecyclePayload = serde_json::from_str(&event.payload_json)
-            .with_context(|| format!("failed to decode runtime lifecycle payload for event {:?}", event.id))?;
+        let payload: RuntimeTurnLifecyclePayload = match serde_json::from_str(&event.payload_json) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(event_id=%event.id, error=%error, "skipping malformed runtime lifecycle payload during session inspection");
+                continue;
+            }
+        };
         lifecycle.push(RuntimeTurnLifecycleRecord {
             event_id: event.id.clone(),
             turn_id: payload.turn_id,
