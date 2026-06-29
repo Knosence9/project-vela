@@ -109,9 +109,9 @@ struct CronArgs {
     add: Option<String>,
     #[arg(long = "show", group = "action")]
     show: Option<String>,
-    #[arg(long = "schedule")]
+    #[arg(long = "schedule", requires = "add")]
     schedule: Option<String>,
-    #[arg(long = "source")]
+    #[arg(long = "source", requires = "add")]
     source: Option<String>,
 }
 
