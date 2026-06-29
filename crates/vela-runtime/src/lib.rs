@@ -52,6 +52,15 @@ pub struct SchedulerStartReport {
     pub session: SessionRuntimeReport,
 }
 
+#[derive(Debug, Clone)]
+/// Captures one executed chat/runtime turn plus any operator-triggered review work.
+pub struct ChatTurnReport {
+    pub session: SessionRuntimeReport,
+    pub response: Option<String>,
+    pub emitted_signal_count: usize,
+    pub generated_candidate_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Represents one durable scheduler registration stored in `jobs.json`.
 pub struct ScheduledJob {
@@ -309,6 +318,54 @@ pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartRepo
         }
     }
     Ok(SchedulerStartReport { setup, session })
+}
+
+/// Executes one local runtime turn, optionally emitting review/checkpoint artifacts.
+pub fn execute_chat_turn(
+    bootstrap: &BootstrapReport,
+    request: &SessionRequest,
+    checkpoints: bool,
+) -> Result<ChatTurnReport> {
+    let session = resolve_runtime_session(bootstrap, request)?;
+    let response = render_chat_response(bootstrap, &session, request)?;
+
+    if let Some(content) = response.as_deref() {
+        let logged = vela_state::append_message_to_session(
+            &bootstrap.persistence.state_db_path,
+            &session.session_id,
+            "assistant",
+            content,
+            Some(
+                json!({
+                    "source": "runtime-kernel",
+                    "checkpoints": checkpoints,
+                    "interaction_mode": session.interaction_mode.label(),
+                })
+                .to_string(),
+            ),
+        )?;
+        if !logged {
+            tracing::warn!(session_id=%session.session_id, "failed to append assistant runtime response");
+        }
+    }
+
+    let mut emitted_signal_count = 0usize;
+    let mut generated_candidate_count = 0usize;
+    if checkpoints {
+        if let Some(report) = emit_review_signals_from_latest_session(bootstrap, 50)? {
+            emitted_signal_count = report.signals.len();
+        }
+        if let Some(report) = generate_review_candidates_from_latest_session(bootstrap, 50)? {
+            generated_candidate_count = report.candidate_ids.len();
+        }
+    }
+
+    Ok(ChatTurnReport {
+        session,
+        response,
+        emitted_signal_count,
+        generated_candidate_count,
+    })
 }
 
 /// Lists all durable scheduled jobs currently registered.
@@ -733,6 +790,42 @@ pub fn emit_review_signals_from_latest_session(
     Ok(Some(report))
 }
 
+fn render_chat_response(
+    bootstrap: &BootstrapReport,
+    session: &SessionRuntimeReport,
+    request: &SessionRequest,
+) -> Result<Option<String>> {
+    if let Some(query) = request.query_text.as_deref() {
+        let memory = vela_memory::render_prompt_snapshot(&bootstrap.vela_home)?;
+        let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
+        let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
+        let memory_lines = memory.lines().count();
+        return Ok(Some(format!(
+            "Vela executed a local kernel turn.\n\nQuery: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo external model provider is wired yet, so this reply comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
+            query.trim(),
+            session.title,
+            session.session_id,
+            memory_lines,
+            skills.len(),
+            reviews.len(),
+        )));
+    }
+
+    if matches!(session.action, SessionAction::Created) {
+        let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
+        let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
+        return Ok(Some(format!(
+            "Interactive Vela runtime ready. Session: {} ({}). Loaded skills: {}. Pending review candidates: {}.",
+            session.title,
+            session.session_id,
+            skills.len(),
+            reviews.len(),
+        )));
+    }
+
+    Ok(None)
+}
+
 fn append_review_event(
     bootstrap: &BootstrapReport,
     session_id: Option<&str>,
@@ -1015,6 +1108,35 @@ mod tests {
         assert_eq!(first_summary.message_count, 1);
         assert_eq!(summary.message_count, 1);
         assert_eq!(summary.event_count, first_summary.event_count + 3);
+
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    /// Verifies that a query executes a live assistant turn and can emit review candidates.
+    fn execute_chat_turn_appends_response_and_checkpoint_artifacts() {
+        let bootstrap = test_bootstrap("chat-turn");
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("please always use terse answers".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+            true,
+        )
+        .unwrap();
+
+        assert!(report.response.as_deref().unwrap_or_default().contains("Vela executed a local kernel turn"));
+        assert_eq!(report.emitted_signal_count, 1);
+        assert_eq!(report.generated_candidate_count, 1);
+        let summary = current_session_summary(&bootstrap).unwrap().expect("chat session summary");
+        assert_eq!(summary.message_count, 2);
+        assert!(list_review_candidates(&bootstrap).unwrap().len() >= 1);
 
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }

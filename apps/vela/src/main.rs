@@ -273,7 +273,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Chat(args)) => {
-            let report = vela_runtime::resolve_runtime_session(
+            let report = vela_runtime::execute_chat_turn(
                 &bootstrap,
                 &vela_runtime::SessionRequest {
                     command_name: "chat".to_string(),
@@ -284,17 +284,27 @@ fn main() -> Result<()> {
                     resume: args.resume.clone(),
                     continue_last: args.continue_last.clone(),
                 },
+                args.checkpoints,
             )?;
             println!(
                 "runtime session: action={} id={} title={} mode={}",
-                report.action.label(),
-                report.session_id,
-                report.title,
-                report.interaction_mode.label(),
+                report.session.action.label(),
+                report.session.session_id,
+                report.session.title,
+                report.session.interaction_mode.label(),
             );
+            if let Some(response) = report.response {
+                println!("\n{}", response);
+            }
+            if args.checkpoints {
+                println!(
+                    "\ncheckpoints: signals={} candidates={}",
+                    report.emitted_signal_count, report.generated_candidate_count
+                );
+            }
         }
         None => {
-            let report = vela_runtime::resolve_runtime_session(
+            let report = vela_runtime::execute_chat_turn(
                 &bootstrap,
                 &vela_runtime::SessionRequest {
                     command_name: "chat".to_string(),
@@ -305,14 +315,18 @@ fn main() -> Result<()> {
                     resume: cli.resume.clone(),
                     continue_last: cli.continue_last.clone(),
                 },
+                false,
             )?;
             println!(
                 "runtime session: action={} id={} title={} mode={}",
-                report.action.label(),
-                report.session_id,
-                report.title,
-                report.interaction_mode.label(),
+                report.session.action.label(),
+                report.session.session_id,
+                report.session.title,
+                report.session.interaction_mode.label(),
             );
+            if let Some(response) = report.response {
+                println!("\n{}", response);
+            }
         }
         Some(Commands::Status) => {
             println!("{}", bootstrap.summary_line());

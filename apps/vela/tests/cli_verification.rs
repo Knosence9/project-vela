@@ -47,6 +47,7 @@ fn default_runtime_session_surfaces_in_status() {
     assert!(first.status.success(), "{}", stderr_text(&first));
     let first_stdout = stdout_text(&first);
     assert!(first_stdout.contains("runtime session: action=created"));
+    assert!(first_stdout.contains("Interactive Vela runtime ready."));
 
     let status = run_vela(&vela_home, &["status"]);
     assert!(status.status.success(), "{}", stderr_text(&status));
@@ -72,6 +73,33 @@ fn gateway_start_resumes_same_session_via_cli() {
     let second_session = parse_field(&second_stdout, "session").expect("second gateway session id");
     assert_eq!(first_session, second_session);
     assert!(second_stdout.contains("action=resumed-latest"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a chat query executes a local runtime turn and can emit checkpoint artifacts.
+fn chat_query_executes_runtime_turn_and_generates_candidates() {
+    let vela_home = temp_vela_home("chat-turn");
+
+    let turn = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--query",
+            "please always use terse answers",
+            "--checkpoints",
+        ],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Vela executed a local kernel turn."));
+    assert!(turn_stdout.contains("checkpoints: signals=1 candidates=1"));
+
+    let review = run_vela(&vela_home, &["review", "--list"]);
+    assert!(review.status.success(), "{}", stderr_text(&review));
+    let review_stdout = stdout_text(&review);
+    assert!(review_stdout.contains("review candidates [1]:"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
