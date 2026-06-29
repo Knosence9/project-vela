@@ -20,6 +20,9 @@ pub struct ResolvedConfig {
     pub hooks_auto_accept: Option<bool>,
     pub security_redact_secrets: Option<bool>,
     pub network_force_ipv4: Option<bool>,
+    pub runtime_provider: Option<String>,
+    pub runtime_model: Option<String>,
+    pub runtime_ollama_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -176,6 +179,9 @@ fn load_resolved_config(config_sources: &mut [ConfigSource]) -> Result<ResolvedC
         hooks_auto_accept: decoded.hooks_auto_accept,
         security_redact_secrets: decoded.security.and_then(|s| s.redact_secrets),
         network_force_ipv4: decoded.network.and_then(|n| n.force_ipv4),
+        runtime_provider: decoded.runtime.as_ref().and_then(|r| r.provider.clone()),
+        runtime_model: decoded.runtime.as_ref().and_then(|r| r.model.clone()),
+        runtime_ollama_base_url: decoded.runtime.and_then(|r| r.ollama_base_url),
     })
 }
 
@@ -228,6 +234,7 @@ struct PartialConfig {
     display: Option<DisplayConfig>,
     security: Option<SecurityConfig>,
     network: Option<NetworkConfig>,
+    runtime: Option<RuntimeConfig>,
     hooks_auto_accept: Option<bool>,
 }
 
@@ -244,6 +251,13 @@ struct SecurityConfig {
 #[derive(Debug, Default, Deserialize)]
 struct NetworkConfig {
     force_ipv4: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RuntimeConfig {
+    provider: Option<String>,
+    model: Option<String>,
+    ollama_base_url: Option<String>,
 }
 
 fn resolve_config_sources(vela_home: &Path, ignore_user_config: bool) -> Result<Vec<ConfigSource>> {
@@ -387,6 +401,36 @@ mod tests {
         assert!(matches!(sources[0].kind, ConfigSourceKind::SkippedUnreadable));
         assert!(sources[0].detail.is_some());
         assert!(matches!(sources[1].kind, ConfigSourceKind::ProjectFallback));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn runtime_provider_settings_are_loaded_from_config() {
+        let root = std::env::temp_dir().join(format!("vela-config-test-runtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let user = root.join("runtime.yaml");
+        std::fs::write(
+            &user,
+            "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: http://127.0.0.1:11434\n",
+        )
+        .unwrap();
+
+        let mut sources = vec![ConfigSource {
+            path: user,
+            kind: ConfigSourceKind::User,
+            detail: None,
+        }];
+
+        let resolved = load_resolved_config(&mut sources).unwrap();
+        assert_eq!(resolved.runtime_provider.as_deref(), Some("ollama"));
+        assert_eq!(resolved.runtime_model.as_deref(), Some("gemma3:4b"));
+        assert_eq!(
+            resolved.runtime_ollama_base_url.as_deref(),
+            Some("http://127.0.0.1:11434")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
