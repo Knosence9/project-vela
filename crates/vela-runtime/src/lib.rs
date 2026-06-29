@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs::OpenOptions;
@@ -57,6 +57,7 @@ pub struct SchedulerStartReport {
 pub struct ChatTurnReport {
     pub session: SessionRuntimeReport,
     pub response: Option<String>,
+    pub response_source: String,
     pub emitted_signal_count: usize,
     pub generated_candidate_count: usize,
 }
@@ -320,16 +321,18 @@ pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartRepo
     Ok(SchedulerStartReport { setup, session })
 }
 
-/// Executes one local runtime turn, optionally emitting review/checkpoint artifacts.
+/// Executes one runtime turn, optionally emitting review/checkpoint artifacts.
 pub fn execute_chat_turn(
     bootstrap: &BootstrapReport,
     request: &SessionRequest,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
     checkpoints: bool,
 ) -> Result<ChatTurnReport> {
     let session = resolve_runtime_session(bootstrap, request)?;
-    let response = render_chat_response(bootstrap, &session, request)?;
+    let rendered = render_chat_response(bootstrap, &session, request, provider_override, model_override)?;
 
-    if let Some(content) = response.as_deref() {
+    if let Some(content) = rendered.content.as_deref() {
         let logged = vela_state::append_message_to_session(
             &bootstrap.persistence.state_db_path,
             &session.session_id,
@@ -337,7 +340,9 @@ pub fn execute_chat_turn(
             content,
             Some(
                 json!({
-                    "source": "runtime-kernel",
+                    "source": rendered.source,
+                    "provider": rendered.provider,
+                    "model": rendered.model,
                     "checkpoints": checkpoints,
                     "interaction_mode": session.interaction_mode.label(),
                 })
@@ -362,7 +367,8 @@ pub fn execute_chat_turn(
 
     Ok(ChatTurnReport {
         session,
-        response,
+        response: rendered.content,
+        response_source: rendered.source.to_string(),
         emitted_signal_count,
         generated_candidate_count,
     })
@@ -790,52 +796,181 @@ pub fn emit_review_signals_from_latest_session(
     Ok(Some(report))
 }
 
+struct RenderedChatResponse {
+    content: Option<String>,
+    source: &'static str,
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum RuntimeProviderChoice {
+    Ollama,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeExecutionConfig {
+    provider: Option<RuntimeProviderChoice>,
+    provider_label: Option<String>,
+    model: Option<String>,
+    ollama_base_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaGenerateRequest<'a> {
+    model: &'a str,
+    prompt: &'a str,
+    stream: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaGenerateResponse {
+    response: String,
+}
+
 fn render_chat_response(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
     request: &SessionRequest,
-) -> Result<Option<String>> {
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+) -> Result<RenderedChatResponse> {
     let memory = vela_memory::render_prompt_snapshot(&bootstrap.vela_home)?;
     let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
     let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
     let memory_lines = memory.lines().count();
+    let execution = resolve_runtime_execution(&bootstrap.resolved_config, provider_override, model_override)?;
 
     if let Some(query) = request.query_text.as_deref() {
-        return Ok(Some(format!(
-            "Vela executed a local kernel turn.\n\nQuery: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo external model provider is wired yet, so this reply comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
-            query.trim(),
-            session.title,
-            session.session_id,
-            memory_lines,
-            skills.len(),
-            reviews.len(),
-        )));
+        if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
+            let model = execution
+                .model
+                .as_deref()
+                .context("runtime provider 'ollama' requires a model (for example a Gemma family model)")?;
+            let prompt = format!(
+                "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}",
+                session.title,
+                session.session_id,
+                memory,
+                skills.len(),
+                reviews.len(),
+                query.trim(),
+            );
+            let response = call_ollama_generate(&execution.ollama_base_url, model, &prompt)?;
+            return Ok(RenderedChatResponse {
+                content: Some(response),
+                source: "runtime-ollama",
+                provider: execution.provider_label,
+                model: execution.model,
+            });
+        }
+
+        return Ok(RenderedChatResponse {
+            content: Some(format!(
+                "Vela executed a local kernel turn.\n\nQuery: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo external model provider is wired yet, so this reply comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
+                query.trim(),
+                session.title,
+                session.session_id,
+                memory_lines,
+                skills.len(),
+                reviews.len(),
+            )),
+            source: "runtime-kernel",
+            provider: None,
+            model: None,
+        });
     }
 
     if request.image_present {
         let image_path = request.image_path.as_deref().unwrap_or("(unspecified image path)");
-        return Ok(Some(format!(
-            "Vela executed a local image turn.\n\nImage: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nImage understanding is not wired to a local model yet, so this response comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
-            image_path,
-            session.title,
-            session.session_id,
-            memory_lines,
-            skills.len(),
-            reviews.len(),
-        )));
+        return Ok(RenderedChatResponse {
+            content: Some(format!(
+                "Vela executed a local image turn.\n\nImage: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nImage understanding is not wired to a local model yet, so this response comes from the Rust kernel scaffold while persistence, review, and continuity stay live.",
+                image_path,
+                session.title,
+                session.session_id,
+                memory_lines,
+                skills.len(),
+                reviews.len(),
+            )),
+            source: "runtime-kernel",
+            provider: execution.provider_label,
+            model: execution.model,
+        });
     }
 
     if matches!(session.action, SessionAction::Created) {
-        return Ok(Some(format!(
-            "Interactive Vela runtime ready. Session: {} ({}). Loaded skills: {}. Pending review candidates: {}.",
-            session.title,
-            session.session_id,
-            skills.len(),
-            reviews.len(),
-        )));
+        return Ok(RenderedChatResponse {
+            content: Some(format!(
+                "Interactive Vela runtime ready. Session: {} ({}). Loaded skills: {}. Pending review candidates: {}.",
+                session.title,
+                session.session_id,
+                skills.len(),
+                reviews.len(),
+            )),
+            source: "runtime-kernel",
+            provider: execution.provider_label,
+            model: execution.model,
+        });
     }
 
-    Ok(None)
+    Ok(RenderedChatResponse {
+        content: None,
+        source: "runtime-kernel",
+        provider: execution.provider_label,
+        model: execution.model,
+    })
+}
+
+fn resolve_runtime_execution(
+    resolved: &ResolvedConfig,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+) -> Result<RuntimeExecutionConfig> {
+    let provider_label = provider_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .or_else(|| resolved.runtime_provider.as_ref().map(|s| s.trim().to_ascii_lowercase()));
+    let provider = match provider_label.as_deref() {
+        Some("ollama") => Some(RuntimeProviderChoice::Ollama),
+        Some(other) => bail!("unsupported runtime provider {other:?}"),
+        None => None,
+    };
+    let model = model_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| resolved.runtime_model.clone());
+    let ollama_base_url = resolved
+        .runtime_ollama_base_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
+
+    Ok(RuntimeExecutionConfig {
+        provider,
+        provider_label,
+        model,
+        ollama_base_url,
+    })
+}
+
+fn call_ollama_generate(base_url: &str, model: &str, prompt: &str) -> Result<String> {
+    let url = format!("{}/api/generate", base_url.trim_end_matches('/'));
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(&url)
+        .json(&OllamaGenerateRequest {
+            model,
+            prompt,
+            stream: false,
+        })
+        .send()
+        .with_context(|| format!("failed to call Ollama at {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Ollama returned an error for {url}"))?;
+    let payload: OllamaGenerateResponse = response.json().context("failed to decode Ollama response")?;
+    Ok(payload.response.trim().to_string())
 }
 
 fn append_review_event(
@@ -1059,6 +1194,34 @@ mod tests {
         }
     }
 
+    fn spawn_mock_ollama(response_body: &str) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        let body = response_body.to_string();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf);
+            let payload = serde_json::json!({ "response": body }).to_string();
+            let reply = format!(
+                "HTTP/1.1 200 OK
+content-type: application/json
+content-length: {}
+connection: close
+
+{}",
+                payload.len(),
+                payload
+            );
+            stream.write_all(reply.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+        (addr, handle)
+    }
+
     #[test]
     /// Verifies that scheduler registrations persist and duplicate pending jobs are rejected.
     fn scheduler_jobs_persist_and_dedupe() {
@@ -1139,6 +1302,8 @@ mod tests {
                 resume: None,
                 continue_last: None,
             },
+            None,
+            None,
             true,
         )
         .unwrap();
@@ -1168,6 +1333,8 @@ mod tests {
                 resume: None,
                 continue_last: None,
             },
+            None,
+            None,
             false,
         )
         .unwrap();
@@ -1176,6 +1343,38 @@ mod tests {
         let summary = current_session_summary(&bootstrap).unwrap().expect("image chat session summary");
         assert_eq!(summary.message_count, 2);
 
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    /// Verifies that configured Ollama execution is used for text chat turns.
+    fn execute_chat_turn_uses_ollama_provider_when_configured() {
+        let (base_url, server) = spawn_mock_ollama("Gemma says hi.");
+        let mut bootstrap = test_bootstrap("ollama-turn");
+        bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
+        bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
+        bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
+
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("hello there".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.response.as_deref(), Some("Gemma says hi."));
+        assert_eq!(report.response_source, "runtime-ollama");
+        server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
 }

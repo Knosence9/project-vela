@@ -284,6 +284,8 @@ fn main() -> Result<()> {
                     resume: args.resume.clone(),
                     continue_last: args.continue_last.clone(),
                 },
+                args.provider.as_deref(),
+                args.model.as_deref(),
                 args.checkpoints,
             )?;
             println!(
@@ -315,6 +317,8 @@ fn main() -> Result<()> {
                     resume: cli.resume.clone(),
                     continue_last: cli.continue_last.clone(),
                 },
+                None,
+                None,
                 false,
             )?;
             println!(
@@ -351,11 +355,14 @@ fn main() -> Result<()> {
                 );
             }
             println!(
-                "resolved config: display.interface={:?} hooks_auto_accept={:?} security.redact_secrets={:?} network.force_ipv4={:?}",
+                "resolved config: display.interface={:?} hooks_auto_accept={:?} security.redact_secrets={:?} network.force_ipv4={:?} runtime.provider={:?} runtime.model={:?} runtime.ollama_base_url={:?}",
                 bootstrap.resolved_config.display_interface,
                 bootstrap.resolved_config.hooks_auto_accept,
                 bootstrap.resolved_config.security_redact_secrets,
                 bootstrap.resolved_config.network_force_ipv4,
+                bootstrap.resolved_config.runtime_provider,
+                bootstrap.resolved_config.runtime_model,
+                bootstrap.resolved_config.runtime_ollama_base_url,
             );
             println!(
                 "persistence: state_db={} existed_before={} bootstrap_runs={} sessions_dir={} snapshot_pattern={}",

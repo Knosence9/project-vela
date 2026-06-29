@@ -2,6 +2,30 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Spawns a one-shot mock Ollama server that returns a fixed response.
+fn spawn_mock_ollama(response_body: &str) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock ollama");
+    let addr = format!("http://{}", listener.local_addr().expect("mock ollama addr"));
+    let body = response_body.to_string();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept mock ollama request");
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+        let payload = format!("{{\"response\":\"{}\"}}", body);
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        stream.write_all(reply.as_bytes()).expect("write mock ollama response");
+        stream.flush().expect("flush mock ollama response");
+    });
+    (addr, handle)
+}
+
 /// Creates an isolated VELA_HOME path for one CLI integration test.
 fn temp_vela_home(prefix: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
@@ -100,6 +124,30 @@ fn chat_query_executes_runtime_turn_and_generates_candidates() {
     assert!(review.status.success(), "{}", stderr_text(&review));
     let review_stdout = stdout_text(&review);
     assert!(review_stdout.contains("review candidates [1]:"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured Ollama provider is used for chat text turns.
+fn chat_query_uses_configured_ollama_provider() {
+    let vela_home = temp_vela_home("ollama-chat");
+    let (base_url, server) = spawn_mock_ollama("Gemma local reply.");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: {}\n",
+            base_url
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(&vela_home, &["chat", "--query", "hello from cli"]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Gemma local reply."));
+    server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
