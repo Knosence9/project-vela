@@ -55,6 +55,7 @@ pub struct SessionMessageRecord {
     pub role: String,
     pub content: String,
     pub created_at: i64,
+    pub metadata_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -446,6 +447,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_session_events_session_created ON session_events(session_id, created_at);
         ",
     )?;
+    ensure_messages_metadata_column(conn)?;
     conn.execute(
         "INSERT INTO message_fts(message_id, session_id, title, content)
          SELECT m.id, m.session_id, s.title, m.content
@@ -456,6 +458,18 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
          )",
         [],
     )?;
+    Ok(())
+}
+
+fn ensure_messages_metadata_column(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(messages)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for column in columns {
+        if column? == "metadata_json" {
+            return Ok(());
+        }
+    }
+    conn.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT", [])?;
     Ok(())
 }
 
@@ -538,7 +552,7 @@ fn append_event(conn: &Connection, session_id: &str, event_type: &str, payload_j
 
 fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, limit: usize) -> Result<SessionInspection> {
     let mut message_stmt = conn.prepare(
-        "SELECT id, role, content, created_at
+        "SELECT id, role, content, created_at, metadata_json
          FROM messages
          WHERE session_id = ?1
          ORDER BY created_at DESC, id DESC
@@ -550,6 +564,7 @@ fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, lim
             role: row.get(1)?,
             content: row.get(2)?,
             created_at: row.get(3)?,
+            metadata_json: row.get(4)?,
         })
     })?;
     let mut messages = Vec::new();
@@ -817,6 +832,85 @@ mod tests {
             .unwrap();
         assert_eq!(summary.id, first.session_id);
         assert_eq!(summary.message_count, 1);
+
+        let _ = fs::remove_dir_all(&vela_home);
+    }
+
+    #[test]
+    fn initialize_persistence_migrates_legacy_messages_without_metadata_column() {
+        let vela_home = std::env::temp_dir().join(format!("vela-state-legacy-metadata-test-{}", unix_timestamp_nanos()));
+        fs::create_dir_all(&vela_home).unwrap();
+        let state_db_path = vela_home.join("state.db");
+        let conn = Connection::open(&state_db_path).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE state_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                command_name TEXT NOT NULL,
+                interaction_mode TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+            CREATE TABLE session_events (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+            CREATE VIRTUAL TABLE message_fts USING fts5(
+                message_id UNINDEXED,
+                session_id UNINDEXED,
+                title UNINDEXED,
+                content
+            );
+            ",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params!["session-legacy", "Legacy", "chat", "single-turn", 1_i64, 1_i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages(id, session_id, role, content, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params!["message-legacy", "session-legacy", "assistant", "hello", 1_i64],
+        )
+        .unwrap();
+        drop(conn);
+
+        let report = initialize_persistence(&vela_home).unwrap();
+        let inspection = inspect_latest_session(&report.state_db_path, 10)
+            .unwrap()
+            .expect("legacy session inspection");
+        assert_eq!(inspection.messages.len(), 1);
+        assert_eq!(inspection.messages[0].metadata_json, None);
+
+        let conn = Connection::open(&report.state_db_path).unwrap();
+        let metadata_exists: bool = conn
+            .prepare("PRAGMA table_info(messages)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|name| name == "metadata_json");
+        assert!(metadata_exists);
 
         let _ = fs::remove_dir_all(&vela_home);
     }
