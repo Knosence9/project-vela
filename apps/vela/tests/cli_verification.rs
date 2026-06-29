@@ -2,18 +2,31 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Spawns a one-shot mock Ollama server that returns a fixed response.
-fn spawn_mock_ollama(response_body: &str) -> (String, std::thread::JoinHandle<()>) {
+/// Spawns a one-shot mock Ollama server that validates the request contract.
+fn spawn_mock_ollama(response_body: &str, expected_model: &str, prompt_fragment: &str) -> (String, std::thread::JoinHandle<()>) {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock ollama");
     let addr = format!("http://{}", listener.local_addr().expect("mock ollama addr"));
     let body = response_body.to_string();
+    let expected_model = expected_model.to_string();
+    let prompt_fragment = prompt_fragment.to_string();
     let handle = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept mock ollama request");
         let mut buf = [0u8; 8192];
-        let _ = stream.read(&mut buf);
+        let size = stream.read(&mut buf).expect("read mock ollama request");
+        let request = String::from_utf8_lossy(&buf[..size]).into_owned();
+        let (head, body_text) = request
+            .split_once("\r\n\r\n")
+            .expect("split HTTP headers/body");
+        let request_line = head.lines().next().expect("HTTP request line");
+        assert!(request_line.starts_with("POST /api/generate HTTP/1.1"), "unexpected request line: {request_line}");
+        let payload: serde_json::Value = serde_json::from_str(body_text).expect("decode mock ollama JSON body");
+        assert_eq!(payload.get("model").and_then(|v| v.as_str()), Some(expected_model.as_str()));
+        assert_eq!(payload.get("stream").and_then(|v| v.as_bool()), Some(false));
+        let prompt = payload.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
+        assert!(prompt.contains(&prompt_fragment), "prompt missing fragment: {prompt_fragment}");
         let payload = format!("{{\"response\":\"{}\"}}", body);
         let reply = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -132,7 +145,7 @@ fn chat_query_executes_runtime_turn_and_generates_candidates() {
 /// Verifies that a configured Ollama provider is used for chat text turns.
 fn chat_query_uses_configured_ollama_provider() {
     let vela_home = temp_vela_home("ollama-chat");
-    let (base_url, server) = spawn_mock_ollama("Gemma local reply.");
+    let (base_url, server) = spawn_mock_ollama("Gemma local reply.", "gemma3:4b", "hello from cli");
     std::fs::create_dir_all(&vela_home).unwrap();
     std::fs::write(
         vela_home.join("config.yaml"),

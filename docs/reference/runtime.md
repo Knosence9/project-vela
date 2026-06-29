@@ -26,7 +26,7 @@
 - when no provider is configured, text turns fall back to deterministic local-kernel responses
 - repeated resume/continue paths update `updated_at` on the matching session row
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
-- `vela gateway start` resumes the latest `gateway` command session when one already exists
+- `vela gateway --start` resumes the latest `gateway` command session when one already exists
 - `vela cron --start` resumes the latest `cron` command session when one already exists
 
 ## Still needed

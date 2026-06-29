@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::thread::sleep;
 use std::time::Duration;
 use vela_config::{BootstrapConfig, ConfigSource, ResolvedConfig};
@@ -835,11 +836,15 @@ fn render_chat_response(
     provider_override: Option<&str>,
     model_override: Option<&str>,
 ) -> Result<RenderedChatResponse> {
+    let execution = resolve_runtime_execution(&bootstrap.resolved_config, provider_override, model_override)?;
+    if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
+        validate_ollama_base_url(&execution.ollama_base_url)?;
+    }
+
     let memory = vela_memory::render_prompt_snapshot(&bootstrap.vela_home)?;
     let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
     let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
     let memory_lines = memory.lines().count();
-    let execution = resolve_runtime_execution(&bootstrap.resolved_config, provider_override, model_override)?;
 
     if let Some(query) = request.query_text.as_deref() {
         if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
@@ -957,7 +962,11 @@ fn resolve_runtime_execution(
 
 fn call_ollama_generate(base_url: &str, model: &str, prompt: &str) -> Result<String> {
     let url = format!("{}/api/generate", base_url.trim_end_matches('/'));
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("failed to build Ollama HTTP client")?;
     let response = client
         .post(&url)
         .json(&OllamaGenerateRequest {
@@ -971,6 +980,32 @@ fn call_ollama_generate(base_url: &str, model: &str, prompt: &str) -> Result<Str
         .with_context(|| format!("Ollama returned an error for {url}"))?;
     let payload: OllamaGenerateResponse = response.json().context("failed to decode Ollama response")?;
     Ok(payload.response.trim().to_string())
+}
+
+fn validate_ollama_base_url(base_url: &str) -> Result<()> {
+    if std::env::var("VELA_ALLOW_REMOTE_OLLAMA")
+        .ok()
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let parsed = reqwest::Url::parse(base_url)
+        .with_context(|| format!("invalid Ollama base URL {:?}", base_url))?;
+    let host = parsed.host_str().context("Ollama base URL is missing a host")?;
+    let is_local = host.eq_ignore_ascii_case("localhost")
+        || host.parse::<IpAddr>().map(|ip| {
+            ip.is_loopback() || ip == IpAddr::V4(Ipv4Addr::LOCALHOST) || ip == IpAddr::V6(Ipv6Addr::LOCALHOST)
+        }).unwrap_or(false);
+
+    if !is_local {
+        bail!(
+            "refusing non-local Ollama endpoint {:?}; set VELA_ALLOW_REMOTE_OLLAMA=1 to opt in explicitly",
+            base_url
+        );
+    }
+    Ok(())
 }
 
 fn append_review_event(
