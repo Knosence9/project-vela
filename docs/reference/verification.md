@@ -28,6 +28,7 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - configured Ollama execution is used for text turns when provider/model settings are present
   - configured Ollama execution is used for image turns when provider/model settings are present
   - configured provider turns can request approved local tools across a bounded multi-step loop and continue with each tool result
+  - configured provider turns can retrieve targeted memory, session history, and skill context through read-only runtime tools
   - runtime turns persist ordered lifecycle phases for local, provider-backed, and tool-loop execution paths
   - provider-backed turns can reflect on invalid intermediate continuations, retry within strict limits, and fall back deterministically when recovery fails
   - max-step fallback, reflection retries, and tool-loop execution preserve ordered lifecycle phase records through `finish`
@@ -37,6 +38,7 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - `vela chat --query ... --checkpoints` executes a runtime turn, reports lifecycle state, and produces review candidates
   - `vela chat --query ...` uses a configured Ollama provider when present
   - configured provider turns can complete a bounded multi-step runtime tool loop through the CLI while reporting lifecycle phase counts
+  - configured provider turns can retrieve targeted skill context through the CLI tool loop
   - configured provider turns can recover from an invalid tool request through bounded reflection/retry in the CLI path
   - `vela chat --image ...` uses a configured Ollama provider when present
   - `vela chat --image ...` falls back to a deterministic local-kernel scaffold response when no provider is configured
@@ -45,6 +47,6 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - invalid `vela cron --schedule ...` usage is rejected at CLI parse time
 
 ## Remaining gaps
-- end-to-end live runtime loop behavior beyond the current local Ollama text/image-turn paths, bounded iterative tool loop, bounded reflection/retry, and first-pass lifecycle persistence
+- end-to-end live runtime loop behavior beyond the current local Ollama text/image-turn paths, bounded iterative tool loop, bounded reflection/retry, first-pass lifecycle persistence, and the new internal context retrieval tools
 - broader review-pipeline integration from transcript -> candidate -> pending -> approval via CLI-only tests
 - model/tool execution verification once runtime behavior moves beyond the current shell scaffolding

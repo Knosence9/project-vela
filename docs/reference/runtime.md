@@ -23,7 +23,9 @@
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
 - `vela chat --query ...` creates a single-turn session and can call a configured local Ollama model for text turns
 - configured provider-backed turns can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
+- approved read-only runtime tools now include targeted internal context retrieval for memory, session history, and skill content (`view_memory`, `search_session_history`, `view_skill`) in addition to the earlier snapshot/list tools
 - provider-backed turns now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
+- retrieved tool context is injected back into the provider continuation path as durable tool-result artifacts, keeping context-aware reasoning auditable without allowing live mutation
 - each live runtime turn now persists ordered lifecycle phases (`receive`, `deliberate`, `tool-request`, `tool-result`, `reflect`, `retry`, `respond`, `finish`, plus `failed` on error paths)
 - session inspection now surfaces parsed runtime lifecycle records alongside raw messages and events
 - runtime CLI turn output now reports the durable `turn_id`, lifecycle phase count, and final phase
@@ -37,7 +39,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states at the session level
-- broader external provider/model execution beyond the first Ollama text/image-turn slices, bounded iterative tool loop, and first-pass bounded reflection/retry rules
+- broader external provider/model execution beyond the first Ollama text/image-turn slices, bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - lifecycle-driven branching, retry, and compression semantics built on the new per-turn phase records
