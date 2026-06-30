@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
+/// Represents `ReviewReport` data exposed by this crate.
 pub struct ReviewReport {
     pub reviews_dir: PathBuf,
     pub candidates_dir: PathBuf,
@@ -15,12 +16,14 @@ pub struct ReviewReport {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Enumerates supported `ReviewKind` variants.
 pub enum ReviewKind {
     Memory,
     Skill,
 }
 
 impl ReviewKind {
+/// Returns the stable string label used for persistence and display.
     pub fn label(self) -> &'static str {
         match self {
             Self::Memory => "memory",
@@ -30,6 +33,7 @@ impl ReviewKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents `ReviewCandidate` data exposed by this crate.
 pub struct ReviewCandidate {
     pub id: String,
     pub kind: ReviewKind,
@@ -44,6 +48,7 @@ pub struct ReviewCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents `MemoryCandidate` data exposed by this crate.
 pub struct MemoryCandidate {
     pub action: String,
     pub target: vela_memory::MemoryTarget,
@@ -52,6 +57,7 @@ pub struct MemoryCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents `SkillCandidate` data exposed by this crate.
 pub struct SkillCandidate {
     pub action: String,
     pub name: String,
@@ -60,6 +66,7 @@ pub struct SkillCandidate {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `PromotionReport` data exposed by this crate.
 pub struct PromotionReport {
     pub candidate_id: String,
     pub kind: ReviewKind,
@@ -67,18 +74,21 @@ pub struct PromotionReport {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SuggestionMessage` data exposed by this crate.
 pub struct SuggestionMessage {
     pub role: String,
     pub content: String,
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SuggestionEvent` data exposed by this crate.
 pub struct SuggestionEvent {
     pub event_type: String,
     pub payload_json: String,
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SuggestionInput` data exposed by this crate.
 pub struct SuggestionInput {
     pub session_id: String,
     pub session_title: String,
@@ -87,6 +97,7 @@ pub struct SuggestionInput {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SuggestionReport` data exposed by this crate.
 pub struct SuggestionReport {
     pub session_id: String,
     pub session_title: String,
@@ -95,12 +106,14 @@ pub struct SuggestionReport {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SignalSpec` data exposed by this crate.
 pub struct SignalSpec {
     pub event_type: String,
     pub payload_json: String,
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SignalReport` data exposed by this crate.
 pub struct SignalReport {
     pub session_id: String,
     pub session_title: String,
@@ -108,6 +121,7 @@ pub struct SignalReport {
     pub skipped: usize,
 }
 
+/// Initializes reviews state for this subsystem.
 pub fn initialize_reviews(vela_home: &Path) -> Result<ReviewReport> {
     let reviews_dir = vela_home.join("reviews");
     let existed_before = reviews_dir.is_dir();
@@ -123,6 +137,7 @@ pub fn initialize_reviews(vela_home: &Path) -> Result<ReviewReport> {
     })
 }
 
+/// Stages memory candidate for explicit approval.
 pub fn stage_memory_candidate(
     vela_home: &Path,
     target: vela_memory::MemoryTarget,
@@ -164,6 +179,7 @@ pub fn stage_memory_candidate(
     Ok(candidate)
 }
 
+/// Stages skill candidate for explicit approval.
 pub fn stage_skill_candidate(
     vela_home: &Path,
     action: &str,
@@ -198,6 +214,7 @@ pub fn stage_skill_candidate(
     Ok(candidate)
 }
 
+/// Lists candidates available in this subsystem.
 pub fn list_candidates(vela_home: &Path) -> Result<Vec<ReviewCandidate>> {
     let dir = candidates_dir(vela_home);
     fs::create_dir_all(&dir)?;
@@ -216,6 +233,7 @@ pub fn list_candidates(vela_home: &Path) -> Result<Vec<ReviewCandidate>> {
     Ok(items)
 }
 
+/// Retrieves candidate by identifier.
 pub fn get_candidate(vela_home: &Path, id: &str) -> Result<ReviewCandidate> {
     let id = validate_candidate_id(id)?;
     let path = candidates_dir(vela_home).join(format!("{id}.json"));
@@ -225,6 +243,7 @@ pub fn get_candidate(vela_home: &Path, id: &str) -> Result<ReviewCandidate> {
         .with_context(|| format!("failed to parse {}", path.display()))?)
 }
 
+/// Rejects candidate without applying it.
 pub fn reject_candidate(vela_home: &Path, id: &str) -> Result<ReviewCandidate> {
     let candidate = get_candidate(vela_home, id)?;
     let id = validate_candidate_id(id)?;
@@ -233,6 +252,7 @@ pub fn reject_candidate(vela_home: &Path, id: &str) -> Result<ReviewCandidate> {
     Ok(candidate)
 }
 
+/// Infers signals from the provided input.
 pub fn infer_signals(input: &SuggestionInput) -> Result<SignalReport> {
     let mut seen = HashSet::new();
     for event in &input.events {
@@ -315,6 +335,7 @@ pub fn infer_signals(input: &SuggestionInput) -> Result<SignalReport> {
     })
 }
 
+/// Generates candidates from the provided input.
 pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<SuggestionReport> {
     let existing_review_candidates = list_candidates(vela_home)?;
     let pending_memory = vela_memory::list_pending(vela_home)?;
@@ -469,6 +490,7 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
     })
 }
 
+/// Promotes candidate into the next workflow stage.
 pub fn promote_candidate(vela_home: &Path, id: &str) -> Result<PromotionReport> {
     let candidate = get_candidate(vela_home, id)?;
     let report = match candidate.kind {

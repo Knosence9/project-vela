@@ -4,13 +4,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Defines the maximum prompt-facing character budget for durable memory entries.
 pub const MEMORY_CHAR_LIMIT: usize = 2_200;
+/// Defines the maximum prompt-facing character budget for user-profile entries.
 pub const USER_CHAR_LIMIT: usize = 1_375;
 const LEGACY_ENTRY_SEPARATOR: &str = "§";
 const ENTRY_GAP: &str = "\n\n";
 const STORAGE_FORMAT_MARKER: &str = "<!-- vela-memory-format: v2 -->";
 
 #[derive(Debug, Clone)]
+/// Represents `MemoryReport` data exposed by this crate.
 pub struct MemoryReport {
     pub memories_dir: PathBuf,
     pub memory_path: PathBuf,
@@ -25,12 +28,14 @@ pub struct MemoryReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Enumerates supported `MemoryTarget` variants.
 pub enum MemoryTarget {
     Memory,
     User,
 }
 
 impl MemoryTarget {
+/// Returns the stable string label used for persistence and display.
     pub fn label(self) -> &'static str {
         match self {
             Self::Memory => "memory",
@@ -38,6 +43,7 @@ impl MemoryTarget {
         }
     }
 
+/// Parses a persisted or user-provided value into the corresponding enum.
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "memory" => Ok(Self::Memory),
@@ -69,6 +75,7 @@ impl MemoryTarget {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `MemorySnapshot` data exposed by this crate.
 pub struct MemorySnapshot {
     pub target: MemoryTarget,
     pub content: String,
@@ -77,6 +84,7 @@ pub struct MemorySnapshot {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `MemoryView` data exposed by this crate.
 pub struct MemoryView {
     pub target: MemoryTarget,
     pub entries: Vec<String>,
@@ -85,6 +93,7 @@ pub struct MemoryView {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `MemoryMutationReport` data exposed by this crate.
 pub struct MemoryMutationReport {
     pub target: MemoryTarget,
     pub action: &'static str,
@@ -94,6 +103,7 @@ pub struct MemoryMutationReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents `PendingMemoryWrite` data exposed by this crate.
 pub struct PendingMemoryWrite {
     pub id: String,
     pub target: MemoryTarget,
@@ -104,6 +114,7 @@ pub struct PendingMemoryWrite {
     pub created_at: i64,
 }
 
+/// Initializes memory state for this subsystem.
 pub fn initialize_memory(vela_home: &Path) -> Result<MemoryReport> {
     let memories_dir = vela_home.join("memories");
     fs::create_dir_all(&memories_dir)
@@ -140,6 +151,7 @@ pub fn initialize_memory(vela_home: &Path) -> Result<MemoryReport> {
     })
 }
 
+/// Loads snapshot from durable storage.
 pub fn load_snapshot(vela_home: &Path, target: MemoryTarget) -> Result<MemorySnapshot> {
     let entries = load_entries(vela_home, target)?;
     let content = render_entries(&entries);
@@ -151,6 +163,7 @@ pub fn load_snapshot(vela_home: &Path, target: MemoryTarget) -> Result<MemorySna
     })
 }
 
+/// Returns a view of memory content.
 pub fn view_memory(vela_home: &Path, target: MemoryTarget) -> Result<MemoryView> {
     let entries = load_entries(vela_home, target)?;
     let rendered = render_entries(&entries);
@@ -162,6 +175,7 @@ pub fn view_memory(vela_home: &Path, target: MemoryTarget) -> Result<MemoryView>
     })
 }
 
+/// Adds memory entry to durable storage.
 pub fn add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &str) -> Result<MemoryMutationReport> {
     let mut entries = load_entries(vela_home, target)?;
     let new_entry = sanitize_entry(content)?;
@@ -170,6 +184,7 @@ pub fn add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &str) -
     report(target, "add", &entries)
 }
 
+/// Stages add memory entry for explicit approval.
 pub fn stage_add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &str) -> Result<PendingMemoryWrite> {
     let new_entry = sanitize_entry(content)?;
     let entries = load_entries(vela_home, target)?;
@@ -197,6 +212,7 @@ pub fn stage_add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &
     )
 }
 
+/// Replaces memory entry in durable storage.
 pub fn replace_memory_entry(
     vela_home: &Path,
     target: MemoryTarget,
@@ -210,6 +226,7 @@ pub fn replace_memory_entry(
     report(target, "replace", &entries)
 }
 
+/// Stages replace memory entry for explicit approval.
 pub fn stage_replace_memory_entry(
     vela_home: &Path,
     target: MemoryTarget,
@@ -236,6 +253,7 @@ pub fn stage_replace_memory_entry(
     )
 }
 
+/// Removes memory entry from durable storage.
 pub fn remove_memory_entry(vela_home: &Path, target: MemoryTarget, old_text: &str) -> Result<MemoryMutationReport> {
     let mut entries = load_entries(vela_home, target)?;
     let idx = unique_match_index(&entries, old_text)?;
@@ -265,6 +283,7 @@ fn remove_exact_memory_entry(vela_home: &Path, target: MemoryTarget, matched_ent
     report(target, "remove", &entries)
 }
 
+/// Stages remove memory entry for explicit approval.
 pub fn stage_remove_memory_entry(vela_home: &Path, target: MemoryTarget, old_text: &str) -> Result<PendingMemoryWrite> {
     if old_text.trim().is_empty() {
         bail!("match text cannot be empty");
@@ -285,6 +304,7 @@ pub fn stage_remove_memory_entry(vela_home: &Path, target: MemoryTarget, old_tex
     )
 }
 
+/// Lists pending available in this subsystem.
 pub fn list_pending(vela_home: &Path) -> Result<Vec<PendingMemoryWrite>> {
     let dir = pending_dir(vela_home);
     fs::create_dir_all(&dir)?;
@@ -303,6 +323,7 @@ pub fn list_pending(vela_home: &Path) -> Result<Vec<PendingMemoryWrite>> {
     Ok(items)
 }
 
+/// Retrieves pending by identifier.
 pub fn get_pending(vela_home: &Path, id: &str) -> Result<PendingMemoryWrite> {
     let id = validate_pending_id(id)?;
     let path = pending_dir(vela_home).join(format!("{id}.json"));
@@ -312,6 +333,7 @@ pub fn get_pending(vela_home: &Path, id: &str) -> Result<PendingMemoryWrite> {
         .with_context(|| format!("failed to parse {}", path.display()))?)
 }
 
+/// Rejects pending without applying it.
 pub fn reject_pending(vela_home: &Path, id: &str) -> Result<()> {
     let id = validate_pending_id(id)?;
     let path = pending_dir(vela_home).join(format!("{id}.json"));
@@ -319,6 +341,7 @@ pub fn reject_pending(vela_home: &Path, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Approves pending and applies it durably.
 pub fn approve_pending(vela_home: &Path, id: &str) -> Result<MemoryMutationReport> {
     let pending = get_pending(vela_home, id)?;
     let result = match pending.action.as_str() {
@@ -346,6 +369,7 @@ pub fn approve_pending(vela_home: &Path, id: &str) -> Result<MemoryMutationRepor
     Ok(result)
 }
 
+/// Renders prompt snapshot for prompt or display use.
 pub fn render_prompt_snapshot(vela_home: &Path) -> Result<String> {
     let memory = load_snapshot(vela_home, MemoryTarget::Memory)?;
     let user = load_snapshot(vela_home, MemoryTarget::User)?;

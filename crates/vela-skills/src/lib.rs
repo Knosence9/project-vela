@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
+/// Represents `SkillMutationReport` data exposed by this crate.
 pub struct SkillMutationReport {
     pub action: &'static str,
     pub name: String,
@@ -12,6 +13,7 @@ pub struct SkillMutationReport {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SkillsReport` data exposed by this crate.
 pub struct SkillsReport {
     pub skills_dir: PathBuf,
     pub pending_dir: PathBuf,
@@ -20,6 +22,7 @@ pub struct SkillsReport {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SkillSummary` data exposed by this crate.
 pub struct SkillSummary {
     pub name: String,
     pub skill_md_path: PathBuf,
@@ -27,6 +30,7 @@ pub struct SkillSummary {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SkillView` data exposed by this crate.
 pub struct SkillView {
     pub name: String,
     pub skill_md_path: PathBuf,
@@ -34,6 +38,7 @@ pub struct SkillView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents `PendingSkillWrite` data exposed by this crate.
 pub struct PendingSkillWrite {
     pub id: String,
     pub action: String,
@@ -43,6 +48,7 @@ pub struct PendingSkillWrite {
     pub created_at: i64,
 }
 
+/// Initializes skills state for this subsystem.
 pub fn initialize_skills(vela_home: &Path) -> Result<SkillsReport> {
     let skills_dir = vela_home.join("skills");
     let existed_before = skills_dir.is_dir();
@@ -60,6 +66,7 @@ pub fn initialize_skills(vela_home: &Path) -> Result<SkillsReport> {
     })
 }
 
+/// Lists skills available in this subsystem.
 pub fn list_skills(vela_home: &Path) -> Result<Vec<SkillSummary>> {
     let skills_dir = vela_home.join("skills");
     fs::create_dir_all(&skills_dir)
@@ -91,6 +98,7 @@ pub fn list_skills(vela_home: &Path) -> Result<Vec<SkillSummary>> {
     Ok(skills)
 }
 
+/// Returns a view of skill content.
 pub fn view_skill(vela_home: &Path, name: &str) -> Result<SkillView> {
     let normalized = normalize_skill_name(name)?;
     let skill_md_path = skill_md_path(vela_home, &normalized);
@@ -106,6 +114,7 @@ pub fn view_skill(vela_home: &Path, name: &str) -> Result<SkillView> {
     })
 }
 
+/// Creates skill in durable storage.
 pub fn create_skill(
     vela_home: &Path,
     name: &str,
@@ -129,6 +138,7 @@ pub fn create_skill(
     })
 }
 
+/// Stages create skill for explicit approval.
 pub fn stage_create_skill(
     vela_home: &Path,
     name: &str,
@@ -153,6 +163,7 @@ pub fn stage_create_skill(
     )
 }
 
+/// Writes skill to durable storage.
 pub fn write_skill(
     vela_home: &Path,
     name: &str,
@@ -173,6 +184,7 @@ pub fn write_skill(
     })
 }
 
+/// Stages write skill for explicit approval.
 pub fn stage_write_skill(
     vela_home: &Path,
     name: &str,
@@ -197,6 +209,7 @@ pub fn stage_write_skill(
     )
 }
 
+/// Deletes skill from durable storage.
 pub fn delete_skill(vela_home: &Path, name: &str) -> Result<SkillMutationReport> {
     let normalized = normalize_skill_name(name)?;
     let skill_dir = vela_home.join("skills").join(&normalized);
@@ -213,6 +226,7 @@ pub fn delete_skill(vela_home: &Path, name: &str) -> Result<SkillMutationReport>
     })
 }
 
+/// Stages delete skill for explicit approval.
 pub fn stage_delete_skill(vela_home: &Path, name: &str) -> Result<PendingSkillWrite> {
     let normalized = normalize_skill_name(name)?;
     if !skill_md_path(vela_home, &normalized).is_file() {
@@ -232,6 +246,7 @@ pub fn stage_delete_skill(vela_home: &Path, name: &str) -> Result<PendingSkillWr
     )
 }
 
+/// Lists pending available in this subsystem.
 pub fn list_pending(vela_home: &Path) -> Result<Vec<PendingSkillWrite>> {
     let dir = pending_dir(vela_home);
     fs::create_dir_all(&dir)?;
@@ -250,6 +265,7 @@ pub fn list_pending(vela_home: &Path) -> Result<Vec<PendingSkillWrite>> {
     Ok(items)
 }
 
+/// Retrieves pending by identifier.
 pub fn get_pending(vela_home: &Path, id: &str) -> Result<PendingSkillWrite> {
     let id = validate_pending_id(id)?;
     let path = pending_dir(vela_home).join(format!("{id}.json"));
@@ -259,6 +275,7 @@ pub fn get_pending(vela_home: &Path, id: &str) -> Result<PendingSkillWrite> {
         .with_context(|| format!("failed to parse {}", path.display()))?)
 }
 
+/// Rejects pending without applying it.
 pub fn reject_pending(vela_home: &Path, id: &str) -> Result<()> {
     let id = validate_pending_id(id)?;
     let path = pending_dir(vela_home).join(format!("{id}.json"));
@@ -266,6 +283,7 @@ pub fn reject_pending(vela_home: &Path, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Approves pending and applies it durably.
 pub fn approve_pending(vela_home: &Path, id: &str) -> Result<SkillMutationReport> {
     let pending = get_pending(vela_home, id)?;
     let result = match pending.action.as_str() {
@@ -320,6 +338,7 @@ fn skill_md_path(vela_home: &Path, name: &str) -> PathBuf {
     vela_home.join("skills").join(name).join("SKILL.md")
 }
 
+/// Normalizes skill name for consistent storage and lookup.
 pub fn normalize_skill_name(name: &str) -> Result<String> {
     let normalized = name.trim();
     if normalized.is_empty() {
