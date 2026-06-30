@@ -353,6 +353,53 @@ fn chat_query_uses_configured_ollama_tool_loop() {
 }
 
 #[test]
+/// Verifies that the CLI runtime can recover from one invalid provider tool request with bounded reflection.
+fn chat_query_recovers_from_invalid_tool_request() {
+    let vela_home = temp_vela_home("ollama-reflect-recover");
+    let (base_url, server) = spawn_mock_ollama_sequence(vec![
+        MockOllamaExchange {
+            response_body: r#"{"tool":"shell_exec"}"#,
+            expected_model: "gemma3:4b",
+            prompt_fragment: "recover from invalid tool",
+            expected_image_base64: None,
+        },
+        MockOllamaExchange {
+            response_body: "Recovered final answer.",
+            expected_model: "gemma3:4b",
+            prompt_fragment: "unsupported or malformed tool envelope",
+            expected_image_base64: None,
+        },
+    ]);
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: {}\n",
+            base_url
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(&vela_home, &["chat", "--query", "recover from invalid tool"]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Recovered final answer."));
+    assert!(turn_stdout.contains("lifecycle: turn=turn-"));
+    assert!(turn_stdout.contains("phases=6"));
+    assert!(turn_stdout.contains("last=finish"));
+
+    std::env::set_var("VELA_HOME", &vela_home);
+    let bootstrap = vela_runtime::initialize_bootstrap(None, false).unwrap();
+    let inspection = vela_runtime::inspect_latest_session(&bootstrap, 20).unwrap().expect("cli reflection inspection");
+    let lifecycle: Vec<_> = inspection.lifecycle.iter().map(|record| record.phase.as_str()).collect();
+    assert_eq!(lifecycle, vec!["receive", "deliberate", "reflect", "retry", "respond", "finish"]);
+    std::env::remove_var("VELA_HOME");
+    server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies cron job persistence and clap-level rejection of invalid flag combinations.
 fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     let vela_home = temp_vela_home("cron");
