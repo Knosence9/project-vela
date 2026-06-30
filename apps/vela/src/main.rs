@@ -808,27 +808,43 @@ fn main() -> Result<()> {
                     branch.branch_note,
                 );
             } else if let Some(target) = args.compress.as_deref() {
-                let summary = args.summary.as_deref().unwrap_or("Compressed continuity summary.");
+                let summary = args.summary.as_deref().ok_or_else(|| anyhow::anyhow!("--summary is required with --compress"))?;
                 let compression = vela_runtime::compress_session(&bootstrap, target, summary)?;
                 println!(
-                    "session compressed: session={} compression={} messages={} events={}",
+                    "session compressed: session={} compression={} messages={} events={} summary={}",
                     compression.session_id,
                     compression.id,
                     compression.source_message_count,
                     compression.source_event_count,
+                    compression.summary,
                 );
             } else if let Some(target) = args.show.as_deref() {
                 match vela_runtime::inspect_session(&bootstrap, target, 20)? {
                     Some(inspection) => {
                         println!(
-                            "session inspect: id={} title={} parent={:?} compressions={} messages={} events={}",
+                            "session inspect: id={} title={} parent_id={:?} parent_title={:?} branch_note={:?} messages={} events={}",
                             inspection.session_id,
                             inspection.title,
                             inspection.branch.parent_session_id,
-                            inspection.compressions.len(),
+                            inspection.branch.parent_title,
+                            inspection.branch.branch_note,
                             inspection.messages.len(),
                             inspection.events.len(),
                         );
+                        if inspection.compressions.is_empty() {
+                            println!("compressions: none");
+                        } else {
+                            println!("compressions [{}]:", inspection.compressions.len());
+                            for compression in inspection.compressions {
+                                println!(
+                                    "- {} :: messages={} events={} summary={}",
+                                    compression.id,
+                                    compression.source_message_count,
+                                    compression.source_event_count,
+                                    compression.summary,
+                                );
+                            }
+                        }
                     }
                     None => println!("session inspect: not found for {:?}", target),
                 }

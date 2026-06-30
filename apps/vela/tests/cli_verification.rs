@@ -466,8 +466,10 @@ fn sessions_branch_and_compress_are_inspectable() {
     let show = run_vela(&vela_home, &["sessions", "--show", branch_session]);
     assert!(show.status.success(), "{}", stderr_text(&show));
     let show_stdout = stdout_text(&show);
-    assert!(show_stdout.contains("parent=Some"));
-    assert!(show_stdout.contains("compressions=1"));
+    assert!(show_stdout.contains("parent_id=Some"));
+    assert!(show_stdout.contains("parent_title=Some"));
+    assert!(show_stdout.contains("compressions [1]:"));
+    assert!(show_stdout.contains("summary=branch compressed summary"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

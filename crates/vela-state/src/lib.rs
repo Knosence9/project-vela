@@ -233,6 +233,7 @@ pub fn search_session_history(state_db_path: &Path, query: &str, limit: usize) -
     Ok(hits)
 }
 
+/// Inspects the most recently updated session with recent messages, events, lifecycle, and compression state.
 pub fn inspect_latest_session(state_db_path: &Path, limit: usize) -> Result<Option<SessionInspection>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -242,6 +243,7 @@ pub fn inspect_latest_session(state_db_path: &Path, limit: usize) -> Result<Opti
     Ok(Some(load_session_inspection(&conn, &session.id, &session.title, limit)?))
 }
 
+/// Inspects one session by id or title with recent messages, events, lifecycle, lineage, and compression state.
 pub fn inspect_session(state_db_path: &Path, target: &str, limit: usize) -> Result<Option<SessionInspection>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -395,6 +397,7 @@ pub fn resolve_runtime_session(state_db_path: &Path, request: &SessionRequest) -
     })
 }
 
+/// Creates a durable child session by copying continuity from a source session and recording explicit parent lineage.
 pub fn branch_session(
     state_db_path: &Path,
     source: &str,
@@ -521,6 +524,7 @@ pub fn branch_session(
     })
 }
 
+/// Persists one compression summary for a session and records the matching audit event atomically.
 pub fn compress_session(
     state_db_path: &Path,
     target: &str,
@@ -546,13 +550,14 @@ pub fn compress_session(
     )?;
     let created_at = unix_timestamp();
     let id = format!("cmp-{}", unix_timestamp_nanos());
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, created_at)
          VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
         params![id, session.id, summary, source_message_count as i64, source_event_count as i64, created_at],
     )?;
     append_event(
-        &conn,
+        &tx,
         &session.id,
         "session_compressed",
         json!({
@@ -562,6 +567,7 @@ pub fn compress_session(
             "source_event_count": source_event_count,
         }).to_string(),
     )?;
+    tx.commit()?;
     Ok(SessionCompressionRecord {
         id,
         session_id: session.id,
@@ -572,6 +578,7 @@ pub fn compress_session(
     })
 }
 
+/// Returns the latest persisted compression summary for one session when present.
 pub fn latest_compression_summary(state_db_path: &Path, session_id: &str) -> Result<Option<String>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
