@@ -913,6 +913,7 @@ impl RuntimeToolName {
 }
 
 const MAX_RUNTIME_TOOL_STEPS: usize = 3;
+const MAX_RUNTIME_REFLECTION_ATTEMPTS: usize = 2;
 
 #[derive(Debug, Clone)]
 struct RuntimeExecutionConfig {
@@ -993,6 +994,14 @@ struct OllamaGenerateResponse {
 #[derive(Debug, Deserialize)]
 struct RuntimeToolRequest {
     tool: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ProviderContinuation {
+    FinalAnswer,
+    ToolRequest(RuntimeToolName),
+    InvalidToolRequest,
+    EmptyResponse,
 }
 
 fn render_chat_response(
@@ -1183,70 +1192,180 @@ fn execute_ollama_turn(
 ) -> Result<RenderedChatResponse> {
     let mut current_prompt = prompt.to_string();
     let mut used_tool_loop = false;
+    let mut reflection_attempts = 0usize;
 
     for step in 1..=MAX_RUNTIME_TOOL_STEPS {
         let response = call_ollama_generate(&execution.ollama_base_url, model, &current_prompt, images.clone())?;
-        if let Some(tool_name) = parse_runtime_tool_request(&response)? {
-            used_tool_loop = true;
-            persist_runtime_tool_request(bootstrap, &session.session_id, tool_name, step)?;
-            lifecycle.record_phase(
-                bootstrap,
-                &session.session_id,
-                "tool-request",
-                Some(step),
-                json!({"tool": tool_name.as_str(), "provider": execution.provider_label, "model": execution.model}),
-            )?;
-            let tool_result = execute_runtime_tool(tool_name, memory, skills);
-            persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, step, &tool_result)?;
-            lifecycle.record_phase(
-                bootstrap,
-                &session.session_id,
-                "tool-result",
-                Some(step),
-                json!({"tool": tool_name.as_str(), "result_length": tool_result.len()}),
-            )?;
+        match classify_provider_continuation(&response) {
+            ProviderContinuation::ToolRequest(tool_name) => {
+                used_tool_loop = true;
+                persist_runtime_tool_request(bootstrap, &session.session_id, tool_name, step)?;
+                lifecycle.record_phase(
+                    bootstrap,
+                    &session.session_id,
+                    "tool-request",
+                    Some(step),
+                    json!({"tool": tool_name.as_str(), "provider": execution.provider_label, "model": execution.model}),
+                )?;
+                let tool_result = execute_runtime_tool(tool_name, memory, skills);
+                if tool_result.trim().is_empty() {
+                    reflection_attempts += 1;
+                    if reflection_attempts > MAX_RUNTIME_REFLECTION_ATTEMPTS {
+                        lifecycle.record_phase(
+                            bootstrap,
+                            &session.session_id,
+                            "reflect",
+                            Some(step),
+                            json!({"attempt": reflection_attempts, "reason": "empty-tool-result", "tool": tool_name.as_str(), "outcome": "fallback"}),
+                        )?;
+                        return Ok(RenderedChatResponse {
+                            content: Some("Vela could not recover from an empty intermediate tool result within the bounded retry limit, so it fell back to a deterministic runtime response.".to_string()),
+                            source: "runtime-kernel",
+                            provider: None,
+                            model: None,
+                        });
+                    }
+                    record_reflection_and_retry(
+                        bootstrap,
+                        session,
+                        lifecycle,
+                        reflection_attempts,
+                        Some(step),
+                        "empty-tool-result",
+                        json!({"tool": tool_name.as_str()}),
+                    )?;
+                    current_prompt = format!(
+                        "{}\n\nThe tool result for {} was empty and unusable. Do not repeat the same failed continuation blindly. Either request a supported tool with ONLY JSON like {{\"tool\":\"memory_snapshot\"}} or {{\"tool\":\"list_skills\"}}, or answer directly.",
+                        current_prompt,
+                        tool_name.as_str(),
+                    );
+                    continue;
+                }
 
-            let followup_instruction = if step == MAX_RUNTIME_TOOL_STEPS {
-                "You have reached the maximum number of tool steps. Answer the user directly without requesting another tool."
-            } else {
-                "You may either request another supported tool with ONLY JSON like {\"tool\":\"memory_snapshot\"} or {\"tool\":\"list_skills\"}, or answer directly."
-            };
-            current_prompt = format!(
-                "{}\n\nCompleted tool step {} of {}.\nTool result for {}:\n{}\n\n{}",
-                current_prompt,
-                step,
-                MAX_RUNTIME_TOOL_STEPS,
-                tool_name.as_str(),
-                tool_result,
-                followup_instruction,
-            );
-            continue;
+                persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, step, &tool_result)?;
+                lifecycle.record_phase(
+                    bootstrap,
+                    &session.session_id,
+                    "tool-result",
+                    Some(step),
+                    json!({"tool": tool_name.as_str(), "result_length": tool_result.len()}),
+                )?;
+
+                let followup_instruction = if step == MAX_RUNTIME_TOOL_STEPS {
+                    "You have reached the maximum number of tool steps. Answer the user directly without requesting another tool."
+                } else {
+                    "You may either request another supported tool with ONLY JSON like {\"tool\":\"memory_snapshot\"} or {\"tool\":\"list_skills\"}, or answer directly."
+                };
+                current_prompt = format!(
+                    "{}\n\nCompleted tool step {} of {}.\nTool result for {}:\n{}\n\n{}",
+                    current_prompt,
+                    step,
+                    MAX_RUNTIME_TOOL_STEPS,
+                    tool_name.as_str(),
+                    tool_result,
+                    followup_instruction,
+                );
+            }
+            ProviderContinuation::FinalAnswer => {
+                return Ok(RenderedChatResponse {
+                    content: Some(response),
+                    source: if used_tool_loop { "runtime-ollama-tool-loop" } else { "runtime-ollama" },
+                    provider: execution.provider_label.clone(),
+                    model: execution.model.clone(),
+                });
+            }
+            ProviderContinuation::InvalidToolRequest => {
+                reflection_attempts += 1;
+                if reflection_attempts > MAX_RUNTIME_REFLECTION_ATTEMPTS {
+                    lifecycle.record_phase(
+                        bootstrap,
+                        &session.session_id,
+                        "reflect",
+                        Some(step),
+                        json!({"attempt": reflection_attempts, "reason": "invalid-tool-request", "response": response, "outcome": "fallback"}),
+                    )?;
+                    return Ok(RenderedChatResponse {
+                        content: Some("Vela received an invalid provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.".to_string()),
+                        source: "runtime-kernel",
+                        provider: None,
+                        model: None,
+                    });
+                }
+                record_reflection_and_retry(
+                    bootstrap,
+                    session,
+                    lifecycle,
+                    reflection_attempts,
+                    Some(step),
+                    "invalid-tool-request",
+                    json!({"response": response}),
+                )?;
+                current_prompt = format!(
+                    "{}\n\nYour previous reply requested an unsupported tool. Only these tools are allowed: memory_snapshot, list_skills. If you need one tool, respond with ONLY JSON using one of those exact tool names. Otherwise answer the user directly.",
+                    current_prompt,
+                );
+            }
+            ProviderContinuation::EmptyResponse => {
+                reflection_attempts += 1;
+                if reflection_attempts > MAX_RUNTIME_REFLECTION_ATTEMPTS {
+                    lifecycle.record_phase(
+                        bootstrap,
+                        &session.session_id,
+                        "reflect",
+                        Some(step),
+                        json!({"attempt": reflection_attempts, "reason": "empty-provider-response", "outcome": "fallback"}),
+                    )?;
+                    return Ok(RenderedChatResponse {
+                        content: Some("Vela received an empty provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.".to_string()),
+                        source: "runtime-kernel",
+                        provider: None,
+                        model: None,
+                    });
+                }
+                record_reflection_and_retry(
+                    bootstrap,
+                    session,
+                    lifecycle,
+                    reflection_attempts,
+                    Some(step),
+                    "empty-provider-response",
+                    json!({}),
+                )?;
+                current_prompt = format!(
+                    "{}\n\nYour previous reply was empty and unusable. Either request one supported tool with ONLY JSON using memory_snapshot or list_skills, or answer the user directly with non-empty text.",
+                    current_prompt,
+                );
+            }
         }
-
-        return Ok(RenderedChatResponse {
-            content: Some(response),
-            source: if used_tool_loop { "runtime-ollama-tool-loop" } else { "runtime-ollama" },
-            provider: execution.provider_label.clone(),
-            model: execution.model.clone(),
-        });
     }
 
     let final_response = call_ollama_generate(&execution.ollama_base_url, model, &current_prompt, images)?;
-    if parse_runtime_tool_request(&final_response)?.is_some() {
-        return Ok(RenderedChatResponse {
+    match classify_provider_continuation(&final_response) {
+        ProviderContinuation::FinalAnswer => Ok(RenderedChatResponse {
+            content: Some(final_response),
+            source: "runtime-ollama-tool-loop",
+            provider: execution.provider_label.clone(),
+            model: execution.model.clone(),
+        }),
+        ProviderContinuation::ToolRequest(_) => Ok(RenderedChatResponse {
             content: Some("Vela reached the maximum bounded tool steps and fell back to a deterministic runtime response instead of continuing indefinitely.".to_string()),
             source: "runtime-kernel",
             provider: None,
             model: None,
-        });
+        }),
+        ProviderContinuation::InvalidToolRequest => Ok(RenderedChatResponse {
+            content: Some("Vela received an invalid provider continuation after the bounded tool loop and fell back to a deterministic runtime response.".to_string()),
+            source: "runtime-kernel",
+            provider: None,
+            model: None,
+        }),
+        ProviderContinuation::EmptyResponse => Ok(RenderedChatResponse {
+            content: Some("Vela received an empty provider continuation after the bounded tool loop and fell back to a deterministic runtime response.".to_string()),
+            source: "runtime-kernel",
+            provider: None,
+            model: None,
+        }),
     }
-
-    Ok(RenderedChatResponse {
-        content: Some(final_response),
-        source: "runtime-ollama-tool-loop",
-        provider: execution.provider_label.clone(),
-        model: execution.model.clone(),
-    })
 }
 
 /// Parses a model response for a supported runtime tool request envelope.
@@ -1266,6 +1385,59 @@ fn parse_runtime_tool_request(response: &str) -> Result<Option<RuntimeToolName>>
         other => bail!("unsupported runtime tool request {:?}", other),
     };
     Ok(Some(tool))
+}
+
+fn classify_provider_continuation(response: &str) -> ProviderContinuation {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return ProviderContinuation::EmptyResponse;
+    }
+    let json_body = trimmed
+        .strip_prefix("```json")
+        .and_then(|value| value.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    let Ok(request) = serde_json::from_str::<RuntimeToolRequest>(json_body) else {
+        return ProviderContinuation::FinalAnswer;
+    };
+    match request.tool.trim() {
+        "memory_snapshot" => ProviderContinuation::ToolRequest(RuntimeToolName::MemorySnapshot),
+        "list_skills" => ProviderContinuation::ToolRequest(RuntimeToolName::ListSkills),
+        _ => ProviderContinuation::InvalidToolRequest,
+    }
+}
+
+fn record_reflection_and_retry(
+    bootstrap: &BootstrapReport,
+    session: &SessionRuntimeReport,
+    lifecycle: &mut RuntimeTurnRecorder,
+    attempt: usize,
+    step: Option<usize>,
+    reason: &str,
+    detail: serde_json::Value,
+) -> Result<()> {
+    lifecycle.record_phase(
+        bootstrap,
+        &session.session_id,
+        "reflect",
+        step,
+        json!({
+            "attempt": attempt,
+            "reason": reason,
+            "detail": detail,
+        }),
+    )?;
+    lifecycle.record_phase(
+        bootstrap,
+        &session.session_id,
+        "retry",
+        step,
+        json!({
+            "attempt": attempt,
+            "reason": reason,
+        }),
+    )?;
+    Ok(())
 }
 
 /// Executes one approved read-only runtime tool and returns its textual result.
@@ -2069,6 +2241,70 @@ mod tests {
     }
 
     #[test]
+    /// Verifies that the runtime can reflect on an invalid tool request and recover with a bounded retry.
+    fn execute_chat_turn_reflects_and_recovers_from_invalid_tool_request() {
+        let (base_url, server) = spawn_mock_ollama_sequence(vec![
+            MockOllamaExchange {
+                response_body: r#"{"tool":"shell_exec"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "recover from invalid tool",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: "Recovered final answer.",
+                expected_model: "gemma3:4b",
+                prompt_fragment: "unsupported tool",
+                expected_image_base64: None,
+            },
+        ]);
+        let mut bootstrap = test_bootstrap("ollama-reflect-recover");
+        bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
+        bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
+        bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
+
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("recover from invalid tool".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.response.as_deref(), Some("Recovered final answer."));
+        assert_eq!(report.response_source, "runtime-ollama");
+        assert_eq!(report.lifecycle_phase_count, 6);
+        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("reflection inspection");
+        let lifecycle: Vec<_> = inspection
+            .lifecycle
+            .iter()
+            .filter(|record| record.turn_id == report.turn_id)
+            .map(|record| (record.phase.as_str(), record.step))
+            .collect();
+        assert_eq!(
+            lifecycle,
+            vec![
+                ("receive", None),
+                ("deliberate", None),
+                ("reflect", Some(1)),
+                ("retry", Some(1)),
+                ("respond", None),
+                ("finish", None),
+            ]
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
     /// Verifies that the iterative tool loop trips the max-step guard and falls back deterministically.
     fn execute_chat_turn_stops_at_max_runtime_tool_steps() {
         let (base_url, server) = spawn_mock_ollama_sequence(vec![
@@ -2173,6 +2409,79 @@ mod tests {
         assert_eq!(assistant_metadata.get("source").and_then(|v| v.as_str()), Some("runtime-kernel"));
         assert_eq!(assistant_metadata.get("provider").and_then(|v| v.as_str()), None);
         assert_eq!(assistant_metadata.get("model").and_then(|v| v.as_str()), None);
+        server.join().unwrap();
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    /// Verifies that repeated invalid provider continuations fall back after the bounded reflection limit.
+    fn execute_chat_turn_falls_back_after_exhausting_reflection_retries() {
+        let (base_url, server) = spawn_mock_ollama_sequence(vec![
+            MockOllamaExchange {
+                response_body: r#"{"tool":"shell_exec"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "exhaust reflection retries",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: r#"{"tool":"shell_exec"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "unsupported tool",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: r#"{"tool":"shell_exec"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "unsupported tool",
+                expected_image_base64: None,
+            },
+        ]);
+        let mut bootstrap = test_bootstrap("ollama-reflect-fallback");
+        bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
+        bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
+        bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
+
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("exhaust reflection retries".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.response_source, "runtime-kernel");
+        assert!(report.response.as_deref().unwrap_or_default().contains("exhausted the bounded reflection limit"));
+        assert_eq!(report.lifecycle_phase_count, 9);
+        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("reflection fallback inspection");
+        let lifecycle: Vec<_> = inspection
+            .lifecycle
+            .iter()
+            .filter(|record| record.turn_id == report.turn_id)
+            .map(|record| (record.phase.as_str(), record.step))
+            .collect();
+        assert_eq!(
+            lifecycle,
+            vec![
+                ("receive", None),
+                ("deliberate", None),
+                ("reflect", Some(1)),
+                ("retry", Some(1)),
+                ("reflect", Some(2)),
+                ("retry", Some(2)),
+                ("reflect", Some(3)),
+                ("respond", None),
+                ("finish", None),
+            ]
+        );
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
