@@ -15,8 +15,8 @@ use vela_state::{PersistenceReport, SessionRuntimeReport};
 
 pub use vela_config::preparse_profile_override;
 pub use vela_state::{
-    InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionEventRecord, SessionInspection,
-    SessionMessageRecord, SessionSearchHit, SessionSummary,
+    InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchRecord, SessionCompressionRecord,
+    SessionEventRecord, SessionInspection, SessionMessageRecord, SessionSearchHit, SessionSummary,
 };
 
 #[derive(Debug, Clone)]
@@ -529,6 +529,30 @@ pub fn search_session_history(bootstrap: &BootstrapReport, query: &str, limit: u
 /// Inspects the latest persisted session with recent messages and events.
 pub fn inspect_latest_session(bootstrap: &BootstrapReport, limit: usize) -> Result<Option<SessionInspection>> {
     vela_state::inspect_latest_session(&bootstrap.persistence.state_db_path, limit)
+}
+
+/// Inspects one persisted session by id or title.
+pub fn inspect_session(bootstrap: &BootstrapReport, target: &str, limit: usize) -> Result<Option<SessionInspection>> {
+    vela_state::inspect_session(&bootstrap.persistence.state_db_path, target, limit)
+}
+
+/// Creates a durable branch session with copied continuity and explicit lineage.
+pub fn branch_session(
+    bootstrap: &BootstrapReport,
+    source: &str,
+    title: Option<&str>,
+    note: Option<&str>,
+) -> Result<SessionBranchRecord> {
+    vela_state::branch_session(&bootstrap.persistence.state_db_path, source, title, note)
+}
+
+/// Persists one compression summary for a session.
+pub fn compress_session(
+    bootstrap: &BootstrapReport,
+    target: &str,
+    summary: &str,
+) -> Result<SessionCompressionRecord> {
+    vela_state::compress_session(&bootstrap.persistence.state_db_path, target, summary)
 }
 
 /// Renders the always-on memory snapshot used for prompting.
@@ -1080,6 +1104,11 @@ fn render_chat_response(
     let memory = vela_memory::render_prompt_snapshot(&bootstrap.vela_home)?;
     let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
     let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
+    let compression_summary = vela_state::latest_compression_summary(&bootstrap.persistence.state_db_path, &session.session_id)?;
+    let compression_block = compression_summary
+        .as_deref()
+        .map(|summary| format!("\n\nCompressed continuity summary:\n{}", summary))
+        .unwrap_or_default();
     let memory_lines = memory.lines().count();
 
     if request.image_present {
@@ -1099,10 +1128,11 @@ fn render_chat_response(
                     .map(str::to_string)
                     .unwrap_or_else(|| "Please analyze the attached image and respond concisely with the most relevant details for the runtime session.".to_string());
                 let prompt = format!(
-                    "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
+                    "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
                     session.title,
                     session.session_id,
                     memory,
+                    compression_block,
                     skills.len(),
                     reviews.len(),
                     user_prompt,
@@ -1145,10 +1175,11 @@ fn render_chat_response(
                 .as_deref()
                 .context("runtime provider 'ollama' requires a model (for example a Gemma family model)")?;
             let prompt = format!(
-                "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
+                "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
                 session.title,
                 session.session_id,
                 memory,
+                compression_block,
                 skills.len(),
                 reviews.len(),
                 query.trim(),

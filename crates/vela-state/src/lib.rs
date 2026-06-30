@@ -40,6 +40,7 @@ pub struct SessionSummary {
     pub title: String,
     pub message_count: u64,
     pub event_count: u64,
+    pub parent_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,12 +80,33 @@ pub struct RuntimeTurnLifecycleRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionBranchRecord {
+    pub session_id: String,
+    pub title: String,
+    pub parent_session_id: Option<String>,
+    pub parent_title: Option<String>,
+    pub branch_note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionCompressionRecord {
+    pub id: String,
+    pub session_id: String,
+    pub summary: String,
+    pub source_message_count: u64,
+    pub source_event_count: u64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct SessionInspection {
     pub session_id: String,
     pub title: String,
+    pub branch: SessionBranchRecord,
     pub messages: Vec<SessionMessageRecord>,
     pub events: Vec<SessionEventRecord>,
     pub lifecycle: Vec<RuntimeTurnLifecycleRecord>,
+    pub compressions: Vec<SessionCompressionRecord>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -211,10 +233,21 @@ pub fn search_session_history(state_db_path: &Path, query: &str, limit: usize) -
     Ok(hits)
 }
 
+/// Inspects the most recently updated session with recent messages, events, lifecycle, and compression state.
 pub fn inspect_latest_session(state_db_path: &Path, limit: usize) -> Result<Option<SessionInspection>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
     let Some(session) = latest_session(&conn)? else {
+        return Ok(None);
+    };
+    Ok(Some(load_session_inspection(&conn, &session.id, &session.title, limit)?))
+}
+
+/// Inspects one session by id or title with recent messages, events, lifecycle, lineage, and compression state.
+pub fn inspect_session(state_db_path: &Path, target: &str, limit: usize) -> Result<Option<SessionInspection>> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    let Some(session) = find_session_by_id_or_title(&conn, target)? else {
         return Ok(None);
     };
     Ok(Some(load_session_inspection(&conn, &session.id, &session.title, limit)?))
@@ -364,6 +397,198 @@ pub fn resolve_runtime_session(state_db_path: &Path, request: &SessionRequest) -
     })
 }
 
+/// Creates a durable child session by copying continuity from a source session and recording explicit parent lineage.
+pub fn branch_session(
+    state_db_path: &Path,
+    source: &str,
+    new_title: Option<&str>,
+    branch_note: Option<&str>,
+) -> Result<SessionBranchRecord> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    let source_session = find_session_by_id_or_title(&conn, source)?
+        .with_context(|| format!("session not found for branch source {source}"))?;
+    let mut detail_stmt = conn.prepare(
+        "SELECT command_name, interaction_mode FROM sessions WHERE id = ?1"
+    )?;
+    let (command_name, interaction_mode): (String, String) = detail_stmt.query_row(params![source_session.id], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?;
+
+    let now = unix_timestamp();
+    let unique = unix_timestamp_nanos();
+    let session_id = format!("session-{}", unique);
+    let title = new_title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}-branch-{}", source_session.title, unique));
+    let note = branch_note.map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at, parent_session_id, branch_note)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
+        params![session_id, title, command_name, interaction_mode, now, source_session.id, note],
+    )?;
+
+    let messages: Vec<(String, String, Option<String>, i64)> = {
+        let mut message_stmt = tx.prepare(
+            "SELECT role, content, metadata_json, created_at FROM messages WHERE session_id = ?1 ORDER BY created_at ASC, id ASC"
+        )?;
+        let rows = message_stmt.query_map(params![source_session.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, i64>(3)?))
+        })?;
+        let mut values = Vec::new();
+        for row in rows {
+            values.push(row?);
+        }
+        values
+    };
+    for (role, content, metadata_json, created_at) in messages {
+        let id = format!("msg-{}-{}", session_id, unix_timestamp_nanos());
+        tx.execute(
+            "INSERT INTO messages(id, session_id, role, content, created_at, metadata_json)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, session_id, role, content, created_at, metadata_json],
+        )?;
+        tx.execute(
+            "INSERT INTO message_fts(message_id, session_id, title, content) VALUES(?1, ?2, ?3, ?4)",
+            params![id, session_id, title, content],
+        )?;
+    }
+
+    let events: Vec<(String, String, i64)> = {
+        let mut event_stmt = tx.prepare(
+            "SELECT event_type, payload_json, created_at FROM session_events WHERE session_id = ?1 ORDER BY created_at ASC, id ASC"
+        )?;
+        let rows = event_stmt.query_map(params![source_session.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+        })?;
+        let mut values = Vec::new();
+        for row in rows {
+            values.push(row?);
+        }
+        values
+    };
+    for (event_type, payload_json, created_at) in events {
+        let id = format!("evt-{}-{}", session_id, unix_timestamp_nanos());
+        tx.execute(
+            "INSERT INTO session_events(id, session_id, event_type, payload_json, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![id, session_id, event_type, payload_json, created_at],
+        )?;
+    }
+
+    let compressions: Vec<(String, i64, i64, i64)> = {
+        let mut compression_stmt = tx.prepare(
+            "SELECT summary, source_message_count, source_event_count, created_at FROM session_compressions WHERE session_id = ?1 ORDER BY created_at ASC, id ASC"
+        )?;
+        let rows = compression_stmt.query_map(params![source_session.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?))
+        })?;
+        let mut values = Vec::new();
+        for row in rows {
+            values.push(row?);
+        }
+        values
+    };
+    for (summary, source_message_count, source_event_count, created_at) in compressions {
+        let id = format!("cmp-{}-{}", session_id, unix_timestamp_nanos());
+        tx.execute(
+            "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, session_id, summary, source_message_count, source_event_count, created_at],
+        )?;
+    }
+
+    append_event(
+        &tx,
+        &session_id,
+        "session_branched",
+        json!({
+            "parent_session_id": source_session.id,
+            "parent_title": source_session.title,
+            "branch_note": note,
+        })
+        .to_string(),
+    )?;
+    tx.commit()?;
+
+    Ok(SessionBranchRecord {
+        session_id,
+        title,
+        parent_session_id: Some(source_session.id),
+        parent_title: Some(source_session.title),
+        branch_note: note,
+    })
+}
+
+/// Persists one compression summary for a session and records the matching audit event atomically.
+pub fn compress_session(
+    state_db_path: &Path,
+    target: &str,
+    summary: &str,
+) -> Result<SessionCompressionRecord> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    let session = find_session_by_id_or_title(&conn, target)?
+        .with_context(|| format!("session not found for compression target {target}"))?;
+    let summary = summary.trim();
+    if summary.is_empty() {
+        anyhow::bail!("compression summary cannot be empty");
+    }
+    let source_message_count: u64 = conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+        params![session.id],
+        |row| row.get(0),
+    )?;
+    let source_event_count: u64 = conn.query_row(
+        "SELECT COUNT(*) FROM session_events WHERE session_id = ?1",
+        params![session.id],
+        |row| row.get(0),
+    )?;
+    let created_at = unix_timestamp();
+    let id = format!("cmp-{}", unix_timestamp_nanos());
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, created_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, session.id, summary, source_message_count as i64, source_event_count as i64, created_at],
+    )?;
+    append_event(
+        &tx,
+        &session.id,
+        "session_compressed",
+        json!({
+            "compression_id": id,
+            "summary": summary,
+            "source_message_count": source_message_count,
+            "source_event_count": source_event_count,
+        }).to_string(),
+    )?;
+    tx.commit()?;
+    Ok(SessionCompressionRecord {
+        id,
+        session_id: session.id,
+        summary: summary.to_string(),
+        source_message_count,
+        source_event_count,
+        created_at,
+    })
+}
+
+/// Returns the latest persisted compression summary for one session when present.
+pub fn latest_compression_summary(state_db_path: &Path, session_id: &str) -> Result<Option<String>> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    Ok(conn.query_row(
+        "SELECT summary FROM session_compressions WHERE session_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
+        params![session_id],
+        |row| row.get(0),
+    ).optional()?)
+}
+
 pub fn resolve_command_session(
     state_db_path: &Path,
     command_name: &str,
@@ -442,7 +667,9 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             command_name TEXT NOT NULL,
             interaction_mode TEXT NOT NULL,
             created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            parent_session_id TEXT,
+            branch_note TEXT
         );
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
@@ -461,6 +688,15 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             created_at INTEGER NOT NULL,
             FOREIGN KEY(session_id) REFERENCES sessions(id)
         );
+        CREATE TABLE IF NOT EXISTS session_compressions (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            source_message_count INTEGER NOT NULL,
+            source_event_count INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES sessions(id)
+        );
         CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
             message_id UNINDEXED,
             session_id UNINDEXED,
@@ -469,9 +705,11 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_session_events_session_created ON session_events(session_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_session_compressions_session_created ON session_compressions(session_id, created_at);
         ",
     )?;
     ensure_messages_metadata_column(conn)?;
+    ensure_sessions_branch_columns(conn)?;
     conn.execute(
         "INSERT INTO message_fts(message_id, session_id, title, content)
          SELECT m.id, m.session_id, s.title, m.content
@@ -494,6 +732,27 @@ fn ensure_messages_metadata_column(conn: &Connection) -> Result<()> {
         }
     }
     conn.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT", [])?;
+    Ok(())
+}
+
+fn ensure_sessions_branch_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut has_parent = false;
+    let mut has_note = false;
+    for column in columns {
+        match column?.as_str() {
+            "parent_session_id" => has_parent = true,
+            "branch_note" => has_note = true,
+            _ => {}
+        }
+    }
+    if !has_parent {
+        conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT", [])?;
+    }
+    if !has_note {
+        conn.execute("ALTER TABLE sessions ADD COLUMN branch_note TEXT", [])?;
+    }
     Ok(())
 }
 
@@ -575,6 +834,7 @@ fn append_event(conn: &Connection, session_id: &str, event_type: &str, payload_j
 }
 
 fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, limit: usize) -> Result<SessionInspection> {
+    let branch = load_branch_record(conn, session_id, title)?;
     let mut message_stmt = conn.prepare(
         "SELECT id, role, content, created_at, metadata_json
          FROM messages
@@ -641,12 +901,37 @@ fn load_session_inspection(conn: &Connection, session_id: &str, title: &str, lim
         });
     }
 
+    let mut compression_stmt = conn.prepare(
+        "SELECT id, summary, source_message_count, source_event_count, created_at
+         FROM session_compressions
+         WHERE session_id = ?1
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?2",
+    )?;
+    let compression_rows = compression_stmt.query_map(params![session_id, limit as i64], |row| {
+        Ok(SessionCompressionRecord {
+            id: row.get(0)?,
+            session_id: session_id.to_string(),
+            summary: row.get(1)?,
+            source_message_count: row.get::<_, i64>(2)? as u64,
+            source_event_count: row.get::<_, i64>(3)? as u64,
+            created_at: row.get(4)?,
+        })
+    })?;
+    let mut compressions = Vec::new();
+    for row in compression_rows {
+        compressions.push(row?);
+    }
+    compressions.reverse();
+
     Ok(SessionInspection {
         session_id: session_id.to_string(),
         title: title.to_string(),
+        branch,
         messages,
         events,
         lifecycle,
+        compressions,
     })
 }
 
@@ -661,11 +946,20 @@ fn load_summary(conn: &Connection, session_id: &str, title: &str) -> Result<Sess
         params![session_id],
         |row| row.get(0),
     )?;
+    let parent_session_id: Option<String> = conn
+        .query_row(
+            "SELECT parent_session_id FROM sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
     Ok(SessionSummary {
         id: session_id.to_string(),
         title: title.to_string(),
         message_count,
         event_count,
+        parent_session_id,
     })
 }
 
@@ -687,6 +981,26 @@ fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
         params![key, value],
     )?;
     Ok(())
+}
+
+fn load_branch_record(conn: &Connection, session_id: &str, title: &str) -> Result<SessionBranchRecord> {
+    let (parent_session_id, branch_note): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT parent_session_id, branch_note FROM sessions WHERE id = ?1",
+        params![session_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let parent_title = if let Some(parent_session_id) = parent_session_id.as_deref() {
+        session_title(conn, parent_session_id)?
+    } else {
+        None
+    };
+    Ok(SessionBranchRecord {
+        session_id: session_id.to_string(),
+        title: title.to_string(),
+        parent_session_id,
+        parent_title,
+        branch_note,
+    })
 }
 
 fn latest_session(conn: &Connection) -> Result<Option<StoredSession>> {
@@ -880,6 +1194,39 @@ mod tests {
             .unwrap();
         assert_eq!(summary.id, first.session_id);
         assert_eq!(summary.message_count, 1);
+
+        let _ = fs::remove_dir_all(&vela_home);
+    }
+
+    #[test]
+    fn branch_and_compression_preserve_lineage_and_inspection() {
+        let vela_home = std::env::temp_dir().join(format!("vela-state-branch-test-{}", unix_timestamp_nanos()));
+        let report = initialize_persistence(&vela_home).unwrap();
+        let parent = resolve_runtime_session(
+            &report.state_db_path,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("parent turn".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+        )
+        .unwrap();
+        assert!(append_message_to_session(&report.state_db_path, &parent.session_id, "assistant", "parent reply", None).unwrap());
+
+        let branch = branch_session(&report.state_db_path, &parent.session_id, Some("branch-a"), Some("explore alternative")).unwrap();
+        let compression = compress_session(&report.state_db_path, &branch.session_id, "branch compressed summary").unwrap();
+        let inspection = inspect_session(&report.state_db_path, &branch.session_id, 20).unwrap().expect("branch inspection");
+        assert_eq!(inspection.branch.parent_session_id.as_deref(), Some(parent.session_id.as_str()));
+        assert_eq!(inspection.branch.branch_note.as_deref(), Some("explore alternative"));
+        assert_eq!(inspection.messages.len(), 2);
+        assert_eq!(inspection.compressions.len(), 1);
+        assert_eq!(inspection.compressions[0].id, compression.id);
+        let summary = load_summary(&Connection::open(&report.state_db_path).unwrap(), &branch.session_id, &branch.title).unwrap();
+        assert_eq!(summary.parent_session_id.as_deref(), Some(parent.session_id.as_str()));
 
         let _ = fs::remove_dir_all(&vela_home);
     }

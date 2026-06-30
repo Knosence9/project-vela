@@ -95,6 +95,18 @@ struct SessionsArgs {
     browse: bool,
     #[arg(long = "search")]
     search: Option<String>,
+    #[arg(long = "show")]
+    show: Option<String>,
+    #[arg(long = "branch")]
+    branch: Option<String>,
+    #[arg(long = "title")]
+    title: Option<String>,
+    #[arg(long = "note")]
+    note: Option<String>,
+    #[arg(long = "compress")]
+    compress: Option<String>,
+    #[arg(long = "summary")]
+    summary: Option<String>,
 }
 
 #[derive(Debug, Default, Args)]
@@ -786,7 +798,57 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::Sessions(args)) => {
-            if let Some(query) = args.search.as_deref() {
+            if let Some(source) = args.branch.as_deref() {
+                let branch = vela_runtime::branch_session(&bootstrap, source, args.title.as_deref(), args.note.as_deref())?;
+                println!(
+                    "session branched: session={} title={} parent={} note={:?}",
+                    branch.session_id,
+                    branch.title,
+                    branch.parent_session_id.as_deref().unwrap_or("none"),
+                    branch.branch_note,
+                );
+            } else if let Some(target) = args.compress.as_deref() {
+                let summary = args.summary.as_deref().ok_or_else(|| anyhow::anyhow!("--summary is required with --compress"))?;
+                let compression = vela_runtime::compress_session(&bootstrap, target, summary)?;
+                println!(
+                    "session compressed: session={} compression={} messages={} events={} summary={}",
+                    compression.session_id,
+                    compression.id,
+                    compression.source_message_count,
+                    compression.source_event_count,
+                    compression.summary,
+                );
+            } else if let Some(target) = args.show.as_deref() {
+                match vela_runtime::inspect_session(&bootstrap, target, 20)? {
+                    Some(inspection) => {
+                        println!(
+                            "session inspect: id={} title={} parent_id={:?} parent_title={:?} branch_note={:?} messages={} events={}",
+                            inspection.session_id,
+                            inspection.title,
+                            inspection.branch.parent_session_id,
+                            inspection.branch.parent_title,
+                            inspection.branch.branch_note,
+                            inspection.messages.len(),
+                            inspection.events.len(),
+                        );
+                        if inspection.compressions.is_empty() {
+                            println!("compressions: none");
+                        } else {
+                            println!("compressions [{}]:", inspection.compressions.len());
+                            for compression in inspection.compressions {
+                                println!(
+                                    "- {} :: messages={} events={} summary={}",
+                                    compression.id,
+                                    compression.source_message_count,
+                                    compression.source_event_count,
+                                    compression.summary,
+                                );
+                            }
+                        }
+                    }
+                    None => println!("session inspect: not found for {:?}", target),
+                }
+            } else if let Some(query) = args.search.as_deref() {
                 let hits = vela_runtime::search_session_history(&bootstrap, query, 10)?;
                 if hits.is_empty() {
                     println!("session search: no hits for {:?}", query);

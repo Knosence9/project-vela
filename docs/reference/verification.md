@@ -20,6 +20,7 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - command session reuse is durable
   - explicit event targeting stays attached to the requested session
   - session inspection parses ordered runtime lifecycle records from persisted events
+  - branch lineage and compression summaries remain inspectable after branching/compression flows
 - `crates/vela-runtime`
   - scheduler job persistence and dedupe
   - gateway restart continuity avoids duplicate bootstrap messages
@@ -29,6 +30,7 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - configured Ollama execution is used for image turns when provider/model settings are present
   - configured provider turns can request approved local tools across a bounded multi-step loop and continue with each tool result
   - configured provider turns can retrieve targeted memory, session history, and skill context through read-only runtime tools
+  - latest persisted session compression summaries are injected back into provider prompts for continuity
   - runtime turns persist ordered lifecycle phases for local, provider-backed, and tool-loop execution paths
   - provider-backed turns can reflect on invalid intermediate continuations, retry within strict limits, and fall back deterministically when recovery fails
   - max-step fallback, reflection retries, and tool-loop execution preserve ordered lifecycle phase records through `finish`
@@ -39,6 +41,7 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - `vela chat --query ...` uses a configured Ollama provider when present
   - configured provider turns can complete a bounded multi-step runtime tool loop through the CLI while reporting lifecycle phase counts
   - configured provider turns can retrieve targeted skill context through the CLI tool loop
+  - sessions can branch and persist compression summaries through the CLI sessions surface
   - configured provider turns can recover from an invalid tool request through bounded reflection/retry in the CLI path
   - `vela chat --image ...` uses a configured Ollama provider when present
   - `vela chat --image ...` falls back to a deterministic local-kernel scaffold response when no provider is configured
@@ -47,6 +50,6 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - invalid `vela cron --schedule ...` usage is rejected at CLI parse time
 
 ## Remaining gaps
-- end-to-end live runtime loop behavior beyond the current local Ollama text/image-turn paths, bounded iterative tool loop, bounded reflection/retry, first-pass lifecycle persistence, and the new internal context retrieval tools
+- end-to-end live runtime loop behavior beyond the current local Ollama text/image-turn paths, bounded iterative tool loop, bounded reflection/retry, first-pass lifecycle persistence, internal context retrieval tools, and first-pass branching/compression semantics
 - broader review-pipeline integration from transcript -> candidate -> pending -> approval via CLI-only tests
 - model/tool execution verification once runtime behavior moves beyond the current shell scaffolding

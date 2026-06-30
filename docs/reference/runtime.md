@@ -27,8 +27,11 @@
 - provider-backed turns now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
 - retrieved tool context is injected back into the provider continuation path as durable tool-result artifacts, keeping context-aware reasoning auditable without allowing live mutation
 - each live runtime turn now persists ordered lifecycle phases (`receive`, `deliberate`, `tool-request`, `tool-result`, `reflect`, `retry`, `respond`, `finish`, plus `failed` on error paths)
-- session inspection now surfaces parsed runtime lifecycle records alongside raw messages and events
+- session inspection now surfaces parsed runtime lifecycle records, explicit branch lineage, and persisted compression summaries alongside raw messages and events
 - runtime CLI turn output now reports the durable `turn_id`, lifecycle phase count, and final phase
+- `vela sessions --branch <session> --title <new-title> [--note ...]` can fork a durable child session with explicit parent lineage and copied continuity
+- `vela sessions --compress <session> --summary ...` can persist compressed continuity summaries without mutating durable memory directly
+- `vela sessions --show <session>` exposes branch parentage and compression counts through the session inspection surface
 - `vela chat --image ...` can call a configured local Ollama model for first-pass provider-backed image turns
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
@@ -42,6 +45,6 @@
 - broader external provider/model execution beyond the first Ollama text/image-turn slices, bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
-- lifecycle-driven branching, retry, and compression semantics built on the new per-turn phase records
-- session branching/compression semantics
+- richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
+- more advanced compression policies beyond explicit persisted operator summaries
 - actual recurring job execution and restart recovery beyond durable registration
