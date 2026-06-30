@@ -1179,6 +1179,50 @@ fn resolve_runtime_execution(
 }
 
 /// Executes one provider-backed Ollama turn and optionally completes a bounded local tool loop.
+fn handle_reflection_outcome(
+    bootstrap: &BootstrapReport,
+    session: &SessionRuntimeReport,
+    lifecycle: &mut RuntimeTurnRecorder,
+    reflection_attempts: &mut usize,
+    reason: &str,
+    detail: serde_json::Value,
+    fallback_message: &str,
+    prompt_rewrite: String,
+) -> Result<Option<RenderedChatResponse>> {
+    *reflection_attempts += 1;
+    let reflection_step = Some(*reflection_attempts);
+    if *reflection_attempts > MAX_RUNTIME_REFLECTION_ATTEMPTS {
+        lifecycle.record_phase(
+            bootstrap,
+            &session.session_id,
+            "reflect",
+            reflection_step,
+            json!({"attempt": *reflection_attempts, "reason": reason, "detail": detail, "outcome": "fallback"}),
+        )?;
+        return Ok(Some(RenderedChatResponse {
+            content: Some(fallback_message.to_string()),
+            source: "runtime-kernel",
+            provider: None,
+            model: None,
+        }));
+    }
+    record_reflection_and_retry(
+        bootstrap,
+        session,
+        lifecycle,
+        *reflection_attempts,
+        reflection_step,
+        reason,
+        detail,
+    )?;
+    Ok(Some(RenderedChatResponse {
+        content: Some(prompt_rewrite),
+        source: "runtime-kernel",
+        provider: None,
+        model: None,
+    }))
+}
+
 fn execute_ollama_turn(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
@@ -1193,65 +1237,55 @@ fn execute_ollama_turn(
     let mut current_prompt = prompt.to_string();
     let mut used_tool_loop = false;
     let mut reflection_attempts = 0usize;
+    let mut tool_step = 0usize;
 
-    for step in 1..=MAX_RUNTIME_TOOL_STEPS {
+    while tool_step < MAX_RUNTIME_TOOL_STEPS {
         let response = call_ollama_generate(&execution.ollama_base_url, model, &current_prompt, images.clone())?;
         match classify_provider_continuation(&response) {
             ProviderContinuation::ToolRequest(tool_name) => {
+                tool_step += 1;
                 used_tool_loop = true;
-                persist_runtime_tool_request(bootstrap, &session.session_id, tool_name, step)?;
+                persist_runtime_tool_request(bootstrap, &session.session_id, tool_name, tool_step)?;
                 lifecycle.record_phase(
                     bootstrap,
                     &session.session_id,
                     "tool-request",
-                    Some(step),
+                    Some(tool_step),
                     json!({"tool": tool_name.as_str(), "provider": execution.provider_label, "model": execution.model}),
                 )?;
                 let tool_result = execute_runtime_tool(tool_name, memory, skills);
-                if tool_result.trim().is_empty() {
-                    reflection_attempts += 1;
-                    if reflection_attempts > MAX_RUNTIME_REFLECTION_ATTEMPTS {
-                        lifecycle.record_phase(
-                            bootstrap,
-                            &session.session_id,
-                            "reflect",
-                            Some(step),
-                            json!({"attempt": reflection_attempts, "reason": "empty-tool-result", "tool": tool_name.as_str(), "outcome": "fallback"}),
-                        )?;
-                        return Ok(RenderedChatResponse {
-                            content: Some("Vela could not recover from an empty intermediate tool result within the bounded retry limit, so it fell back to a deterministic runtime response.".to_string()),
-                            source: "runtime-kernel",
-                            provider: None,
-                            model: None,
-                        });
-                    }
-                    record_reflection_and_retry(
-                        bootstrap,
-                        session,
-                        lifecycle,
-                        reflection_attempts,
-                        Some(step),
-                        "empty-tool-result",
-                        json!({"tool": tool_name.as_str()}),
-                    )?;
-                    current_prompt = format!(
-                        "{}\n\nThe tool result for {} was empty and unusable. Do not repeat the same failed continuation blindly. Either request a supported tool with ONLY JSON like {{\"tool\":\"memory_snapshot\"}} or {{\"tool\":\"list_skills\"}}, or answer directly.",
-                        current_prompt,
-                        tool_name.as_str(),
-                    );
-                    continue;
-                }
-
-                persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, step, &tool_result)?;
+                persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, tool_step, &tool_result)?;
                 lifecycle.record_phase(
                     bootstrap,
                     &session.session_id,
                     "tool-result",
-                    Some(step),
+                    Some(tool_step),
                     json!({"tool": tool_name.as_str(), "result_length": tool_result.len()}),
                 )?;
+                if tool_result.trim().is_empty() {
+                    if let Some(outcome) = handle_reflection_outcome(
+                        bootstrap,
+                        session,
+                        lifecycle,
+                        &mut reflection_attempts,
+                        "empty-tool-result",
+                        json!({"tool": tool_name.as_str()}),
+                        "Vela could not recover from an empty intermediate tool result within the bounded retry limit, so it fell back to a deterministic runtime response.",
+                        format!(
+                            "{}\n\nThe tool result for {} was empty and unusable. Do not repeat the same failed continuation blindly. Either request a supported tool with ONLY JSON like {{\"tool\":\"memory_snapshot\"}} or {{\"tool\":\"list_skills\"}}, or answer directly.",
+                            current_prompt,
+                            tool_name.as_str(),
+                        ),
+                    )? {
+                        if outcome.source == "runtime-kernel" && outcome.provider.is_none() && outcome.model.is_none() && outcome.content.as_deref().is_some_and(|text| text.starts_with("Vela could not recover")) {
+                            return Ok(outcome);
+                        }
+                        current_prompt = outcome.content.expect("reflection retry prompt rewrite");
+                        continue;
+                    }
+                }
 
-                let followup_instruction = if step == MAX_RUNTIME_TOOL_STEPS {
+                let followup_instruction = if tool_step == MAX_RUNTIME_TOOL_STEPS {
                     "You have reached the maximum number of tool steps. Answer the user directly without requesting another tool."
                 } else {
                     "You may either request another supported tool with ONLY JSON like {\"tool\":\"memory_snapshot\"} or {\"tool\":\"list_skills\"}, or answer directly."
@@ -1259,7 +1293,7 @@ fn execute_ollama_turn(
                 current_prompt = format!(
                     "{}\n\nCompleted tool step {} of {}.\nTool result for {}:\n{}\n\n{}",
                     current_prompt,
-                    step,
+                    tool_step,
                     MAX_RUNTIME_TOOL_STEPS,
                     tool_name.as_str(),
                     tool_result,
@@ -1275,66 +1309,44 @@ fn execute_ollama_turn(
                 });
             }
             ProviderContinuation::InvalidToolRequest => {
-                reflection_attempts += 1;
-                if reflection_attempts > MAX_RUNTIME_REFLECTION_ATTEMPTS {
-                    lifecycle.record_phase(
-                        bootstrap,
-                        &session.session_id,
-                        "reflect",
-                        Some(step),
-                        json!({"attempt": reflection_attempts, "reason": "invalid-tool-request", "response": response, "outcome": "fallback"}),
-                    )?;
-                    return Ok(RenderedChatResponse {
-                        content: Some("Vela received an invalid provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.".to_string()),
-                        source: "runtime-kernel",
-                        provider: None,
-                        model: None,
-                    });
-                }
-                record_reflection_and_retry(
+                let outcome = handle_reflection_outcome(
                     bootstrap,
                     session,
                     lifecycle,
-                    reflection_attempts,
-                    Some(step),
+                    &mut reflection_attempts,
                     "invalid-tool-request",
                     json!({"response": response}),
+                    "Vela received an invalid provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.",
+                    format!(
+                        "{}\n\nYour previous reply requested an unsupported or malformed tool envelope. Only these tools are allowed: memory_snapshot, list_skills. If you need one tool, respond with ONLY JSON using one of those exact tool names. Otherwise answer the user directly.",
+                        current_prompt,
+                    ),
                 )?;
-                current_prompt = format!(
-                    "{}\n\nYour previous reply requested an unsupported tool. Only these tools are allowed: memory_snapshot, list_skills. If you need one tool, respond with ONLY JSON using one of those exact tool names. Otherwise answer the user directly.",
-                    current_prompt,
-                );
+                let Some(outcome) = outcome else { continue; };
+                if outcome.source == "runtime-kernel" && outcome.content.as_deref().is_some_and(|text| text.starts_with("Vela received an invalid provider continuation")) {
+                    return Ok(outcome);
+                }
+                current_prompt = outcome.content.expect("reflection retry prompt rewrite");
             }
             ProviderContinuation::EmptyResponse => {
-                reflection_attempts += 1;
-                if reflection_attempts > MAX_RUNTIME_REFLECTION_ATTEMPTS {
-                    lifecycle.record_phase(
-                        bootstrap,
-                        &session.session_id,
-                        "reflect",
-                        Some(step),
-                        json!({"attempt": reflection_attempts, "reason": "empty-provider-response", "outcome": "fallback"}),
-                    )?;
-                    return Ok(RenderedChatResponse {
-                        content: Some("Vela received an empty provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.".to_string()),
-                        source: "runtime-kernel",
-                        provider: None,
-                        model: None,
-                    });
-                }
-                record_reflection_and_retry(
+                let outcome = handle_reflection_outcome(
                     bootstrap,
                     session,
                     lifecycle,
-                    reflection_attempts,
-                    Some(step),
+                    &mut reflection_attempts,
                     "empty-provider-response",
                     json!({}),
+                    "Vela received an empty provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.",
+                    format!(
+                        "{}\n\nYour previous reply was empty and unusable. Either request one supported tool with ONLY JSON using memory_snapshot or list_skills, or answer the user directly with non-empty text.",
+                        current_prompt,
+                    ),
                 )?;
-                current_prompt = format!(
-                    "{}\n\nYour previous reply was empty and unusable. Either request one supported tool with ONLY JSON using memory_snapshot or list_skills, or answer the user directly with non-empty text.",
-                    current_prompt,
-                );
+                let Some(outcome) = outcome else { continue; };
+                if outcome.source == "runtime-kernel" && outcome.content.as_deref().is_some_and(|text| text.starts_with("Vela received an empty provider continuation")) {
+                    return Ok(outcome);
+                }
+                current_prompt = outcome.content.expect("reflection retry prompt rewrite");
             }
         }
     }
@@ -1368,25 +1380,6 @@ fn execute_ollama_turn(
     }
 }
 
-/// Parses a model response for a supported runtime tool request envelope.
-fn parse_runtime_tool_request(response: &str) -> Result<Option<RuntimeToolName>> {
-    let trimmed = response.trim();
-    let json_body = trimmed
-        .strip_prefix("```json")
-        .and_then(|value| value.strip_suffix("```"))
-        .map(str::trim)
-        .unwrap_or(trimmed);
-    let Ok(request) = serde_json::from_str::<RuntimeToolRequest>(json_body) else {
-        return Ok(None);
-    };
-    let tool = match request.tool.trim() {
-        "memory_snapshot" => RuntimeToolName::MemorySnapshot,
-        "list_skills" => RuntimeToolName::ListSkills,
-        other => bail!("unsupported runtime tool request {:?}", other),
-    };
-    Ok(Some(tool))
-}
-
 fn classify_provider_continuation(response: &str) -> ProviderContinuation {
     let trimmed = response.trim();
     if trimmed.is_empty() {
@@ -1397,8 +1390,13 @@ fn classify_provider_continuation(response: &str) -> ProviderContinuation {
         .and_then(|value| value.strip_suffix("```"))
         .map(str::trim)
         .unwrap_or(trimmed);
+    let looks_like_tool_envelope = json_body.starts_with('{') || trimmed.starts_with("```json");
     let Ok(request) = serde_json::from_str::<RuntimeToolRequest>(json_body) else {
-        return ProviderContinuation::FinalAnswer;
+        return if looks_like_tool_envelope {
+            ProviderContinuation::InvalidToolRequest
+        } else {
+            ProviderContinuation::FinalAnswer
+        };
     };
     match request.tool.trim() {
         "memory_snapshot" => ProviderContinuation::ToolRequest(RuntimeToolName::MemorySnapshot),
@@ -2253,7 +2251,7 @@ mod tests {
             MockOllamaExchange {
                 response_body: "Recovered final answer.",
                 expected_model: "gemma3:4b",
-                prompt_fragment: "unsupported tool",
+                prompt_fragment: "unsupported or malformed tool envelope",
                 expected_image_base64: None,
             },
         ]);
@@ -2426,13 +2424,13 @@ mod tests {
             MockOllamaExchange {
                 response_body: r#"{"tool":"shell_exec"}"#,
                 expected_model: "gemma3:4b",
-                prompt_fragment: "unsupported tool",
+                prompt_fragment: "unsupported or malformed tool envelope",
                 expected_image_base64: None,
             },
             MockOllamaExchange {
                 response_body: r#"{"tool":"shell_exec"}"#,
                 expected_model: "gemma3:4b",
-                prompt_fragment: "unsupported tool",
+                prompt_fragment: "unsupported or malformed tool envelope",
                 expected_image_base64: None,
             },
         ]);

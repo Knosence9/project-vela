@@ -366,7 +366,7 @@ fn chat_query_recovers_from_invalid_tool_request() {
         MockOllamaExchange {
             response_body: "Recovered final answer.",
             expected_model: "gemma3:4b",
-            prompt_fragment: "unsupported tool",
+            prompt_fragment: "unsupported or malformed tool envelope",
             expected_image_base64: None,
         },
     ]);
@@ -387,6 +387,13 @@ fn chat_query_recovers_from_invalid_tool_request() {
     assert!(turn_stdout.contains("lifecycle: turn=turn-"));
     assert!(turn_stdout.contains("phases=6"));
     assert!(turn_stdout.contains("last=finish"));
+
+    std::env::set_var("VELA_HOME", &vela_home);
+    let bootstrap = vela_runtime::initialize_bootstrap(None, false).unwrap();
+    let inspection = vela_runtime::inspect_latest_session(&bootstrap, 20).unwrap().expect("cli reflection inspection");
+    let lifecycle: Vec<_> = inspection.lifecycle.iter().map(|record| record.phase.as_str()).collect();
+    assert_eq!(lifecycle, vec!["receive", "deliberate", "reflect", "retry", "respond", "finish"]);
+    std::env::remove_var("VELA_HOME");
     server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();
