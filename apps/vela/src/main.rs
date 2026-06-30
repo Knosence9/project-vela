@@ -298,6 +298,10 @@ fn main() -> Result<()> {
             if let Some(response) = report.response {
                 println!("\n{}", response);
             }
+            println!(
+                "\nlifecycle: turn={} phases={} last={}",
+                report.turn_id, report.lifecycle_phase_count, report.final_phase
+            );
             if args.checkpoints {
                 println!(
                     "\ncheckpoints: signals={} candidates={}",
@@ -331,6 +335,10 @@ fn main() -> Result<()> {
             if let Some(response) = report.response {
                 println!("\n{}", response);
             }
+            println!(
+                "\nlifecycle: turn={} phases={} last={}",
+                report.turn_id, report.lifecycle_phase_count, report.final_phase
+            );
         }
         Some(Commands::Status) => {
             println!("{}", bootstrap.summary_line());

@@ -219,6 +219,9 @@ fn chat_query_executes_runtime_turn_and_generates_candidates() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Vela executed a local kernel turn."));
+    assert!(turn_stdout.contains("lifecycle: turn=turn-"));
+    assert!(turn_stdout.contains("phases=4"));
+    assert!(turn_stdout.contains("last=finish"));
     assert!(turn_stdout.contains("checkpoints: signals=1 candidates=1"));
 
     let review = run_vela(&vela_home, &["review", "--list"]);
@@ -341,6 +344,9 @@ fn chat_query_uses_configured_ollama_tool_loop() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Tool-informed final answer."));
+    assert!(turn_stdout.contains("lifecycle: turn=turn-"));
+    assert!(turn_stdout.contains("phases=8"));
+    assert!(turn_stdout.contains("last=finish"));
     server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();

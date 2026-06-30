@@ -19,6 +19,7 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
 - `crates/vela-state`
   - command session reuse is durable
   - explicit event targeting stays attached to the requested session
+  - session inspection parses ordered runtime lifecycle records from persisted events
 - `crates/vela-runtime`
   - scheduler job persistence and dedupe
   - gateway restart continuity avoids duplicate bootstrap messages
@@ -27,12 +28,14 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - configured Ollama execution is used for text turns when provider/model settings are present
   - configured Ollama execution is used for image turns when provider/model settings are present
   - configured provider turns can request approved local tools across a bounded multi-step loop and continue with each tool result
+  - runtime turns persist ordered lifecycle phases for local, provider-backed, and tool-loop execution paths
+  - max-step fallback and tool-loop execution preserve ordered lifecycle phase records through `finish`
 - `apps/vela/tests/cli_verification.rs`
   - bare `vela` creates a runtime session visible in `vela status`
   - bare `vela` emits an interactive runtime-ready message on first creation
-  - `vela chat --query ... --checkpoints` executes a runtime turn and produces review candidates
+  - `vela chat --query ... --checkpoints` executes a runtime turn, reports lifecycle state, and produces review candidates
   - `vela chat --query ...` uses a configured Ollama provider when present
-  - configured provider turns can complete a bounded multi-step runtime tool loop through the CLI
+  - configured provider turns can complete a bounded multi-step runtime tool loop through the CLI while reporting lifecycle phase counts
   - `vela chat --image ...` uses a configured Ollama provider when present
   - `vela chat --image ...` falls back to a deterministic local-kernel scaffold response when no provider is configured
   - `vela gateway --start` resumes the same gateway session
@@ -40,6 +43,6 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - invalid `vela cron --schedule ...` usage is rejected at CLI parse time
 
 ## Remaining gaps
-- end-to-end live runtime loop behavior beyond the current local Ollama text/image-turn paths and bounded iterative tool loop
+- end-to-end live runtime loop behavior beyond the current local Ollama text/image-turn paths, bounded iterative tool loop, and first-pass lifecycle persistence
 - broader review-pipeline integration from transcript -> candidate -> pending -> approval via CLI-only tests
 - model/tool execution verification once runtime behavior moves beyond the current shell scaffolding
