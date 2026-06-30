@@ -5,6 +5,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
+/// Represents `BootstrapConfig` data exposed by this crate.
 pub struct BootstrapConfig {
     pub vela_home: PathBuf,
     pub active_profile: Option<String>,
@@ -15,6 +16,7 @@ pub struct BootstrapConfig {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Represents `ResolvedConfig` data exposed by this crate.
 pub struct ResolvedConfig {
     pub display_interface: Option<String>,
     pub hooks_auto_accept: Option<bool>,
@@ -26,6 +28,7 @@ pub struct ResolvedConfig {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `ConfigSource` data exposed by this crate.
 pub struct ConfigSource {
     pub path: PathBuf,
     pub kind: ConfigSourceKind,
@@ -33,6 +36,7 @@ pub struct ConfigSource {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Enumerates supported `ConfigSourceKind` variants.
 pub enum ConfigSourceKind {
     User,
     ProjectFallback,
@@ -44,6 +48,7 @@ pub enum ConfigSourceKind {
 }
 
 impl ConfigSourceKind {
+/// Returns the stable string label used for persistence and display.
     pub fn label(self) -> &'static str {
         match self {
             Self::User => "user",
@@ -57,6 +62,7 @@ impl ConfigSourceKind {
     }
 }
 
+/// Exposes the `preparse_profile_override` operation for this subsystem.
 pub fn preparse_profile_override<I>(args: I) -> Result<(Vec<String>, Option<String>)>
 where
     I: IntoIterator<Item = String>,
@@ -89,6 +95,7 @@ where
     Ok((filtered, active))
 }
 
+/// Initializes config state for this subsystem.
 pub fn initialize_config(active_profile: Option<String>, ignore_user_config: bool) -> Result<BootstrapConfig> {
     let vela_home = compute_vela_home(active_profile.as_deref())?;
     env::set_var("VELA_HOME", &vela_home);

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
+/// Represents `PersistenceReport` data exposed by this crate.
 pub struct PersistenceReport {
     pub state_db_path: PathBuf,
     pub sessions_dir: PathBuf,
@@ -16,6 +17,7 @@ pub struct PersistenceReport {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionRequest` data exposed by this crate.
 pub struct SessionRequest {
     pub command_name: String,
     pub query_present: bool,
@@ -27,6 +29,7 @@ pub struct SessionRequest {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionRuntimeReport` data exposed by this crate.
 pub struct SessionRuntimeReport {
     pub session_id: String,
     pub action: SessionAction,
@@ -35,6 +38,7 @@ pub struct SessionRuntimeReport {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionSummary` data exposed by this crate.
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
@@ -44,6 +48,7 @@ pub struct SessionSummary {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionSearchHit` data exposed by this crate.
 pub struct SessionSearchHit {
     pub session_id: String,
     pub session_title: String,
@@ -52,6 +57,7 @@ pub struct SessionSearchHit {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionMessageRecord` data exposed by this crate.
 pub struct SessionMessageRecord {
     pub id: String,
     pub role: String,
@@ -61,6 +67,7 @@ pub struct SessionMessageRecord {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionEventRecord` data exposed by this crate.
 pub struct SessionEventRecord {
     pub id: String,
     pub event_type: String,
@@ -69,6 +76,7 @@ pub struct SessionEventRecord {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `RuntimeTurnLifecycleRecord` data exposed by this crate.
 pub struct RuntimeTurnLifecycleRecord {
     pub event_id: String,
     pub turn_id: String,
@@ -80,6 +88,7 @@ pub struct RuntimeTurnLifecycleRecord {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionBranchRecord` data exposed by this crate.
 pub struct SessionBranchRecord {
     pub session_id: String,
     pub title: String,
@@ -89,6 +98,7 @@ pub struct SessionBranchRecord {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionCompressionRecord` data exposed by this crate.
 pub struct SessionCompressionRecord {
     pub id: String,
     pub session_id: String,
@@ -99,6 +109,7 @@ pub struct SessionCompressionRecord {
 }
 
 #[derive(Debug, Clone)]
+/// Represents `SessionInspection` data exposed by this crate.
 pub struct SessionInspection {
     pub session_id: String,
     pub title: String,
@@ -110,6 +121,7 @@ pub struct SessionInspection {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Enumerates supported `SessionAction` variants.
 pub enum SessionAction {
     Created,
     ResumedById,
@@ -118,6 +130,7 @@ pub enum SessionAction {
 }
 
 impl SessionAction {
+/// Returns the stable string label used for persistence and display.
     pub fn label(self) -> &'static str {
         match self {
             Self::Created => "created",
@@ -129,12 +142,14 @@ impl SessionAction {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Enumerates supported `InteractionMode` variants.
 pub enum InteractionMode {
     Interactive,
     SingleTurn,
 }
 
 impl InteractionMode {
+/// Returns the stable string label used for persistence and display.
     pub fn label(self) -> &'static str {
         match self {
             Self::Interactive => "interactive",
@@ -160,6 +175,7 @@ struct RuntimeTurnLifecyclePayload {
     detail: Option<Value>,
 }
 
+/// Initializes persistence state for this subsystem.
 pub fn initialize_persistence(vela_home: &Path) -> Result<PersistenceReport> {
     let sessions_dir = vela_home.join("sessions");
     fs::create_dir_all(&sessions_dir)
@@ -184,12 +200,14 @@ pub fn initialize_persistence(vela_home: &Path) -> Result<PersistenceReport> {
     })
 }
 
+/// Returns the current session identity when available.
 pub fn current_session_identity(state_db_path: &Path) -> Result<Option<(String, String)>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
     Ok(latest_session(&conn)?.map(|session| (session.id, session.title)))
 }
 
+/// Returns the current session summary when available.
 pub fn current_session_summary(state_db_path: &Path) -> Result<Option<SessionSummary>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -199,6 +217,7 @@ pub fn current_session_summary(state_db_path: &Path) -> Result<Option<SessionSum
     Ok(Some(load_summary(&conn, &session.id, &session.title)?))
 }
 
+/// Returns the current command session summary when available.
 pub fn current_command_session_summary(state_db_path: &Path, command_name: &str) -> Result<Option<SessionSummary>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -208,6 +227,7 @@ pub fn current_command_session_summary(state_db_path: &Path, command_name: &str)
     Ok(Some(load_summary(&conn, &session.id, &session.title)?))
 }
 
+/// Searches session history and returns matching results.
 pub fn search_session_history(state_db_path: &Path, query: &str, limit: usize) -> Result<Vec<SessionSearchHit>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -253,6 +273,7 @@ pub fn inspect_session(state_db_path: &Path, target: &str, limit: usize) -> Resu
     Ok(Some(load_session_inspection(&conn, &session.id, &session.title, limit)?))
 }
 
+/// Appends event to session to persisted session state.
 pub fn append_event_to_session(
     state_db_path: &Path,
     session_id: &str,
@@ -268,6 +289,7 @@ pub fn append_event_to_session(
     Ok(true)
 }
 
+/// Appends message to session to persisted session state.
 pub fn append_message_to_session(
     state_db_path: &Path,
     session_id: &str,
@@ -284,6 +306,7 @@ pub fn append_message_to_session(
     Ok(true)
 }
 
+/// Appends event to latest session to persisted session state.
 pub fn append_event_to_latest_session(state_db_path: &Path, event_type: &str, payload_json: String) -> Result<bool> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -294,6 +317,7 @@ pub fn append_event_to_latest_session(state_db_path: &Path, event_type: &str, pa
     Ok(true)
 }
 
+/// Resolves runtime session from persisted state and runtime inputs.
 pub fn resolve_runtime_session(state_db_path: &Path, request: &SessionRequest) -> Result<SessionRuntimeReport> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
@@ -589,6 +613,7 @@ pub fn latest_compression_summary(state_db_path: &Path, session_id: &str) -> Res
     ).optional()?)
 }
 
+/// Resolves command session from persisted state and runtime inputs.
 pub fn resolve_command_session(
     state_db_path: &Path,
     command_name: &str,
