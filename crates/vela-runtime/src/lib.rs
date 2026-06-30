@@ -901,6 +901,9 @@ enum RuntimeProviderChoice {
 enum RuntimeToolName {
     MemorySnapshot,
     ListSkills,
+    ViewMemory,
+    SearchSessionHistory,
+    ViewSkill,
 }
 
 impl RuntimeToolName {
@@ -908,7 +911,56 @@ impl RuntimeToolName {
         match self {
             Self::MemorySnapshot => "memory_snapshot",
             Self::ListSkills => "list_skills",
+            Self::ViewMemory => "view_memory",
+            Self::SearchSessionHistory => "search_session_history",
+            Self::ViewSkill => "view_skill",
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeToolInvocation {
+    name: RuntimeToolName,
+    target: Option<vela_memory::MemoryTarget>,
+    query: Option<String>,
+    skill_name: Option<String>,
+    limit: Option<usize>,
+}
+
+impl RuntimeToolInvocation {
+    fn display_name(&self) -> &'static str {
+        self.name.as_str()
+    }
+
+    fn request_text(&self) -> String {
+        match self.name {
+            RuntimeToolName::MemorySnapshot | RuntimeToolName::ListSkills => self.display_name().to_string(),
+            RuntimeToolName::ViewMemory => format!(
+                "{}:{}",
+                self.display_name(),
+                self.target.unwrap_or(vela_memory::MemoryTarget::Memory).label()
+            ),
+            RuntimeToolName::SearchSessionHistory => format!(
+                "{}:{}",
+                self.display_name(),
+                self.query.as_deref().unwrap_or_default()
+            ),
+            RuntimeToolName::ViewSkill => format!(
+                "{}:{}",
+                self.display_name(),
+                self.skill_name.as_deref().unwrap_or_default()
+            ),
+        }
+    }
+
+    fn metadata_json(&self) -> serde_json::Value {
+        json!({
+            "tool": self.display_name(),
+            "target": self.target.map(|target| target.label().to_string()),
+            "query": self.query,
+            "skill_name": self.skill_name,
+            "limit": self.limit,
+        })
     }
 }
 
@@ -994,12 +1046,20 @@ struct OllamaGenerateResponse {
 #[derive(Debug, Deserialize)]
 struct RuntimeToolRequest {
     tool: String,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum ProviderContinuation {
     FinalAnswer,
-    ToolRequest(RuntimeToolName),
+    ToolRequest(RuntimeToolInvocation),
     InvalidToolRequest,
     EmptyResponse,
 }
@@ -1039,7 +1099,7 @@ fn render_chat_response(
                     .map(str::to_string)
                     .unwrap_or_else(|| "Please analyze the attached image and respond concisely with the most relevant details for the runtime session.".to_string());
                 let prompt = format!(
-                    "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\nIf you need one tool before answering, respond with ONLY JSON like {{\"tool\":\"memory_snapshot\"}} or {{\"tool\":\"list_skills\"}}. Otherwise answer directly.",
+                    "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
                     session.title,
                     session.session_id,
                     memory,
@@ -1085,7 +1145,7 @@ fn render_chat_response(
                 .as_deref()
                 .context("runtime provider 'ollama' requires a model (for example a Gemma family model)")?;
             let prompt = format!(
-                "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\nIf you need one tool before answering, respond with ONLY JSON like {{\"tool\":\"memory_snapshot\"}} or {{\"tool\":\"list_skills\"}}. Otherwise answer directly.",
+                "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
                 session.title,
                 session.session_id,
                 memory,
@@ -1242,25 +1302,25 @@ fn execute_ollama_turn(
     while tool_step < MAX_RUNTIME_TOOL_STEPS {
         let response = call_ollama_generate(&execution.ollama_base_url, model, &current_prompt, images.clone())?;
         match classify_provider_continuation(&response) {
-            ProviderContinuation::ToolRequest(tool_name) => {
+            ProviderContinuation::ToolRequest(tool_request) => {
                 tool_step += 1;
                 used_tool_loop = true;
-                persist_runtime_tool_request(bootstrap, &session.session_id, tool_name, tool_step)?;
+                persist_runtime_tool_request(bootstrap, &session.session_id, &tool_request, tool_step)?;
                 lifecycle.record_phase(
                     bootstrap,
                     &session.session_id,
                     "tool-request",
                     Some(tool_step),
-                    json!({"tool": tool_name.as_str(), "provider": execution.provider_label, "model": execution.model}),
+                    json!({"request": tool_request.metadata_json(), "provider": execution.provider_label, "model": execution.model}),
                 )?;
-                let tool_result = execute_runtime_tool(tool_name, memory, skills);
-                persist_runtime_tool_result(bootstrap, &session.session_id, tool_name, tool_step, &tool_result)?;
+                let tool_result = execute_runtime_tool(bootstrap, &tool_request, memory, skills);
+                persist_runtime_tool_result(bootstrap, &session.session_id, &tool_request, tool_step, &tool_result)?;
                 lifecycle.record_phase(
                     bootstrap,
                     &session.session_id,
                     "tool-result",
                     Some(tool_step),
-                    json!({"tool": tool_name.as_str(), "result_length": tool_result.len()}),
+                    json!({"request": tool_request.metadata_json(), "result_length": tool_result.len()}),
                 )?;
                 if tool_result.trim().is_empty() {
                     if let Some(outcome) = handle_reflection_outcome(
@@ -1269,12 +1329,12 @@ fn execute_ollama_turn(
                         lifecycle,
                         &mut reflection_attempts,
                         "empty-tool-result",
-                        json!({"tool": tool_name.as_str()}),
+                        json!({"request": tool_request.metadata_json()}),
                         "Vela could not recover from an empty intermediate tool result within the bounded retry limit, so it fell back to a deterministic runtime response.",
                         format!(
-                            "{}\n\nThe tool result for {} was empty and unusable. Do not repeat the same failed continuation blindly. Either request a supported tool with ONLY JSON like {{\"tool\":\"memory_snapshot\"}} or {{\"tool\":\"list_skills\"}}, or answer directly.",
+                            "{}\n\nThe tool result for {} was empty and unusable. Do not repeat the same failed continuation blindly. Either request a supported tool with ONLY valid JSON for one approved tool, or answer directly.",
                             current_prompt,
-                            tool_name.as_str(),
+                            tool_request.display_name(),
                         ),
                     )? {
                         if outcome.source == "runtime-kernel" && outcome.provider.is_none() && outcome.model.is_none() && outcome.content.as_deref().is_some_and(|text| text.starts_with("Vela could not recover")) {
@@ -1288,14 +1348,14 @@ fn execute_ollama_turn(
                 let followup_instruction = if tool_step == MAX_RUNTIME_TOOL_STEPS {
                     "You have reached the maximum number of tool steps. Answer the user directly without requesting another tool."
                 } else {
-                    "You may either request another supported tool with ONLY JSON like {\"tool\":\"memory_snapshot\"} or {\"tool\":\"list_skills\"}, or answer directly."
+                    "You may either request another supported tool with ONLY valid JSON for one approved tool, or answer directly."
                 };
                 current_prompt = format!(
                     "{}\n\nCompleted tool step {} of {}.\nTool result for {}:\n{}\n\n{}",
                     current_prompt,
                     tool_step,
                     MAX_RUNTIME_TOOL_STEPS,
-                    tool_name.as_str(),
+                    tool_request.request_text(),
                     tool_result,
                     followup_instruction,
                 );
@@ -1318,7 +1378,7 @@ fn execute_ollama_turn(
                     json!({"response": response}),
                     "Vela received an invalid provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.",
                     format!(
-                        "{}\n\nYour previous reply requested an unsupported or malformed tool envelope. Only these tools are allowed: memory_snapshot, list_skills. If you need one tool, respond with ONLY JSON using one of those exact tool names. Otherwise answer the user directly.",
+                        "{}\n\nYour previous reply requested an unsupported or malformed tool envelope. Only these tools are allowed: memory_snapshot, list_skills, view_memory, search_session_history, view_skill. If you need one tool, respond with ONLY valid JSON for exactly one of those tool contracts. Otherwise answer the user directly.",
                         current_prompt,
                     ),
                 )?;
@@ -1338,7 +1398,7 @@ fn execute_ollama_turn(
                     json!({}),
                     "Vela received an empty provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.",
                     format!(
-                        "{}\n\nYour previous reply was empty and unusable. Either request one supported tool with ONLY JSON using memory_snapshot or list_skills, or answer the user directly with non-empty text.",
+                        "{}\n\nYour previous reply was empty and unusable. Either request one supported tool with ONLY valid JSON for memory_snapshot, list_skills, view_memory, search_session_history, or view_skill, or answer the user directly with non-empty text.",
                         current_prompt,
                     ),
                 )?;
@@ -1398,11 +1458,66 @@ fn classify_provider_continuation(response: &str) -> ProviderContinuation {
             ProviderContinuation::FinalAnswer
         };
     };
-    match request.tool.trim() {
-        "memory_snapshot" => ProviderContinuation::ToolRequest(RuntimeToolName::MemorySnapshot),
-        "list_skills" => ProviderContinuation::ToolRequest(RuntimeToolName::ListSkills),
-        _ => ProviderContinuation::InvalidToolRequest,
-    }
+    let tool = match request.tool.trim() {
+        "memory_snapshot" => RuntimeToolInvocation {
+            name: RuntimeToolName::MemorySnapshot,
+            target: None,
+            query: None,
+            skill_name: None,
+            limit: None,
+        },
+        "list_skills" => RuntimeToolInvocation {
+            name: RuntimeToolName::ListSkills,
+            target: None,
+            query: None,
+            skill_name: None,
+            limit: None,
+        },
+        "view_memory" => {
+            let target = match request.target.as_deref() {
+                Some(raw) => match vela_memory::MemoryTarget::parse(raw) {
+                    Ok(target) => Some(target),
+                    Err(_) => return ProviderContinuation::InvalidToolRequest,
+                },
+                None => Some(vela_memory::MemoryTarget::Memory),
+            };
+            RuntimeToolInvocation {
+                name: RuntimeToolName::ViewMemory,
+                target,
+                query: None,
+                skill_name: None,
+                limit: None,
+            }
+        }
+        "search_session_history" => {
+            let query = request.query.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+            let Some(query) = query else {
+                return ProviderContinuation::InvalidToolRequest;
+            };
+            RuntimeToolInvocation {
+                name: RuntimeToolName::SearchSessionHistory,
+                target: None,
+                query: Some(query),
+                skill_name: None,
+                limit: request.limit.map(|value| value.clamp(1, 5)),
+            }
+        }
+        "view_skill" => {
+            let name = request.name.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+            let Some(skill_name) = name else {
+                return ProviderContinuation::InvalidToolRequest;
+            };
+            RuntimeToolInvocation {
+                name: RuntimeToolName::ViewSkill,
+                target: None,
+                query: None,
+                skill_name: Some(skill_name),
+                limit: None,
+            }
+        }
+        _ => return ProviderContinuation::InvalidToolRequest,
+    };
+    ProviderContinuation::ToolRequest(tool)
 }
 
 fn record_reflection_and_retry(
@@ -1439,26 +1554,67 @@ fn record_reflection_and_retry(
 }
 
 /// Executes one approved read-only runtime tool and returns its textual result.
-fn execute_runtime_tool(tool: RuntimeToolName, memory: &str, skills: &[vela_skills::SkillSummary]) -> String {
-    match tool {
-        RuntimeToolName::MemorySnapshot => memory.to_string(),
+fn execute_runtime_tool(
+    bootstrap: &BootstrapReport,
+    tool: &RuntimeToolInvocation,
+    memory_snapshot: &str,
+    skills: &[vela_skills::SkillSummary],
+) -> String {
+    match tool.name {
+        RuntimeToolName::MemorySnapshot => memory_snapshot.to_string(),
         RuntimeToolName::ListSkills => {
             if skills.is_empty() {
                 "(no loaded skills)".to_string()
             } else {
                 skills
                     .iter()
-                    .map(|skill| skill.name.as_str())
+                    .map(|skill| match skill.description.as_deref() {
+                        Some(description) => format!("{} — {}", skill.name, description),
+                        None => skill.name.clone(),
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
+            }
+        }
+        RuntimeToolName::ViewMemory => {
+            let target = tool.target.unwrap_or(vela_memory::MemoryTarget::Memory);
+            match vela_memory::view_memory(&bootstrap.vela_home, target) {
+                Ok(view) => {
+                    if view.entries.is_empty() {
+                        format!("{}: (no entries)", target.label())
+                    } else {
+                        format!("{}:\n{}", target.label(), view.entries.join("\n\n"))
+                    }
+                }
+                Err(error) => format!("failed to load {}: {}", target.label(), error),
+            }
+        }
+        RuntimeToolName::SearchSessionHistory => {
+            let query = tool.query.as_deref().unwrap_or_default();
+            let limit = tool.limit.unwrap_or(3);
+            match vela_state::search_session_history(&bootstrap.persistence.state_db_path, query, limit) {
+                Ok(hits) if hits.is_empty() => format!("session search for {:?}: no matches", query),
+                Ok(hits) => hits
+                    .into_iter()
+                    .map(|hit| format!("{} :: {}", hit.session_title, hit.snippet))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Err(error) => format!("failed to search session history for {:?}: {}", query, error),
+            }
+        }
+        RuntimeToolName::ViewSkill => {
+            let name = tool.skill_name.as_deref().unwrap_or_default();
+            match vela_skills::view_skill(&bootstrap.vela_home, name) {
+                Ok(skill) => format!("skill {}:\n{}", skill.name, skill.content),
+                Err(error) => format!("failed to view skill {:?}: {}", name, error),
             }
         }
     }
 }
 
 /// Persists the requested runtime tool before execution begins.
-fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName, step: usize) -> Result<()> {
-    let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str(), "step": step}).to_string();
+fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, tool: &RuntimeToolInvocation, step: usize) -> Result<()> {
+    let metadata = json!({"source": "runtime-tool-loop", "step": step, "request": tool.metadata_json()}).to_string();
     let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
@@ -1472,7 +1628,7 @@ fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, t
         &bootstrap.persistence.state_db_path,
         session_id,
         "tool-request",
-        tool.as_str(),
+        &tool.request_text(),
         Some(metadata),
     )?;
     if !message_logged {
@@ -1482,8 +1638,8 @@ fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, t
 }
 
 /// Persists the completed runtime tool result and its metadata.
-fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, tool: RuntimeToolName, step: usize, result: &str) -> Result<()> {
-    let metadata = json!({"source": "runtime-tool-loop", "tool": tool.as_str(), "step": step, "result_length": result.len()}).to_string();
+fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, tool: &RuntimeToolInvocation, step: usize, result: &str) -> Result<()> {
+    let metadata = json!({"source": "runtime-tool-loop", "step": step, "request": tool.metadata_json(), "result_length": result.len()}).to_string();
     let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
@@ -2137,6 +2293,77 @@ mod tests {
     }
 
     #[test]
+    /// Verifies that a configured provider turn can retrieve targeted memory, session, and skill context through runtime tools.
+    fn execute_chat_turn_retrieves_targeted_internal_context() {
+        let (base_url, server) = spawn_mock_ollama_sequence(vec![
+            MockOllamaExchange {
+                response_body: r#"{"tool":"view_memory","target":"user"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "retrieve targeted context",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: r#"{"tool":"search_session_history","query":"retrieve targeted context","limit":2}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "Tool result for view_memory:user:",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: r#"{"tool":"view_skill","name":"deploy-staging"}"#,
+                expected_model: "gemma3:4b",
+                prompt_fragment: "Tool result for search_session_history:retrieve targeted context:",
+                expected_image_base64: None,
+            },
+            MockOllamaExchange {
+                response_body: "Context-aware final answer.",
+                expected_model: "gemma3:4b",
+                prompt_fragment: "Tool result for view_skill:deploy-staging:",
+                expected_image_base64: None,
+            },
+        ]);
+        let mut bootstrap = test_bootstrap("ollama-context-tools");
+        bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
+        bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
+        bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
+        vela_memory::add_memory_entry(&bootstrap.vela_home, vela_memory::MemoryTarget::User, "Prefers terse answers.").unwrap();
+        std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
+        std::fs::write(
+            bootstrap.vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+            "# deploy-staging\n\nDeploy staging safely.",
+        )
+        .unwrap();
+
+        let report = execute_chat_turn(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("retrieve targeted context".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.response.as_deref(), Some("Context-aware final answer."));
+        assert_eq!(report.response_source, "runtime-ollama-tool-loop");
+        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("context tool inspection");
+        assert_eq!(inspection.messages[1].content, "view_memory:user");
+        assert!(inspection.messages[2].content.contains("Prefers terse answers."));
+        assert_eq!(inspection.messages[3].content, "search_session_history:retrieve targeted context");
+        assert!(inspection.messages[4].content.contains("retrieve"));
+        assert_eq!(inspection.messages[5].content, "view_skill:deploy-staging");
+        assert!(inspection.messages[6].content.contains("Deploy staging safely."));
+        server.join().unwrap();
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
     /// Verifies that a configured provider turn can execute a bounded multi-step local tool sequence.
     fn execute_chat_turn_runs_first_runtime_tool_loop() {
         let (base_url, server) = spawn_mock_ollama_sequence(vec![
@@ -2201,7 +2428,7 @@ mod tests {
             inspection.messages[2].metadata_json.as_deref().expect("first tool-result metadata"),
         )
         .expect("decode first tool-result metadata");
-        assert_eq!(first_tool_result_metadata.get("tool").and_then(|v| v.as_str()), Some("memory_snapshot"));
+        assert_eq!(first_tool_result_metadata.get("request").and_then(|v| v.get("tool")).and_then(|v| v.as_str()), Some("memory_snapshot"));
         assert_eq!(first_tool_result_metadata.get("step").and_then(|v| v.as_u64()), Some(1));
         assert_eq!(inspection.messages[3].role, "tool-request");
         assert_eq!(inspection.messages[3].content, "list_skills");
@@ -2376,7 +2603,7 @@ mod tests {
         )
         .expect("decode third tool-result metadata");
         assert_eq!(inspection.messages[6].role, "tool-result");
-        assert_eq!(third_tool_result_metadata.get("tool").and_then(|v| v.as_str()), Some("memory_snapshot"));
+        assert_eq!(third_tool_result_metadata.get("request").and_then(|v| v.get("tool")).and_then(|v| v.as_str()), Some("memory_snapshot"));
         assert_eq!(third_tool_result_metadata.get("step").and_then(|v| v.as_u64()), Some(3));
         let lifecycle: Vec<_> = inspection
             .lifecycle

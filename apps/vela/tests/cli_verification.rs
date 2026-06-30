@@ -400,6 +400,48 @@ fn chat_query_recovers_from_invalid_tool_request() {
 }
 
 #[test]
+/// Verifies that the CLI runtime can retrieve targeted skill context through the provider tool loop.
+fn chat_query_retrieves_targeted_skill_context() {
+    let vela_home = temp_vela_home("ollama-skill-context");
+    let (base_url, server) = spawn_mock_ollama_sequence(vec![
+        MockOllamaExchange {
+            response_body: r#"{"tool":"view_skill","name":"deploy-staging"}"#,
+            expected_model: "gemma3:4b",
+            prompt_fragment: "retrieve skill context",
+            expected_image_base64: None,
+        },
+        MockOllamaExchange {
+            response_body: "Skill-aware final answer.",
+            expected_model: "gemma3:4b",
+            prompt_fragment: "Tool result for view_skill:deploy-staging:\nskill deploy-staging:\n# deploy-staging\n\nDeploy staging safely.",
+            expected_image_base64: None,
+        },
+    ]);
+    std::fs::create_dir_all(vela_home.join("skills").join("deploy-staging")).unwrap();
+    std::fs::write(
+        vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+        "# deploy-staging\n\nDeploy staging safely.",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: {}\n",
+            base_url
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(&vela_home, &["chat", "--query", "retrieve skill context"]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Skill-aware final answer."));
+    server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies cron job persistence and clap-level rejection of invalid flag combinations.
 fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     let vela_home = temp_vela_home("cron");
