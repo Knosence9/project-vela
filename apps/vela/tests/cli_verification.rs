@@ -413,7 +413,7 @@ fn chat_query_retrieves_targeted_skill_context() {
         MockOllamaExchange {
             response_body: "Skill-aware final answer.",
             expected_model: "gemma3:4b",
-            prompt_fragment: "Tool result for view_skill:deploy-staging:",
+            prompt_fragment: "Tool result for view_skill:deploy-staging:\nskill deploy-staging:\n# deploy-staging\n\nDeploy staging safely.",
             expected_image_base64: None,
         },
     ]);

@@ -1474,14 +1474,13 @@ fn classify_provider_continuation(response: &str) -> ProviderContinuation {
             limit: None,
         },
         "view_memory" => {
-            let target = request
-                .target
-                .as_deref()
-                .map(vela_memory::MemoryTarget::parse)
-                .transpose()
-                .ok()
-                .flatten()
-                .or(Some(vela_memory::MemoryTarget::Memory));
+            let target = match request.target.as_deref() {
+                Some(raw) => match vela_memory::MemoryTarget::parse(raw) {
+                    Ok(target) => Some(target),
+                    Err(_) => return ProviderContinuation::InvalidToolRequest,
+                },
+                None => Some(vela_memory::MemoryTarget::Memory),
+            };
             RuntimeToolInvocation {
                 name: RuntimeToolName::ViewMemory,
                 target,
