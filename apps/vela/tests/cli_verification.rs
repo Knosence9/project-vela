@@ -442,6 +442,37 @@ fn chat_query_retrieves_targeted_skill_context() {
 }
 
 #[test]
+/// Verifies session branching and compression through the CLI sessions surface.
+fn sessions_branch_and_compress_are_inspectable() {
+    let vela_home = temp_vela_home("sessions-branch");
+
+    let first = run_vela(&vela_home, &["chat", "--query", "branch me"]);
+    assert!(first.status.success(), "{}", stderr_text(&first));
+    let first_stdout = stdout_text(&first);
+    let parent_session = parse_field(&first_stdout, "id").expect("parent session id");
+
+    let branch = run_vela(&vela_home, &["sessions", "--branch", parent_session, "--title", "branch-a", "--note", "explore alternative"]);
+    assert!(branch.status.success(), "{}", stderr_text(&branch));
+    let branch_stdout = stdout_text(&branch);
+    assert!(branch_stdout.contains("session branched:"));
+    assert!(branch_stdout.contains("title=branch-a"));
+    let branch_session = parse_field(&branch_stdout, "session").expect("branch session id");
+
+    let compress = run_vela(&vela_home, &["sessions", "--compress", branch_session, "--summary", "branch compressed summary"]);
+    assert!(compress.status.success(), "{}", stderr_text(&compress));
+    let compress_stdout = stdout_text(&compress);
+    assert!(compress_stdout.contains("session compressed:"));
+
+    let show = run_vela(&vela_home, &["sessions", "--show", branch_session]);
+    assert!(show.status.success(), "{}", stderr_text(&show));
+    let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains("parent=Some"));
+    assert!(show_stdout.contains("compressions=1"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies cron job persistence and clap-level rejection of invalid flag combinations.
 fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     let vela_home = temp_vela_home("cron");
