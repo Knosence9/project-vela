@@ -15,7 +15,9 @@ use vela_skills::SkillsReport;
 use vela_state::{PersistenceReport, SessionRuntimeReport};
 
 pub use vela_config::preparse_profile_override;
-pub use vela_extensions::{ExtensionKind, ExtensionRecord, ExtensionState};
+pub use vela_extensions::{
+    ExtensionActivation, ExtensionKind, ExtensionLifecycle, ExtensionRecord,
+};
 pub use vela_state::{
     InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchRecord, SessionCompressionRecord,
     SessionEventRecord, SessionInspection, SessionMessageRecord, SessionSearchHit, SessionSummary,
@@ -116,14 +118,16 @@ impl BootstrapReport {
             })
             .count();
         format!(
-            "vela bootstrap ready: home={} env_files={} config_files={} ignore_user_config={} state_db_runs={} extensions_loaded={} extensions_disabled={}{}",
+            "vela bootstrap ready: home={} env_files={} config_files={} ignore_user_config={} state_db_runs={} extensions_activated={} extensions_validated={} extensions_disabled={} extensions_failed={}{}",
             self.vela_home.display(),
             env_count,
             config_count,
             self.ignored_user_config,
             self.persistence.bootstrap_runs,
-            self.extensions.loaded_count,
+            self.extensions.activated_count,
+            self.extensions.validated_count,
             self.extensions.disabled_count,
+            self.extensions.failed_count,
             profile
         )
     }
@@ -1993,7 +1997,7 @@ mod tests {
         std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
         std::fs::write(
             vela_home.join("extensions").join("demo.yaml"),
-            "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\ncapabilities:\n  - chat\n",
+            "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
         )
         .unwrap();
         std::fs::write(
@@ -2016,7 +2020,7 @@ mod tests {
             reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
             extensions: vela_extensions::initialize_extensions(&vela_home, &vela_config::reload_config_snapshot(&vela_home, false).unwrap().1).unwrap(),
         };
-        assert_eq!(bootstrap.extensions.loaded_count, 0);
+        assert_eq!(bootstrap.extensions.activated_count, 0);
         assert_eq!(bootstrap.extensions.disabled_count, 1);
 
         let session = resolve_runtime_session(
@@ -2043,10 +2047,24 @@ mod tests {
             .unwrap()
             .expect("session after reload");
 
-        assert_eq!(reloaded.loaded_count, 1);
+        assert_eq!(reloaded.activated_count, 1);
         assert_eq!(reloaded.disabled_count, 0);
         assert_eq!(before.id, after.id);
         assert_eq!(before.title, after.title);
+
+        std::fs::write(
+            vela_home.join("extensions").join("demo.yaml"),
+            "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\ncapabilities:\n  - chat\n",
+        )
+        .unwrap();
+        let failed = reload_extensions(&bootstrap).unwrap();
+        let after_failed = current_session_summary(&bootstrap)
+            .unwrap()
+            .expect("session after failed reload");
+        assert_eq!(failed.failed_count, 1);
+        assert_eq!(failed.activated_count, 0);
+        assert_eq!(before.id, after_failed.id);
+        assert_eq!(before.title, after_failed.title);
 
         let _ = std::fs::remove_dir_all(&vela_home);
     }
