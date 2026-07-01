@@ -183,6 +183,44 @@ fn default_runtime_session_surfaces_in_status() {
 }
 
 #[test]
+/// Verifies that extension status surfaces config-disabled entries and reload preserves the active session.
+fn extensions_status_and_reload_are_visible_via_cli() {
+    let vela_home = temp_vela_home("extensions");
+    std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
+    std::fs::write(
+        vela_home.join("extensions").join("demo.yaml"),
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\ncapabilities:\n  - chat\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "extensions:\n  entries:\n    demo:\n      enabled: false\n",
+    )
+    .unwrap();
+
+    let status = run_vela(&vela_home, &["status"]);
+    assert!(status.status.success(), "{}", stderr_text(&status));
+    let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("extensions: dir="));
+    assert!(status_stdout.contains("disabled=1"));
+    assert!(status_stdout.contains("extension [disabled-by-config]: id=Some(\"demo\")"));
+
+    let session_turn = run_vela(&vela_home, &["chat", "--query", "keep my session"]);
+    assert!(session_turn.status.success(), "{}", stderr_text(&session_turn));
+
+    std::fs::write(vela_home.join("config.yaml"), "extensions: {}\n").unwrap();
+    let reload = run_vela(&vela_home, &["extensions", "--reload"]);
+    assert!(reload.status.success(), "{}", stderr_text(&reload));
+    let reload_stdout = stdout_text(&reload);
+    assert!(reload_stdout.contains("extensions reloaded: extensions: dir="));
+    assert!(reload_stdout.contains("loaded=1"));
+    assert!(reload_stdout.contains("session preserved: true"));
+    assert!(reload_stdout.contains("extension [loaded]: id=Some(\"demo\")"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that repeated gateway starts reuse the same command-scoped session.
 fn gateway_start_resumes_same_session_via_cli() {
     let vela_home = temp_vela_home("gateway");

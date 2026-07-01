@@ -16,3 +16,4 @@ vela-memory = { path = "../vela-memory" }
 vela-skills = { path = "../vela-skills" }
 vela-review = { path = "../vela-review" }
 vela-state = { path = "../vela-state" }
+vela-extensions = { path = "../vela-extensions" }

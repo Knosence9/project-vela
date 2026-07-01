@@ -15,7 +15,7 @@
 - `--continue <name>` resumes the latest matching titled session
 - bare `--continue` resumes the latest session
 - interactive vs single-turn mode is derived from whether query/image input is present
-- `status` reports the latest active session identity
+- `status` reports the latest active session identity and first-pass extension registry state
 - `gateway` now bootstraps durable gateway directories/config and can resume a gateway-specific runtime session
 - `cron` now bootstraps durable scheduler config/job state and can resume a scheduler-specific runtime session
 
@@ -32,6 +32,8 @@
 - `vela sessions --branch <session> --title <new-title> [--note ...]` can fork a durable child session with explicit parent lineage and copied continuity
 - `vela sessions --compress <session> --summary ...` can persist compressed continuity summaries without mutating durable memory directly
 - `vela sessions --show <session>` exposes branch parentage and compression counts through the session inspection surface
+- Vela now discovers extension manifests from `~/.vela/extensions/` (or `extensions.manifests_dir` in config), applies config-driven enable/disable overrides, and surfaces loaded/disabled/invalid entries through `vela status`
+- `vela extensions --reload` re-reads config + manifest files and refreshes extension registry state without resetting durable session state
 - `vela chat --image ...` can call a configured local Ollama model for first-pass provider-backed image turns
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
@@ -40,6 +42,12 @@
 - `vela gateway --start` resumes the latest `gateway` command session when one already exists
 - `vela cron --start` resumes the latest `cron` command session when one already exists
 
+## Kernel vs extension boundary
+- keep durable session/state ownership in-kernel (`vela-state`, runtime lifecycle, approvals, persistence, scheduler continuity)
+- keep policy-bearing memory/review/session mutation paths in-kernel until stronger trust boundaries exist
+- allow extensions to describe discoverable capabilities, tool/skill/workflow metadata, and future optional activation hooks
+- treat the current registry as metadata-first scaffolding, not arbitrary third-party code execution
+
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states at the session level
 - broader external provider/model execution beyond the first Ollama text/image-turn slices, bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
@@ -47,4 +55,5 @@
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
 - more advanced compression policies beyond explicit persisted operator summaries
+- richer extension lifecycle hooks and capability activation beyond the first manifest-registry slice
 - actual recurring job execution and restart recovery beyond durable registration
