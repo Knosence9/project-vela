@@ -112,15 +112,12 @@ pub fn initialize_config(active_profile: Option<String>, ignore_user_config: boo
         .with_context(|| format!("failed to create {}", vela_home.display()))?;
 
     let loaded_env_paths = load_vela_dotenv(&vela_home)?;
+    let (effective_ignore_user_config, config_sources, resolved_config) =
+        load_config_snapshot(&vela_home, ignore_user_config)?;
 
-    let effective_ignore_user_config = ignore_user_config || is_truthy_env("VELA_IGNORE_USER_CONFIG");
     if effective_ignore_user_config {
         env::set_var("VELA_IGNORE_USER_CONFIG", "1");
     }
-
-    let mut config_sources = resolve_config_sources(&vela_home, effective_ignore_user_config)?;
-    let resolved_config = load_resolved_config(&mut config_sources)?;
-
     if let Some(value) = resolved_config.hooks_auto_accept {
         env::set_var("VELA_ACCEPT_HOOKS", if value { "1" } else { "0" });
     }
@@ -136,6 +133,25 @@ pub fn initialize_config(active_profile: Option<String>, ignore_user_config: boo
         config_sources,
         resolved_config,
     })
+}
+
+/// Reloads config sources and resolved settings for an already-selected VELA_HOME without reapplying env side effects.
+pub fn reload_config_snapshot(
+    vela_home: &Path,
+    ignore_user_config: bool,
+) -> Result<(Vec<ConfigSource>, ResolvedConfig)> {
+    let (_, config_sources, resolved_config) = load_config_snapshot(vela_home, ignore_user_config)?;
+    Ok((config_sources, resolved_config))
+}
+
+fn load_config_snapshot(
+    vela_home: &Path,
+    ignore_user_config: bool,
+) -> Result<(bool, Vec<ConfigSource>, ResolvedConfig)> {
+    let effective_ignore_user_config = ignore_user_config || is_truthy_env("VELA_IGNORE_USER_CONFIG");
+    let mut config_sources = resolve_config_sources(vela_home, effective_ignore_user_config)?;
+    let resolved_config = load_resolved_config(&mut config_sources)?;
+    Ok((effective_ignore_user_config, config_sources, resolved_config))
 }
 
 fn load_vela_dotenv(vela_home: &Path) -> Result<Vec<PathBuf>> {

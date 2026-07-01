@@ -165,11 +165,9 @@ pub fn current_command_session_summary(
 
 /// Reloads extension discovery from the latest config and manifest files without resetting durable session state.
 pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionsReport> {
-    let config = vela_config::initialize_config(
-        bootstrap.active_profile.clone(),
-        bootstrap.ignored_user_config,
-    )?;
-    vela_extensions::initialize_extensions(&config.vela_home, &config.resolved_config)
+    let (_, resolved_config) =
+        vela_config::reload_config_snapshot(&bootstrap.vela_home, bootstrap.ignored_user_config)?;
+    vela_extensions::initialize_extensions(&bootstrap.vela_home, &resolved_config)
 }
 
 /// Resolves or creates a runtime session for an interactive request.
@@ -2004,8 +2002,20 @@ mod tests {
         )
         .unwrap();
 
-        std::env::set_var("VELA_HOME", &vela_home);
-        let bootstrap = initialize_bootstrap(None, false).unwrap();
+        let (_, resolved_config) = vela_config::reload_config_snapshot(&vela_home, false).unwrap();
+        let bootstrap = BootstrapReport {
+            vela_home: vela_home.clone(),
+            active_profile: None,
+            loaded_env_paths: vec![],
+            ignored_user_config: false,
+            config_sources: vec![],
+            resolved_config,
+            persistence: vela_state::initialize_persistence(&vela_home).unwrap(),
+            memory: vela_memory::initialize_memory(&vela_home).unwrap(),
+            skills: vela_skills::initialize_skills(&vela_home).unwrap(),
+            reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
+            extensions: vela_extensions::initialize_extensions(&vela_home, &vela_config::reload_config_snapshot(&vela_home, false).unwrap().1).unwrap(),
+        };
         assert_eq!(bootstrap.extensions.loaded_count, 0);
         assert_eq!(bootstrap.extensions.disabled_count, 1);
 
@@ -2038,7 +2048,6 @@ mod tests {
         assert_eq!(before.id, after.id);
         assert_eq!(before.title, after.title);
 
-        std::env::remove_var("VELA_HOME");
         let _ = std::fs::remove_dir_all(&vela_home);
     }
 

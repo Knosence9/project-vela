@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use vela_config::{ResolvedConfig, ResolvedExtensionConfigEntry};
 
 /// Enumerates the supported first-pass extension kinds Vela can discover.
@@ -145,7 +146,6 @@ fn load_registry_from_dir(
         .collect();
 
     let mut entries = Vec::new();
-    let mut seen_ids = BTreeSet::new();
     let mut manifest_paths = Vec::new();
     for dir_entry in std::fs::read_dir(manifests_dir)
         .with_context(|| format!("failed to read {}", manifests_dir.display()))?
@@ -164,8 +164,21 @@ fn load_registry_from_dir(
     }
     manifest_paths.sort();
 
+    let mut duplicate_counts = BTreeMap::<String, usize>::new();
     for path in &manifest_paths {
-        entries.push(load_record(path, &override_map, &mut seen_ids)?);
+        if let Some(id) = read_manifest_id(path)? {
+            *duplicate_counts.entry(id).or_default() += 1;
+        }
+    }
+    let duplicate_ids = Arc::new(
+        duplicate_counts
+            .into_iter()
+            .filter_map(|(id, count)| (count > 1).then_some(id))
+            .collect::<BTreeSet<_>>(),
+    );
+
+    for path in &manifest_paths {
+        entries.push(load_record(path, &override_map, duplicate_ids.clone())?);
     }
 
     let discovered_manifest_count = manifest_paths.len();
@@ -193,10 +206,24 @@ fn load_registry_from_dir(
     })
 }
 
+fn read_manifest_id(path: &Path) -> Result<Option<String>> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let parsed: ExtensionManifest = match serde_yaml::from_str(&text) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
+    let trimmed_id = parsed.id.trim().to_string();
+    if trimmed_id.is_empty() || parsed.manifest_version != 1 {
+        return Ok(None);
+    }
+    Ok(Some(trimmed_id))
+}
+
 fn load_record(
     path: &Path,
     overrides: &BTreeMap<String, bool>,
-    seen_ids: &mut BTreeSet<String>,
+    duplicate_ids: Arc<BTreeSet<String>>,
 ) -> Result<ExtensionRecord> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
@@ -250,7 +277,7 @@ fn load_record(
             )),
         });
     }
-    if !seen_ids.insert(trimmed_id.clone()) {
+    if duplicate_ids.contains(&trimmed_id) {
         return Ok(ExtensionRecord {
             manifest_path: path.to_path_buf(),
             state: ExtensionState::InvalidManifest,
@@ -368,13 +395,18 @@ mod tests {
 
         let report = initialize_extensions(&vela_home, &resolved_with(vec![])).unwrap();
         assert_eq!(report.discovered_manifest_count, 3);
-        assert_eq!(report.loaded_count, 1);
-        assert_eq!(report.invalid_count, 2);
-        assert!(report.entries.iter().any(|entry| {
-            entry.id.as_deref() == Some("duplicate")
-                && matches!(entry.state, ExtensionState::InvalidManifest)
-                && entry.detail.as_deref() == Some("duplicate extension id discovered")
-        }));
+        assert_eq!(report.loaded_count, 0);
+        assert_eq!(report.invalid_count, 3);
+        let duplicate_invalid = report
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.id.as_deref() == Some("duplicate")
+                    && matches!(entry.state, ExtensionState::InvalidManifest)
+                    && entry.detail.as_deref() == Some("duplicate extension id discovered")
+            })
+            .count();
+        assert_eq!(duplicate_invalid, 2);
         assert!(report.entries.iter().any(|entry| {
             entry.id.as_deref() == Some("unsupported")
                 && matches!(entry.state, ExtensionState::InvalidManifest)
