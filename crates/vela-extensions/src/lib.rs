@@ -8,6 +8,7 @@ use vela_config::{ResolvedConfig, ResolvedExtensionConfigEntry};
 /// Enumerates the supported first-pass extension kinds Vela can discover.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+/// Enumerates the supported first-pass extension kinds Vela can discover.
 pub enum ExtensionKind {
     Tool,
     Skill,
@@ -29,6 +30,7 @@ impl ExtensionKind {
 
 /// Captures one extension manifest discovered on disk before enable/disable policy is applied.
 #[derive(Debug, Clone, Deserialize)]
+/// Captures one extension manifest discovered on disk before enable/disable policy is applied.
 pub struct ExtensionManifest {
     #[serde(default = "default_manifest_version")]
     pub manifest_version: u32,
@@ -47,6 +49,7 @@ pub struct ExtensionManifest {
 
 /// Represents the load state assigned to one discovered extension manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents the load state assigned to one discovered extension manifest.
 pub enum ExtensionState {
     Loaded,
     DisabledByConfig,
@@ -66,6 +69,7 @@ impl ExtensionState {
 
 /// Describes one discovered extension entry and the metadata retained for status output.
 #[derive(Debug, Clone)]
+/// Describes one discovered extension entry and the metadata retained for status output.
 pub struct ExtensionRecord {
     pub manifest_path: PathBuf,
     pub state: ExtensionState,
@@ -81,6 +85,7 @@ pub struct ExtensionRecord {
 
 /// Summarizes the currently discovered extension registry for one bootstrap or reload pass.
 #[derive(Debug, Clone)]
+/// Summarizes the currently discovered extension registry for one bootstrap or reload pass.
 pub struct ExtensionsReport {
     pub manifests_dir: PathBuf,
     pub manifests_dir_existed_before: bool,
