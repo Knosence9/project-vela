@@ -58,8 +58,8 @@ Use a **progressive replacement strategy**:
 - treat Hermes as the capability benchmark, not as a requirement for day-one feature completeness
 
 ## Suggested next steps
-1. deepen extension lifecycle semantics beyond the first metadata registry/reload slice
-2. broaden provider/backend abstraction beyond the first Ollama path
-3. strengthen recurring-job execution and restart recovery
+1. define the Rust kernel boundary
+2. define plugin/runtime reload semantics
+3. implement one end-to-end session loop with persistence and tools
 4. add one Hermes-class vertical slice at a time
-5. create richer multi-branch/continue/compression policies over the durable session model
+5. create a backend abstraction so future model experiments can plug in cleanly
