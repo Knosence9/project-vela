@@ -38,7 +38,7 @@ Use a **progressive replacement strategy**:
 - `docs/reference/` — compatibility notes and prior rewrite research that remain useful as reference input
 
 ## Current scaffold highlights
-- `vela-config` now owns profile/home/env/config bootstrap logic
+- `vela-config` now owns profile/home/env/config bootstrap logic, including config-driven extension discovery settings
 - `vela-memory` now bootstraps Hermes-style built-in memory files (`MEMORY.md`, `USER.md`) and can render a frozen prompt snapshot
 - `vela-state` now owns SQLite session persistence plus transcript/event foundation tables (`sessions`, `messages`, `session_events`)
 - `vela-state` now also maintains an FTS5-backed `message_fts` index and the CLI can run basic session history searches via `vela sessions --search <query>`
@@ -47,6 +47,7 @@ Use a **progressive replacement strategy**:
 - `vela-skills` now also supports first real management actions through the CLI: `--create`, `--write`, and `--delete`
 - both `vela memory` and `vela skills` now support approval staging flows via `--stage`, `--pending`, `--show`, `--approve`, and `--reject`
 - `vela review` now stages background-review candidates under `~/.vela/reviews/`, can promote them into the existing pending approval queues, can emit structured `memory_signal` / `skill_signal` events via `--emit-signals`, and can run an end-to-end background pass via `--auto`
+- `vela-extensions` now bootstraps a first-pass manifest registry from `~/.vela/extensions/` (or configured override), surfaces loaded/disabled/invalid entries in `vela status`, and supports safe config-driven reload via `vela extensions --reload`
 - `.github/ISSUE_TEMPLATE/` — issue templates for milestones, slices, regressions, and proof work
 
 ## Working style
@@ -57,8 +58,8 @@ Use a **progressive replacement strategy**:
 - treat Hermes as the capability benchmark, not as a requirement for day-one feature completeness
 
 ## Suggested next steps
-1. define the Rust kernel boundary
-2. define plugin/runtime reload semantics
-3. implement one end-to-end session loop with persistence and tools
+1. deepen extension lifecycle semantics beyond the first metadata registry/reload slice
+2. broaden provider/backend abstraction beyond the first Ollama path
+3. strengthen recurring-job execution and restart recovery
 4. add one Hermes-class vertical slice at a time
-5. create a backend abstraction so future model experiments can plug in cleanly
+5. create richer multi-branch/continue/compression policies over the durable session model

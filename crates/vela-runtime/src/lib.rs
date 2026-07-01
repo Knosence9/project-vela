@@ -8,12 +8,14 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::thread::sleep;
 use std::time::Duration;
 use vela_config::{BootstrapConfig, ConfigSource, ResolvedConfig};
+use vela_extensions::ExtensionsReport;
 use vela_memory::MemoryReport;
 use vela_review::ReviewReport;
 use vela_skills::SkillsReport;
 use vela_state::{PersistenceReport, SessionRuntimeReport};
 
 pub use vela_config::preparse_profile_override;
+pub use vela_extensions::{ExtensionKind, ExtensionRecord, ExtensionState};
 pub use vela_state::{
     InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchRecord, SessionCompressionRecord,
     SessionEventRecord, SessionInspection, SessionMessageRecord, SessionSearchHit, SessionSummary,
@@ -91,6 +93,7 @@ pub struct BootstrapReport {
     pub memory: MemoryReport,
     pub skills: SkillsReport,
     pub reviews: ReviewReport,
+    pub extensions: ExtensionsReport,
 }
 
 impl BootstrapReport {
@@ -113,25 +116,28 @@ impl BootstrapReport {
             })
             .count();
         format!(
-            "vela bootstrap ready: home={} env_files={} config_files={} ignore_user_config={} state_db_runs={}{}",
+            "vela bootstrap ready: home={} env_files={} config_files={} ignore_user_config={} state_db_runs={} extensions_loaded={} extensions_disabled={}{}",
             self.vela_home.display(),
             env_count,
             config_count,
             self.ignored_user_config,
             self.persistence.bootstrap_runs,
+            self.extensions.loaded_count,
+            self.extensions.disabled_count,
             profile
         )
     }
 }
 
-/// Initializes config, persistence, memory, skills, and review subsystems.
+/// Initializes config, persistence, memory, skills, review, and extension-registry subsystems.
 pub fn initialize_bootstrap(active_profile: Option<String>, ignore_user_config: bool) -> Result<BootstrapReport> {
     let config = vela_config::initialize_config(active_profile, ignore_user_config)?;
     let persistence = vela_state::initialize_persistence(&config.vela_home)?;
     let memory = vela_memory::initialize_memory(&config.vela_home)?;
     let skills = vela_skills::initialize_skills(&config.vela_home)?;
     let reviews = vela_review::initialize_reviews(&config.vela_home)?;
-    Ok(BootstrapReport::from_parts(config, persistence, memory, skills, reviews))
+    let extensions = vela_extensions::initialize_extensions(&config.vela_home, &config.resolved_config)?;
+    Ok(BootstrapReport::from_parts(config, persistence, memory, skills, reviews, extensions))
 }
 
 /// Emits a debug log once runtime bootstrap has completed.
@@ -155,6 +161,15 @@ pub fn current_command_session_summary(
     command_name: &str,
 ) -> Result<Option<SessionSummary>> {
     vela_state::current_command_session_summary(&bootstrap.persistence.state_db_path, command_name)
+}
+
+/// Reloads extension discovery from the latest config and manifest files without resetting durable session state.
+pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionsReport> {
+    let config = vela_config::initialize_config(
+        bootstrap.active_profile.clone(),
+        bootstrap.ignored_user_config,
+    )?;
+    vela_extensions::initialize_extensions(&config.vela_home, &config.resolved_config)
 }
 
 /// Resolves or creates a runtime session for an interactive request.
@@ -1929,6 +1944,7 @@ impl BootstrapReport {
         memory: MemoryReport,
         skills: SkillsReport,
         reviews: ReviewReport,
+        extensions: ExtensionsReport,
     ) -> Self {
         Self {
             vela_home: config.vela_home,
@@ -1941,6 +1957,7 @@ impl BootstrapReport {
             memory,
             skills,
             reviews,
+            extensions,
         }
     }
 }
@@ -1966,7 +1983,63 @@ mod tests {
             memory: vela_memory::initialize_memory(&vela_home).unwrap(),
             skills: vela_skills::initialize_skills(&vela_home).unwrap(),
             reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
+            extensions: vela_extensions::initialize_extensions(&vela_home, &ResolvedConfig::default()).unwrap(),
         }
+    }
+
+    #[test]
+    /// Verifies that extension reload re-reads config and manifests without resetting durable session state.
+    fn reload_extensions_rereads_config_without_resetting_sessions() {
+        let vela_home = std::env::temp_dir().join(format!("vela-runtime-ext-reload-{}", unix_timestamp_nanos()));
+        let _ = std::fs::remove_dir_all(&vela_home);
+        std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
+        std::fs::write(
+            vela_home.join("extensions").join("demo.yaml"),
+            "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\ncapabilities:\n  - chat\n",
+        )
+        .unwrap();
+        std::fs::write(
+            vela_home.join("config.yaml"),
+            "extensions:\n  entries:\n    demo:\n      enabled: false\n",
+        )
+        .unwrap();
+
+        std::env::set_var("VELA_HOME", &vela_home);
+        let bootstrap = initialize_bootstrap(None, false).unwrap();
+        assert_eq!(bootstrap.extensions.loaded_count, 0);
+        assert_eq!(bootstrap.extensions.disabled_count, 1);
+
+        let session = resolve_runtime_session(
+            &bootstrap,
+            &SessionRequest {
+                command_name: "chat".to_string(),
+                query_present: true,
+                query_text: Some("reload test".to_string()),
+                image_present: false,
+                image_path: None,
+                resume: None,
+                continue_last: None,
+            },
+        )
+        .unwrap();
+        let before = current_session_summary(&bootstrap)
+            .unwrap()
+            .expect("session before reload");
+        assert_eq!(before.id, session.session_id);
+
+        std::fs::write(vela_home.join("config.yaml"), "extensions: {}\n").unwrap();
+        let reloaded = reload_extensions(&bootstrap).unwrap();
+        let after = current_session_summary(&bootstrap)
+            .unwrap()
+            .expect("session after reload");
+
+        assert_eq!(reloaded.loaded_count, 1);
+        assert_eq!(reloaded.disabled_count, 0);
+        assert_eq!(before.id, after.id);
+        assert_eq!(before.title, after.title);
+
+        std::env::remove_var("VELA_HOME");
+        let _ = std::fs::remove_dir_all(&vela_home);
     }
 
     struct MockOllamaExchange<'a> {

@@ -25,6 +25,15 @@ pub struct ResolvedConfig {
     pub runtime_provider: Option<String>,
     pub runtime_model: Option<String>,
     pub runtime_ollama_base_url: Option<String>,
+    pub extension_manifests_dir: Option<String>,
+    pub extension_entries: Vec<ResolvedExtensionConfigEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Describes one config-driven extension enable/disable override resolved from YAML.
+pub struct ResolvedExtensionConfigEntry {
+    pub id: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +190,23 @@ fn load_resolved_config(config_sources: &mut [ConfigSource]) -> Result<ResolvedC
     }
 
     let decoded: PartialConfig = serde_yaml::from_value(merged).unwrap_or_default();
+    let extension_entries = decoded
+        .extensions
+        .as_ref()
+        .and_then(|extensions| extensions.entries.as_ref())
+        .map(|entries| {
+            let mut collected: Vec<_> = entries
+                .iter()
+                .map(|(id, entry)| ResolvedExtensionConfigEntry {
+                    id: id.trim().to_string(),
+                    enabled: entry.enabled,
+                })
+                .filter(|entry| !entry.id.is_empty())
+                .collect();
+            collected.sort_by(|left, right| left.id.cmp(&right.id));
+            collected
+        })
+        .unwrap_or_default();
     Ok(ResolvedConfig {
         display_interface: decoded.display.and_then(|d| d.interface),
         hooks_auto_accept: decoded.hooks_auto_accept,
@@ -189,6 +215,8 @@ fn load_resolved_config(config_sources: &mut [ConfigSource]) -> Result<ResolvedC
         runtime_provider: decoded.runtime.as_ref().and_then(|r| r.provider.clone()),
         runtime_model: decoded.runtime.as_ref().and_then(|r| r.model.clone()),
         runtime_ollama_base_url: decoded.runtime.and_then(|r| r.ollama_base_url),
+        extension_manifests_dir: decoded.extensions.and_then(|extensions| extensions.manifests_dir),
+        extension_entries,
     })
 }
 
@@ -242,6 +270,7 @@ struct PartialConfig {
     security: Option<SecurityConfig>,
     network: Option<NetworkConfig>,
     runtime: Option<RuntimeConfig>,
+    extensions: Option<ExtensionsConfig>,
     hooks_auto_accept: Option<bool>,
 }
 
@@ -265,6 +294,22 @@ struct RuntimeConfig {
     provider: Option<String>,
     model: Option<String>,
     ollama_base_url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ExtensionsConfig {
+    manifests_dir: Option<String>,
+    entries: Option<std::collections::BTreeMap<String, ExtensionEntryConfig>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExtensionEntryConfig {
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 fn resolve_config_sources(vela_home: &Path, ignore_user_config: bool) -> Result<Vec<ConfigSource>> {
@@ -437,6 +482,47 @@ mod tests {
         assert_eq!(
             resolved.runtime_ollama_base_url.as_deref(),
             Some("http://127.0.0.1:11434")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extension_settings_are_loaded_from_config() {
+        let root = std::env::temp_dir().join(format!("vela-config-test-extensions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let user = root.join("extensions.yaml");
+        std::fs::write(
+            &user,
+            "extensions:\n  manifests_dir: .vela/extensions/manifests\n  entries:\n    demo-tool:\n      enabled: false\n    demo-skill:\n      enabled: true\n",
+        )
+        .unwrap();
+
+        let mut sources = vec![ConfigSource {
+            path: user,
+            kind: ConfigSourceKind::User,
+            detail: None,
+        }];
+
+        let resolved = load_resolved_config(&mut sources).unwrap();
+        assert_eq!(
+            resolved.extension_manifests_dir.as_deref(),
+            Some(".vela/extensions/manifests")
+        );
+        assert_eq!(
+            resolved.extension_entries,
+            vec![
+                ResolvedExtensionConfigEntry {
+                    id: "demo-skill".to_string(),
+                    enabled: true,
+                },
+                ResolvedExtensionConfigEntry {
+                    id: "demo-tool".to_string(),
+                    enabled: false,
+                },
+            ]
         );
 
         let _ = std::fs::remove_dir_all(&root);

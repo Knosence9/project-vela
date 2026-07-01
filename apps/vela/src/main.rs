@@ -144,6 +144,14 @@ struct DashboardArgs {
 }
 
 #[derive(Debug, Default, Args)]
+struct ExtensionsArgs {
+    #[arg(long = "reload", default_value_t = false, group = "action")]
+    reload: bool,
+    #[arg(long = "list", default_value_t = false, group = "action")]
+    list: bool,
+}
+
+#[derive(Debug, Default, Args)]
 struct SkillsArgs {
     #[arg(long = "list", default_value_t = false, group = "action")]
     list: bool,
@@ -252,6 +260,7 @@ enum Commands {
     Logs(LogsArgs),
     Model,
     Config,
+    Extensions(ExtensionsArgs),
     Skills(SkillsArgs),
     Tools,
     Memory(MemoryArgs),
@@ -416,12 +425,91 @@ fn main() -> Result<()> {
                 bootstrap.reviews.reviews_dir_existed_before,
                 bootstrap.reviews.candidate_count,
             );
+            println!("{}", bootstrap.extensions.summary_line());
+            for entry in &bootstrap.extensions.entries {
+                let capabilities = if entry.capabilities.is_empty() {
+                    "none".to_string()
+                } else {
+                    entry.capabilities.join(",")
+                };
+                println!(
+                    "extension [{}]: id={:?} title={:?} kind={:?} version={:?} entry={:?} capabilities={} path={} detail={:?}",
+                    entry.state.label(),
+                    entry.id,
+                    entry.title,
+                    entry.kind.as_ref().map(|kind| kind.label()),
+                    entry.version,
+                    entry.entry,
+                    capabilities,
+                    entry.manifest_path.display(),
+                    entry.detail,
+                );
+            }
             match vela_runtime::current_session_summary(&bootstrap)? {
                 Some(summary) => println!(
                     "active session: id={} title={} messages={} events={}",
                     summary.id, summary.title, summary.message_count, summary.event_count
                 ),
                 None => println!("active session: none"),
+            }
+        }
+        Some(Commands::Extensions(args)) => {
+            if args.reload {
+                let before = vela_runtime::current_session_summary(&bootstrap)?;
+                let report = vela_runtime::reload_extensions(&bootstrap)?;
+                let after = vela_runtime::current_session_summary(&bootstrap)?;
+                let session_preserved = match (before.as_ref(), after.as_ref()) {
+                    (Some(before), Some(after)) => before.id == after.id,
+                    (None, None) => true,
+                    _ => false,
+                };
+                println!("extensions reloaded: {}", report.summary_line());
+                println!(
+                    "session preserved: {} before={:?} after={:?}",
+                    session_preserved,
+                    before.as_ref().map(|item| item.id.as_str()),
+                    after.as_ref().map(|item| item.id.as_str()),
+                );
+                for entry in report.entries {
+                    let capabilities = if entry.capabilities.is_empty() {
+                        "none".to_string()
+                    } else {
+                        entry.capabilities.join(",")
+                    };
+                    println!(
+                        "extension [{}]: id={:?} title={:?} kind={:?} version={:?} entry={:?} capabilities={} path={} detail={:?}",
+                        entry.state.label(),
+                        entry.id,
+                        entry.title,
+                        entry.kind.as_ref().map(|kind| kind.label()),
+                        entry.version,
+                        entry.entry,
+                        capabilities,
+                        entry.manifest_path.display(),
+                        entry.detail,
+                    );
+                }
+            } else {
+                println!("{}", bootstrap.extensions.summary_line());
+                for entry in &bootstrap.extensions.entries {
+                    let capabilities = if entry.capabilities.is_empty() {
+                        "none".to_string()
+                    } else {
+                        entry.capabilities.join(",")
+                    };
+                    println!(
+                        "extension [{}]: id={:?} title={:?} kind={:?} version={:?} entry={:?} capabilities={} path={} detail={:?}",
+                        entry.state.label(),
+                        entry.id,
+                        entry.title,
+                        entry.kind.as_ref().map(|kind| kind.label()),
+                        entry.version,
+                        entry.entry,
+                        capabilities,
+                        entry.manifest_path.display(),
+                        entry.detail,
+                    );
+                }
             }
         }
         Some(Commands::Memory(args)) => {
