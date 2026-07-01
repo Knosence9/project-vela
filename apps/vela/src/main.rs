@@ -276,6 +276,27 @@ enum Commands {
     Plan,
 }
 
+fn print_extension_record(entry: &vela_runtime::ExtensionRecord) {
+    let capabilities = if entry.capabilities.is_empty() {
+        "none".to_string()
+    } else {
+        entry.capabilities.join(",")
+    };
+    println!(
+        "extension [{}]: id={:?} title={:?} kind={:?} activation={:?} version={:?} entry={:?} capabilities={} path={} detail={:?}",
+        entry.lifecycle.label(),
+        entry.id,
+        entry.title,
+        entry.kind.as_ref().map(|kind| kind.label()),
+        entry.activation.as_ref().map(|activation| activation.label()),
+        entry.version,
+        entry.entry,
+        capabilities,
+        entry.manifest_path.display(),
+        entry.detail,
+    );
+}
+
 fn main() -> Result<()> {
     let (argv, preparse_profile) = vela_runtime::preparse_profile_override(std::env::args())?;
     tracing_subscriber::fmt::init();
@@ -427,23 +448,7 @@ fn main() -> Result<()> {
             );
             println!("{}", bootstrap.extensions.summary_line());
             for entry in &bootstrap.extensions.entries {
-                let capabilities = if entry.capabilities.is_empty() {
-                    "none".to_string()
-                } else {
-                    entry.capabilities.join(",")
-                };
-                println!(
-                    "extension [{}]: id={:?} title={:?} kind={:?} version={:?} entry={:?} capabilities={} path={} detail={:?}",
-                    entry.state.label(),
-                    entry.id,
-                    entry.title,
-                    entry.kind.as_ref().map(|kind| kind.label()),
-                    entry.version,
-                    entry.entry,
-                    capabilities,
-                    entry.manifest_path.display(),
-                    entry.detail,
-                );
+                print_extension_record(entry);
             }
             match vela_runtime::current_session_summary(&bootstrap)? {
                 Some(summary) => println!(
@@ -470,45 +475,13 @@ fn main() -> Result<()> {
                     before.as_ref().map(|item| item.id.as_str()),
                     after.as_ref().map(|item| item.id.as_str()),
                 );
-                for entry in report.entries {
-                    let capabilities = if entry.capabilities.is_empty() {
-                        "none".to_string()
-                    } else {
-                        entry.capabilities.join(",")
-                    };
-                    println!(
-                        "extension [{}]: id={:?} title={:?} kind={:?} version={:?} entry={:?} capabilities={} path={} detail={:?}",
-                        entry.state.label(),
-                        entry.id,
-                        entry.title,
-                        entry.kind.as_ref().map(|kind| kind.label()),
-                        entry.version,
-                        entry.entry,
-                        capabilities,
-                        entry.manifest_path.display(),
-                        entry.detail,
-                    );
+                for entry in &report.entries {
+                    print_extension_record(entry);
                 }
             } else {
                 println!("{}", bootstrap.extensions.summary_line());
                 for entry in &bootstrap.extensions.entries {
-                    let capabilities = if entry.capabilities.is_empty() {
-                        "none".to_string()
-                    } else {
-                        entry.capabilities.join(",")
-                    };
-                    println!(
-                        "extension [{}]: id={:?} title={:?} kind={:?} version={:?} entry={:?} capabilities={} path={} detail={:?}",
-                        entry.state.label(),
-                        entry.id,
-                        entry.title,
-                        entry.kind.as_ref().map(|kind| kind.label()),
-                        entry.version,
-                        entry.entry,
-                        capabilities,
-                        entry.manifest_path.display(),
-                        entry.detail,
-                    );
+                    print_extension_record(entry);
                 }
             }
         }

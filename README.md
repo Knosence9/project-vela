@@ -47,7 +47,7 @@ Use a **progressive replacement strategy**:
 - `vela-skills` now also supports first real management actions through the CLI: `--create`, `--write`, and `--delete`
 - both `vela memory` and `vela skills` now support approval staging flows via `--stage`, `--pending`, `--show`, `--approve`, and `--reject`
 - `vela review` now stages background-review candidates under `~/.vela/reviews/`, can promote them into the existing pending approval queues, can emit structured `memory_signal` / `skill_signal` events via `--emit-signals`, and can run an end-to-end background pass via `--auto`
-- `vela-extensions` now bootstraps a first-pass manifest registry from `~/.vela/extensions/` (or configured override), surfaces loaded/disabled/invalid entries in `vela status`, and supports safe config-driven reload via `vela extensions --reload`
+- `vela-extensions` now bootstraps a first-pass manifest registry from `~/.vela/extensions/` (or configured override), surfaces lifecycle-aware extension entries in `vela status`, and supports safe config-driven reload via `vela extensions --reload`
 - `.github/ISSUE_TEMPLATE/` — issue templates for milestones, slices, regressions, and proof work
 
 ## Working style

@@ -189,7 +189,7 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
     std::fs::write(
         vela_home.join("extensions").join("demo.yaml"),
-        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\ncapabilities:\n  - chat\n",
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
     )
     .unwrap();
     std::fs::write(
@@ -203,7 +203,8 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     let status_stdout = stdout_text(&status);
     assert!(status_stdout.contains("extensions: dir="));
     assert!(status_stdout.contains("disabled=1"));
-    assert!(status_stdout.contains("extension [disabled-by-config]: id=Some(\"demo\")"));
+    assert!(status_stdout.contains("activation=Some(\"on-boot\")"));
+    assert!(status_stdout.contains("extension [disabled]: id=Some(\"demo\")"));
 
     let session_turn = run_vela(&vela_home, &["chat", "--query", "keep my session"]);
     assert!(session_turn.status.success(), "{}", stderr_text(&session_turn));
@@ -213,9 +214,9 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     assert!(reload.status.success(), "{}", stderr_text(&reload));
     let reload_stdout = stdout_text(&reload);
     assert!(reload_stdout.contains("extensions reloaded: extensions: dir="));
-    assert!(reload_stdout.contains("loaded=1"));
+    assert!(reload_stdout.contains("activated=1"));
     assert!(reload_stdout.contains("session preserved: true"));
-    assert!(reload_stdout.contains("extension [loaded]: id=Some(\"demo\")"));
+    assert!(reload_stdout.contains("extension [activated]: id=Some(\"demo\")"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

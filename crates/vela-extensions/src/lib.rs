@@ -1,11 +1,9 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use vela_config::{ResolvedConfig, ResolvedExtensionConfigEntry};
 
-/// Enumerates the supported first-pass extension kinds Vela can discover.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// Enumerates the supported first-pass extension kinds Vela can discover.
@@ -28,9 +26,49 @@ impl ExtensionKind {
     }
 }
 
-/// Captures one extension manifest discovered on disk before enable/disable policy is applied.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// Enumerates how a discovered extension should participate in runtime activation.
+pub enum ExtensionActivation {
+    MetadataOnly,
+    OnBoot,
+}
+
+impl ExtensionActivation {
+    /// Returns the stable string label used for persistence and display.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::MetadataOnly => "metadata-only",
+            Self::OnBoot => "on-boot",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Enumerates the lifecycle states surfaced for discovered extension entries.
+pub enum ExtensionLifecycle {
+    Discovered,
+    Validated,
+    Activated,
+    Disabled,
+    Failed,
+}
+
+impl ExtensionLifecycle {
+    /// Returns the stable string label used for persistence and display.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Discovered => "discovered",
+            Self::Validated => "validated",
+            Self::Activated => "activated",
+            Self::Disabled => "disabled",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
-/// Captures one extension manifest discovered on disk before enable/disable policy is applied.
+/// Captures one extension manifest discovered on disk before activation policy is applied.
 pub struct ExtensionManifest {
     #[serde(default = "default_manifest_version")]
     pub manifest_version: u32,
@@ -45,34 +83,25 @@ pub struct ExtensionManifest {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub entry: Option<String>,
+    #[serde(default)]
+    pub activation: Option<ExtensionActivation>,
 }
 
-/// Represents the load state assigned to one discovered extension manifest.
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Represents the load state assigned to one discovered extension manifest.
-pub enum ExtensionState {
-    Loaded,
-    DisabledByConfig,
-    InvalidManifest,
-}
-
-impl ExtensionState {
-    /// Returns the stable string label used for persistence and display.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Loaded => "loaded",
-            Self::DisabledByConfig => "disabled-by-config",
-            Self::InvalidManifest => "invalid-manifest",
-        }
+impl ExtensionManifest {
+    fn resolved_activation(&self) -> ExtensionActivation {
+        self.activation.clone().unwrap_or_else(|| match self.kind {
+            ExtensionKind::Tool | ExtensionKind::Skill | ExtensionKind::Workflow => ExtensionActivation::OnBoot,
+            ExtensionKind::Service => ExtensionActivation::MetadataOnly,
+        })
     }
 }
 
-/// Describes one discovered extension entry and the metadata retained for status output.
 #[derive(Debug, Clone)]
 /// Describes one discovered extension entry and the metadata retained for status output.
 pub struct ExtensionRecord {
     pub manifest_path: PathBuf,
-    pub state: ExtensionState,
+    pub lifecycle: ExtensionLifecycle,
+    pub activation: Option<ExtensionActivation>,
     pub id: Option<String>,
     pub title: Option<String>,
     pub kind: Option<ExtensionKind>,
@@ -83,16 +112,17 @@ pub struct ExtensionRecord {
     pub detail: Option<String>,
 }
 
-/// Summarizes the currently discovered extension registry for one bootstrap or reload pass.
 #[derive(Debug, Clone)]
 /// Summarizes the currently discovered extension registry for one bootstrap or reload pass.
 pub struct ExtensionsReport {
     pub manifests_dir: PathBuf,
     pub manifests_dir_existed_before: bool,
     pub discovered_manifest_count: usize,
-    pub loaded_count: usize,
+    pub discovered_count: usize,
+    pub validated_count: usize,
+    pub activated_count: usize,
     pub disabled_count: usize,
-    pub invalid_count: usize,
+    pub failed_count: usize,
     pub entries: Vec<ExtensionRecord>,
 }
 
@@ -100,13 +130,15 @@ impl ExtensionsReport {
     /// Renders a compact extension-registry summary for CLI status output.
     pub fn summary_line(&self) -> String {
         format!(
-            "extensions: dir={} existed_before={} discovered={} loaded={} disabled={} invalid={}",
+            "extensions: dir={} existed_before={} manifests={} discovered={} validated={} activated={} disabled={} failed={}",
             self.manifests_dir.display(),
             self.manifests_dir_existed_before,
             self.discovered_manifest_count,
-            self.loaded_count,
+            self.discovered_count,
+            self.validated_count,
+            self.activated_count,
             self.disabled_count,
-            self.invalid_count,
+            self.failed_count,
         )
     }
 }
@@ -150,7 +182,6 @@ fn load_registry_from_dir(
         .map(|entry| (entry.id.trim().to_string(), entry.enabled))
         .collect();
 
-    let mut entries = Vec::new();
     let mut manifest_paths = Vec::new();
     for dir_entry in std::fs::read_dir(manifests_dir)
         .with_context(|| format!("failed to read {}", manifests_dir.display()))?
@@ -169,75 +200,81 @@ fn load_registry_from_dir(
     }
     manifest_paths.sort();
 
-    let mut duplicate_counts = BTreeMap::<String, usize>::new();
-    for path in &manifest_paths {
-        if let Some(id) = read_manifest_id(path)? {
-            *duplicate_counts.entry(id).or_default() += 1;
-        }
-    }
-    let duplicate_ids = Arc::new(
-        duplicate_counts
-            .into_iter()
-            .filter_map(|(id, count)| (count > 1).then_some(id))
-            .collect::<BTreeSet<_>>(),
-    );
-
-    for path in &manifest_paths {
-        entries.push(load_record(path, &override_map, duplicate_ids.clone())?);
-    }
-
     let discovered_manifest_count = manifest_paths.len();
-    let loaded_count = entries
+    let mut pending = Vec::new();
+    let mut id_counts = BTreeMap::<String, usize>::new();
+    for path in &manifest_paths {
+        let entry = parse_manifest(path)?;
+        if let ParsedExtension::Valid { id, .. } = &entry {
+            *id_counts.entry(id.clone()).or_default() += 1;
+        }
+        pending.push(entry);
+    }
+
+    let mut entries = Vec::new();
+    for entry in pending {
+        entries.push(finalize_record(entry, &override_map, &id_counts));
+    }
+
+    let discovered_count = entries
         .iter()
-        .filter(|entry| matches!(entry.state, ExtensionState::Loaded))
+        .filter(|entry| matches!(entry.lifecycle, ExtensionLifecycle::Discovered))
+        .count();
+    let validated_count = entries
+        .iter()
+        .filter(|entry| matches!(entry.lifecycle, ExtensionLifecycle::Validated))
+        .count();
+    let activated_count = entries
+        .iter()
+        .filter(|entry| matches!(entry.lifecycle, ExtensionLifecycle::Activated))
         .count();
     let disabled_count = entries
         .iter()
-        .filter(|entry| matches!(entry.state, ExtensionState::DisabledByConfig))
+        .filter(|entry| matches!(entry.lifecycle, ExtensionLifecycle::Disabled))
         .count();
-    let invalid_count = entries
+    let failed_count = entries
         .iter()
-        .filter(|entry| matches!(entry.state, ExtensionState::InvalidManifest))
+        .filter(|entry| matches!(entry.lifecycle, ExtensionLifecycle::Failed))
         .count();
 
     Ok(ExtensionsReport {
         manifests_dir: manifests_dir.to_path_buf(),
         manifests_dir_existed_before: existed_before,
         discovered_manifest_count,
-        loaded_count,
+        discovered_count,
+        validated_count,
+        activated_count,
         disabled_count,
-        invalid_count,
+        failed_count,
         entries,
     })
 }
 
-fn read_manifest_id(path: &Path) -> Result<Option<String>> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let parsed: ExtensionManifest = match serde_yaml::from_str(&text) {
-        Ok(parsed) => parsed,
-        Err(_) => return Ok(None),
-    };
-    let trimmed_id = parsed.id.trim().to_string();
-    if trimmed_id.is_empty() || parsed.manifest_version != 1 {
-        return Ok(None);
-    }
-    Ok(Some(trimmed_id))
+enum ParsedExtension {
+    Valid {
+        manifest_path: PathBuf,
+        id: String,
+        title: String,
+        kind: ExtensionKind,
+        activation: ExtensionActivation,
+        version: Option<String>,
+        description: Option<String>,
+        capabilities: Vec<String>,
+        entry: Option<String>,
+    },
+    Invalid(ExtensionRecord),
 }
 
-fn load_record(
-    path: &Path,
-    overrides: &BTreeMap<String, bool>,
-    duplicate_ids: Arc<BTreeSet<String>>,
-) -> Result<ExtensionRecord> {
+fn parse_manifest(path: &Path) -> Result<ParsedExtension> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let parsed: ExtensionManifest = match serde_yaml::from_str(&text) {
         Ok(parsed) => parsed,
         Err(error) => {
-            return Ok(ExtensionRecord {
+            return Ok(ParsedExtension::Invalid(ExtensionRecord {
                 manifest_path: path.to_path_buf(),
-                state: ExtensionState::InvalidManifest,
+                lifecycle: ExtensionLifecycle::Failed,
+                activation: None,
                 id: None,
                 title: None,
                 kind: None,
@@ -246,15 +283,16 @@ fn load_record(
                 capabilities: vec![],
                 entry: None,
                 detail: Some(error.to_string()),
-            });
+            }));
         }
     };
 
     let trimmed_id = parsed.id.trim().to_string();
     if trimmed_id.is_empty() {
-        return Ok(ExtensionRecord {
+        return Ok(ParsedExtension::Invalid(ExtensionRecord {
             manifest_path: path.to_path_buf(),
-            state: ExtensionState::InvalidManifest,
+            lifecycle: ExtensionLifecycle::Failed,
+            activation: None,
             id: None,
             title: Some(parsed.title),
             kind: Some(parsed.kind),
@@ -263,12 +301,13 @@ fn load_record(
             capabilities: parsed.capabilities,
             entry: parsed.entry,
             detail: Some("manifest id cannot be empty".to_string()),
-        });
+        }));
     }
     if parsed.manifest_version != 1 {
-        return Ok(ExtensionRecord {
+        return Ok(ParsedExtension::Invalid(ExtensionRecord {
             manifest_path: path.to_path_buf(),
-            state: ExtensionState::InvalidManifest,
+            lifecycle: ExtensionLifecycle::Failed,
+            activation: Some(parsed.resolved_activation()),
             id: Some(trimmed_id),
             title: Some(parsed.title),
             kind: Some(parsed.kind),
@@ -280,44 +319,113 @@ fn load_record(
                 "unsupported manifest_version {}; expected 1",
                 parsed.manifest_version
             )),
-        });
-    }
-    if duplicate_ids.contains(&trimmed_id) {
-        return Ok(ExtensionRecord {
-            manifest_path: path.to_path_buf(),
-            state: ExtensionState::InvalidManifest,
-            id: Some(trimmed_id),
-            title: Some(parsed.title),
-            kind: Some(parsed.kind),
-            version: parsed.version,
-            description: parsed.description,
-            capabilities: parsed.capabilities,
-            entry: parsed.entry,
-            detail: Some("duplicate extension id discovered".to_string()),
-        });
+        }));
     }
 
-    let enabled = overrides.get(&trimmed_id).copied().unwrap_or(true);
-    Ok(ExtensionRecord {
+    let activation = parsed.resolved_activation();
+    Ok(ParsedExtension::Valid {
         manifest_path: path.to_path_buf(),
-        state: if enabled {
-            ExtensionState::Loaded
-        } else {
-            ExtensionState::DisabledByConfig
-        },
-        id: Some(trimmed_id),
-        title: Some(parsed.title),
-        kind: Some(parsed.kind),
+        id: trimmed_id,
+        title: parsed.title,
+        kind: parsed.kind,
+        activation,
         version: parsed.version,
         description: parsed.description,
         capabilities: parsed.capabilities,
         entry: parsed.entry,
-        detail: if enabled {
-            None
-        } else {
-            Some("disabled by config override".to_string())
-        },
     })
+}
+
+fn finalize_record(
+    parsed: ParsedExtension,
+    overrides: &BTreeMap<String, bool>,
+    id_counts: &BTreeMap<String, usize>,
+) -> ExtensionRecord {
+    match parsed {
+        ParsedExtension::Invalid(record) => record,
+        ParsedExtension::Valid {
+            manifest_path,
+            id,
+            title,
+            kind,
+            activation,
+            version,
+            description,
+            capabilities,
+            entry,
+        } => {
+            if id_counts.get(&id).copied().unwrap_or_default() > 1 {
+                return ExtensionRecord {
+                    manifest_path,
+                    lifecycle: ExtensionLifecycle::Failed,
+                    activation: Some(activation),
+                    id: Some(id),
+                    title: Some(title),
+                    kind: Some(kind),
+                    version,
+                    description,
+                    capabilities,
+                    entry,
+                    detail: Some("duplicate extension id discovered".to_string()),
+                };
+            }
+
+            let base = ExtensionRecord {
+                manifest_path,
+                lifecycle: ExtensionLifecycle::Discovered,
+                activation: Some(activation.clone()),
+                id: Some(id.clone()),
+                title: Some(title),
+                kind: Some(kind.clone()),
+                version,
+                description,
+                capabilities,
+                entry,
+                detail: None,
+            };
+
+            if !overrides.get(&id).copied().unwrap_or(true) {
+                return ExtensionRecord {
+                    lifecycle: ExtensionLifecycle::Disabled,
+                    detail: Some("disabled by config override".to_string()),
+                    ..base
+                };
+            }
+
+            match activation {
+                ExtensionActivation::MetadataOnly => ExtensionRecord {
+                    lifecycle: ExtensionLifecycle::Validated,
+                    detail: Some("metadata-only extension in this slice".to_string()),
+                    ..base
+                },
+                ExtensionActivation::OnBoot => match activation_failure(base.kind.as_ref(), base.entry.as_deref()) {
+                    Some(detail) => ExtensionRecord {
+                        lifecycle: ExtensionLifecycle::Failed,
+                        detail: Some(detail),
+                        ..base
+                    },
+                    None => ExtensionRecord {
+                        lifecycle: ExtensionLifecycle::Activated,
+                        detail: Some("activation completed during bootstrap".to_string()),
+                        ..base
+                    },
+                },
+            }
+        }
+    }
+}
+
+fn activation_failure(kind: Option<&ExtensionKind>, entry: Option<&str>) -> Option<String> {
+    match kind {
+        Some(ExtensionKind::Service) => Some("service extensions remain metadata-only in this slice".to_string()),
+        Some(ExtensionKind::Tool | ExtensionKind::Skill | ExtensionKind::Workflow) => {
+            match entry.map(str::trim).filter(|value| !value.is_empty()) {
+                Some(_) => None,
+                None => Some("activation requires a non-empty entry path".to_string()),
+            }
+        }
+        None => Some("activation requires a known extension kind".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -334,20 +442,25 @@ mod tests {
     }
 
     #[test]
-    /// Verifies that manifest discovery loads valid entries and applies config disables.
-    fn initialize_extensions_discovers_manifests_and_applies_config_disables() {
+    /// Verifies that manifests can activate, validate as metadata-only, or disable through config.
+    fn initialize_extensions_applies_lifecycle_states() {
         let vela_home = std::env::temp_dir().join(format!("vela-ext-test-{}", std::process::id()));
         let manifests_dir = vela_home.join("extensions-manifests");
         let _ = std::fs::remove_dir_all(&vela_home);
         std::fs::create_dir_all(&manifests_dir).unwrap();
         std::fs::write(
             manifests_dir.join("demo.yaml"),
-            "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\ncapabilities:\n  - chat\n",
+            "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
+        )
+        .unwrap();
+        std::fs::write(
+            manifests_dir.join("service.yaml"),
+            "manifest_version: 1\nid: service\ntitle: Service\nkind: service\n",
         )
         .unwrap();
         std::fs::write(
             manifests_dir.join("ops.yaml"),
-            "manifest_version: 1\nid: ops\ntitle: Ops\nkind: workflow\n",
+            "manifest_version: 1\nid: ops\ntitle: Ops\nkind: workflow\nentry: extensions/ops.flow\n",
         )
         .unwrap();
 
@@ -360,36 +473,39 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.discovered_manifest_count, 2);
-        assert_eq!(report.loaded_count, 1);
+        assert_eq!(report.discovered_manifest_count, 3);
+        assert_eq!(report.activated_count, 1);
+        assert_eq!(report.validated_count, 1);
         assert_eq!(report.disabled_count, 1);
-        assert_eq!(report.invalid_count, 0);
+        assert_eq!(report.failed_count, 0);
         assert!(report.entries.iter().any(|entry| {
-            entry.id.as_deref() == Some("demo") && matches!(entry.state, ExtensionState::Loaded)
+            entry.id.as_deref() == Some("demo") && matches!(entry.lifecycle, ExtensionLifecycle::Activated)
         }));
         assert!(report.entries.iter().any(|entry| {
-            entry.id.as_deref() == Some("ops")
-                && matches!(entry.state, ExtensionState::DisabledByConfig)
+            entry.id.as_deref() == Some("service") && matches!(entry.lifecycle, ExtensionLifecycle::Validated)
+        }));
+        assert!(report.entries.iter().any(|entry| {
+            entry.id.as_deref() == Some("ops") && matches!(entry.lifecycle, ExtensionLifecycle::Disabled)
         }));
 
         let _ = std::fs::remove_dir_all(&vela_home);
     }
 
     #[test]
-    /// Verifies that duplicate ids or unsupported manifests are surfaced as invalid entries.
-    fn initialize_extensions_marks_invalid_manifests() {
+    /// Verifies that duplicate ids, unsupported manifests, and failed activation are surfaced as failed entries.
+    fn initialize_extensions_marks_failed_entries() {
         let vela_home = std::env::temp_dir().join(format!("vela-ext-invalid-{}", std::process::id()));
         let manifests_dir = vela_home.join("extensions-manifests");
         let _ = std::fs::remove_dir_all(&vela_home);
         std::fs::create_dir_all(&manifests_dir).unwrap();
         std::fs::write(
             manifests_dir.join("duplicate-a.yaml"),
-            "manifest_version: 1\nid: duplicate\ntitle: First\nkind: tool\n",
+            "manifest_version: 1\nid: duplicate\ntitle: First\nkind: tool\nentry: extensions/a.wasm\n",
         )
         .unwrap();
         std::fs::write(
             manifests_dir.join("duplicate-b.yaml"),
-            "manifest_version: 1\nid: duplicate\ntitle: Second\nkind: tool\n",
+            "manifest_version: 1\nid: duplicate\ntitle: Second\nkind: tool\nentry: extensions/b.wasm\n",
         )
         .unwrap();
         std::fs::write(
@@ -397,24 +513,34 @@ mod tests {
             "manifest_version: 2\nid: unsupported\ntitle: Unsupported\nkind: skill\n",
         )
         .unwrap();
+        std::fs::write(
+            manifests_dir.join("missing-entry.yaml"),
+            "manifest_version: 1\nid: missing-entry\ntitle: Missing Entry\nkind: workflow\n",
+        )
+        .unwrap();
 
         let report = initialize_extensions(&vela_home, &resolved_with(vec![])).unwrap();
-        assert_eq!(report.discovered_manifest_count, 3);
-        assert_eq!(report.loaded_count, 0);
-        assert_eq!(report.invalid_count, 3);
-        let duplicate_invalid = report
+        assert_eq!(report.discovered_manifest_count, 4);
+        assert_eq!(report.activated_count, 0);
+        assert_eq!(report.failed_count, 4);
+        let duplicate_failed = report
             .entries
             .iter()
             .filter(|entry| {
                 entry.id.as_deref() == Some("duplicate")
-                    && matches!(entry.state, ExtensionState::InvalidManifest)
+                    && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
                     && entry.detail.as_deref() == Some("duplicate extension id discovered")
             })
             .count();
-        assert_eq!(duplicate_invalid, 2);
+        assert_eq!(duplicate_failed, 2);
         assert!(report.entries.iter().any(|entry| {
             entry.id.as_deref() == Some("unsupported")
-                && matches!(entry.state, ExtensionState::InvalidManifest)
+                && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
+        }));
+        assert!(report.entries.iter().any(|entry| {
+            entry.id.as_deref() == Some("missing-entry")
+                && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
+                && entry.detail.as_deref() == Some("activation requires a non-empty entry path")
         }));
 
         let _ = std::fs::remove_dir_all(&vela_home);
