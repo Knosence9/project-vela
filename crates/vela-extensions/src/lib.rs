@@ -203,9 +203,11 @@ fn load_registry_from_dir(
     let discovered_manifest_count = manifest_paths.len();
     let mut pending = Vec::new();
     let mut id_counts = BTreeMap::<String, usize>::new();
+    let mut discovered_count = 0usize;
     for path in &manifest_paths {
         let entry = parse_manifest(path)?;
         if let ParsedExtension::Valid { id, .. } = &entry {
+            discovered_count += 1;
             *id_counts.entry(id.clone()).or_default() += 1;
         }
         pending.push(entry);
@@ -215,11 +217,6 @@ fn load_registry_from_dir(
     for entry in pending {
         entries.push(finalize_record(entry, &override_map, &id_counts));
     }
-
-    let discovered_count = entries
-        .iter()
-        .filter(|entry| matches!(entry.lifecycle, ExtensionLifecycle::Discovered))
-        .count();
     let validated_count = entries
         .iter()
         .filter(|entry| matches!(entry.lifecycle, ExtensionLifecycle::Validated))
@@ -474,6 +471,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.discovered_manifest_count, 3);
+        assert_eq!(report.discovered_count, 3);
         assert_eq!(report.activated_count, 1);
         assert_eq!(report.validated_count, 1);
         assert_eq!(report.disabled_count, 1);
@@ -521,6 +519,7 @@ mod tests {
 
         let report = initialize_extensions(&vela_home, &resolved_with(vec![])).unwrap();
         assert_eq!(report.discovered_manifest_count, 4);
+        assert_eq!(report.discovered_count, 3);
         assert_eq!(report.activated_count, 0);
         assert_eq!(report.failed_count, 4);
         let duplicate_failed = report
