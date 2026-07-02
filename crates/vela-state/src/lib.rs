@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -624,12 +625,6 @@ pub fn compress_session(
     if summary.is_empty() {
         anyhow::bail!("compression summary cannot be empty");
     }
-    if latest_compression_summary(state_db_path, &session.id)?
-        .as_deref()
-        .is_some_and(|existing| existing.trim() == summary)
-    {
-        anyhow::bail!("compression summary matches the latest persisted summary");
-    }
     let source_message_count: u64 = conn.query_row(
         "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
         params![session.id],
@@ -643,6 +638,12 @@ pub fn compress_session(
     let created_at = unix_timestamp();
     let id = format!("cmp-{}", unix_timestamp_nanos());
     let tx = conn.unchecked_transaction()?;
+    if latest_compression_summary_for_connection(&tx, &session.id)?
+        .as_deref()
+        .is_some_and(|existing| existing.trim() == summary)
+    {
+        anyhow::bail!("compression summary matches the latest persisted summary");
+    }
     tx.execute(
         "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, created_at)
          VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
@@ -679,11 +680,20 @@ pub fn latest_compression_summary(
 ) -> Result<Option<String>> {
     let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
-    Ok(conn.query_row(
-        "SELECT summary FROM session_compressions WHERE session_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
-        params![session_id],
-        |row| row.get(0),
-    ).optional()?)
+    latest_compression_summary_for_connection(&conn, session_id)
+}
+
+fn latest_compression_summary_for_connection(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT summary FROM session_compressions WHERE session_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 /// Resolves command session from persisted state and runtime inputs.
@@ -1144,8 +1154,11 @@ fn latest_session_in_subtree(
         ))
     })?;
     let mut sessions = Vec::new();
+    let mut parents_by_id = HashMap::new();
     for row in rows {
-        sessions.push(row?);
+        let (id, title, parent_session_id, updated_at) = row?;
+        parents_by_id.insert(id.clone(), parent_session_id.clone());
+        sessions.push((id, title, parent_session_id, updated_at));
     }
     for (id, title, _parent_session_id, _updated_at) in &sessions {
         let mut cursor = Some(id.as_str());
@@ -1156,10 +1169,9 @@ fn latest_session_in_subtree(
                     title: title.clone(),
                 }));
             }
-            cursor = sessions
-                .iter()
-                .find(|(candidate_id, _, _, _)| candidate_id == current)
-                .and_then(|(_, _, parent_session_id, _)| parent_session_id.as_deref());
+            cursor = parents_by_id
+                .get(current)
+                .and_then(|parent| parent.as_deref());
         }
     }
     Ok(None)
