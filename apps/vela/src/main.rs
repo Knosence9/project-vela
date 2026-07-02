@@ -1014,6 +1014,21 @@ fn main() -> Result<()> {
                             inspection.messages.len(),
                             inspection.events.len(),
                         );
+                        if inspection.child_sessions.is_empty() {
+                            println!("children: none");
+                        } else {
+                            println!("children [{}]:", inspection.child_sessions.len());
+                            for child in inspection.child_sessions {
+                                println!(
+                                    "- session={} title={} messages={} events={} parent={:?}",
+                                    child.id,
+                                    child.title,
+                                    child.message_count,
+                                    child.event_count,
+                                    child.parent_session_id,
+                                );
+                            }
+                        }
                         if inspection.compressions.is_empty() {
                             println!("compressions: none");
                         } else {

@@ -550,7 +550,7 @@ fn chat_query_retrieves_targeted_skill_context() {
 }
 
 #[test]
-/// Verifies session branching and compression through the CLI sessions surface.
+/// Verifies session branching, continue resolution, and compression through the CLI sessions surface.
 fn sessions_branch_and_compress_are_inspectable() {
     let vela_home = temp_vela_home("sessions-branch");
 
@@ -558,6 +558,7 @@ fn sessions_branch_and_compress_are_inspectable() {
     assert!(first.status.success(), "{}", stderr_text(&first));
     let first_stdout = stdout_text(&first);
     let parent_session = parse_field(&first_stdout, "id").expect("parent session id");
+    let parent_title = parse_field(&first_stdout, "title").expect("parent session title");
 
     let branch = run_vela(
         &vela_home,
@@ -576,6 +577,25 @@ fn sessions_branch_and_compress_are_inspectable() {
     assert!(branch_stdout.contains("session branched:"));
     assert!(branch_stdout.contains("title=branch-a"));
     let branch_session = parse_field(&branch_stdout, "session").expect("branch session id");
+
+    let branch_child = run_vela(
+        &vela_home,
+        &[
+            "sessions",
+            "--branch",
+            branch_session,
+            "--title",
+            "branch-a-child",
+        ],
+    );
+    assert!(
+        branch_child.status.success(),
+        "{}",
+        stderr_text(&branch_child)
+    );
+    let branch_child_stdout = stdout_text(&branch_child);
+    let branch_child_session =
+        parse_field(&branch_child_stdout, "session").expect("branch child session id");
 
     let compress = run_vela(
         &vela_home,
@@ -596,8 +616,44 @@ fn sessions_branch_and_compress_are_inspectable() {
     let show_stdout = stdout_text(&show);
     assert!(show_stdout.contains("parent_id=Some"));
     assert!(show_stdout.contains("parent_title=Some"));
+    assert!(show_stdout.contains("children [1]:"));
+    assert!(show_stdout.contains("title=branch-a-child"));
     assert!(show_stdout.contains("compressions [1]:"));
     assert!(show_stdout.contains("summary=branch compressed summary"));
+
+    let parent_show = run_vela(&vela_home, &["sessions", "--show", parent_session]);
+    assert!(
+        parent_show.status.success(),
+        "{}",
+        stderr_text(&parent_show)
+    );
+    let parent_show_stdout = stdout_text(&parent_show);
+    assert!(parent_show_stdout.contains("children [1]:"));
+    assert!(parent_show_stdout.contains("title=branch-a"));
+
+    let continue_root = run_vela(
+        &vela_home,
+        &["chat", "--continue", parent_title, "--query", "follow root"],
+    );
+    assert!(
+        continue_root.status.success(),
+        "{}",
+        stderr_text(&continue_root)
+    );
+    let continue_root_stdout = stdout_text(&continue_root);
+    assert!(continue_root_stdout.contains(&format!("id={}", branch_child_session)));
+
+    let continue_branch = run_vela(
+        &vela_home,
+        &["chat", "--continue", "branch-a", "--query", "follow branch"],
+    );
+    assert!(
+        continue_branch.status.success(),
+        "{}",
+        stderr_text(&continue_branch)
+    );
+    let continue_branch_stdout = stdout_text(&continue_branch);
+    assert!(continue_branch_stdout.contains(&format!("id={}", branch_child_session)));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

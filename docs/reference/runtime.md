@@ -12,7 +12,7 @@
   - `created_at`
   - `updated_at`
 - `--resume <session-id-or-title>` resumes a stored session
-- `--continue <name>` resumes the latest matching titled session
+- `--continue <name>` now resumes the latest session in the matched branch subtree, so continuing a parent or branch title prefers the freshest related descendant
 - bare `--continue` resumes the latest session
 - interactive vs single-turn mode is derived from whether query/image input is present
 - `status` reports the latest active session identity and first-pass extension registry state
@@ -31,7 +31,7 @@
 - runtime CLI turn output now reports the durable `turn_id`, lifecycle phase count, and final phase
 - `vela sessions --branch <session> --title <new-title> [--note ...]` can fork a durable child session with explicit parent lineage and copied continuity
 - `vela sessions --compress <session> --summary ...` can persist compressed continuity summaries without mutating durable memory directly
-- `vela sessions --show <session>` exposes branch parentage and compression counts through the session inspection surface
+- `vela sessions --show <session>` exposes branch parentage, immediate child sessions, and compression counts through the session inspection surface
 - Vela now discovers extension manifests from `~/.vela/extensions/` (or `extensions.manifests_dir` in config), applies config-driven enable/disable overrides, and surfaces lifecycle-aware extension entries through `vela status`
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
 - `vela extensions --reload` now re-reads config + manifest files, recomputes lifecycle transitions, and refreshes extension state without resetting durable session state
@@ -62,6 +62,6 @@
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
-- more advanced compression policies beyond explicit persisted operator summaries
+- more advanced compression policies beyond duplicate-summary rejection, touched-session updates, and explicit persisted operator summaries
 - deeper extension lifecycle hooks and capability activation beyond the first validated/activated/disabled/failed slice
 - richer recurring scheduling semantics beyond the first durable execution/recovery sweep and next-run rescheduling model
