@@ -17,7 +17,7 @@
 - interactive vs single-turn mode is derived from whether query/image input is present
 - `status` reports the latest active session identity and first-pass extension registry state
 - `gateway` now bootstraps durable gateway directories/config and can resume a gateway-specific runtime session
-- `cron` now bootstraps durable scheduler config/job state and can resume a scheduler-specific runtime session
+- `cron` now bootstraps durable scheduler config/job state, can resume a scheduler-specific runtime session, and can execute due jobs through the kernel scheduler path
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
@@ -41,7 +41,7 @@
 - repeated resume/continue paths update `updated_at` on the matching session row
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
 - `vela gateway --start` resumes the latest `gateway` command session when one already exists
-- `vela cron --start` resumes the latest `cron` command session when one already exists
+- `vela cron --start` resumes the latest `cron` command session when one already exists, executes due durable jobs, and recovers stale in-flight jobs before retrying them
 
 ## Kernel vs provider boundary
 - keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel
@@ -50,7 +50,7 @@
 - preserve local-only Ollama safety (`VELA_ALLOW_REMOTE_OLLAMA` opt-in for remote endpoints) inside the Ollama provider implementation
 
 ## Kernel vs extension boundary
-- keep durable session/state ownership in-kernel (`vela-state`, runtime lifecycle, approvals, persistence, scheduler continuity)
+- keep durable session/state ownership in-kernel (`vela-state`, runtime lifecycle, approvals, persistence, scheduler continuity, and scheduler execution recovery)
 - keep policy-bearing memory/review/session mutation paths in-kernel until stronger trust boundaries exist
 - allow extensions to describe discoverable capabilities, tool/skill/workflow metadata, and bounded activation hooks
 - keep service-style extensions metadata-only in this slice while tool/skill/workflow entries may activate when they provide valid entrypoints
@@ -64,4 +64,4 @@
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
 - more advanced compression policies beyond explicit persisted operator summaries
 - deeper extension lifecycle hooks and capability activation beyond the first validated/activated/disabled/failed slice
-- actual recurring job execution and restart recovery beyond durable registration
+- richer recurring scheduling semantics beyond the first durable execution/recovery sweep and next-run rescheduling model

@@ -20,14 +20,20 @@ fn read_mock_http_request(stream: &mut std::net::TcpStream) -> String {
     let expected_total_len;
     loop {
         let read = stream.read(&mut buf).expect("read mock ollama request");
-        assert!(read > 0, "mock Ollama request closed before full payload arrived");
+        assert!(
+            read > 0,
+            "mock Ollama request closed before full payload arrived"
+        );
         request_bytes.extend_from_slice(&buf[..read]);
         if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
             let end = end + 4;
             let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
             let content_length = head
                 .lines()
-                .find_map(|line| line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: ")))
+                .find_map(|line| {
+                    line.strip_prefix("Content-Length: ")
+                        .or_else(|| line.strip_prefix("content-length: "))
+                })
                 .expect("Content-Length header")
                 .trim()
                 .parse::<usize>()
@@ -38,7 +44,9 @@ fn read_mock_http_request(stream: &mut std::net::TcpStream) -> String {
         }
     }
     while request_bytes.len() < expected_total_len {
-        let read = stream.read(&mut buf).expect("read mock Ollama request body");
+        let read = stream
+            .read(&mut buf)
+            .expect("read mock Ollama request body");
         assert!(read > 0, "mock Ollama request closed before body finished");
         request_bytes.extend_from_slice(&buf[..read]);
     }
@@ -51,24 +59,43 @@ fn assert_mock_ollama_request(request: &str, exchange: &MockOllamaExchange<'_>) 
         .split_once("\r\n\r\n")
         .expect("split HTTP headers/body");
     let request_line = head.lines().next().expect("HTTP request line");
-    assert!(request_line.starts_with("POST /api/generate HTTP/1.1"), "unexpected request line: {request_line}");
-    let payload: serde_json::Value = serde_json::from_str(body_text).expect("decode mock ollama JSON body");
-    assert_eq!(payload.get("model").and_then(|v| v.as_str()), Some(exchange.expected_model));
+    assert!(
+        request_line.starts_with("POST /api/generate HTTP/1.1"),
+        "unexpected request line: {request_line}"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(body_text).expect("decode mock ollama JSON body");
+    assert_eq!(
+        payload.get("model").and_then(|v| v.as_str()),
+        Some(exchange.expected_model)
+    );
     assert_eq!(payload.get("stream").and_then(|v| v.as_bool()), Some(false));
-    let prompt = payload.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
-    assert!(prompt.contains(exchange.prompt_fragment), "prompt missing fragment: {}", exchange.prompt_fragment);
+    let prompt = payload
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .expect("prompt field");
+    assert!(
+        prompt.contains(exchange.prompt_fragment),
+        "prompt missing fragment: {}",
+        exchange.prompt_fragment
+    );
     let images = payload.get("images").and_then(|v| v.as_array());
     if let Some(expected_image_base64) = exchange.expected_image_base64 {
         let images = images.expect("images field");
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].as_str(), Some(expected_image_base64));
     } else {
-        assert!(payload.get("images").is_none(), "images field should be absent when no image is expected");
+        assert!(
+            payload.get("images").is_none(),
+            "images field should be absent when no image is expected"
+        );
     }
 }
 
 /// Spawns a mock Ollama server that validates one or more request/response exchanges.
-fn spawn_mock_ollama_sequence(exchanges: Vec<MockOllamaExchange<'static>>) -> (String, std::thread::JoinHandle<()>) {
+fn spawn_mock_ollama_sequence(
+    exchanges: Vec<MockOllamaExchange<'static>>,
+) -> (String, std::thread::JoinHandle<()>) {
     use std::io::Write;
     use std::net::TcpListener;
     use std::time::{Duration, Instant};
@@ -77,7 +104,10 @@ fn spawn_mock_ollama_sequence(exchanges: Vec<MockOllamaExchange<'static>>) -> (S
     listener
         .set_nonblocking(true)
         .expect("configure mock ollama listener nonblocking mode");
-    let addr = format!("http://{}", listener.local_addr().expect("mock ollama addr"));
+    let addr = format!(
+        "http://{}",
+        listener.local_addr().expect("mock ollama addr")
+    );
     let handle = std::thread::spawn(move || {
         for exchange in exchanges {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -85,7 +115,10 @@ fn spawn_mock_ollama_sequence(exchanges: Vec<MockOllamaExchange<'static>>) -> (S
                 match listener.accept() {
                     Ok(pair) => break pair,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "timed out waiting for mock Ollama request");
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for mock Ollama request"
+                        );
                         std::thread::sleep(Duration::from_millis(10));
                     }
                     Err(error) => panic!("accept mock ollama request: {error}"),
@@ -105,7 +138,9 @@ fn spawn_mock_ollama_sequence(exchanges: Vec<MockOllamaExchange<'static>>) -> (S
                 payload.len(),
                 payload
             );
-            stream.write_all(reply.as_bytes()).expect("write mock ollama response");
+            stream
+                .write_all(reply.as_bytes())
+                .expect("write mock ollama response");
             stream.flush().expect("flush mock ollama response");
         }
     });
@@ -207,7 +242,11 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     assert!(status_stdout.contains("extension [disabled]: id=Some(\"demo\")"));
 
     let session_turn = run_vela(&vela_home, &["chat", "--query", "keep my session"]);
-    assert!(session_turn.status.success(), "{}", stderr_text(&session_turn));
+    assert!(
+        session_turn.status.success(),
+        "{}",
+        stderr_text(&session_turn)
+    );
 
     std::fs::write(vela_home.join("config.yaml"), "extensions: {}\n").unwrap();
     let reload = run_vela(&vela_home, &["extensions", "--reload"]);
@@ -275,7 +314,8 @@ fn chat_query_executes_runtime_turn_and_generates_candidates() {
 /// Verifies that a configured Ollama provider is used for chat text turns.
 fn chat_query_uses_configured_ollama_provider() {
     let vela_home = temp_vela_home("ollama-chat");
-    let (base_url, server) = spawn_mock_ollama("Gemma local reply.", "gemma3:4b", "hello from cli", None);
+    let (base_url, server) =
+        spawn_mock_ollama("Gemma local reply.", "gemma3:4b", "hello from cli", None);
     std::fs::create_dir_all(&vela_home).unwrap();
     std::fs::write(
         vela_home.join("config.yaml"),
@@ -331,7 +371,10 @@ fn chat_image_uses_configured_ollama_provider() {
     )
     .unwrap();
 
-    let turn = run_vela(&vela_home, &["chat", "--image", image_path.to_str().expect("image path")]);
+    let turn = run_vela(
+        &vela_home,
+        &["chat", "--image", image_path.to_str().expect("image path")],
+    );
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Gemma inspected the image."));
@@ -360,13 +403,17 @@ fn chat_query_uses_configured_ollama_tool_loop() {
         MockOllamaExchange {
             response_body: "Tool-informed final answer.",
             expected_model: "gemma3:4b",
-            prompt_fragment: "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
+            prompt_fragment:
+                "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
             expected_image_base64: None,
         },
     ]);
     std::fs::create_dir_all(vela_home.join("skills").join("deploy-staging")).unwrap();
     std::fs::write(
-        vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+        vela_home
+            .join("skills")
+            .join("deploy-staging")
+            .join("SKILL.md"),
         "# deploy-staging\n\nDeploys staging.",
     )
     .unwrap();
@@ -419,7 +466,10 @@ fn chat_query_recovers_from_invalid_tool_request() {
     )
     .unwrap();
 
-    let turn = run_vela(&vela_home, &["chat", "--query", "recover from invalid tool"]);
+    let turn = run_vela(
+        &vela_home,
+        &["chat", "--query", "recover from invalid tool"],
+    );
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Recovered final answer."));
@@ -429,9 +479,25 @@ fn chat_query_recovers_from_invalid_tool_request() {
 
     std::env::set_var("VELA_HOME", &vela_home);
     let bootstrap = vela_runtime::initialize_bootstrap(None, false).unwrap();
-    let inspection = vela_runtime::inspect_latest_session(&bootstrap, 20).unwrap().expect("cli reflection inspection");
-    let lifecycle: Vec<_> = inspection.lifecycle.iter().map(|record| record.phase.as_str()).collect();
-    assert_eq!(lifecycle, vec!["receive", "deliberate", "reflect", "retry", "respond", "finish"]);
+    let inspection = vela_runtime::inspect_latest_session(&bootstrap, 20)
+        .unwrap()
+        .expect("cli reflection inspection");
+    let lifecycle: Vec<_> = inspection
+        .lifecycle
+        .iter()
+        .map(|record| record.phase.as_str())
+        .collect();
+    assert_eq!(
+        lifecycle,
+        vec![
+            "receive",
+            "deliberate",
+            "reflect",
+            "retry",
+            "respond",
+            "finish"
+        ]
+    );
     std::env::remove_var("VELA_HOME");
     server.join().unwrap();
 
@@ -458,7 +524,10 @@ fn chat_query_retrieves_targeted_skill_context() {
     ]);
     std::fs::create_dir_all(vela_home.join("skills").join("deploy-staging")).unwrap();
     std::fs::write(
-        vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+        vela_home
+            .join("skills")
+            .join("deploy-staging")
+            .join("SKILL.md"),
         "# deploy-staging\n\nDeploy staging safely.",
     )
     .unwrap();
@@ -490,14 +559,34 @@ fn sessions_branch_and_compress_are_inspectable() {
     let first_stdout = stdout_text(&first);
     let parent_session = parse_field(&first_stdout, "id").expect("parent session id");
 
-    let branch = run_vela(&vela_home, &["sessions", "--branch", parent_session, "--title", "branch-a", "--note", "explore alternative"]);
+    let branch = run_vela(
+        &vela_home,
+        &[
+            "sessions",
+            "--branch",
+            parent_session,
+            "--title",
+            "branch-a",
+            "--note",
+            "explore alternative",
+        ],
+    );
     assert!(branch.status.success(), "{}", stderr_text(&branch));
     let branch_stdout = stdout_text(&branch);
     assert!(branch_stdout.contains("session branched:"));
     assert!(branch_stdout.contains("title=branch-a"));
     let branch_session = parse_field(&branch_stdout, "session").expect("branch session id");
 
-    let compress = run_vela(&vela_home, &["sessions", "--compress", branch_session, "--summary", "branch compressed summary"]);
+    let compress = run_vela(
+        &vela_home,
+        &[
+            "sessions",
+            "--compress",
+            branch_session,
+            "--summary",
+            "branch compressed summary",
+        ],
+    );
     assert!(compress.status.success(), "{}", stderr_text(&compress));
     let compress_stdout = stdout_text(&compress);
     assert!(compress_stdout.contains("session compressed:"));
@@ -518,30 +607,64 @@ fn sessions_branch_and_compress_are_inspectable() {
 fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     let vela_home = temp_vela_home("cron");
 
-    let add = run_vela(&vela_home, &["cron", "--add", "ping status", "--schedule", "0 * * * *"]);
+    let add = run_vela(
+        &vela_home,
+        &["cron", "--add", "ping status", "--schedule", "0 * * * *"],
+    );
     assert!(add.status.success(), "{}", stderr_text(&add));
     let add_stdout = stdout_text(&add);
-    let job_id = parse_field(&add_stdout, "added:").or_else(|| parse_field(&add_stdout, "job")).unwrap_or_else(|| {
-        add_stdout
-            .split_whitespace()
-            .nth(3)
-            .expect("job id token")
-    });
+    let job_id = parse_field(&add_stdout, "added:")
+        .or_else(|| parse_field(&add_stdout, "job"))
+        .unwrap_or_else(|| add_stdout.split_whitespace().nth(3).expect("job id token"));
 
     let show = run_vela(&vela_home, &["cron", "--show", job_id]);
     assert!(show.status.success(), "{}", stderr_text(&show));
     let show_stdout = stdout_text(&show);
     assert!(show_stdout.contains(job_id));
     assert!(show_stdout.contains("task=ping status"));
+    assert!(show_stdout.contains("next_run_at="));
 
     let list = run_vela(&vela_home, &["cron", "--list"]);
     assert!(list.status.success(), "{}", stderr_text(&list));
     let list_stdout = stdout_text(&list);
     assert!(list_stdout.contains(job_id));
+    assert!(list_stdout.contains("run_count=0"));
 
     let invalid = run_vela(&vela_home, &["cron", "--schedule", "0 * * * *"]);
     assert!(!invalid.status.success());
     assert!(stderr_text(&invalid).contains("--add <ADD>"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that starting the scheduler executes due jobs and records durable run metadata.
+fn cron_start_executes_due_jobs() {
+    let vela_home = temp_vela_home("cron-start");
+
+    let add = run_vela(
+        &vela_home,
+        &["cron", "--add", "ping status", "--schedule", "* * * * *"],
+    );
+    assert!(add.status.success(), "{}", stderr_text(&add));
+    let add_stdout = stdout_text(&add);
+    let job_id = parse_field(&add_stdout, "added:")
+        .or_else(|| parse_field(&add_stdout, "job"))
+        .unwrap_or_else(|| add_stdout.split_whitespace().nth(3).expect("job id token"));
+
+    let start = run_vela(&vela_home, &["cron", "--start"]);
+    assert!(start.status.success(), "{}", stderr_text(&start));
+    let start_stdout = stdout_text(&start);
+    assert!(start_stdout.contains("executed=1"));
+    assert!(start_stdout.contains("recovered=0"));
+    assert!(start_stdout.contains("failed=0"));
+
+    let show = run_vela(&vela_home, &["cron", "--show", job_id]);
+    assert!(show.status.success(), "{}", stderr_text(&show));
+    let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains("status=pending"));
+    assert!(show_stdout.contains("run_count=1"));
+    assert!(show_stdout.contains("outcome=Some(\"completed\")"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

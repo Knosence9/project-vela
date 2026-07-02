@@ -57,6 +57,9 @@ pub struct SchedulerSetupReport {
 pub struct SchedulerStartReport {
     pub setup: SchedulerSetupReport,
     pub session: SessionRuntimeReport,
+    pub executed_job_count: usize,
+    pub recovered_job_count: usize,
+    pub failed_job_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +84,28 @@ pub struct ScheduledJob {
     pub source: String,
     pub status: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+    #[serde(default)]
+    pub next_run_at: i64,
+    #[serde(default)]
+    pub last_started_at: Option<i64>,
+    #[serde(default)]
+    pub last_completed_at: Option<i64>,
+    #[serde(default)]
+    pub last_failed_at: Option<i64>,
+    #[serde(default)]
+    pub last_recovered_at: Option<i64>,
+    #[serde(default)]
+    pub last_outcome: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub run_count: u64,
+    #[serde(default)]
+    pub recovery_count: u64,
+    #[serde(default)]
+    pub last_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -320,6 +345,7 @@ pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartRepo
         "cron",
         InteractionMode::Interactive,
     )?;
+    let cycle = process_scheduler_jobs(bootstrap, &session.session_id, &setup.jobs_path)?;
     let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         &session.session_id,
@@ -330,6 +356,9 @@ pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartRepo
             "jobs_path": setup.jobs_path,
             "job_count": setup.job_count,
             "action": session.action.label(),
+            "executed_job_count": cycle.executed_job_count,
+            "recovered_job_count": cycle.recovered_job_count,
+            "failed_job_count": cycle.failed_job_count,
         })
         .to_string(),
     )?;
@@ -356,7 +385,13 @@ pub fn start_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerStartRepo
             tracing::warn!(session_id=%session.session_id, "failed to append scheduler bootstrap message");
         }
     }
-    Ok(SchedulerStartReport { setup, session })
+    Ok(SchedulerStartReport {
+        setup,
+        session,
+        executed_job_count: cycle.executed_job_count,
+        recovered_job_count: cycle.recovered_job_count,
+        failed_job_count: cycle.failed_job_count,
+    })
 }
 
 /// Executes one runtime turn, optionally emitting review/checkpoint artifacts.
@@ -535,18 +570,30 @@ pub fn add_scheduled_job(
         job.schedule == schedule
             && job.task == task
             && job.source == source
-            && job.status == "pending"
+            && matches!(job.status.as_str(), "pending" | "running")
     }) {
         drop(lock);
         bail!("matching scheduled job is already registered");
     }
+    let now = unix_timestamp();
     let job = ScheduledJob {
         id: format!("job-{}", unix_timestamp_nanos()),
         schedule,
         task,
         source,
         status: "pending".to_string(),
-        created_at: unix_timestamp(),
+        created_at: now,
+        updated_at: now,
+        next_run_at: now,
+        last_started_at: None,
+        last_completed_at: None,
+        last_failed_at: None,
+        last_recovered_at: None,
+        last_outcome: None,
+        last_error: None,
+        run_count: 0,
+        recovery_count: 0,
+        last_session_id: None,
     };
     jobs.push(job.clone());
     save_scheduler_jobs(&setup.jobs_path, &jobs)?;
@@ -564,6 +611,223 @@ pub fn add_scheduled_job(
         }
     }
     Ok(job)
+}
+
+#[derive(Default)]
+struct SchedulerCycleReport {
+    executed_job_count: usize,
+    recovered_job_count: usize,
+    failed_job_count: usize,
+}
+
+const SCHEDULER_RECOVERY_LEASE_SECONDS: i64 = 300;
+
+fn process_scheduler_jobs(
+    bootstrap: &BootstrapReport,
+    scheduler_session_id: &str,
+    jobs_path: &std::path::Path,
+) -> Result<SchedulerCycleReport> {
+    let now = unix_timestamp();
+    let lock = acquire_scheduler_jobs_lock(jobs_path)?;
+    let mut jobs = load_scheduler_jobs(jobs_path)?;
+    let mut recovered_job_ids = Vec::new();
+    for job in &mut jobs {
+        backfill_scheduler_job(job, now);
+        if job.status == "running"
+            && job
+                .last_started_at
+                .is_some_and(|started| started + SCHEDULER_RECOVERY_LEASE_SECONDS <= now)
+        {
+            job.status = "pending".to_string();
+            job.updated_at = now;
+            job.last_recovered_at = Some(now);
+            job.last_outcome = Some("recovered".to_string());
+            job.recovery_count += 1;
+            recovered_job_ids.push(job.id.clone());
+        }
+    }
+    let due_job_ids = jobs
+        .iter()
+        .filter(|job| job.status == "pending" && job.next_run_at <= now)
+        .map(|job| job.id.clone())
+        .collect::<Vec<_>>();
+    save_scheduler_jobs(jobs_path, &jobs)?;
+    drop(lock);
+
+    for job_id in &recovered_job_ids {
+        let event_logged = vela_state::append_event_to_session(
+            &bootstrap.persistence.state_db_path,
+            scheduler_session_id,
+            "scheduler_job_recovered",
+            json!({"job_id": job_id, "recovered_at": now}).to_string(),
+        )?;
+        if !event_logged {
+            tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler recovery event");
+        }
+    }
+
+    let mut cycle = SchedulerCycleReport {
+        recovered_job_count: recovered_job_ids.len(),
+        ..SchedulerCycleReport::default()
+    };
+    for job_id in due_job_ids {
+        match execute_scheduled_job(bootstrap, scheduler_session_id, jobs_path, &job_id) {
+            Ok(true) => cycle.executed_job_count += 1,
+            Ok(false) => {}
+            Err(error) => {
+                cycle.failed_job_count += 1;
+                tracing::warn!(job_id=%job_id, error=%error, "scheduled job execution failed");
+            }
+        }
+    }
+    Ok(cycle)
+}
+
+fn execute_scheduled_job(
+    bootstrap: &BootstrapReport,
+    scheduler_session_id: &str,
+    jobs_path: &std::path::Path,
+    job_id: &str,
+) -> Result<bool> {
+    let now = unix_timestamp();
+    let lock = acquire_scheduler_jobs_lock(jobs_path)?;
+    let mut jobs = load_scheduler_jobs(jobs_path)?;
+    let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) else {
+        drop(lock);
+        return Ok(false);
+    };
+    backfill_scheduler_job(job, now);
+    if job.status != "pending" || job.next_run_at > now {
+        drop(lock);
+        return Ok(false);
+    }
+    job.status = "running".to_string();
+    job.updated_at = now;
+    job.last_started_at = Some(now);
+    job.last_outcome = Some("running".to_string());
+    job.last_error = None;
+    let task = job.task.clone();
+    let schedule = job.schedule.clone();
+    save_scheduler_jobs(jobs_path, &jobs)?;
+    drop(lock);
+
+    let event_logged = vela_state::append_event_to_session(
+        &bootstrap.persistence.state_db_path,
+        scheduler_session_id,
+        "scheduler_job_started",
+        json!({"job_id": job_id, "task": task, "schedule": schedule, "started_at": now})
+            .to_string(),
+    )?;
+    if !event_logged {
+        tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job start event");
+    }
+
+    match execute_chat_turn(
+        bootstrap,
+        &SessionRequest {
+            command_name: "cron".to_string(),
+            query_present: true,
+            query_text: Some(task.clone()),
+            image_present: false,
+            image_path: None,
+            resume: Some(scheduler_session_id.to_string()),
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    ) {
+        Ok(report) => {
+            let completed_at = unix_timestamp();
+            let lock = acquire_scheduler_jobs_lock(jobs_path)?;
+            let mut jobs = load_scheduler_jobs(jobs_path)?;
+            if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
+                backfill_scheduler_job(job, completed_at);
+                job.status = "pending".to_string();
+                job.updated_at = completed_at;
+                job.last_completed_at = Some(completed_at);
+                job.last_outcome = Some("completed".to_string());
+                job.last_error = None;
+                job.run_count += 1;
+                job.last_session_id = Some(report.session.session_id.clone());
+                job.next_run_at = next_scheduler_run_at(&job.schedule, completed_at);
+            }
+            save_scheduler_jobs(jobs_path, &jobs)?;
+            drop(lock);
+
+            let event_logged = vela_state::append_event_to_session(
+                &bootstrap.persistence.state_db_path,
+                scheduler_session_id,
+                "scheduler_job_completed",
+                json!({
+                    "job_id": job_id,
+                    "completed_at": completed_at,
+                    "response_source": report.response_source,
+                    "session_id": report.session.session_id,
+                })
+                .to_string(),
+            )?;
+            if !event_logged {
+                tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job completion event");
+            }
+            Ok(true)
+        }
+        Err(error) => {
+            let failed_at = unix_timestamp();
+            let lock = acquire_scheduler_jobs_lock(jobs_path)?;
+            let mut jobs = load_scheduler_jobs(jobs_path)?;
+            if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
+                backfill_scheduler_job(job, failed_at);
+                job.status = "failed".to_string();
+                job.updated_at = failed_at;
+                job.last_failed_at = Some(failed_at);
+                job.last_outcome = Some("failed".to_string());
+                job.last_error = Some(error.to_string());
+            }
+            save_scheduler_jobs(jobs_path, &jobs)?;
+            drop(lock);
+
+            let event_logged = vela_state::append_event_to_session(
+                &bootstrap.persistence.state_db_path,
+                scheduler_session_id,
+                "scheduler_job_failed",
+                json!({"job_id": job_id, "failed_at": failed_at, "error": error.to_string()})
+                    .to_string(),
+            )?;
+            if !event_logged {
+                tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job failure event");
+            }
+            Err(error)
+        }
+    }
+}
+
+fn backfill_scheduler_job(job: &mut ScheduledJob, now: i64) {
+    if job.updated_at == 0 {
+        job.updated_at = job.created_at.max(now);
+    }
+    if job.next_run_at == 0 {
+        job.next_run_at = job.created_at.max(now);
+    }
+}
+
+fn next_scheduler_run_at(schedule: &str, now: i64) -> i64 {
+    let fields = schedule.split_whitespace().collect::<Vec<_>>();
+    if fields.len() != 5 {
+        return now + 60;
+    }
+    match fields[0] {
+        "*" => now - (now % 60) + 60,
+        minute if minute.starts_with("*/") => minute
+            .trim_start_matches("*/")
+            .parse::<i64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .map(|value| now - (now % (value * 60)) + (value * 60))
+            .unwrap_or(now + 60),
+        "0" if fields[1] == "*" => now - (now % 3600) + 3600,
+        _ => now + 60,
+    }
 }
 
 /// Searches persisted session history using the state FTS index.
@@ -2489,12 +2753,57 @@ mod tests {
 
         assert_eq!(first.session.session_id, second.session.session_id);
         assert_eq!(second.setup.job_count, 1);
+        assert_eq!(second.executed_job_count, 1);
         let summary = current_command_session_summary(&bootstrap, "cron")
             .unwrap()
             .expect("cron session summary");
-        assert_eq!(first_summary.message_count, 1);
-        assert_eq!(summary.message_count, 1);
-        assert_eq!(summary.event_count, first_summary.event_count + 3);
+        assert!(summary.message_count >= first_summary.message_count + 2);
+        assert!(summary.event_count >= first_summary.event_count + 4);
+
+        std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+    }
+
+    #[test]
+    /// Verifies scheduler execution reschedules completed jobs and recovers stale running jobs safely.
+    fn scheduler_executes_and_recovers_jobs() {
+        let bootstrap = test_bootstrap("scheduler-exec-recover");
+        let added =
+            add_scheduled_job(&bootstrap, "* * * * *", "ping status", Some("test")).unwrap();
+
+        let first = start_scheduler(&bootstrap).unwrap();
+        assert_eq!(first.executed_job_count, 1);
+        assert_eq!(first.recovered_job_count, 0);
+        assert_eq!(first.failed_job_count, 0);
+        let first_job = get_scheduled_job(&bootstrap, &added.id).unwrap();
+        assert_eq!(first_job.status, "pending");
+        assert_eq!(first_job.run_count, 1);
+        assert_eq!(first_job.last_outcome.as_deref(), Some("completed"));
+        assert!(first_job.next_run_at > first_job.created_at);
+
+        let setup = setup_scheduler(&bootstrap).unwrap();
+        let lock = acquire_scheduler_jobs_lock(&setup.jobs_path).unwrap();
+        let mut jobs = load_scheduler_jobs(&setup.jobs_path).unwrap();
+        let job = jobs
+            .iter_mut()
+            .find(|job| job.id == added.id)
+            .expect("scheduler job");
+        let stale_started_at = unix_timestamp() - SCHEDULER_RECOVERY_LEASE_SECONDS - 1;
+        job.status = "running".to_string();
+        job.last_started_at = Some(stale_started_at);
+        job.next_run_at = unix_timestamp() - 1;
+        save_scheduler_jobs(&setup.jobs_path, &jobs).unwrap();
+        drop(lock);
+
+        let second = start_scheduler(&bootstrap).unwrap();
+        assert_eq!(second.executed_job_count, 1);
+        assert_eq!(second.recovered_job_count, 1);
+        assert_eq!(second.failed_job_count, 0);
+        let recovered_job = get_scheduled_job(&bootstrap, &added.id).unwrap();
+        assert_eq!(recovered_job.status, "pending");
+        assert_eq!(recovered_job.run_count, 2);
+        assert_eq!(recovered_job.recovery_count, 1);
+        assert_eq!(recovered_job.last_outcome.as_deref(), Some("completed"));
+        assert!(recovered_job.last_recovered_at.is_some());
 
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
