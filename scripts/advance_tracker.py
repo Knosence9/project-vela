@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -13,6 +14,11 @@ def run(cmd: list[str], cwd: Path) -> str:
 
 
 def sync_main(cwd: Path) -> None:
+    status = run(["git", "status", "--porcelain"], cwd)
+    if status.strip():
+        raise SystemExit(
+            "Refusing to sync main with local modifications present. Commit, stash, or clean the working tree first."
+        )
     subprocess.run(["git", "fetch", "origin"], cwd=cwd, check=True)
     subprocess.run(["git", "checkout", "main"], cwd=cwd, check=True)
     subprocess.run(["git", "merge", "--ff-only", "origin/main"], cwd=cwd, check=True)
@@ -91,16 +97,21 @@ def main() -> int:
         sys.stdout.write(body)
         return 0
 
-    tmp = cwd / ".tracker-body.tmp.md"
+    tmp_path = None
     try:
-        tmp.write_text(body)
+        with tempfile.NamedTemporaryFile(
+            mode="w", prefix="tracker-body-", suffix=".md", dir=cwd, delete=False
+        ) as tmp:
+            tmp.write(body)
+            tmp_path = Path(tmp.name)
         subprocess.run(
-            ["gh", "issue", "edit", str(args.tracker), "--body-file", str(tmp)],
+            ["gh", "issue", "edit", str(args.tracker), "--body-file", str(tmp_path)],
             cwd=cwd,
             check=True,
         )
     finally:
-        tmp.unlink(missing_ok=True)
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
     print(f"Updated tracker issue #{args.tracker}.")
     return 0
