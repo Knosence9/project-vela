@@ -57,6 +57,24 @@ Use a **progressive replacement strategy**:
 - use compatibility work as input, not as the only organizing principle
 - treat Hermes as the capability benchmark, not as a requirement for day-one feature completeness
 
+## Tracker maintenance
+To keep issue `#1` from drifting after each merge, use the repo helper:
+
+```bash
+./scripts/advance_tracker.py \
+  --sync-main \
+  --tracker 1 \
+  --landed "provider/backend abstraction beyond the initial Ollama slices via #49 / PR #50" \
+  --next "#51 Implement recurring job execution and restart recovery"
+```
+
+What it does:
+- optionally fast-forwards local `main`
+- appends new landed bullets under `## Current state`
+- rewrites the `Primary next execution issue` line in tracker issue `#1`
+
+Use `--dry-run` first if you want to preview the body before editing GitHub.
+
 ## Suggested next steps
 1. define the Rust kernel boundary
 2. define plugin/runtime reload semantics
