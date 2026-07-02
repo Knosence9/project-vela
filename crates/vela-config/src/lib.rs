@@ -4,154 +4,26 @@ use serde_yaml::Value;
 use std::env;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
-/// Represents `BootstrapConfig` data exposed by this crate.
-pub struct BootstrapConfig {
-    pub vela_home: PathBuf,
-    pub active_profile: Option<String>,
-    pub loaded_env_paths: Vec<PathBuf>,
-    pub ignored_user_config: bool,
-    pub config_sources: Vec<ConfigSource>,
-    pub resolved_config: ResolvedConfig,
-}
+mod surface;
 
-#[derive(Debug, Clone, Default)]
-/// Represents `ResolvedConfig` data exposed by this crate.
-pub struct ResolvedConfig {
-    pub display_interface: Option<String>,
-    pub hooks_auto_accept: Option<bool>,
-    pub security_redact_secrets: Option<bool>,
-    pub network_force_ipv4: Option<bool>,
-    pub runtime_provider: Option<String>,
-    pub runtime_model: Option<String>,
-    pub runtime_ollama_base_url: Option<String>,
-    pub extension_manifests_dir: Option<String>,
-    pub extension_entries: Vec<ResolvedExtensionConfigEntry>,
-}
+#[cfg(test)]
+mod tests;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Describes one config-driven extension enable/disable override resolved from YAML.
-pub struct ResolvedExtensionConfigEntry {
-    pub id: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone)]
-/// Represents `ConfigSource` data exposed by this crate.
-pub struct ConfigSource {
-    pub path: PathBuf,
-    pub kind: ConfigSourceKind,
-    pub detail: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-/// Enumerates supported `ConfigSourceKind` variants.
-pub enum ConfigSourceKind {
-    User,
-    ProjectFallback,
-    SkippedIgnored,
-    SkippedLowerPrecedence,
-    SkippedUnreadable,
-    SkippedInvalid,
-    Missing,
-}
-
-impl ConfigSourceKind {
-/// Returns the stable string label used for persistence and display.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::ProjectFallback => "project-fallback",
-            Self::SkippedIgnored => "skipped-ignored",
-            Self::SkippedLowerPrecedence => "skipped-lower-precedence",
-            Self::SkippedUnreadable => "skipped-unreadable",
-            Self::SkippedInvalid => "skipped-invalid",
-            Self::Missing => "missing",
-        }
-    }
-}
-
-/// Exposes the `preparse_profile_override` operation for this subsystem.
-pub fn preparse_profile_override<I>(args: I) -> Result<(Vec<String>, Option<String>)>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut filtered = Vec::new();
-    let mut iter = args.into_iter();
-    let first = iter.next().context("missing argv[0]")?;
-    filtered.push(first);
-
-    let mut profile = None;
-    while let Some(arg) = iter.next() {
-        if arg == "--profile" || arg == "-p" {
-            let value = iter
-                .next()
-                .context("missing value for --profile/-p")?;
-            profile = Some(value);
-            continue;
-        }
-        if let Some(value) = arg.strip_prefix("--profile=") {
-            profile = Some(value.to_string());
-            continue;
-        }
-        filtered.push(arg);
-    }
-
-    let active = profile.or_else(read_sticky_profile);
-    let vela_home = compute_vela_home(active.as_deref())?;
-    env::set_var("VELA_HOME", &vela_home);
-
-    Ok((filtered, active))
-}
-
-/// Initializes config state for this subsystem.
-pub fn initialize_config(active_profile: Option<String>, ignore_user_config: bool) -> Result<BootstrapConfig> {
-    let vela_home = compute_vela_home(active_profile.as_deref())?;
-    env::set_var("VELA_HOME", &vela_home);
-    std::fs::create_dir_all(&vela_home)
-        .with_context(|| format!("failed to create {}", vela_home.display()))?;
-
-    let loaded_env_paths = load_vela_dotenv(&vela_home)?;
-    let (effective_ignore_user_config, config_sources, resolved_config) =
-        load_config_snapshot(&vela_home, ignore_user_config)?;
-
-    if effective_ignore_user_config {
-        env::set_var("VELA_IGNORE_USER_CONFIG", "1");
-    }
-    if let Some(value) = resolved_config.hooks_auto_accept {
-        env::set_var("VELA_ACCEPT_HOOKS", if value { "1" } else { "0" });
-    }
-    if let Some(value) = resolved_config.security_redact_secrets {
-        env::set_var("VELA_REDACT_SECRETS", if value { "true" } else { "false" });
-    }
-
-    Ok(BootstrapConfig {
-        vela_home,
-        active_profile,
-        loaded_env_paths,
-        ignored_user_config: effective_ignore_user_config,
-        config_sources,
-        resolved_config,
-    })
-}
-
-/// Reloads config sources and resolved settings for an already-selected VELA_HOME without reapplying env side effects.
-pub fn reload_config_snapshot(
-    vela_home: &Path,
-    ignore_user_config: bool,
-) -> Result<(Vec<ConfigSource>, ResolvedConfig)> {
-    let (_, config_sources, resolved_config) = load_config_snapshot(vela_home, ignore_user_config)?;
-    Ok((config_sources, resolved_config))
-}
+pub use surface::*;
 
 fn load_config_snapshot(
     vela_home: &Path,
     ignore_user_config: bool,
 ) -> Result<(bool, Vec<ConfigSource>, ResolvedConfig)> {
-    let effective_ignore_user_config = ignore_user_config || is_truthy_env("VELA_IGNORE_USER_CONFIG");
+    let effective_ignore_user_config =
+        ignore_user_config || is_truthy_env("VELA_IGNORE_USER_CONFIG");
     let mut config_sources = resolve_config_sources(vela_home, effective_ignore_user_config)?;
     let resolved_config = load_resolved_config(&mut config_sources)?;
-    Ok((effective_ignore_user_config, config_sources, resolved_config))
+    Ok((
+        effective_ignore_user_config,
+        config_sources,
+        resolved_config,
+    ))
 }
 
 fn load_vela_dotenv(vela_home: &Path) -> Result<Vec<PathBuf>> {
@@ -231,7 +103,9 @@ fn load_resolved_config(config_sources: &mut [ConfigSource]) -> Result<ResolvedC
         runtime_provider: decoded.runtime.as_ref().and_then(|r| r.provider.clone()),
         runtime_model: decoded.runtime.as_ref().and_then(|r| r.model.clone()),
         runtime_ollama_base_url: decoded.runtime.and_then(|r| r.ollama_base_url),
-        extension_manifests_dir: decoded.extensions.and_then(|extensions| extensions.manifests_dir),
+        extension_manifests_dir: decoded
+            .extensions
+            .and_then(|extensions| extensions.manifests_dir),
         extension_entries,
     })
 }
@@ -374,7 +248,10 @@ fn resolve_config_sources(vela_home: &Path, ignore_user_config: bool) -> Result<
 
 fn is_truthy_env(name: &str) -> bool {
     match env::var(name) {
-        Ok(value) => matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
         Err(_) => false,
     }
 }
@@ -401,146 +278,5 @@ fn read_sticky_profile() -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn invalid_user_config_falls_back_to_project_config() {
-        let root = std::env::temp_dir().join(format!("vela-config-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-
-        let user = root.join("user.yaml");
-        let project = root.join("project.yaml");
-        std::fs::write(&user, "display: [oops\n").unwrap();
-        std::fs::write(&project, "display:\n  interface: tui\n").unwrap();
-
-        let mut sources = vec![
-            ConfigSource {
-                path: user,
-                kind: ConfigSourceKind::User,
-                detail: None,
-            },
-            ConfigSource {
-                path: project,
-                kind: ConfigSourceKind::SkippedLowerPrecedence,
-                detail: None,
-            },
-        ];
-
-        let resolved = load_resolved_config(&mut sources).unwrap();
-        assert_eq!(resolved.display_interface.as_deref(), Some("tui"));
-        assert!(matches!(sources[0].kind, ConfigSourceKind::SkippedInvalid));
-        assert!(sources[0].detail.is_some());
-        assert!(matches!(sources[1].kind, ConfigSourceKind::ProjectFallback));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn unreadable_user_config_falls_back_to_project_config() {
-        let root = std::env::temp_dir().join(format!("vela-config-test-missing-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-
-        let missing_user = root.join("missing-user.yaml");
-        let project = root.join("project.yaml");
-        std::fs::write(&project, "hooks_auto_accept: true\n").unwrap();
-
-        let mut sources = vec![
-            ConfigSource {
-                path: missing_user,
-                kind: ConfigSourceKind::User,
-                detail: None,
-            },
-            ConfigSource {
-                path: project,
-                kind: ConfigSourceKind::SkippedLowerPrecedence,
-                detail: None,
-            },
-        ];
-
-        let resolved = load_resolved_config(&mut sources).unwrap();
-        assert_eq!(resolved.hooks_auto_accept, Some(true));
-        assert!(matches!(sources[0].kind, ConfigSourceKind::SkippedUnreadable));
-        assert!(sources[0].detail.is_some());
-        assert!(matches!(sources[1].kind, ConfigSourceKind::ProjectFallback));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn runtime_provider_settings_are_loaded_from_config() {
-        let root = std::env::temp_dir().join(format!("vela-config-test-runtime-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-
-        let user = root.join("runtime.yaml");
-        std::fs::write(
-            &user,
-            "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: http://127.0.0.1:11434\n",
-        )
-        .unwrap();
-
-        let mut sources = vec![ConfigSource {
-            path: user,
-            kind: ConfigSourceKind::User,
-            detail: None,
-        }];
-
-        let resolved = load_resolved_config(&mut sources).unwrap();
-        assert_eq!(resolved.runtime_provider.as_deref(), Some("ollama"));
-        assert_eq!(resolved.runtime_model.as_deref(), Some("gemma3:4b"));
-        assert_eq!(
-            resolved.runtime_ollama_base_url.as_deref(),
-            Some("http://127.0.0.1:11434")
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn extension_settings_are_loaded_from_config() {
-        let root = std::env::temp_dir().join(format!("vela-config-test-extensions-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-
-        let user = root.join("extensions.yaml");
-        std::fs::write(
-            &user,
-            "extensions:\n  manifests_dir: .vela/extensions/manifests\n  entries:\n    demo-tool:\n      enabled: false\n    demo-skill:\n      enabled: true\n",
-        )
-        .unwrap();
-
-        let mut sources = vec![ConfigSource {
-            path: user,
-            kind: ConfigSourceKind::User,
-            detail: None,
-        }];
-
-        let resolved = load_resolved_config(&mut sources).unwrap();
-        assert_eq!(
-            resolved.extension_manifests_dir.as_deref(),
-            Some(".vela/extensions/manifests")
-        );
-        assert_eq!(
-            resolved.extension_entries,
-            vec![
-                ResolvedExtensionConfigEntry {
-                    id: "demo-skill".to_string(),
-                    enabled: true,
-                },
-                ResolvedExtensionConfigEntry {
-                    id: "demo-tool".to_string(),
-                    enabled: false,
-                },
-            ]
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 }
