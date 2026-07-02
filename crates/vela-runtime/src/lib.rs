@@ -19,8 +19,9 @@ pub use vela_extensions::{
     ExtensionActivation, ExtensionKind, ExtensionLifecycle, ExtensionRecord,
 };
 pub use vela_state::{
-    InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchRecord, SessionCompressionRecord,
-    SessionEventRecord, SessionInspection, SessionMessageRecord, SessionSearchHit, SessionSummary,
+    InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchRecord,
+    SessionCompressionRecord, SessionEventRecord, SessionInspection, SessionMessageRecord,
+    SessionSearchHit, SessionSummary,
 };
 
 #[derive(Debug, Clone)]
@@ -113,7 +114,8 @@ impl BootstrapReport {
             .filter(|source| {
                 matches!(
                     source.kind,
-                    vela_config::ConfigSourceKind::User | vela_config::ConfigSourceKind::ProjectFallback
+                    vela_config::ConfigSourceKind::User
+                        | vela_config::ConfigSourceKind::ProjectFallback
                 )
             })
             .count();
@@ -134,14 +136,25 @@ impl BootstrapReport {
 }
 
 /// Initializes config, persistence, memory, skills, review, and extension-registry subsystems.
-pub fn initialize_bootstrap(active_profile: Option<String>, ignore_user_config: bool) -> Result<BootstrapReport> {
+pub fn initialize_bootstrap(
+    active_profile: Option<String>,
+    ignore_user_config: bool,
+) -> Result<BootstrapReport> {
     let config = vela_config::initialize_config(active_profile, ignore_user_config)?;
     let persistence = vela_state::initialize_persistence(&config.vela_home)?;
     let memory = vela_memory::initialize_memory(&config.vela_home)?;
     let skills = vela_skills::initialize_skills(&config.vela_home)?;
     let reviews = vela_review::initialize_reviews(&config.vela_home)?;
-    let extensions = vela_extensions::initialize_extensions(&config.vela_home, &config.resolved_config)?;
-    Ok(BootstrapReport::from_parts(config, persistence, memory, skills, reviews, extensions))
+    let extensions =
+        vela_extensions::initialize_extensions(&config.vela_home, &config.resolved_config)?;
+    Ok(BootstrapReport::from_parts(
+        config,
+        persistence,
+        memory,
+        skills,
+        reviews,
+        extensions,
+    ))
 }
 
 /// Emits a debug log once runtime bootstrap has completed.
@@ -175,7 +188,10 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionsReport
 }
 
 /// Resolves or creates a runtime session for an interactive request.
-pub fn resolve_runtime_session(bootstrap: &BootstrapReport, request: &SessionRequest) -> Result<SessionRuntimeReport> {
+pub fn resolve_runtime_session(
+    bootstrap: &BootstrapReport,
+    request: &SessionRequest,
+) -> Result<SessionRuntimeReport> {
     vela_state::resolve_runtime_session(&bootstrap.persistence.state_db_path, request)
 }
 
@@ -378,7 +394,14 @@ pub fn execute_chat_turn(
             "checkpoints": checkpoints,
         }),
     )?;
-    let rendered = match render_chat_response(bootstrap, &session, request, provider_override, model_override, &mut lifecycle) {
+    let rendered = match render_chat_response(
+        bootstrap,
+        &session,
+        request,
+        provider_override,
+        model_override,
+        &mut lifecycle,
+    ) {
         Ok(rendered) => rendered,
         Err(error) => {
             let _ = lifecycle.record_phase(
@@ -508,7 +531,12 @@ pub fn add_scheduled_job(
     let source = normalize_scheduler_source(source);
     let lock = acquire_scheduler_jobs_lock(&setup.jobs_path)?;
     let mut jobs = load_scheduler_jobs(&setup.jobs_path)?;
-    if jobs.iter().any(|job| job.schedule == schedule && job.task == task && job.source == source && job.status == "pending") {
+    if jobs.iter().any(|job| {
+        job.schedule == schedule
+            && job.task == task
+            && job.source == source
+            && job.status == "pending"
+    }) {
         drop(lock);
         bail!("matching scheduled job is already registered");
     }
@@ -539,17 +567,28 @@ pub fn add_scheduled_job(
 }
 
 /// Searches persisted session history using the state FTS index.
-pub fn search_session_history(bootstrap: &BootstrapReport, query: &str, limit: usize) -> Result<Vec<SessionSearchHit>> {
+pub fn search_session_history(
+    bootstrap: &BootstrapReport,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SessionSearchHit>> {
     vela_state::search_session_history(&bootstrap.persistence.state_db_path, query, limit)
 }
 
 /// Inspects the latest persisted session with recent messages and events.
-pub fn inspect_latest_session(bootstrap: &BootstrapReport, limit: usize) -> Result<Option<SessionInspection>> {
+pub fn inspect_latest_session(
+    bootstrap: &BootstrapReport,
+    limit: usize,
+) -> Result<Option<SessionInspection>> {
     vela_state::inspect_latest_session(&bootstrap.persistence.state_db_path, limit)
 }
 
 /// Inspects one persisted session by id or title.
-pub fn inspect_session(bootstrap: &BootstrapReport, target: &str, limit: usize) -> Result<Option<SessionInspection>> {
+pub fn inspect_session(
+    bootstrap: &BootstrapReport,
+    target: &str,
+    limit: usize,
+) -> Result<Option<SessionInspection>> {
     vela_state::inspect_session(&bootstrap.persistence.state_db_path, target, limit)
 }
 
@@ -578,7 +617,10 @@ pub fn render_memory_snapshot(bootstrap: &BootstrapReport) -> Result<String> {
 }
 
 /// Views the current durable memory contents for a target file.
-pub fn view_memory(bootstrap: &BootstrapReport, target: vela_memory::MemoryTarget) -> Result<vela_memory::MemoryView> {
+pub fn view_memory(
+    bootstrap: &BootstrapReport,
+    target: vela_memory::MemoryTarget,
+) -> Result<vela_memory::MemoryView> {
     vela_memory::view_memory(&bootstrap.vela_home, target)
 }
 
@@ -639,12 +681,17 @@ pub fn stage_remove_memory_entry(
 }
 
 /// Lists staged memory writes awaiting approval.
-pub fn list_pending_memory(bootstrap: &BootstrapReport) -> Result<Vec<vela_memory::PendingMemoryWrite>> {
+pub fn list_pending_memory(
+    bootstrap: &BootstrapReport,
+) -> Result<Vec<vela_memory::PendingMemoryWrite>> {
     vela_memory::list_pending(&bootstrap.vela_home)
 }
 
 /// Loads one staged memory write by id.
-pub fn get_pending_memory(bootstrap: &BootstrapReport, id: &str) -> Result<vela_memory::PendingMemoryWrite> {
+pub fn get_pending_memory(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<vela_memory::PendingMemoryWrite> {
     vela_memory::get_pending(&bootstrap.vela_home, id)
 }
 
@@ -712,22 +759,33 @@ pub fn stage_write_skill(
 }
 
 /// Deletes a durable skill immediately.
-pub fn delete_skill(bootstrap: &BootstrapReport, name: &str) -> Result<vela_skills::SkillMutationReport> {
+pub fn delete_skill(
+    bootstrap: &BootstrapReport,
+    name: &str,
+) -> Result<vela_skills::SkillMutationReport> {
     vela_skills::delete_skill(&bootstrap.vela_home, name)
 }
 
 /// Stages deletion of a durable skill for later approval.
-pub fn stage_delete_skill(bootstrap: &BootstrapReport, name: &str) -> Result<vela_skills::PendingSkillWrite> {
+pub fn stage_delete_skill(
+    bootstrap: &BootstrapReport,
+    name: &str,
+) -> Result<vela_skills::PendingSkillWrite> {
     vela_skills::stage_delete_skill(&bootstrap.vela_home, name)
 }
 
 /// Lists staged skill writes awaiting approval.
-pub fn list_pending_skills(bootstrap: &BootstrapReport) -> Result<Vec<vela_skills::PendingSkillWrite>> {
+pub fn list_pending_skills(
+    bootstrap: &BootstrapReport,
+) -> Result<Vec<vela_skills::PendingSkillWrite>> {
     vela_skills::list_pending(&bootstrap.vela_home)
 }
 
 /// Loads one staged skill write by id.
-pub fn get_pending_skill(bootstrap: &BootstrapReport, id: &str) -> Result<vela_skills::PendingSkillWrite> {
+pub fn get_pending_skill(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<vela_skills::PendingSkillWrite> {
     vela_skills::get_pending(&bootstrap.vela_home, id)
 }
 
@@ -745,12 +803,17 @@ pub fn reject_pending_skill(bootstrap: &BootstrapReport, id: &str) -> Result<()>
 }
 
 /// Lists queued review candidates derived from user or background signals.
-pub fn list_review_candidates(bootstrap: &BootstrapReport) -> Result<Vec<vela_review::ReviewCandidate>> {
+pub fn list_review_candidates(
+    bootstrap: &BootstrapReport,
+) -> Result<Vec<vela_review::ReviewCandidate>> {
     vela_review::list_candidates(&bootstrap.vela_home)
 }
 
 /// Loads one review candidate by id.
-pub fn get_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<vela_review::ReviewCandidate> {
+pub fn get_review_candidate(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<vela_review::ReviewCandidate> {
     vela_review::get_candidate(&bootstrap.vela_home, id)
 }
 
@@ -833,7 +896,10 @@ pub fn stage_skill_review_candidate(
 }
 
 /// Promotes a review candidate into the appropriate pending approval queue.
-pub fn promote_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<vela_review::PromotionReport> {
+pub fn promote_review_candidate(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<vela_review::PromotionReport> {
     let candidate = vela_review::get_candidate(&bootstrap.vela_home, id)?;
     let report = vela_review::promote_candidate(&bootstrap.vela_home, id)?;
     append_review_event(
@@ -874,7 +940,9 @@ pub fn emit_review_signals_from_latest_session(
     bootstrap: &BootstrapReport,
     limit: usize,
 ) -> Result<Option<vela_review::SignalReport>> {
-    let Some(session) = vela_state::inspect_latest_session(&bootstrap.persistence.state_db_path, limit)? else {
+    let Some(session) =
+        vela_state::inspect_latest_session(&bootstrap.persistence.state_db_path, limit)?
+    else {
         return Ok(None);
     };
     let input = vela_review::SuggestionInput {
@@ -933,9 +1001,49 @@ struct RenderedChatResponse {
     model: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum RuntimeProviderChoice {
-    Ollama,
+trait RuntimeProviderBackend {
+    fn label(&self) -> &str;
+    fn model(&self) -> Option<&str>;
+    fn validate(&self) -> Result<()>;
+    fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String>;
+    fn direct_response_source(&self) -> &'static str;
+    fn tool_loop_response_source(&self) -> &'static str;
+}
+
+#[derive(Debug, Clone)]
+struct OllamaRuntimeProvider {
+    label: String,
+    model: Option<String>,
+    base_url: String,
+}
+
+impl RuntimeProviderBackend for OllamaRuntimeProvider {
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    fn validate(&self) -> Result<()> {
+        validate_ollama_base_url(&self.base_url)
+    }
+
+    fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
+        let model = self.model.as_deref().context(
+            "runtime provider 'ollama' requires a model (for example a Gemma family model)",
+        )?;
+        call_ollama_generate(&self.base_url, model, prompt, images)
+    }
+
+    fn direct_response_source(&self) -> &'static str {
+        "runtime-ollama"
+    }
+
+    fn tool_loop_response_source(&self) -> &'static str {
+        "runtime-ollama-tool-loop"
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -975,11 +1083,15 @@ impl RuntimeToolInvocation {
 
     fn request_text(&self) -> String {
         match self.name {
-            RuntimeToolName::MemorySnapshot | RuntimeToolName::ListSkills => self.display_name().to_string(),
+            RuntimeToolName::MemorySnapshot | RuntimeToolName::ListSkills => {
+                self.display_name().to_string()
+            }
             RuntimeToolName::ViewMemory => format!(
                 "{}:{}",
                 self.display_name(),
-                self.target.unwrap_or(vela_memory::MemoryTarget::Memory).label()
+                self.target
+                    .unwrap_or(vela_memory::MemoryTarget::Memory)
+                    .label()
             ),
             RuntimeToolName::SearchSessionHistory => format!(
                 "{}:{}",
@@ -1008,12 +1120,10 @@ impl RuntimeToolInvocation {
 const MAX_RUNTIME_TOOL_STEPS: usize = 3;
 const MAX_RUNTIME_REFLECTION_ATTEMPTS: usize = 2;
 
-#[derive(Debug, Clone)]
 struct RuntimeExecutionConfig {
-    provider: Option<RuntimeProviderChoice>,
+    provider: Option<Box<dyn RuntimeProviderBackend>>,
     provider_label: Option<String>,
     model: Option<String>,
-    ollama_base_url: String,
 }
 
 struct RuntimeTurnRecorder {
@@ -1055,7 +1165,11 @@ impl RuntimeTurnRecorder {
             payload,
         )?;
         if !logged {
-            bail!("failed to persist runtime turn lifecycle phase {:?} for session {:?}", phase, session_id);
+            bail!(
+                "failed to persist runtime turn lifecycle phase {:?} for session {:?}",
+                phase,
+                session_id
+            );
         }
         self.final_phase = Some(phase.to_string());
         Ok(())
@@ -1113,15 +1227,22 @@ fn render_chat_response(
     model_override: Option<&str>,
     lifecycle: &mut RuntimeTurnRecorder,
 ) -> Result<RenderedChatResponse> {
-    let execution = resolve_runtime_execution(&bootstrap.resolved_config, provider_override, model_override)?;
-    if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
-        validate_ollama_base_url(&execution.ollama_base_url)?;
+    let execution = resolve_runtime_execution(
+        &bootstrap.resolved_config,
+        provider_override,
+        model_override,
+    )?;
+    if let Some(provider) = execution.provider.as_deref() {
+        provider.validate()?;
     }
 
     let memory = vela_memory::render_prompt_snapshot(&bootstrap.vela_home)?;
     let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
     let reviews = vela_review::list_candidates(&bootstrap.vela_home)?;
-    let compression_summary = vela_state::latest_compression_summary(&bootstrap.persistence.state_db_path, &session.session_id)?;
+    let compression_summary = vela_state::latest_compression_summary(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+    )?;
     let compression_block = compression_summary
         .as_deref()
         .map(|summary| format!("\n\nCompressed continuity summary:\n{}", summary))
@@ -1129,13 +1250,12 @@ fn render_chat_response(
     let memory_lines = memory.lines().count();
 
     if request.image_present {
-        let image_path = request.image_path.as_deref().unwrap_or("(unspecified image path)");
-        if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
+        let image_path = request
+            .image_path
+            .as_deref()
+            .unwrap_or("(unspecified image path)");
+        if let Some(provider) = execution.provider.as_deref() {
             if let Some(image_path) = request.image_path.as_deref() {
-                let model = execution
-                    .model
-                    .as_deref()
-                    .context("runtime provider 'ollama' requires a model (for example a Gemma family model)")?;
                 let image_base64 = encode_image_as_base64(image_path)?;
                 let user_prompt = request
                     .query_text
@@ -1155,11 +1275,10 @@ fn render_chat_response(
                     user_prompt,
                     std::path::Path::new(image_path).file_name().and_then(|n| n.to_str()).unwrap_or("attachment"),
                 );
-                return execute_ollama_turn(
+                return execute_provider_turn(
                     bootstrap,
                     session,
-                    &execution,
-                    model,
+                    provider,
                     &prompt,
                     Some(vec![image_base64]),
                     &memory,
@@ -1186,11 +1305,7 @@ fn render_chat_response(
     }
 
     if let Some(query) = request.query_text.as_deref() {
-        if let Some(RuntimeProviderChoice::Ollama) = execution.provider.as_ref() {
-            let model = execution
-                .model
-                .as_deref()
-                .context("runtime provider 'ollama' requires a model (for example a Gemma family model)")?;
+        if let Some(provider) = execution.provider.as_deref() {
             let prompt = format!(
                 "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
                 session.title,
@@ -1201,16 +1316,8 @@ fn render_chat_response(
                 reviews.len(),
                 query.trim(),
             );
-            return execute_ollama_turn(
-                bootstrap,
-                session,
-                &execution,
-                model,
-                &prompt,
-                None,
-                &memory,
-                &skills,
-                lifecycle,
+            return execute_provider_turn(
+                bootstrap, session, provider, &prompt, None, &memory, &skills, lifecycle,
             );
         }
 
@@ -1262,31 +1369,38 @@ fn resolve_runtime_execution(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_ascii_lowercase())
-        .or_else(|| resolved.runtime_provider.as_ref().map(|s| s.trim().to_ascii_lowercase()));
-    let provider = match provider_label.as_deref() {
-        Some("ollama") => Some(RuntimeProviderChoice::Ollama),
-        Some(other) => bail!("unsupported runtime provider {other:?}"),
-        None => None,
-    };
+        .or_else(|| {
+            resolved
+                .runtime_provider
+                .as_ref()
+                .map(|s| s.trim().to_ascii_lowercase())
+        });
     let model = model_override
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .or_else(|| resolved.runtime_model.clone());
-    let ollama_base_url = resolved
-        .runtime_ollama_base_url
-        .clone()
-        .unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
+    let provider = match provider_label.as_deref() {
+        Some("ollama") => Some(Box::new(OllamaRuntimeProvider {
+            label: "ollama".to_string(),
+            model: model.clone(),
+            base_url: resolved
+                .runtime_ollama_base_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:11434".to_string()),
+        }) as Box<dyn RuntimeProviderBackend>),
+        Some(other) => bail!("unsupported runtime provider {other:?}"),
+        None => None,
+    };
 
     Ok(RuntimeExecutionConfig {
         provider,
         provider_label,
         model,
-        ollama_base_url,
     })
 }
 
-/// Executes one provider-backed Ollama turn and optionally completes a bounded local tool loop.
+/// Executes one provider-backed runtime turn and optionally completes a bounded local tool loop.
 fn handle_reflection_outcome(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
@@ -1331,11 +1445,10 @@ fn handle_reflection_outcome(
     }))
 }
 
-fn execute_ollama_turn(
+fn execute_provider_turn(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
-    execution: &RuntimeExecutionConfig,
-    model: &str,
+    provider: &dyn RuntimeProviderBackend,
     prompt: &str,
     images: Option<Vec<String>>,
     memory: &str,
@@ -1348,21 +1461,32 @@ fn execute_ollama_turn(
     let mut tool_step = 0usize;
 
     while tool_step < MAX_RUNTIME_TOOL_STEPS {
-        let response = call_ollama_generate(&execution.ollama_base_url, model, &current_prompt, images.clone())?;
+        let response = provider.generate(&current_prompt, images.clone())?;
         match classify_provider_continuation(&response) {
             ProviderContinuation::ToolRequest(tool_request) => {
                 tool_step += 1;
                 used_tool_loop = true;
-                persist_runtime_tool_request(bootstrap, &session.session_id, &tool_request, tool_step)?;
+                persist_runtime_tool_request(
+                    bootstrap,
+                    &session.session_id,
+                    &tool_request,
+                    tool_step,
+                )?;
                 lifecycle.record_phase(
                     bootstrap,
                     &session.session_id,
                     "tool-request",
                     Some(tool_step),
-                    json!({"request": tool_request.metadata_json(), "provider": execution.provider_label, "model": execution.model}),
+                    json!({"request": tool_request.metadata_json(), "provider": provider.label(), "model": provider.model()}),
                 )?;
                 let tool_result = execute_runtime_tool(bootstrap, &tool_request, memory, skills);
-                persist_runtime_tool_result(bootstrap, &session.session_id, &tool_request, tool_step, &tool_result)?;
+                persist_runtime_tool_result(
+                    bootstrap,
+                    &session.session_id,
+                    &tool_request,
+                    tool_step,
+                    &tool_result,
+                )?;
                 lifecycle.record_phase(
                     bootstrap,
                     &session.session_id,
@@ -1411,9 +1535,13 @@ fn execute_ollama_turn(
             ProviderContinuation::FinalAnswer => {
                 return Ok(RenderedChatResponse {
                     content: Some(response),
-                    source: if used_tool_loop { "runtime-ollama-tool-loop" } else { "runtime-ollama" },
-                    provider: execution.provider_label.clone(),
-                    model: execution.model.clone(),
+                    source: if used_tool_loop {
+                        provider.tool_loop_response_source()
+                    } else {
+                        provider.direct_response_source()
+                    },
+                    provider: Some(provider.label().to_string()),
+                    model: provider.model().map(str::to_string),
                 });
             }
             ProviderContinuation::InvalidToolRequest => {
@@ -1430,8 +1558,14 @@ fn execute_ollama_turn(
                         current_prompt,
                     ),
                 )?;
-                let Some(outcome) = outcome else { continue; };
-                if outcome.source == "runtime-kernel" && outcome.content.as_deref().is_some_and(|text| text.starts_with("Vela received an invalid provider continuation")) {
+                let Some(outcome) = outcome else {
+                    continue;
+                };
+                if outcome.source == "runtime-kernel"
+                    && outcome.content.as_deref().is_some_and(|text| {
+                        text.starts_with("Vela received an invalid provider continuation")
+                    })
+                {
                     return Ok(outcome);
                 }
                 current_prompt = outcome.content.expect("reflection retry prompt rewrite");
@@ -1450,8 +1584,14 @@ fn execute_ollama_turn(
                         current_prompt,
                     ),
                 )?;
-                let Some(outcome) = outcome else { continue; };
-                if outcome.source == "runtime-kernel" && outcome.content.as_deref().is_some_and(|text| text.starts_with("Vela received an empty provider continuation")) {
+                let Some(outcome) = outcome else {
+                    continue;
+                };
+                if outcome.source == "runtime-kernel"
+                    && outcome.content.as_deref().is_some_and(|text| {
+                        text.starts_with("Vela received an empty provider continuation")
+                    })
+                {
                     return Ok(outcome);
                 }
                 current_prompt = outcome.content.expect("reflection retry prompt rewrite");
@@ -1459,13 +1599,13 @@ fn execute_ollama_turn(
         }
     }
 
-    let final_response = call_ollama_generate(&execution.ollama_base_url, model, &current_prompt, images)?;
+    let final_response = provider.generate(&current_prompt, images)?;
     match classify_provider_continuation(&final_response) {
         ProviderContinuation::FinalAnswer => Ok(RenderedChatResponse {
             content: Some(final_response),
-            source: "runtime-ollama-tool-loop",
-            provider: execution.provider_label.clone(),
-            model: execution.model.clone(),
+            source: provider.tool_loop_response_source(),
+            provider: Some(provider.label().to_string()),
+            model: provider.model().map(str::to_string),
         }),
         ProviderContinuation::ToolRequest(_) => Ok(RenderedChatResponse {
             content: Some("Vela reached the maximum bounded tool steps and fell back to a deterministic runtime response instead of continuing indefinitely.".to_string()),
@@ -1538,7 +1678,10 @@ fn classify_provider_continuation(response: &str) -> ProviderContinuation {
             }
         }
         "search_session_history" => {
-            let query = request.query.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+            let query = request
+                .query
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
             let Some(query) = query else {
                 return ProviderContinuation::InvalidToolRequest;
             };
@@ -1551,7 +1694,10 @@ fn classify_provider_continuation(response: &str) -> ProviderContinuation {
             }
         }
         "view_skill" => {
-            let name = request.name.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+            let name = request
+                .name
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
             let Some(skill_name) = name else {
                 return ProviderContinuation::InvalidToolRequest;
             };
@@ -1640,14 +1786,23 @@ fn execute_runtime_tool(
         RuntimeToolName::SearchSessionHistory => {
             let query = tool.query.as_deref().unwrap_or_default();
             let limit = tool.limit.unwrap_or(3);
-            match vela_state::search_session_history(&bootstrap.persistence.state_db_path, query, limit) {
-                Ok(hits) if hits.is_empty() => format!("session search for {:?}: no matches", query),
+            match vela_state::search_session_history(
+                &bootstrap.persistence.state_db_path,
+                query,
+                limit,
+            ) {
+                Ok(hits) if hits.is_empty() => {
+                    format!("session search for {:?}: no matches", query)
+                }
                 Ok(hits) => hits
                     .into_iter()
                     .map(|hit| format!("{} :: {}", hit.session_title, hit.snippet))
                     .collect::<Vec<_>>()
                     .join("\n"),
-                Err(error) => format!("failed to search session history for {:?}: {}", query, error),
+                Err(error) => format!(
+                    "failed to search session history for {:?}: {}",
+                    query, error
+                ),
             }
         }
         RuntimeToolName::ViewSkill => {
@@ -1661,8 +1816,15 @@ fn execute_runtime_tool(
 }
 
 /// Persists the requested runtime tool before execution begins.
-fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, tool: &RuntimeToolInvocation, step: usize) -> Result<()> {
-    let metadata = json!({"source": "runtime-tool-loop", "step": step, "request": tool.metadata_json()}).to_string();
+fn persist_runtime_tool_request(
+    bootstrap: &BootstrapReport,
+    session_id: &str,
+    tool: &RuntimeToolInvocation,
+    step: usize,
+) -> Result<()> {
+    let metadata =
+        json!({"source": "runtime-tool-loop", "step": step, "request": tool.metadata_json()})
+            .to_string();
     let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         session_id,
@@ -1670,7 +1832,10 @@ fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, t
         metadata.clone(),
     )?;
     if !event_logged {
-        bail!("failed to persist runtime tool request event for session {:?}", session_id);
+        bail!(
+            "failed to persist runtime tool request event for session {:?}",
+            session_id
+        );
     }
     let message_logged = vela_state::append_message_to_session(
         &bootstrap.persistence.state_db_path,
@@ -1680,13 +1845,22 @@ fn persist_runtime_tool_request(bootstrap: &BootstrapReport, session_id: &str, t
         Some(metadata),
     )?;
     if !message_logged {
-        bail!("failed to persist runtime tool request message for session {:?}", session_id);
+        bail!(
+            "failed to persist runtime tool request message for session {:?}",
+            session_id
+        );
     }
     Ok(())
 }
 
 /// Persists the completed runtime tool result and its metadata.
-fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, tool: &RuntimeToolInvocation, step: usize, result: &str) -> Result<()> {
+fn persist_runtime_tool_result(
+    bootstrap: &BootstrapReport,
+    session_id: &str,
+    tool: &RuntimeToolInvocation,
+    step: usize,
+    result: &str,
+) -> Result<()> {
     let metadata = json!({"source": "runtime-tool-loop", "step": step, "request": tool.metadata_json(), "result_length": result.len()}).to_string();
     let event_logged = vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
@@ -1695,7 +1869,10 @@ fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, to
         metadata.clone(),
     )?;
     if !event_logged {
-        bail!("failed to persist runtime tool completion event for session {:?}", session_id);
+        bail!(
+            "failed to persist runtime tool completion event for session {:?}",
+            session_id
+        );
     }
     let message_logged = vela_state::append_message_to_session(
         &bootstrap.persistence.state_db_path,
@@ -1705,12 +1882,20 @@ fn persist_runtime_tool_result(bootstrap: &BootstrapReport, session_id: &str, to
         Some(metadata),
     )?;
     if !message_logged {
-        bail!("failed to persist runtime tool result message for session {:?}", session_id);
+        bail!(
+            "failed to persist runtime tool result message for session {:?}",
+            session_id
+        );
     }
     Ok(())
 }
 
-fn call_ollama_generate(base_url: &str, model: &str, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
+fn call_ollama_generate(
+    base_url: &str,
+    model: &str,
+    prompt: &str,
+    images: Option<Vec<String>>,
+) -> Result<String> {
     let url = format!("{}/api/generate", base_url.trim_end_matches('/'));
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
@@ -1729,7 +1914,9 @@ fn call_ollama_generate(base_url: &str, model: &str, prompt: &str, images: Optio
         .with_context(|| format!("failed to call Ollama at {url}"))?
         .error_for_status()
         .with_context(|| format!("Ollama returned an error for {url}"))?;
-    let payload: OllamaGenerateResponse = response.json().context("failed to decode Ollama response")?;
+    let payload: OllamaGenerateResponse = response
+        .json()
+        .context("failed to decode Ollama response")?;
     Ok(payload.response.trim().to_string())
 }
 
@@ -1742,7 +1929,12 @@ fn encode_image_as_base64(path: &str) -> Result<String> {
 fn validate_ollama_base_url(base_url: &str) -> Result<()> {
     if std::env::var("VELA_ALLOW_REMOTE_OLLAMA")
         .ok()
-        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false)
     {
         return Ok(());
@@ -1750,11 +1942,18 @@ fn validate_ollama_base_url(base_url: &str) -> Result<()> {
 
     let parsed = reqwest::Url::parse(base_url)
         .with_context(|| format!("invalid Ollama base URL {:?}", base_url))?;
-    let host = parsed.host_str().context("Ollama base URL is missing a host")?;
+    let host = parsed
+        .host_str()
+        .context("Ollama base URL is missing a host")?;
     let is_local = host.eq_ignore_ascii_case("localhost")
-        || host.parse::<IpAddr>().map(|ip| {
-            ip.is_loopback() || ip == IpAddr::V4(Ipv4Addr::LOCALHOST) || ip == IpAddr::V6(Ipv6Addr::LOCALHOST)
-        }).unwrap_or(false);
+        || host
+            .parse::<IpAddr>()
+            .map(|ip| {
+                ip.is_loopback()
+                    || ip == IpAddr::V4(Ipv4Addr::LOCALHOST)
+                    || ip == IpAddr::V6(Ipv6Addr::LOCALHOST)
+            })
+            .unwrap_or(false);
 
     if !is_local {
         bail!(
@@ -1797,8 +1996,16 @@ fn load_scheduler_jobs(path: &std::path::Path) -> Result<Vec<ScheduledJob>> {
 }
 
 fn save_scheduler_jobs(path: &std::path::Path, jobs: &[ScheduledJob]) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| anyhow::anyhow!("scheduler jobs path has no parent directory"))?;
-    let temp_path = parent.join(format!("{}.tmp-{}", path.file_name().and_then(|n| n.to_str()).unwrap_or("jobs.json"), unix_timestamp_nanos()));
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("scheduler jobs path has no parent directory"))?;
+    let temp_path = parent.join(format!(
+        "{}.tmp-{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("jobs.json"),
+        unix_timestamp_nanos()
+    ));
     std::fs::write(&temp_path, serde_json::to_string_pretty(jobs)?)?;
     std::fs::rename(&temp_path, path)?;
     Ok(())
@@ -1807,7 +2014,11 @@ fn save_scheduler_jobs(path: &std::path::Path, jobs: &[ScheduledJob]) -> Result<
 fn acquire_scheduler_jobs_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> {
     let lock_path = path.with_extension("json.lock");
     for _ in 0..100 {
-        match OpenOptions::new().write(true).create_new(true).open(&lock_path) {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
             Ok(_) => {
                 return Ok(SchedulerJobsLock { lock_path });
             }
@@ -1854,7 +2065,12 @@ fn normalize_scheduler_source(source: Option<&str>) -> String {
 
 fn validate_scheduler_job_id(id: &str) -> Result<&str> {
     let normalized = id.trim();
-    if normalized.is_empty() || normalized == "." || normalized == ".." || normalized.contains('/') || normalized.contains('\\') {
+    if normalized.is_empty()
+        || normalized == "."
+        || normalized == ".."
+        || normalized.contains('/')
+        || normalized.contains('\\')
+    {
         bail!("invalid scheduled job id");
     }
     Ok(normalized)
@@ -1879,7 +2095,9 @@ pub fn generate_review_candidates_from_latest_session(
     bootstrap: &BootstrapReport,
     limit: usize,
 ) -> Result<Option<vela_review::SuggestionReport>> {
-    let Some(session) = vela_state::inspect_latest_session(&bootstrap.persistence.state_db_path, limit)? else {
+    let Some(session) =
+        vela_state::inspect_latest_session(&bootstrap.persistence.state_db_path, limit)?
+    else {
         return Ok(None);
     };
     let report = vela_review::generate_candidates(
@@ -1973,7 +2191,8 @@ mod tests {
 
     /// Creates an isolated bootstrap report for runtime regression tests.
     fn test_bootstrap(prefix: &str) -> BootstrapReport {
-        let vela_home = std::env::temp_dir().join(format!("vela-runtime-{prefix}-{}", unix_timestamp_nanos()));
+        let vela_home =
+            std::env::temp_dir().join(format!("vela-runtime-{prefix}-{}", unix_timestamp_nanos()));
         BootstrapReport {
             vela_home: vela_home.clone(),
             active_profile: None,
@@ -1985,14 +2204,49 @@ mod tests {
             memory: vela_memory::initialize_memory(&vela_home).unwrap(),
             skills: vela_skills::initialize_skills(&vela_home).unwrap(),
             reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
-            extensions: vela_extensions::initialize_extensions(&vela_home, &ResolvedConfig::default()).unwrap(),
+            extensions: vela_extensions::initialize_extensions(
+                &vela_home,
+                &ResolvedConfig::default(),
+            )
+            .unwrap(),
         }
+    }
+
+    #[test]
+    /// Verifies that runtime execution resolves the Ollama backend through the provider boundary.
+    fn resolve_runtime_execution_wraps_ollama_provider_backend() {
+        let resolved = ResolvedConfig {
+            runtime_provider: Some("ollama".to_string()),
+            runtime_model: Some("gemma3:4b".to_string()),
+            runtime_ollama_base_url: Some("http://127.0.0.1:11434".to_string()),
+            ..ResolvedConfig::default()
+        };
+
+        let execution = resolve_runtime_execution(&resolved, None, None).unwrap();
+        let provider = execution
+            .provider
+            .as_deref()
+            .expect("resolved provider backend");
+
+        assert_eq!(execution.provider_label.as_deref(), Some("ollama"));
+        assert_eq!(execution.model.as_deref(), Some("gemma3:4b"));
+        assert_eq!(provider.label(), "ollama");
+        assert_eq!(provider.model(), Some("gemma3:4b"));
+        assert_eq!(provider.direct_response_source(), "runtime-ollama");
+        assert_eq!(
+            provider.tool_loop_response_source(),
+            "runtime-ollama-tool-loop"
+        );
+        provider.validate().unwrap();
     }
 
     #[test]
     /// Verifies that extension reload re-reads config and manifests without resetting durable session state.
     fn reload_extensions_rereads_config_without_resetting_sessions() {
-        let vela_home = std::env::temp_dir().join(format!("vela-runtime-ext-reload-{}", unix_timestamp_nanos()));
+        let vela_home = std::env::temp_dir().join(format!(
+            "vela-runtime-ext-reload-{}",
+            unix_timestamp_nanos()
+        ));
         let _ = std::fs::remove_dir_all(&vela_home);
         std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
         std::fs::write(
@@ -2018,7 +2272,13 @@ mod tests {
             memory: vela_memory::initialize_memory(&vela_home).unwrap(),
             skills: vela_skills::initialize_skills(&vela_home).unwrap(),
             reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
-            extensions: vela_extensions::initialize_extensions(&vela_home, &vela_config::reload_config_snapshot(&vela_home, false).unwrap().1).unwrap(),
+            extensions: vela_extensions::initialize_extensions(
+                &vela_home,
+                &vela_config::reload_config_snapshot(&vela_home, false)
+                    .unwrap()
+                    .1,
+            )
+            .unwrap(),
         };
         assert_eq!(bootstrap.extensions.activated_count, 0);
         assert_eq!(bootstrap.extensions.disabled_count, 1);
@@ -2085,14 +2345,20 @@ mod tests {
         let expected_total_len;
         loop {
             let read = stream.read(&mut buf).expect("read mock Ollama request");
-            assert!(read > 0, "mock Ollama request closed before full payload arrived");
+            assert!(
+                read > 0,
+                "mock Ollama request closed before full payload arrived"
+            );
             request_bytes.extend_from_slice(&buf[..read]);
             if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
                 let end = end + 4;
                 let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
                 let content_length = head
                     .lines()
-                    .find_map(|line| line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: ")))
+                    .find_map(|line| {
+                        line.strip_prefix("Content-Length: ")
+                            .or_else(|| line.strip_prefix("content-length: "))
+                    })
                     .expect("Content-Length header")
                     .trim()
                     .parse::<usize>()
@@ -2103,7 +2369,9 @@ mod tests {
             }
         }
         while request_bytes.len() < expected_total_len {
-            let read = stream.read(&mut buf).expect("read mock Ollama request body");
+            let read = stream
+                .read(&mut buf)
+                .expect("read mock Ollama request body");
             assert!(read > 0, "mock Ollama request closed before body finished");
             request_bytes.extend_from_slice(&buf[..read]);
         }
@@ -2114,10 +2382,20 @@ mod tests {
         let (head, body_text) = request.split_once("\r\n\r\n").expect("split HTTP request");
         let request_line = head.lines().next().expect("HTTP request line");
         assert!(request_line.starts_with("POST /api/generate HTTP/1.1"));
-        let payload_json: serde_json::Value = serde_json::from_str(body_text).expect("decode request body");
-        assert_eq!(payload_json.get("model").and_then(|v| v.as_str()), Some(exchange.expected_model));
-        assert_eq!(payload_json.get("stream").and_then(|v| v.as_bool()), Some(false));
-        let prompt = payload_json.get("prompt").and_then(|v| v.as_str()).expect("prompt field");
+        let payload_json: serde_json::Value =
+            serde_json::from_str(body_text).expect("decode request body");
+        assert_eq!(
+            payload_json.get("model").and_then(|v| v.as_str()),
+            Some(exchange.expected_model)
+        );
+        assert_eq!(
+            payload_json.get("stream").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        let prompt = payload_json
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .expect("prompt field");
         assert!(prompt.contains(exchange.prompt_fragment));
         let images = payload_json.get("images").and_then(|v| v.as_array());
         if let Some(expected_image_base64) = exchange.expected_image_base64 {
@@ -2125,11 +2403,16 @@ mod tests {
             assert_eq!(images.len(), 1);
             assert_eq!(images[0].as_str(), Some(expected_image_base64));
         } else {
-            assert!(payload_json.get("images").is_none(), "images field should be absent when no image is expected");
+            assert!(
+                payload_json.get("images").is_none(),
+                "images field should be absent when no image is expected"
+            );
         }
     }
 
-    fn spawn_mock_ollama_sequence(exchanges: Vec<MockOllamaExchange<'static>>) -> (String, std::thread::JoinHandle<()>) {
+    fn spawn_mock_ollama_sequence(
+        exchanges: Vec<MockOllamaExchange<'static>>,
+    ) -> (String, std::thread::JoinHandle<()>) {
         use std::io::Write;
         use std::net::TcpListener;
 
@@ -2253,22 +2536,33 @@ mod tests {
         )
         .unwrap();
 
-        assert!(report.response.as_deref().unwrap_or_default().contains("Vela executed a local kernel turn"));
+        assert!(report
+            .response
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Vela executed a local kernel turn"));
         assert!(report.turn_id.starts_with("turn-"));
         assert_eq!(report.lifecycle_phase_count, 4);
         assert_eq!(report.final_phase, "finish");
         assert_eq!(report.emitted_signal_count, 1);
         assert_eq!(report.generated_candidate_count, 1);
-        let summary = current_session_summary(&bootstrap).unwrap().expect("chat session summary");
+        let summary = current_session_summary(&bootstrap)
+            .unwrap()
+            .expect("chat session summary");
         assert_eq!(summary.message_count, 2);
-        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("chat session inspection");
+        let inspection = inspect_latest_session(&bootstrap, 20)
+            .unwrap()
+            .expect("chat session inspection");
         let lifecycle: Vec<_> = inspection
             .lifecycle
             .iter()
             .filter(|record| record.turn_id == report.turn_id)
             .map(|record| record.phase.as_str())
             .collect();
-        assert_eq!(lifecycle, vec!["receive", "deliberate", "respond", "finish"]);
+        assert_eq!(
+            lifecycle,
+            vec!["receive", "deliberate", "respond", "finish"]
+        );
         assert!(list_review_candidates(&bootstrap).unwrap().len() >= 1);
 
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
@@ -2295,8 +2589,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(report.response.as_deref().unwrap_or_default().contains("Vela executed a local image turn"));
-        let summary = current_session_summary(&bootstrap).unwrap().expect("image chat session summary");
+        assert!(report
+            .response
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Vela executed a local image turn"));
+        let summary = current_session_summary(&bootstrap)
+            .unwrap()
+            .expect("image chat session summary");
         assert_eq!(summary.message_count, 2);
 
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
@@ -2336,17 +2636,34 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.response.as_deref(), Some("Gemma inspected the image."));
+        assert_eq!(
+            report.response.as_deref(),
+            Some("Gemma inspected the image.")
+        );
         assert_eq!(report.response_source, "runtime-ollama");
-        let inspection = inspect_latest_session(&bootstrap, 10).unwrap().expect("image session inspection");
+        let inspection = inspect_latest_session(&bootstrap, 10)
+            .unwrap()
+            .expect("image session inspection");
         let assistant = inspection.messages.last().expect("assistant message");
         let metadata: serde_json::Value = serde_json::from_str(
-            assistant.metadata_json.as_deref().expect("assistant metadata"),
+            assistant
+                .metadata_json
+                .as_deref()
+                .expect("assistant metadata"),
         )
         .expect("decode assistant metadata");
-        assert_eq!(metadata.get("source").and_then(|v| v.as_str()), Some("runtime-ollama"));
-        assert_eq!(metadata.get("provider").and_then(|v| v.as_str()), Some("ollama"));
-        assert_eq!(metadata.get("model").and_then(|v| v.as_str()), Some("gemma3:4b"));
+        assert_eq!(
+            metadata.get("source").and_then(|v| v.as_str()),
+            Some("runtime-ollama")
+        );
+        assert_eq!(
+            metadata.get("provider").and_then(|v| v.as_str()),
+            Some("ollama")
+        );
+        assert_eq!(
+            metadata.get("model").and_then(|v| v.as_str()),
+            Some("gemma3:4b")
+        );
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
@@ -2385,7 +2702,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.response.as_deref(), Some("Gemma handled both prompt and image."));
+        assert_eq!(
+            report.response.as_deref(),
+            Some("Gemma handled both prompt and image.")
+        );
         assert_eq!(report.response_source, "runtime-ollama");
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
@@ -2394,7 +2714,8 @@ mod tests {
     #[test]
     /// Verifies that configured Ollama execution is used for text chat turns.
     fn execute_chat_turn_uses_ollama_provider_when_configured() {
-        let (base_url, server) = spawn_mock_ollama("Gemma says hi.", "gemma3:4b", "hello there", None);
+        let (base_url, server) =
+            spawn_mock_ollama("Gemma says hi.", "gemma3:4b", "hello there", None);
         let mut bootstrap = test_bootstrap("ollama-turn");
         bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
         bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
@@ -2442,7 +2763,8 @@ mod tests {
             MockOllamaExchange {
                 response_body: r#"{"tool":"view_skill","name":"deploy-staging"}"#,
                 expected_model: "gemma3:4b",
-                prompt_fragment: "Tool result for search_session_history:retrieve targeted context:",
+                prompt_fragment:
+                    "Tool result for search_session_history:retrieve targeted context:",
                 expected_image_base64: None,
             },
             MockOllamaExchange {
@@ -2456,10 +2778,19 @@ mod tests {
         bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
         bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
         bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
-        vela_memory::add_memory_entry(&bootstrap.vela_home, vela_memory::MemoryTarget::User, "Prefers terse answers.").unwrap();
+        vela_memory::add_memory_entry(
+            &bootstrap.vela_home,
+            vela_memory::MemoryTarget::User,
+            "Prefers terse answers.",
+        )
+        .unwrap();
         std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
         std::fs::write(
-            bootstrap.vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+            bootstrap
+                .vela_home
+                .join("skills")
+                .join("deploy-staging")
+                .join("SKILL.md"),
             "# deploy-staging\n\nDeploy staging safely.",
         )
         .unwrap();
@@ -2481,15 +2812,27 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.response.as_deref(), Some("Context-aware final answer."));
+        assert_eq!(
+            report.response.as_deref(),
+            Some("Context-aware final answer.")
+        );
         assert_eq!(report.response_source, "runtime-ollama-tool-loop");
-        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("context tool inspection");
+        let inspection = inspect_latest_session(&bootstrap, 20)
+            .unwrap()
+            .expect("context tool inspection");
         assert_eq!(inspection.messages[1].content, "view_memory:user");
-        assert!(inspection.messages[2].content.contains("Prefers terse answers."));
-        assert_eq!(inspection.messages[3].content, "search_session_history:retrieve targeted context");
+        assert!(inspection.messages[2]
+            .content
+            .contains("Prefers terse answers."));
+        assert_eq!(
+            inspection.messages[3].content,
+            "search_session_history:retrieve targeted context"
+        );
         assert!(inspection.messages[4].content.contains("retrieve"));
         assert_eq!(inspection.messages[5].content, "view_skill:deploy-staging");
-        assert!(inspection.messages[6].content.contains("Deploy staging safely."));
+        assert!(inspection.messages[6]
+            .content
+            .contains("Deploy staging safely."));
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
@@ -2513,7 +2856,8 @@ mod tests {
             MockOllamaExchange {
                 response_body: "Tool-informed final answer.",
                 expected_model: "gemma3:4b",
-                prompt_fragment: "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
+                prompt_fragment:
+                    "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
                 expected_image_base64: None,
             },
         ]);
@@ -2523,7 +2867,11 @@ mod tests {
         bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
         std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
         std::fs::write(
-            bootstrap.vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+            bootstrap
+                .vela_home
+                .join("skills")
+                .join("deploy-staging")
+                .join("SKILL.md"),
             "# deploy-staging\n\nDeploys staging.",
         )
         .unwrap();
@@ -2545,28 +2893,61 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.response.as_deref(), Some("Tool-informed final answer."));
+        assert_eq!(
+            report.response.as_deref(),
+            Some("Tool-informed final answer.")
+        );
         assert_eq!(report.response_source, "runtime-ollama-tool-loop");
         assert_eq!(report.lifecycle_phase_count, 8);
         assert_eq!(report.final_phase, "finish");
-        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("tool loop inspection");
+        let inspection = inspect_latest_session(&bootstrap, 20)
+            .unwrap()
+            .expect("tool loop inspection");
         assert_eq!(inspection.messages.len(), 6);
         assert_eq!(inspection.messages[1].role, "tool-request");
         assert_eq!(inspection.messages[1].content, "memory_snapshot");
         assert_eq!(inspection.messages[2].role, "tool-result");
         assert!(!inspection.messages[2].content.trim().is_empty());
         let first_tool_result_metadata: serde_json::Value = serde_json::from_str(
-            inspection.messages[2].metadata_json.as_deref().expect("first tool-result metadata"),
+            inspection.messages[2]
+                .metadata_json
+                .as_deref()
+                .expect("first tool-result metadata"),
         )
         .expect("decode first tool-result metadata");
-        assert_eq!(first_tool_result_metadata.get("request").and_then(|v| v.get("tool")).and_then(|v| v.as_str()), Some("memory_snapshot"));
-        assert_eq!(first_tool_result_metadata.get("step").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(
+            first_tool_result_metadata
+                .get("request")
+                .and_then(|v| v.get("tool"))
+                .and_then(|v| v.as_str()),
+            Some("memory_snapshot")
+        );
+        assert_eq!(
+            first_tool_result_metadata
+                .get("step")
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
         assert_eq!(inspection.messages[3].role, "tool-request");
         assert_eq!(inspection.messages[3].content, "list_skills");
         assert_eq!(inspection.messages[4].role, "tool-result");
         assert!(inspection.messages[4].content.contains("deploy-staging"));
-        assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_requested").count(), 2);
-        assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_completed").count(), 2);
+        assert_eq!(
+            inspection
+                .events
+                .iter()
+                .filter(|event| event.event_type == "runtime_tool_requested")
+                .count(),
+            2
+        );
+        assert_eq!(
+            inspection
+                .events
+                .iter()
+                .filter(|event| event.event_type == "runtime_tool_completed")
+                .count(),
+            2
+        );
         let lifecycle: Vec<_> = inspection
             .lifecycle
             .iter()
@@ -2588,10 +2969,16 @@ mod tests {
         );
         let assistant = inspection.messages.last().expect("assistant message");
         let metadata: serde_json::Value = serde_json::from_str(
-            assistant.metadata_json.as_deref().expect("assistant metadata"),
+            assistant
+                .metadata_json
+                .as_deref()
+                .expect("assistant metadata"),
         )
         .expect("decode assistant metadata");
-        assert_eq!(metadata.get("source").and_then(|v| v.as_str()), Some("runtime-ollama-tool-loop"));
+        assert_eq!(
+            metadata.get("source").and_then(|v| v.as_str()),
+            Some("runtime-ollama-tool-loop")
+        );
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
@@ -2638,7 +3025,9 @@ mod tests {
         assert_eq!(report.response.as_deref(), Some("Recovered final answer."));
         assert_eq!(report.response_source, "runtime-ollama");
         assert_eq!(report.lifecycle_phase_count, 6);
-        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("reflection inspection");
+        let inspection = inspect_latest_session(&bootstrap, 20)
+            .unwrap()
+            .expect("reflection inspection");
         let lifecycle: Vec<_> = inspection
             .lifecycle
             .iter()
@@ -2679,7 +3068,8 @@ mod tests {
             MockOllamaExchange {
                 response_body: r#"{"tool":"memory_snapshot"}"#,
                 expected_model: "gemma3:4b",
-                prompt_fragment: "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
+                prompt_fragment:
+                    "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
                 expected_image_base64: None,
             },
             MockOllamaExchange {
@@ -2695,7 +3085,11 @@ mod tests {
         bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
         std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
         std::fs::write(
-            bootstrap.vela_home.join("skills").join("deploy-staging").join("SKILL.md"),
+            bootstrap
+                .vela_home
+                .join("skills")
+                .join("deploy-staging")
+                .join("SKILL.md"),
             "# deploy-staging\n\nDeploys staging.",
         )
         .unwrap();
@@ -2725,17 +3119,47 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("maximum bounded tool steps"));
-        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("max-step inspection");
+        let inspection = inspect_latest_session(&bootstrap, 20)
+            .unwrap()
+            .expect("max-step inspection");
         assert_eq!(inspection.messages.len(), 8);
-        assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_requested").count(), 3);
-        assert_eq!(inspection.events.iter().filter(|event| event.event_type == "runtime_tool_completed").count(), 3);
+        assert_eq!(
+            inspection
+                .events
+                .iter()
+                .filter(|event| event.event_type == "runtime_tool_requested")
+                .count(),
+            3
+        );
+        assert_eq!(
+            inspection
+                .events
+                .iter()
+                .filter(|event| event.event_type == "runtime_tool_completed")
+                .count(),
+            3
+        );
         let third_tool_result_metadata: serde_json::Value = serde_json::from_str(
-            inspection.messages[6].metadata_json.as_deref().expect("third tool-result metadata"),
+            inspection.messages[6]
+                .metadata_json
+                .as_deref()
+                .expect("third tool-result metadata"),
         )
         .expect("decode third tool-result metadata");
         assert_eq!(inspection.messages[6].role, "tool-result");
-        assert_eq!(third_tool_result_metadata.get("request").and_then(|v| v.get("tool")).and_then(|v| v.as_str()), Some("memory_snapshot"));
-        assert_eq!(third_tool_result_metadata.get("step").and_then(|v| v.as_u64()), Some(3));
+        assert_eq!(
+            third_tool_result_metadata
+                .get("request")
+                .and_then(|v| v.get("tool"))
+                .and_then(|v| v.as_str()),
+            Some("memory_snapshot")
+        );
+        assert_eq!(
+            third_tool_result_metadata
+                .get("step")
+                .and_then(|v| v.as_u64()),
+            Some(3)
+        );
         let lifecycle: Vec<_> = inspection
             .lifecycle
             .iter()
@@ -2759,12 +3183,24 @@ mod tests {
         );
         let assistant = inspection.messages.last().expect("assistant message");
         let assistant_metadata: serde_json::Value = serde_json::from_str(
-            assistant.metadata_json.as_deref().expect("assistant metadata"),
+            assistant
+                .metadata_json
+                .as_deref()
+                .expect("assistant metadata"),
         )
         .expect("decode assistant metadata");
-        assert_eq!(assistant_metadata.get("source").and_then(|v| v.as_str()), Some("runtime-kernel"));
-        assert_eq!(assistant_metadata.get("provider").and_then(|v| v.as_str()), None);
-        assert_eq!(assistant_metadata.get("model").and_then(|v| v.as_str()), None);
+        assert_eq!(
+            assistant_metadata.get("source").and_then(|v| v.as_str()),
+            Some("runtime-kernel")
+        );
+        assert_eq!(
+            assistant_metadata.get("provider").and_then(|v| v.as_str()),
+            None
+        );
+        assert_eq!(
+            assistant_metadata.get("model").and_then(|v| v.as_str()),
+            None
+        );
         server.join().unwrap();
         std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
     }
@@ -2815,9 +3251,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.response_source, "runtime-kernel");
-        assert!(report.response.as_deref().unwrap_or_default().contains("exhausted the bounded reflection limit"));
+        assert!(report
+            .response
+            .as_deref()
+            .unwrap_or_default()
+            .contains("exhausted the bounded reflection limit"));
         assert_eq!(report.lifecycle_phase_count, 9);
-        let inspection = inspect_latest_session(&bootstrap, 20).unwrap().expect("reflection fallback inspection");
+        let inspection = inspect_latest_session(&bootstrap, 20)
+            .unwrap()
+            .expect("reflection fallback inspection");
         let lifecycle: Vec<_> = inspection
             .lifecycle
             .iter()
