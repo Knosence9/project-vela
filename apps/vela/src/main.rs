@@ -507,15 +507,27 @@ fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&item)?);
                 } else if let Some(id) = args.approve.as_deref() {
                     let report = vela_runtime::approve_pending_memory(&bootstrap, id)?;
-                    println!("memory approve: target={} entries={} chars={}/{}", report.target.label(), report.entry_count, report.char_count, report.char_limit);
+                    println!(
+                        "memory approve: target={} entries={} chars={}/{}",
+                        report.target.label(),
+                        report.entry_count,
+                        report.char_count,
+                        report.char_limit
+                    );
                 } else if let Some(id) = args.reject.as_deref() {
                     vela_runtime::reject_pending_memory(&bootstrap, id)?;
                     println!("memory reject: {}", id);
                 } else if let Some(content) = args.add.as_deref() {
                     let target = vela_runtime::MemoryTarget::parse(&args.target)?;
                     if args.stage {
-                        let item = vela_runtime::stage_add_memory_entry(&bootstrap, target, content)?;
-                        println!("memory staged: {} action={} target={}", item.id, item.action, item.target.label());
+                        let item =
+                            vela_runtime::stage_add_memory_entry(&bootstrap, target, content)?;
+                        println!(
+                            "memory staged: {} action={} target={}",
+                            item.id,
+                            item.action,
+                            item.target.label()
+                        );
                     } else {
                         let report = vela_runtime::add_memory_entry(&bootstrap, target, content)?;
                         println!(
@@ -534,10 +546,19 @@ fn main() -> Result<()> {
                         .as_deref()
                         .ok_or_else(|| anyhow::anyhow!("--replace requires --match <substring>"))?;
                     if args.stage {
-                        let item = vela_runtime::stage_replace_memory_entry(&bootstrap, target, old_text, content)?;
-                        println!("memory staged: {} action={} target={}", item.id, item.action, item.target.label());
+                        let item = vela_runtime::stage_replace_memory_entry(
+                            &bootstrap, target, old_text, content,
+                        )?;
+                        println!(
+                            "memory staged: {} action={} target={}",
+                            item.id,
+                            item.action,
+                            item.target.label()
+                        );
                     } else {
-                        let report = vela_runtime::replace_memory_entry(&bootstrap, target, old_text, content)?;
+                        let report = vela_runtime::replace_memory_entry(
+                            &bootstrap, target, old_text, content,
+                        )?;
                         println!(
                             "memory {}: target={} entries={} chars={}/{}",
                             report.action,
@@ -550,10 +571,17 @@ fn main() -> Result<()> {
                 } else if let Some(old_text) = args.remove.as_deref() {
                     let target = vela_runtime::MemoryTarget::parse(&args.target)?;
                     if args.stage {
-                        let item = vela_runtime::stage_remove_memory_entry(&bootstrap, target, old_text)?;
-                        println!("memory staged: {} action={} target={}", item.id, item.action, item.target.label());
+                        let item =
+                            vela_runtime::stage_remove_memory_entry(&bootstrap, target, old_text)?;
+                        println!(
+                            "memory staged: {} action={} target={}",
+                            item.id,
+                            item.action,
+                            item.target.label()
+                        );
                     } else {
-                        let report = vela_runtime::remove_memory_entry(&bootstrap, target, old_text)?;
+                        let report =
+                            vela_runtime::remove_memory_entry(&bootstrap, target, old_text)?;
                         println!(
                             "memory {}: target={} entries={} chars={}/{}",
                             report.action,
@@ -591,14 +619,27 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&item)?);
             } else if let Some(id) = args.approve.as_deref() {
                 let report = vela_runtime::approve_pending_skill(&bootstrap, id)?;
-                println!("skill approve: {} {} ({})", report.action, report.name, report.skill_md_path.display());
+                println!(
+                    "skill approve: {} {} ({})",
+                    report.action,
+                    report.name,
+                    report.skill_md_path.display()
+                );
             } else if let Some(id) = args.reject.as_deref() {
                 vela_runtime::reject_pending_skill(&bootstrap, id)?;
                 println!("skill reject: {}", id);
             } else if let Some(name) = args.create.as_deref() {
                 if args.stage {
-                    let item = vela_runtime::stage_create_skill(&bootstrap, name, args.description.as_deref(), args.body.as_deref())?;
-                    println!("skill staged: {} action={} name={}", item.id, item.action, item.name);
+                    let item = vela_runtime::stage_create_skill(
+                        &bootstrap,
+                        name,
+                        args.description.as_deref(),
+                        args.body.as_deref(),
+                    )?;
+                    println!(
+                        "skill staged: {} action={} name={}",
+                        item.id, item.action, item.name
+                    );
                 } else {
                     let report = vela_runtime::create_skill(
                         &bootstrap,
@@ -606,12 +647,25 @@ fn main() -> Result<()> {
                         args.description.as_deref(),
                         args.body.as_deref(),
                     )?;
-                    println!("skill {}: {} ({})", report.action, report.name, report.skill_md_path.display());
+                    println!(
+                        "skill {}: {} ({})",
+                        report.action,
+                        report.name,
+                        report.skill_md_path.display()
+                    );
                 }
             } else if let Some(name) = args.write.as_deref() {
                 if args.stage {
-                    let item = vela_runtime::stage_write_skill(&bootstrap, name, args.description.as_deref(), args.body.as_deref())?;
-                    println!("skill staged: {} action={} name={}", item.id, item.action, item.name);
+                    let item = vela_runtime::stage_write_skill(
+                        &bootstrap,
+                        name,
+                        args.description.as_deref(),
+                        args.body.as_deref(),
+                    )?;
+                    println!(
+                        "skill staged: {} action={} name={}",
+                        item.id, item.action, item.name
+                    );
                 } else {
                     let report = vela_runtime::write_skill(
                         &bootstrap,
@@ -619,15 +673,28 @@ fn main() -> Result<()> {
                         args.description.as_deref(),
                         args.body.as_deref(),
                     )?;
-                    println!("skill {}: {} ({})", report.action, report.name, report.skill_md_path.display());
+                    println!(
+                        "skill {}: {} ({})",
+                        report.action,
+                        report.name,
+                        report.skill_md_path.display()
+                    );
                 }
             } else if let Some(name) = args.delete.as_deref() {
                 if args.stage {
                     let item = vela_runtime::stage_delete_skill(&bootstrap, name)?;
-                    println!("skill staged: {} action={} name={}", item.id, item.action, item.name);
+                    println!(
+                        "skill staged: {} action={} name={}",
+                        item.id, item.action, item.name
+                    );
                 } else {
                     let report = vela_runtime::delete_skill(&bootstrap, name)?;
-                    println!("skill {}: {} ({})", report.action, report.name, report.skill_md_path.display());
+                    println!(
+                        "skill {}: {} ({})",
+                        report.action,
+                        report.name,
+                        report.skill_md_path.display()
+                    );
                 }
             } else if let Some(name) = args.view.as_deref() {
                 let skill = vela_runtime::view_skill(&bootstrap, name)?;
@@ -653,7 +720,8 @@ fn main() -> Result<()> {
         }
         Some(Commands::Review(args)) => {
             if args.auto {
-                match vela_runtime::emit_review_signals_from_latest_session(&bootstrap, args.limit)? {
+                match vela_runtime::emit_review_signals_from_latest_session(&bootstrap, args.limit)?
+                {
                     Some(signal_report) => {
                         println!(
                             "review signals: session={} title={} emitted={} skipped={}",
@@ -668,7 +736,9 @@ fn main() -> Result<()> {
                     }
                     None => println!("review signals: no session available"),
                 }
-                match vela_runtime::generate_review_candidates_from_latest_session(&bootstrap, args.limit)? {
+                match vela_runtime::generate_review_candidates_from_latest_session(
+                    &bootstrap, args.limit,
+                )? {
                     Some(report) => {
                         println!(
                             "review suggestions: session={} title={} created={} skipped={}",
@@ -684,7 +754,8 @@ fn main() -> Result<()> {
                     None => println!("review suggestions: no session available"),
                 }
             } else if args.emit_signals {
-                match vela_runtime::emit_review_signals_from_latest_session(&bootstrap, args.limit)? {
+                match vela_runtime::emit_review_signals_from_latest_session(&bootstrap, args.limit)?
+                {
                     Some(report) => {
                         println!(
                             "review signals: session={} title={} emitted={} skipped={}",
@@ -700,7 +771,9 @@ fn main() -> Result<()> {
                     None => println!("review signals: no session available"),
                 }
             } else if args.suggest {
-                match vela_runtime::generate_review_candidates_from_latest_session(&bootstrap, args.limit)? {
+                match vela_runtime::generate_review_candidates_from_latest_session(
+                    &bootstrap, args.limit,
+                )? {
                     Some(report) => {
                         println!(
                             "review suggestions: session={} title={} created={} skipped={}",
@@ -737,26 +810,39 @@ fn main() -> Result<()> {
                     "add",
                     None,
                     Some(content),
-                    args.reason.as_deref().unwrap_or("Background review suggested new durable memory."),
+                    args.reason
+                        .as_deref()
+                        .unwrap_or("Background review suggested new durable memory."),
                     args.source.as_deref(),
                 )?;
-                println!("review staged: {} kind={} source={}", candidate.id, candidate.kind.label(), candidate.source);
+                println!(
+                    "review staged: {} kind={} source={}",
+                    candidate.id,
+                    candidate.kind.label(),
+                    candidate.source
+                );
             } else if let Some(content) = args.memory_replace.as_deref() {
                 let target = vela_runtime::MemoryTarget::parse(&args.target)?;
-                let old_text = args
-                    .match_text
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("--memory-replace requires --match <substring>"))?;
+                let old_text = args.match_text.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("--memory-replace requires --match <substring>")
+                })?;
                 let candidate = vela_runtime::stage_memory_review_candidate(
                     &bootstrap,
                     target,
                     "replace",
                     Some(old_text),
                     Some(content),
-                    args.reason.as_deref().unwrap_or("Background review suggested refining durable memory."),
+                    args.reason
+                        .as_deref()
+                        .unwrap_or("Background review suggested refining durable memory."),
                     args.source.as_deref(),
                 )?;
-                println!("review staged: {} kind={} source={}", candidate.id, candidate.kind.label(), candidate.source);
+                println!(
+                    "review staged: {} kind={} source={}",
+                    candidate.id,
+                    candidate.kind.label(),
+                    candidate.source
+                );
             } else if let Some(old_text) = args.memory_remove.as_deref() {
                 let target = vela_runtime::MemoryTarget::parse(&args.target)?;
                 let candidate = vela_runtime::stage_memory_review_candidate(
@@ -765,10 +851,17 @@ fn main() -> Result<()> {
                     "remove",
                     Some(old_text),
                     None,
-                    args.reason.as_deref().unwrap_or("Background review suggested removing stale durable memory."),
+                    args.reason
+                        .as_deref()
+                        .unwrap_or("Background review suggested removing stale durable memory."),
                     args.source.as_deref(),
                 )?;
-                println!("review staged: {} kind={} source={}", candidate.id, candidate.kind.label(), candidate.source);
+                println!(
+                    "review staged: {} kind={} source={}",
+                    candidate.id,
+                    candidate.kind.label(),
+                    candidate.source
+                );
             } else if let Some(name) = args.skill_create.as_deref() {
                 let candidate = vela_runtime::stage_skill_review_candidate(
                     &bootstrap,
@@ -776,10 +869,17 @@ fn main() -> Result<()> {
                     name,
                     args.description.as_deref(),
                     args.body.as_deref(),
-                    args.reason.as_deref().unwrap_or("Background review suggested a new procedural memory skill."),
+                    args.reason
+                        .as_deref()
+                        .unwrap_or("Background review suggested a new procedural memory skill."),
                     args.source.as_deref(),
                 )?;
-                println!("review staged: {} kind={} source={}", candidate.id, candidate.kind.label(), candidate.source);
+                println!(
+                    "review staged: {} kind={} source={}",
+                    candidate.id,
+                    candidate.kind.label(),
+                    candidate.source
+                );
             } else if let Some(name) = args.skill_write.as_deref() {
                 let candidate = vela_runtime::stage_skill_review_candidate(
                     &bootstrap,
@@ -787,10 +887,17 @@ fn main() -> Result<()> {
                     name,
                     args.description.as_deref(),
                     args.body.as_deref(),
-                    args.reason.as_deref().unwrap_or("Background review suggested revising a procedural memory skill."),
+                    args.reason.as_deref().unwrap_or(
+                        "Background review suggested revising a procedural memory skill.",
+                    ),
                     args.source.as_deref(),
                 )?;
-                println!("review staged: {} kind={} source={}", candidate.id, candidate.kind.label(), candidate.source);
+                println!(
+                    "review staged: {} kind={} source={}",
+                    candidate.id,
+                    candidate.kind.label(),
+                    candidate.source
+                );
             } else if let Some(name) = args.skill_delete.as_deref() {
                 let candidate = vela_runtime::stage_skill_review_candidate(
                     &bootstrap,
@@ -798,10 +905,17 @@ fn main() -> Result<()> {
                     name,
                     None,
                     None,
-                    args.reason.as_deref().unwrap_or("Background review suggested removing a stale procedural memory skill."),
+                    args.reason.as_deref().unwrap_or(
+                        "Background review suggested removing a stale procedural memory skill.",
+                    ),
                     args.source.as_deref(),
                 )?;
-                println!("review staged: {} kind={} source={}", candidate.id, candidate.kind.label(), candidate.source);
+                println!(
+                    "review staged: {} kind={} source={}",
+                    candidate.id,
+                    candidate.kind.label(),
+                    candidate.source
+                );
             } else {
                 let candidates = vela_runtime::list_review_candidates(&bootstrap)?;
                 println!("review candidates [{}]:", candidates.len());
@@ -860,7 +974,12 @@ fn main() -> Result<()> {
         }
         Some(Commands::Sessions(args)) => {
             if let Some(source) = args.branch.as_deref() {
-                let branch = vela_runtime::branch_session(&bootstrap, source, args.title.as_deref(), args.note.as_deref())?;
+                let branch = vela_runtime::branch_session(
+                    &bootstrap,
+                    source,
+                    args.title.as_deref(),
+                    args.note.as_deref(),
+                )?;
                 println!(
                     "session branched: session={} title={} parent={} note={:?}",
                     branch.session_id,
@@ -869,7 +988,10 @@ fn main() -> Result<()> {
                     branch.branch_note,
                 );
             } else if let Some(target) = args.compress.as_deref() {
-                let summary = args.summary.as_deref().ok_or_else(|| anyhow::anyhow!("--summary is required with --compress"))?;
+                let summary = args
+                    .summary
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("--summary is required with --compress"))?;
                 let compression = vela_runtime::compress_session(&bootstrap, target, summary)?;
                 println!(
                     "session compressed: session={} compression={} messages={} events={} summary={}",
@@ -923,19 +1045,25 @@ fn main() -> Result<()> {
                     }
                 }
             } else {
-                println!("sessions placeholder: list={} browse={}", args.list, args.browse);
+                println!(
+                    "sessions placeholder: list={} browse={}",
+                    args.list, args.browse
+                );
             }
         }
         Some(Commands::Cron(args)) => {
             if args.start {
                 let report = vela_runtime::start_scheduler(&bootstrap)?;
                 println!(
-                    "scheduler started: session={} action={} title={} config={} jobs={} ",
+                    "scheduler started: session={} action={} title={} config={} jobs={} executed={} recovered={} failed={}",
                     report.session.session_id,
                     report.session.action.label(),
                     report.session.title,
                     report.setup.config_path.display(),
                     report.setup.job_count,
+                    report.executed_job_count,
+                    report.recovered_job_count,
+                    report.failed_job_count,
                 );
             } else if args.setup {
                 let report = vela_runtime::setup_scheduler(&bootstrap)?;
@@ -953,8 +1081,8 @@ fn main() -> Result<()> {
                 println!("scheduled jobs [{}]:", jobs.len());
                 for job in jobs {
                     println!(
-                        "- {} :: schedule={} source={} status={} task={}",
-                        job.id, job.schedule, job.source, job.status, job.task
+                        "- {} :: schedule={} source={} status={} next_run_at={} run_count={} recovery_count={} outcome={:?} last_error={:?} task={}",
+                        job.id, job.schedule, job.source, job.status, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_error, job.task
                     );
                 }
             } else if let Some(task) = args.add.as_deref() {
@@ -962,16 +1090,21 @@ fn main() -> Result<()> {
                     .schedule
                     .as_deref()
                     .ok_or_else(|| anyhow::anyhow!("--add requires --schedule <expr>"))?;
-                let job = vela_runtime::add_scheduled_job(&bootstrap, schedule, task, args.source.as_deref())?;
+                let job = vela_runtime::add_scheduled_job(
+                    &bootstrap,
+                    schedule,
+                    task,
+                    args.source.as_deref(),
+                )?;
                 println!(
-                    "scheduled job added: {} schedule={} source={} status={} task={}",
-                    job.id, job.schedule, job.source, job.status, job.task
+                    "scheduled job added: {} schedule={} source={} status={} next_run_at={} task={}",
+                    job.id, job.schedule, job.source, job.status, job.next_run_at, job.task
                 );
             } else if let Some(id) = args.show.as_deref() {
                 let job = vela_runtime::get_scheduled_job(&bootstrap, id)?;
                 println!(
-                    "scheduled job: {} schedule={} source={} status={} created_at={} task={}",
-                    job.id, job.schedule, job.source, job.status, job.created_at, job.task
+                    "scheduled job: {} schedule={} source={} status={} created_at={} next_run_at={} run_count={} recovery_count={} outcome={:?} last_error={:?} task={}",
+                    job.id, job.schedule, job.source, job.status, job.created_at, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_error, job.task
                 );
             } else {
                 let report = vela_runtime::setup_scheduler(&bootstrap)?;
@@ -994,8 +1127,14 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Some(Commands::Logs(args)) => println!("logs placeholder: follow={} since={:?}", args.follow, args.since),
-        Some(Commands::Dashboard(args)) => println!("dashboard placeholder: stop={} status={}", args.stop, args.status),
+        Some(Commands::Logs(args)) => println!(
+            "logs placeholder: follow={} since={:?}",
+            args.follow, args.since
+        ),
+        Some(Commands::Dashboard(args)) => println!(
+            "dashboard placeholder: stop={} status={}",
+            args.stop, args.status
+        ),
         Some(other) => println!("placeholder command: {:?}", other),
     }
 
