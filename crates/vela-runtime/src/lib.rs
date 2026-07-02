@@ -1219,6 +1219,11 @@ enum ProviderContinuation {
     EmptyResponse,
 }
 
+enum ReflectionOutcome {
+    RetryPrompt(String),
+    Fallback(RenderedChatResponse),
+}
+
 fn render_chat_response(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
@@ -1232,9 +1237,6 @@ fn render_chat_response(
         provider_override,
         model_override,
     )?;
-    if let Some(provider) = execution.provider.as_deref() {
-        provider.validate()?;
-    }
 
     let memory = vela_memory::render_prompt_snapshot(&bootstrap.vela_home)?;
     let skills = vela_skills::list_skills(&bootstrap.vela_home)?;
@@ -1256,6 +1258,7 @@ fn render_chat_response(
             .unwrap_or("(unspecified image path)");
         if let Some(provider) = execution.provider.as_deref() {
             if let Some(image_path) = request.image_path.as_deref() {
+                provider.validate()?;
                 let image_base64 = encode_image_as_base64(image_path)?;
                 let user_prompt = request
                     .query_text
@@ -1306,6 +1309,7 @@ fn render_chat_response(
 
     if let Some(query) = request.query_text.as_deref() {
         if let Some(provider) = execution.provider.as_deref() {
+            provider.validate()?;
             let prompt = format!(
                 "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser query:\n{}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
                 session.title,
@@ -1400,7 +1404,7 @@ fn resolve_runtime_execution(
     })
 }
 
-/// Executes one provider-backed runtime turn and optionally completes a bounded local tool loop.
+/// Records one reflection attempt and returns either a retry prompt or a deterministic fallback.
 fn handle_reflection_outcome(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
@@ -1410,7 +1414,7 @@ fn handle_reflection_outcome(
     detail: serde_json::Value,
     fallback_message: &str,
     prompt_rewrite: String,
-) -> Result<Option<RenderedChatResponse>> {
+) -> Result<ReflectionOutcome> {
     *reflection_attempts += 1;
     let reflection_step = Some(*reflection_attempts);
     if *reflection_attempts > MAX_RUNTIME_REFLECTION_ATTEMPTS {
@@ -1421,7 +1425,7 @@ fn handle_reflection_outcome(
             reflection_step,
             json!({"attempt": *reflection_attempts, "reason": reason, "detail": detail, "outcome": "fallback"}),
         )?;
-        return Ok(Some(RenderedChatResponse {
+        return Ok(ReflectionOutcome::Fallback(RenderedChatResponse {
             content: Some(fallback_message.to_string()),
             source: "runtime-kernel",
             provider: None,
@@ -1437,14 +1441,10 @@ fn handle_reflection_outcome(
         reason,
         detail,
     )?;
-    Ok(Some(RenderedChatResponse {
-        content: Some(prompt_rewrite),
-        source: "runtime-kernel",
-        provider: None,
-        model: None,
-    }))
+    Ok(ReflectionOutcome::RetryPrompt(prompt_rewrite))
 }
 
+/// Executes one provider-backed runtime turn and optionally completes a bounded local tool loop.
 fn execute_provider_turn(
     bootstrap: &BootstrapReport,
     session: &SessionRuntimeReport,
@@ -1495,7 +1495,7 @@ fn execute_provider_turn(
                     json!({"request": tool_request.metadata_json(), "result_length": tool_result.len()}),
                 )?;
                 if tool_result.trim().is_empty() {
-                    if let Some(outcome) = handle_reflection_outcome(
+                    match handle_reflection_outcome(
                         bootstrap,
                         session,
                         lifecycle,
@@ -1509,11 +1509,11 @@ fn execute_provider_turn(
                             tool_request.display_name(),
                         ),
                     )? {
-                        if outcome.source == "runtime-kernel" && outcome.provider.is_none() && outcome.model.is_none() && outcome.content.as_deref().is_some_and(|text| text.starts_with("Vela could not recover")) {
-                            return Ok(outcome);
+                        ReflectionOutcome::Fallback(outcome) => return Ok(outcome),
+                        ReflectionOutcome::RetryPrompt(prompt_rewrite) => {
+                            current_prompt = prompt_rewrite;
+                            continue;
                         }
-                        current_prompt = outcome.content.expect("reflection retry prompt rewrite");
-                        continue;
                     }
                 }
 
@@ -1545,7 +1545,7 @@ fn execute_provider_turn(
                 });
             }
             ProviderContinuation::InvalidToolRequest => {
-                let outcome = handle_reflection_outcome(
+                match handle_reflection_outcome(
                     bootstrap,
                     session,
                     lifecycle,
@@ -1557,21 +1557,13 @@ fn execute_provider_turn(
                         "{}\n\nYour previous reply requested an unsupported or malformed tool envelope. Only these tools are allowed: memory_snapshot, list_skills, view_memory, search_session_history, view_skill. If you need one tool, respond with ONLY valid JSON for exactly one of those tool contracts. Otherwise answer the user directly.",
                         current_prompt,
                     ),
-                )?;
-                let Some(outcome) = outcome else {
-                    continue;
-                };
-                if outcome.source == "runtime-kernel"
-                    && outcome.content.as_deref().is_some_and(|text| {
-                        text.starts_with("Vela received an invalid provider continuation")
-                    })
-                {
-                    return Ok(outcome);
+                )? {
+                    ReflectionOutcome::Fallback(outcome) => return Ok(outcome),
+                    ReflectionOutcome::RetryPrompt(prompt_rewrite) => current_prompt = prompt_rewrite,
                 }
-                current_prompt = outcome.content.expect("reflection retry prompt rewrite");
             }
             ProviderContinuation::EmptyResponse => {
-                let outcome = handle_reflection_outcome(
+                match handle_reflection_outcome(
                     bootstrap,
                     session,
                     lifecycle,
@@ -1583,18 +1575,10 @@ fn execute_provider_turn(
                         "{}\n\nYour previous reply was empty and unusable. Either request one supported tool with ONLY valid JSON for memory_snapshot, list_skills, view_memory, search_session_history, or view_skill, or answer the user directly with non-empty text.",
                         current_prompt,
                     ),
-                )?;
-                let Some(outcome) = outcome else {
-                    continue;
-                };
-                if outcome.source == "runtime-kernel"
-                    && outcome.content.as_deref().is_some_and(|text| {
-                        text.starts_with("Vela received an empty provider continuation")
-                    })
-                {
-                    return Ok(outcome);
+                )? {
+                    ReflectionOutcome::Fallback(outcome) => return Ok(outcome),
+                    ReflectionOutcome::RetryPrompt(prompt_rewrite) => current_prompt = prompt_rewrite,
                 }
-                current_prompt = outcome.content.expect("reflection retry prompt rewrite");
             }
         }
     }
