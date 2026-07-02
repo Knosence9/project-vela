@@ -21,7 +21,7 @@
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
-- `vela chat --query ...` creates a single-turn session and can call a configured local Ollama model for text turns
+- `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama currently serving as the first provider implementation behind that boundary
 - configured provider-backed turns can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
 - approved read-only runtime tools now include targeted internal context retrieval for memory, session history, and skill content (`view_memory`, `search_session_history`, `view_skill`) in addition to the earlier snapshot/list tools
 - provider-backed turns now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
@@ -35,13 +35,19 @@
 - Vela now discovers extension manifests from `~/.vela/extensions/` (or `extensions.manifests_dir` in config), applies config-driven enable/disable overrides, and surfaces lifecycle-aware extension entries through `vela status`
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
 - `vela extensions --reload` now re-reads config + manifest files, recomputes lifecycle transitions, and refreshes extension state without resetting durable session state
-- `vela chat --image ...` can call a configured local Ollama model for first-pass provider-backed image turns
+- `vela chat --image ...` can call a configured runtime provider for first-pass image turns, with Ollama currently serving as the first image-capable provider behind the kernel boundary
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
 - repeated resume/continue paths update `updated_at` on the matching session row
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
 - `vela gateway --start` resumes the latest `gateway` command session when one already exists
 - `vela cron --start` resumes the latest `cron` command session when one already exists
+
+## Kernel vs provider boundary
+- keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel
+- keep provider-specific request transport, response decoding, and provider-local safety validation behind a provider backend boundary
+- treat Ollama as the first provider implementation rather than the runtime’s permanent hard-coded execution path
+- preserve local-only Ollama safety (`VELA_ALLOW_REMOTE_OLLAMA` opt-in for remote endpoints) inside the Ollama provider implementation
 
 ## Kernel vs extension boundary
 - keep durable session/state ownership in-kernel (`vela-state`, runtime lifecycle, approvals, persistence, scheduler continuity)
@@ -52,7 +58,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states at the session level
-- broader external provider/model execution beyond the first Ollama text/image-turn slices, bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
+- additional provider implementations beyond the first Ollama-backed provider boundary, while preserving the bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
