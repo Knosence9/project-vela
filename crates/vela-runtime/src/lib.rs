@@ -24,16 +24,16 @@ pub use vela_state::{
     SessionSearchHit, SessionSummary,
 };
 
-mod surface;
-mod scheduler;
 mod ops;
+mod scheduler;
+mod surface;
 
 #[cfg(test)]
 mod tests;
 
-pub use surface::*;
-pub use scheduler::*;
 pub use ops::*;
+pub use scheduler::*;
+pub use surface::*;
 
 /// Infers review signals from the latest session and appends them as events.
 pub fn emit_review_signals_from_latest_session(

@@ -279,4 +279,3 @@ pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> 
     }
     Ok(GatewayStartReport { setup, session })
 }
-
