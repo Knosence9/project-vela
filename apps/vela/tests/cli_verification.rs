@@ -652,6 +652,12 @@ fn cron_start_executes_due_jobs() {
         .or_else(|| parse_field(&add_stdout, "job"))
         .unwrap_or_else(|| add_stdout.split_whitespace().nth(3).expect("job id token"));
 
+    let jobs_path = vela_home.join("scheduler").join("jobs.json");
+    let mut jobs: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&jobs_path).unwrap()).unwrap();
+    jobs.as_array_mut().unwrap()[0]["next_run_at"] = serde_json::Value::from(1);
+    std::fs::write(&jobs_path, serde_json::to_string_pretty(&jobs).unwrap()).unwrap();
+
     let start = run_vela(&vela_home, &["cron", "--start"]);
     assert!(start.status.success(), "{}", stderr_text(&start));
     let start_stdout = stdout_text(&start);

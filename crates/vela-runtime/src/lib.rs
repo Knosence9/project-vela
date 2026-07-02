@@ -106,6 +106,10 @@ pub struct ScheduledJob {
     pub recovery_count: u64,
     #[serde(default)]
     pub last_session_id: Option<String>,
+    #[serde(default)]
+    pub execution_token: Option<String>,
+    #[serde(default)]
+    pub lease_expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -578,13 +582,13 @@ pub fn add_scheduled_job(
     let now = unix_timestamp();
     let job = ScheduledJob {
         id: format!("job-{}", unix_timestamp_nanos()),
+        next_run_at: next_scheduler_run_at(&schedule, now),
         schedule,
         task,
         source,
         status: "pending".to_string(),
         created_at: now,
         updated_at: now,
-        next_run_at: now,
         last_started_at: None,
         last_completed_at: None,
         last_failed_at: None,
@@ -594,6 +598,8 @@ pub fn add_scheduled_job(
         run_count: 0,
         recovery_count: 0,
         last_session_id: None,
+        execution_token: None,
+        lease_expires_at: None,
     };
     jobs.push(job.clone());
     save_scheduler_jobs(&setup.jobs_path, &jobs)?;
@@ -634,21 +640,22 @@ fn process_scheduler_jobs(
     for job in &mut jobs {
         backfill_scheduler_job(job, now);
         if job.status == "running"
-            && job
-                .last_started_at
-                .is_some_and(|started| started + SCHEDULER_RECOVERY_LEASE_SECONDS <= now)
+            && job.lease_expires_at.is_some_and(|lease| lease <= now)
+            && job.execution_token.is_some()
         {
             job.status = "pending".to_string();
             job.updated_at = now;
             job.last_recovered_at = Some(now);
             job.last_outcome = Some("recovered".to_string());
             job.recovery_count += 1;
+            job.execution_token = None;
+            job.lease_expires_at = None;
             recovered_job_ids.push(job.id.clone());
         }
     }
     let due_job_ids = jobs
         .iter()
-        .filter(|job| job.status == "pending" && job.next_run_at <= now)
+        .filter(|job| matches!(job.status.as_str(), "pending" | "failed") && job.next_run_at <= now)
         .map(|job| job.id.clone())
         .collect::<Vec<_>>();
     save_scheduler_jobs(jobs_path, &jobs)?;
@@ -697,15 +704,18 @@ fn execute_scheduled_job(
         return Ok(false);
     };
     backfill_scheduler_job(job, now);
-    if job.status != "pending" || job.next_run_at > now {
+    if !matches!(job.status.as_str(), "pending" | "failed") || job.next_run_at > now {
         drop(lock);
         return Ok(false);
     }
+    let execution_token = format!("attempt-{}", unix_timestamp_nanos());
     job.status = "running".to_string();
     job.updated_at = now;
     job.last_started_at = Some(now);
     job.last_outcome = Some("running".to_string());
     job.last_error = None;
+    job.execution_token = Some(execution_token.clone());
+    job.lease_expires_at = Some(now + SCHEDULER_RECOVERY_LEASE_SECONDS);
     let task = job.task.clone();
     let schedule = job.schedule.clone();
     save_scheduler_jobs(jobs_path, &jobs)?;
@@ -715,7 +725,7 @@ fn execute_scheduled_job(
         &bootstrap.persistence.state_db_path,
         scheduler_session_id,
         "scheduler_job_started",
-        json!({"job_id": job_id, "task": task, "schedule": schedule, "started_at": now})
+        json!({"job_id": job_id, "task": task, "schedule": schedule, "started_at": now, "execution_token": execution_token})
             .to_string(),
     )?;
     if !event_logged {
@@ -743,6 +753,10 @@ fn execute_scheduled_job(
             let mut jobs = load_scheduler_jobs(jobs_path)?;
             if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
                 backfill_scheduler_job(job, completed_at);
+                if job.execution_token.as_deref() != Some(execution_token.as_str()) {
+                    drop(lock);
+                    return Ok(false);
+                }
                 job.status = "pending".to_string();
                 job.updated_at = completed_at;
                 job.last_completed_at = Some(completed_at);
@@ -751,6 +765,8 @@ fn execute_scheduled_job(
                 job.run_count += 1;
                 job.last_session_id = Some(report.session.session_id.clone());
                 job.next_run_at = next_scheduler_run_at(&job.schedule, completed_at);
+                job.execution_token = None;
+                job.lease_expires_at = None;
             }
             save_scheduler_jobs(jobs_path, &jobs)?;
             drop(lock);
@@ -764,6 +780,7 @@ fn execute_scheduled_job(
                     "completed_at": completed_at,
                     "response_source": report.response_source,
                     "session_id": report.session.session_id,
+                    "execution_token": execution_token,
                 })
                 .to_string(),
             )?;
@@ -778,11 +795,18 @@ fn execute_scheduled_job(
             let mut jobs = load_scheduler_jobs(jobs_path)?;
             if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
                 backfill_scheduler_job(job, failed_at);
+                if job.execution_token.as_deref() != Some(execution_token.as_str()) {
+                    drop(lock);
+                    return Ok(false);
+                }
                 job.status = "failed".to_string();
                 job.updated_at = failed_at;
                 job.last_failed_at = Some(failed_at);
                 job.last_outcome = Some("failed".to_string());
                 job.last_error = Some(error.to_string());
+                job.next_run_at = next_scheduler_run_at(&job.schedule, failed_at);
+                job.execution_token = None;
+                job.lease_expires_at = None;
             }
             save_scheduler_jobs(jobs_path, &jobs)?;
             drop(lock);
@@ -791,7 +815,7 @@ fn execute_scheduled_job(
                 &bootstrap.persistence.state_db_path,
                 scheduler_session_id,
                 "scheduler_job_failed",
-                json!({"job_id": job_id, "failed_at": failed_at, "error": error.to_string()})
+                json!({"job_id": job_id, "failed_at": failed_at, "error": error.to_string(), "execution_token": execution_token})
                     .to_string(),
             )?;
             if !event_logged {
@@ -807,25 +831,23 @@ fn backfill_scheduler_job(job: &mut ScheduledJob, now: i64) {
         job.updated_at = job.created_at.max(now);
     }
     if job.next_run_at == 0 {
-        job.next_run_at = job.created_at.max(now);
+        job.next_run_at = next_scheduler_run_at(&job.schedule, job.created_at.max(now));
     }
 }
 
 fn next_scheduler_run_at(schedule: &str, now: i64) -> i64 {
     let fields = schedule.split_whitespace().collect::<Vec<_>>();
-    if fields.len() != 5 {
-        return now + 60;
-    }
-    match fields[0] {
-        "*" => now - (now % 60) + 60,
-        minute if minute.starts_with("*/") => minute
+    match fields.as_slice() {
+        ["*", "*", "*", "*", "*"] => now - (now % 60) + 60,
+        [minute, "*", "*", "*", "*"] if minute.starts_with("*/") => minute
             .trim_start_matches("*/")
             .parse::<i64>()
             .ok()
             .filter(|value| *value > 0)
             .map(|value| now - (now % (value * 60)) + (value * 60))
             .unwrap_or(now + 60),
-        "0" if fields[1] == "*" => now - (now % 3600) + 3600,
+        ["0", "*", "*", "*", "*"] => now - (now % 3600) + 3600,
+        ["0", "0", "*", "*", "*"] => now - (now % 86_400) + 86_400,
         _ => now + 60,
     }
 }
@@ -2292,6 +2314,14 @@ fn normalize_scheduler_schedule(value: &str) -> Result<String> {
     if normalized.is_empty() {
         bail!("scheduler expression cannot be empty");
     }
+    let fields = normalized.split_whitespace().collect::<Vec<_>>();
+    let supported = matches!(
+        fields.as_slice(),
+        ["*", "*", "*", "*", "*"] | ["0", "*", "*", "*", "*"] | ["0", "0", "*", "*", "*"]
+    ) || matches!(fields.as_slice(), [minute, "*", "*", "*", "*"] if minute.starts_with("*/") && minute[2..].parse::<u32>().ok().is_some_and(|value| value > 0));
+    if !supported {
+        bail!("unsupported scheduler expression {:?}; supported patterns are '* * * * *', '*/N * * * *', '0 * * * *', and '0 0 * * *'", normalized);
+    }
     Ok(normalized)
 }
 
@@ -2748,7 +2778,18 @@ mod tests {
         let first_summary = current_command_session_summary(&bootstrap, "cron")
             .unwrap()
             .expect("initial cron session summary");
-        add_scheduled_job(&bootstrap, "*/5 * * * *", "ping status", Some("test")).unwrap();
+        let added =
+            add_scheduled_job(&bootstrap, "*/5 * * * *", "ping status", Some("test")).unwrap();
+        let setup = setup_scheduler(&bootstrap).unwrap();
+        let lock = acquire_scheduler_jobs_lock(&setup.jobs_path).unwrap();
+        let mut jobs = load_scheduler_jobs(&setup.jobs_path).unwrap();
+        let job = jobs
+            .iter_mut()
+            .find(|job| job.id == added.id)
+            .expect("scheduler job");
+        job.next_run_at = unix_timestamp() - 1;
+        save_scheduler_jobs(&setup.jobs_path, &jobs).unwrap();
+        drop(lock);
         let second = start_scheduler(&bootstrap).unwrap();
 
         assert_eq!(first.session.session_id, second.session.session_id);
@@ -2769,6 +2810,16 @@ mod tests {
         let bootstrap = test_bootstrap("scheduler-exec-recover");
         let added =
             add_scheduled_job(&bootstrap, "* * * * *", "ping status", Some("test")).unwrap();
+        let setup = setup_scheduler(&bootstrap).unwrap();
+        let lock = acquire_scheduler_jobs_lock(&setup.jobs_path).unwrap();
+        let mut jobs = load_scheduler_jobs(&setup.jobs_path).unwrap();
+        let job = jobs
+            .iter_mut()
+            .find(|job| job.id == added.id)
+            .expect("scheduler job");
+        job.next_run_at = unix_timestamp() - 1;
+        save_scheduler_jobs(&setup.jobs_path, &jobs).unwrap();
+        drop(lock);
 
         let first = start_scheduler(&bootstrap).unwrap();
         assert_eq!(first.executed_job_count, 1);
@@ -2790,6 +2841,8 @@ mod tests {
         let stale_started_at = unix_timestamp() - SCHEDULER_RECOVERY_LEASE_SECONDS - 1;
         job.status = "running".to_string();
         job.last_started_at = Some(stale_started_at);
+        job.execution_token = Some("stale-attempt".to_string());
+        job.lease_expires_at = Some(unix_timestamp() - 1);
         job.next_run_at = unix_timestamp() - 1;
         save_scheduler_jobs(&setup.jobs_path, &jobs).unwrap();
         drop(lock);

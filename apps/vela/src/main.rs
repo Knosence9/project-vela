@@ -1081,8 +1081,8 @@ fn main() -> Result<()> {
                 println!("scheduled jobs [{}]:", jobs.len());
                 for job in jobs {
                     println!(
-                        "- {} :: schedule={} source={} status={} next_run_at={} run_count={} outcome={:?} task={}",
-                        job.id, job.schedule, job.source, job.status, job.next_run_at, job.run_count, job.last_outcome, job.task
+                        "- {} :: schedule={} source={} status={} next_run_at={} run_count={} recovery_count={} outcome={:?} last_error={:?} task={}",
+                        job.id, job.schedule, job.source, job.status, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_error, job.task
                     );
                 }
             } else if let Some(task) = args.add.as_deref() {
