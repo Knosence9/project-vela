@@ -12,255 +12,12 @@ const LEGACY_ENTRY_SEPARATOR: &str = "§";
 const ENTRY_GAP: &str = "\n\n";
 const STORAGE_FORMAT_MARKER: &str = "<!-- vela-memory-format: v2 -->";
 
-#[derive(Debug, Clone)]
-/// Represents `MemoryReport` data exposed by this crate.
-pub struct MemoryReport {
-    pub memories_dir: PathBuf,
-    pub memory_path: PathBuf,
-    pub user_path: PathBuf,
-    pub pending_dir: PathBuf,
-    pub memory_exists_before: bool,
-    pub user_exists_before: bool,
-    pub memory_char_count: usize,
-    pub user_char_count: usize,
-    pub memory_char_limit: usize,
-    pub user_char_limit: usize,
-}
+mod surface;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-/// Enumerates supported `MemoryTarget` variants.
-pub enum MemoryTarget {
-    Memory,
-    User,
-}
+#[cfg(test)]
+mod tests;
 
-impl MemoryTarget {
-/// Returns the stable string label used for persistence and display.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Memory => "memory",
-            Self::User => "user",
-        }
-    }
-
-/// Parses a persisted or user-provided value into the corresponding enum.
-    pub fn parse(value: &str) -> Result<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "memory" => Ok(Self::Memory),
-            "user" => Ok(Self::User),
-            other => bail!("invalid memory target {other:?}; expected 'memory' or 'user'"),
-        }
-    }
-
-    fn filename(self) -> &'static str {
-        match self {
-            Self::Memory => "MEMORY.md",
-            Self::User => "USER.md",
-        }
-    }
-
-    fn limit(self) -> usize {
-        match self {
-            Self::Memory => MEMORY_CHAR_LIMIT,
-            Self::User => USER_CHAR_LIMIT,
-        }
-    }
-
-    fn heading(self) -> &'static str {
-        match self {
-            Self::Memory => "MEMORY (personal notes)",
-            Self::User => "USER PROFILE",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-/// Represents `MemorySnapshot` data exposed by this crate.
-pub struct MemorySnapshot {
-    pub target: MemoryTarget,
-    pub content: String,
-    pub char_count: usize,
-    pub char_limit: usize,
-}
-
-#[derive(Debug, Clone)]
-/// Represents `MemoryView` data exposed by this crate.
-pub struct MemoryView {
-    pub target: MemoryTarget,
-    pub entries: Vec<String>,
-    pub char_count: usize,
-    pub char_limit: usize,
-}
-
-#[derive(Debug, Clone)]
-/// Represents `MemoryMutationReport` data exposed by this crate.
-pub struct MemoryMutationReport {
-    pub target: MemoryTarget,
-    pub action: &'static str,
-    pub char_count: usize,
-    pub char_limit: usize,
-    pub entry_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Represents `PendingMemoryWrite` data exposed by this crate.
-pub struct PendingMemoryWrite {
-    pub id: String,
-    pub target: MemoryTarget,
-    pub action: String,
-    pub old_text: Option<String>,
-    pub matched_entry: Option<String>,
-    pub new_text: Option<String>,
-    pub created_at: i64,
-}
-
-/// Initializes memory state for this subsystem.
-pub fn initialize_memory(vela_home: &Path) -> Result<MemoryReport> {
-    let memories_dir = vela_home.join("memories");
-    fs::create_dir_all(&memories_dir)
-        .with_context(|| format!("failed to create {}", memories_dir.display()))?;
-    let pending_dir = vela_home.join("pending").join("memory");
-    fs::create_dir_all(&pending_dir)
-        .with_context(|| format!("failed to create {}", pending_dir.display()))?;
-
-    let memory_path = memories_dir.join(MemoryTarget::Memory.filename());
-    let user_path = memories_dir.join(MemoryTarget::User.filename());
-
-    let memory_exists_before = memory_path.is_file();
-    let user_exists_before = user_path.is_file();
-
-    ensure_file(&memory_path)?;
-    ensure_file(&user_path)?;
-    migrate_legacy_file(&memory_path)?;
-    migrate_legacy_file(&user_path)?;
-
-    let memory_text = render_entries(&load_entries(vela_home, MemoryTarget::Memory)?);
-    let user_text = render_entries(&load_entries(vela_home, MemoryTarget::User)?);
-
-    Ok(MemoryReport {
-        memories_dir,
-        memory_path,
-        user_path,
-        pending_dir,
-        memory_exists_before,
-        user_exists_before,
-        memory_char_count: memory_text.chars().count(),
-        user_char_count: user_text.chars().count(),
-        memory_char_limit: MEMORY_CHAR_LIMIT,
-        user_char_limit: USER_CHAR_LIMIT,
-    })
-}
-
-/// Loads snapshot from durable storage.
-pub fn load_snapshot(vela_home: &Path, target: MemoryTarget) -> Result<MemorySnapshot> {
-    let entries = load_entries(vela_home, target)?;
-    let content = render_entries(&entries);
-    Ok(MemorySnapshot {
-        target,
-        char_count: content.chars().count(),
-        char_limit: target.limit(),
-        content,
-    })
-}
-
-/// Returns a view of memory content.
-pub fn view_memory(vela_home: &Path, target: MemoryTarget) -> Result<MemoryView> {
-    let entries = load_entries(vela_home, target)?;
-    let rendered = render_entries(&entries);
-    Ok(MemoryView {
-        target,
-        entries,
-        char_count: rendered.chars().count(),
-        char_limit: target.limit(),
-    })
-}
-
-/// Adds memory entry to durable storage.
-pub fn add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &str) -> Result<MemoryMutationReport> {
-    let mut entries = load_entries(vela_home, target)?;
-    let new_entry = sanitize_entry(content)?;
-    entries.push(new_entry);
-    save_entries(vela_home, target, &entries)?;
-    report(target, "add", &entries)
-}
-
-/// Stages add memory entry for explicit approval.
-pub fn stage_add_memory_entry(vela_home: &Path, target: MemoryTarget, content: &str) -> Result<PendingMemoryWrite> {
-    let new_entry = sanitize_entry(content)?;
-    let entries = load_entries(vela_home, target)?;
-    if entries.iter().any(|entry| entry == &new_entry) {
-        bail!("memory entry already exists for target {}", target.label());
-    }
-    if list_pending(vela_home)?.iter().any(|pending| {
-        pending.target == target
-            && pending.action == "add"
-            && pending.new_text.as_deref() == Some(new_entry.as_str())
-    }) {
-        bail!("matching memory add is already pending approval for target {}", target.label());
-    }
-    stage_write(
-        vela_home,
-        PendingMemoryWrite {
-            id: new_pending_id("mem"),
-            target,
-            action: "add".to_string(),
-            old_text: None,
-            matched_entry: None,
-            new_text: Some(new_entry),
-            created_at: unix_timestamp(),
-        },
-    )
-}
-
-/// Replaces memory entry in durable storage.
-pub fn replace_memory_entry(
-    vela_home: &Path,
-    target: MemoryTarget,
-    old_text: &str,
-    content: &str,
-) -> Result<MemoryMutationReport> {
-    let mut entries = load_entries(vela_home, target)?;
-    let idx = unique_match_index(&entries, old_text)?;
-    entries[idx] = sanitize_entry(content)?;
-    save_entries(vela_home, target, &entries)?;
-    report(target, "replace", &entries)
-}
-
-/// Stages replace memory entry for explicit approval.
-pub fn stage_replace_memory_entry(
-    vela_home: &Path,
-    target: MemoryTarget,
-    old_text: &str,
-    content: &str,
-) -> Result<PendingMemoryWrite> {
-    if old_text.trim().is_empty() {
-        bail!("match text cannot be empty");
-    }
-    sanitize_entry(content)?;
-    let entries = load_entries(vela_home, target)?;
-    let idx = unique_match_index(&entries, old_text)?;
-    stage_write(
-        vela_home,
-        PendingMemoryWrite {
-            id: new_pending_id("mem"),
-            target,
-            action: "replace".to_string(),
-            old_text: Some(old_text.trim().to_string()),
-            matched_entry: Some(entries[idx].clone()),
-            new_text: Some(content.trim().to_string()),
-            created_at: unix_timestamp(),
-        },
-    )
-}
-
-/// Removes memory entry from durable storage.
-pub fn remove_memory_entry(vela_home: &Path, target: MemoryTarget, old_text: &str) -> Result<MemoryMutationReport> {
-    let mut entries = load_entries(vela_home, target)?;
-    let idx = unique_match_index(&entries, old_text)?;
-    entries.remove(idx);
-    save_entries(vela_home, target, &entries)?;
-    report(target, "remove", &entries)
-}
+pub use surface::*;
 
 fn replace_exact_memory_entry(
     vela_home: &Path,
@@ -275,7 +32,11 @@ fn replace_exact_memory_entry(
     report(target, "replace", &entries)
 }
 
-fn remove_exact_memory_entry(vela_home: &Path, target: MemoryTarget, matched_entry: &str) -> Result<MemoryMutationReport> {
+fn remove_exact_memory_entry(
+    vela_home: &Path,
+    target: MemoryTarget,
+    matched_entry: &str,
+) -> Result<MemoryMutationReport> {
     let mut entries = load_entries(vela_home, target)?;
     let idx = exact_match_index(&entries, matched_entry)?;
     entries.remove(idx);
@@ -284,7 +45,11 @@ fn remove_exact_memory_entry(vela_home: &Path, target: MemoryTarget, matched_ent
 }
 
 /// Stages remove memory entry for explicit approval.
-pub fn stage_remove_memory_entry(vela_home: &Path, target: MemoryTarget, old_text: &str) -> Result<PendingMemoryWrite> {
+pub fn stage_remove_memory_entry(
+    vela_home: &Path,
+    target: MemoryTarget,
+    old_text: &str,
+) -> Result<PendingMemoryWrite> {
     if old_text.trim().is_empty() {
         bail!("match text cannot be empty");
     }
@@ -348,19 +113,31 @@ pub fn approve_pending(vela_home: &Path, id: &str) -> Result<MemoryMutationRepor
         "add" => add_memory_entry(
             vela_home,
             pending.target,
-            pending.new_text.as_deref().ok_or_else(|| anyhow!("pending add missing new_text"))?,
+            pending
+                .new_text
+                .as_deref()
+                .ok_or_else(|| anyhow!("pending add missing new_text"))?,
         )?,
         "replace" => replace_exact_memory_entry(
             vela_home,
             pending.target,
-            pending.matched_entry.as_deref().ok_or_else(|| anyhow!("pending replace missing matched_entry"))?,
-            pending.new_text.as_deref().ok_or_else(|| anyhow!("pending replace missing new_text"))?,
+            pending
+                .matched_entry
+                .as_deref()
+                .ok_or_else(|| anyhow!("pending replace missing matched_entry"))?,
+            pending
+                .new_text
+                .as_deref()
+                .ok_or_else(|| anyhow!("pending replace missing new_text"))?,
         )
         .with_context(|| format!("pending replace {} became stale or conflicted", pending.id))?,
         "remove" => remove_exact_memory_entry(
             vela_home,
             pending.target,
-            pending.matched_entry.as_deref().ok_or_else(|| anyhow!("pending remove missing matched_entry"))?,
+            pending
+                .matched_entry
+                .as_deref()
+                .ok_or_else(|| anyhow!("pending remove missing matched_entry"))?,
         )
         .with_context(|| format!("pending remove {} became stale or conflicted", pending.id))?,
         other => bail!("unknown pending memory action {other:?}"),
@@ -397,7 +174,11 @@ fn stage_write(vela_home: &Path, pending: PendingMemoryWrite) -> Result<PendingM
     Ok(pending)
 }
 
-fn report(target: MemoryTarget, action: &'static str, entries: &[String]) -> Result<MemoryMutationReport> {
+fn report(
+    target: MemoryTarget,
+    action: &'static str,
+    entries: &[String],
+) -> Result<MemoryMutationReport> {
     let rendered = render_entries(entries);
     Ok(MemoryMutationReport {
         target,
@@ -420,8 +201,8 @@ fn load_entries(vela_home: &Path, target: MemoryTarget) -> Result<Vec<String>> {
     let path = target_path(vela_home, target);
     ensure_file(&path)?;
     migrate_legacy_file(&path)?;
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     Ok(parse_entries(&content))
 }
 
@@ -437,7 +218,8 @@ fn save_entries(vela_home: &Path, target: MemoryTarget, entries: &[String]) -> R
         );
     }
     let path = target_path(vela_home, target);
-    fs::write(&path, render_storage(entries)).with_context(|| format!("failed to write {}", path.display()))?;
+    fs::write(&path, render_storage(entries))
+        .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
 
@@ -471,7 +253,10 @@ fn render_storage(entries: &[String]) -> String {
     if entries.is_empty() {
         format!("{STORAGE_FORMAT_MARKER}\n")
     } else {
-        format!("{STORAGE_FORMAT_MARKER}{ENTRY_GAP}{}", render_entries(entries))
+        format!(
+            "{STORAGE_FORMAT_MARKER}{ENTRY_GAP}{}",
+            render_entries(entries)
+        )
     }
 }
 
@@ -491,8 +276,12 @@ fn exact_match_index(entries: &[String], expected: &str) -> Result<usize> {
         .collect();
     match matches.as_slice() {
         [idx] => Ok(*idx),
-        [] => Err(anyhow!("staged memory entry no longer exists exactly as reviewed")),
-        _ => Err(anyhow!("staged memory entry became ambiguous; resolve manually")),
+        [] => Err(anyhow!(
+            "staged memory entry no longer exists exactly as reviewed"
+        )),
+        _ => Err(anyhow!(
+            "staged memory entry became ambiguous; resolve manually"
+        )),
     }
 }
 
@@ -509,13 +298,15 @@ fn unique_match_index(entries: &[String], needle: &str) -> Result<usize> {
     match matches.as_slice() {
         [idx] => Ok(*idx),
         [] => Err(anyhow!("no memory entry matched {needle:?}")),
-        _ => Err(anyhow!("memory match {needle:?} was ambiguous; use a more specific substring")),
+        _ => Err(anyhow!(
+            "memory match {needle:?} was ambiguous; use a more specific substring"
+        )),
     }
 }
 
 fn migrate_legacy_file(path: &Path) -> Result<()> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     if !is_legacy_separator_format(&content) {
         return Ok(());
     }
@@ -580,117 +371,5 @@ fn percent(count: usize, limit: usize) -> usize {
         0
     } else {
         ((count as f64 / limit as f64) * 100.0).round() as usize
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_and_renders_round_trip_with_paragraph_entries() {
-        let entries = vec![
-            "First memory entry".to_string(),
-            "Second memory entry\nwith another line".to_string(),
-            "Third entry".to_string(),
-        ];
-
-        let rendered = render_entries(&entries);
-        assert_eq!(rendered, "First memory entry\n\nSecond memory entry\nwith another line\n\nThird entry");
-        assert_eq!(parse_entries(&rendered), entries);
-        assert_eq!(parse_entries(&render_storage(&entries)), entries);
-    }
-
-    #[test]
-    fn initialize_memory_migrates_legacy_separator_files() {
-        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-{}", unix_timestamp_nanos()));
-        let memories_dir = vela_home.join("memories");
-        fs::create_dir_all(&memories_dir).unwrap();
-        fs::write(
-            memories_dir.join("MEMORY.md"),
-            "alpha§beta§gamma",
-        )
-        .unwrap();
-        fs::write(memories_dir.join("USER.md"), "delta§epsilon").unwrap();
-
-        let report = initialize_memory(&vela_home).unwrap();
-        assert_eq!(report.memory_char_count, "alpha\n\nbeta\n\ngamma".chars().count());
-        assert_eq!(report.user_char_count, "delta\n\nepsilon".chars().count());
-        assert_eq!(
-            fs::read_to_string(memories_dir.join("MEMORY.md")).unwrap(),
-            "<!-- vela-memory-format: v2 -->\n\nalpha\n\nbeta\n\ngamma"
-        );
-        assert_eq!(
-            fs::read_to_string(memories_dir.join("USER.md")).unwrap(),
-            "<!-- vela-memory-format: v2 -->\n\ndelta\n\nepsilon"
-        );
-
-        fs::remove_dir_all(&vela_home).unwrap();
-    }
-
-    #[test]
-    fn marker_prevents_false_legacy_migration_for_section_sign_entries() {
-        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-marker-{}", unix_timestamp_nanos()));
-        let memories_dir = vela_home.join("memories");
-        fs::create_dir_all(&memories_dir).unwrap();
-        fs::write(
-            memories_dir.join("MEMORY.md"),
-            "<!-- vela-memory-format: v2 -->\n\nentry with § symbol",
-        )
-        .unwrap();
-        fs::write(memories_dir.join("USER.md"), "<!-- vela-memory-format: v2 -->\n").unwrap();
-
-        let view = view_memory(&vela_home, MemoryTarget::Memory).unwrap();
-        assert_eq!(view.entries, vec!["entry with § symbol".to_string()]);
-        assert_eq!(
-            fs::read_to_string(memories_dir.join("MEMORY.md")).unwrap(),
-            "<!-- vela-memory-format: v2 -->\n\nentry with § symbol"
-        );
-
-        fs::remove_dir_all(&vela_home).unwrap();
-    }
-
-    #[test]
-    fn stage_add_rejects_duplicate_existing_or_pending_entries() {
-        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-dup-{}", unix_timestamp_nanos()));
-        initialize_memory(&vela_home).unwrap();
-        add_memory_entry(&vela_home, MemoryTarget::User, "remember this").unwrap();
-
-        let err = stage_add_memory_entry(&vela_home, MemoryTarget::User, "remember this").unwrap_err();
-        assert!(err.to_string().contains("already exists"));
-
-        stage_add_memory_entry(&vela_home, MemoryTarget::User, "another memory").unwrap();
-        let err = stage_add_memory_entry(&vela_home, MemoryTarget::User, "another memory").unwrap_err();
-        assert!(err.to_string().contains("already pending approval"));
-
-        fs::remove_dir_all(&vela_home).unwrap();
-    }
-
-    #[test]
-    fn approve_pending_reports_stale_replace_clearly() {
-        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-stale-{}", unix_timestamp_nanos()));
-        initialize_memory(&vela_home).unwrap();
-        add_memory_entry(&vela_home, MemoryTarget::Memory, "old value").unwrap();
-        let pending = stage_replace_memory_entry(&vela_home, MemoryTarget::Memory, "old", "new value").unwrap();
-        replace_memory_entry(&vela_home, MemoryTarget::Memory, "old", "someone else changed it").unwrap();
-
-        let err = approve_pending(&vela_home, &pending.id).unwrap_err();
-        assert!(err.to_string().contains("became stale or conflicted"));
-
-        fs::remove_dir_all(&vela_home).unwrap();
-    }
-
-    #[test]
-    fn approve_pending_reports_stale_remove_clearly() {
-        let vela_home = std::env::temp_dir().join(format!("vela-memory-test-stale-remove-{}", unix_timestamp_nanos()));
-        initialize_memory(&vela_home).unwrap();
-        add_memory_entry(&vela_home, MemoryTarget::Memory, "old value").unwrap();
-        let pending = stage_remove_memory_entry(&vela_home, MemoryTarget::Memory, "old").unwrap();
-        replace_memory_entry(&vela_home, MemoryTarget::Memory, "old", "someone else changed it").unwrap();
-
-        let err = approve_pending(&vela_home, &pending.id).unwrap_err();
-        assert!(err.to_string().contains("became stale or conflicted"));
-
-        fs::remove_dir_all(&vela_home).unwrap();
     }
 }
