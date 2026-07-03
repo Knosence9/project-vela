@@ -30,7 +30,7 @@
 - session inspection now surfaces parsed runtime lifecycle records, explicit branch lineage, and persisted compression summaries alongside raw messages and events
 - runtime CLI turn output now reports the durable `turn_id`, lifecycle phase count, and final phase
 - `vela sessions --branch <session> --title <new-title> [--note ...]` can fork a durable child session with explicit parent lineage and copied continuity
-- `vela sessions --compress <session> --summary ...` can persist compressed continuity summaries without mutating durable memory directly
+- `vela sessions --compress <session> --summary ...` can persist compressed continuity summaries without mutating durable memory directly; summaries are trimmed, must be non-empty, must differ from the latest persisted summary for that session, and are capped to a bounded length
 - `vela sessions --show <session>` exposes branch parentage, immediate child sessions, and compression counts through the session inspection surface
 - title-based `--continue <title>` now resolves to either the exact anchor session or the latest descendant in that anchor's branch subtree, and CLI output reports whether resolution was `exact-anchor`, `latest-in-subtree`, or `latest-global`
 - Vela now discovers extension manifests from `~/.vela/extensions/` (or `extensions.manifests_dir` in config), applies config-driven enable/disable overrides, and surfaces lifecycle-aware extension entries through `vela status`
@@ -64,6 +64,6 @@
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
-- more advanced compression policies beyond duplicate-summary rejection, touched-session updates, and explicit persisted operator summaries
+- more advanced compression policies beyond the current bounded contract (trimmed non-empty summaries, duplicate-latest rejection, bounded summary length, touched-session updates, and explicit persisted operator summaries)
 - deeper extension lifecycle hooks and capability activation beyond the first validated/activated/disabled/failed slice
 - richer recurring scheduling semantics beyond the first durable execution/recovery sweep and next-run rescheduling model

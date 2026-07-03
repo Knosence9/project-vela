@@ -285,7 +285,7 @@ fn continue_target_prefers_latest_session_in_branch_subtree() {
 }
 
 #[test]
-fn duplicate_compression_summary_is_rejected() {
+fn compression_summary_policy_is_enforced() {
     let vela_home = std::env::temp_dir().join(format!(
         "vela-state-compress-test-{}",
         unix_timestamp_nanos()
@@ -304,10 +304,24 @@ fn duplicate_compression_summary_is_rejected() {
         },
     )
     .unwrap();
+
+    let empty_error = compress_session(&report.state_db_path, &session.session_id, "   ")
+        .unwrap_err();
+    assert!(empty_error
+        .to_string()
+        .contains("compression summary cannot be empty"));
+
+    let long_summary = "x".repeat(SESSION_COMPRESSION_CHAR_LIMIT + 1);
+    let long_error = compress_session(&report.state_db_path, &session.session_id, &long_summary)
+        .unwrap_err();
+    assert!(long_error
+        .to_string()
+        .contains("compression summary exceeds"));
+
     compress_session(&report.state_db_path, &session.session_id, "same summary").unwrap();
-    let error =
+    let duplicate_error =
         compress_session(&report.state_db_path, &session.session_id, "same summary").unwrap_err();
-    assert!(error
+    assert!(duplicate_error
         .to_string()
         .contains("matches the latest persisted summary"));
 

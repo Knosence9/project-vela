@@ -1,4 +1,5 @@
 use super::*;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone)]
 /// Represents `PersistenceReport` data exposed by this crate.
@@ -94,6 +95,8 @@ pub struct SessionBranchRecord {
     pub parent_title: Option<String>,
     pub branch_note: Option<String>,
 }
+
+pub const SESSION_COMPRESSION_CHAR_LIMIT: usize = 2_000;
 
 #[derive(Debug, Clone)]
 /// Represents `SessionCompressionRecord` data exposed by this crate.
@@ -658,6 +661,12 @@ pub fn compress_session(
     let summary = summary.trim();
     if summary.is_empty() {
         anyhow::bail!("compression summary cannot be empty");
+    }
+    if summary.graphemes(true).count() > SESSION_COMPRESSION_CHAR_LIMIT {
+        anyhow::bail!(
+            "compression summary exceeds {} characters",
+            SESSION_COMPRESSION_CHAR_LIMIT
+        );
     }
     let source_message_count: u64 = conn.query_row(
         "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
