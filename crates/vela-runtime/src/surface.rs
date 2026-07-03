@@ -88,7 +88,7 @@ pub struct ScheduledJob {
     pub lease_expires_at: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Describes one kernel-owned runtime config drift detected during extension reload.
 pub struct RestartRequiredRuntimeDrift {
     pub field: String,
@@ -253,64 +253,67 @@ fn restart_required_runtime_drifts(
     previous: &ResolvedConfig,
     reloaded: &ResolvedConfig,
 ) -> Vec<RestartRequiredRuntimeDrift> {
-    let mut fields = Vec::new();
-    if previous.display_interface != reloaded.display_interface {
-        fields.push(RestartRequiredRuntimeDrift {
-            field: "display.interface".to_string(),
-            owner: "kernel-interface".to_string(),
-            detail: "display interface changes remain restart-only during extension reload"
-                .to_string(),
-        });
+    macro_rules! drift {
+        ($condition:expr, $field:expr, $owner:expr, $detail:expr) => {
+            if $condition {
+                Some(RestartRequiredRuntimeDrift {
+                    field: $field.to_string(),
+                    owner: $owner.to_string(),
+                    detail: $detail.to_string(),
+                })
+            } else {
+                None
+            }
+        };
     }
-    if previous.hooks_auto_accept != reloaded.hooks_auto_accept {
-        fields.push(RestartRequiredRuntimeDrift {
-            field: "hooks.auto_accept".to_string(),
-            owner: "kernel-hooks".to_string(),
-            detail: "hook auto-accept policy remains restart-only during extension reload"
-                .to_string(),
-        });
-    }
-    if previous.security_redact_secrets != reloaded.security_redact_secrets {
-        fields.push(RestartRequiredRuntimeDrift {
-            field: "security.redact_secrets".to_string(),
-            owner: "kernel-security".to_string(),
-            detail: "security redaction policy remains restart-only during extension reload"
-                .to_string(),
-        });
-    }
-    if previous.network_force_ipv4 != reloaded.network_force_ipv4 {
-        fields.push(RestartRequiredRuntimeDrift {
-            field: "network.force_ipv4".to_string(),
-            owner: "kernel-network".to_string(),
-            detail: "network stack settings remain restart-only during extension reload"
-                .to_string(),
-        });
-    }
-    if previous.runtime_provider != reloaded.runtime_provider {
-        fields.push(RestartRequiredRuntimeDrift {
-            field: "runtime.provider".to_string(),
-            owner: "kernel-runtime".to_string(),
-            detail: "provider backend changes remain restart-only during extension reload"
-                .to_string(),
-        });
-    }
-    if previous.runtime_model != reloaded.runtime_model {
-        fields.push(RestartRequiredRuntimeDrift {
-            field: "runtime.model".to_string(),
-            owner: "kernel-runtime".to_string(),
-            detail: "runtime model changes remain restart-only during extension reload"
-                .to_string(),
-        });
-    }
-    if previous.runtime_ollama_base_url != reloaded.runtime_ollama_base_url {
-        fields.push(RestartRequiredRuntimeDrift {
-            field: "runtime.ollama_base_url".to_string(),
-            owner: "kernel-runtime".to_string(),
-            detail: "provider transport endpoint changes remain restart-only during extension reload"
-                .to_string(),
-        });
-    }
-    fields
+
+    [
+        drift!(
+            previous.display_interface != reloaded.display_interface,
+            "display.interface",
+            "kernel-interface",
+            "display interface changes remain restart-only during extension reload"
+        ),
+        drift!(
+            previous.hooks_auto_accept != reloaded.hooks_auto_accept,
+            "hooks.auto_accept",
+            "kernel-hooks",
+            "hook auto-accept policy remains restart-only during extension reload"
+        ),
+        drift!(
+            previous.security_redact_secrets != reloaded.security_redact_secrets,
+            "security.redact_secrets",
+            "kernel-security",
+            "security redaction policy remains restart-only during extension reload"
+        ),
+        drift!(
+            previous.network_force_ipv4 != reloaded.network_force_ipv4,
+            "network.force_ipv4",
+            "kernel-network",
+            "network stack settings remain restart-only during extension reload"
+        ),
+        drift!(
+            previous.runtime_provider != reloaded.runtime_provider,
+            "runtime.provider",
+            "kernel-runtime",
+            "provider backend changes remain restart-only during extension reload"
+        ),
+        drift!(
+            previous.runtime_model != reloaded.runtime_model,
+            "runtime.model",
+            "kernel-runtime",
+            "runtime model changes remain restart-only during extension reload"
+        ),
+        drift!(
+            previous.runtime_ollama_base_url != reloaded.runtime_ollama_base_url,
+            "runtime.ollama_base_url",
+            "kernel-runtime",
+            "provider transport endpoint changes remain restart-only during extension reload"
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Resolves or creates a runtime session for an interactive request.
