@@ -10,8 +10,8 @@ fn resolved_with(entries: Vec<ResolvedExtensionConfigEntry>) -> ResolvedConfig {
 }
 
 #[test]
-/// Verifies that manifests can activate, validate as metadata-only, or disable through config.
-fn initialize_extensions_applies_lifecycle_states() {
+/// Verifies that activation boundaries are explicit for supported, metadata-only, and disabled entries.
+fn initialize_extensions_applies_activation_boundaries() {
     let vela_home = std::env::temp_dir().join(format!("vela-ext-test-{}", std::process::id()));
     let manifests_dir = vela_home.join("extensions-manifests");
     let _ = std::fs::remove_dir_all(&vela_home);
@@ -31,6 +31,11 @@ fn initialize_extensions_applies_lifecycle_states() {
         "manifest_version: 1\nid: ops\ntitle: Ops\nkind: workflow\nentry: extensions/ops.flow\n",
     )
     .unwrap();
+    std::fs::write(
+        manifests_dir.join("notes.yaml"),
+        "manifest_version: 1\nid: notes\ntitle: Notes\nkind: skill\nactivation: metadata-only\nentry: extensions/notes.md\n",
+    )
+    .unwrap();
 
     let report = initialize_extensions(
         &vela_home,
@@ -41,19 +46,28 @@ fn initialize_extensions_applies_lifecycle_states() {
     )
     .unwrap();
 
-    assert_eq!(report.discovered_manifest_count, 3);
-    assert_eq!(report.discovered_count, 3);
+    assert_eq!(report.discovered_manifest_count, 4);
+    assert_eq!(report.discovered_count, 4);
     assert_eq!(report.activated_count, 1);
-    assert_eq!(report.validated_count, 1);
+    assert_eq!(report.validated_count, 2);
     assert_eq!(report.disabled_count, 1);
     assert_eq!(report.failed_count, 0);
     assert!(report.entries.iter().any(|entry| {
         entry.id.as_deref() == Some("demo")
             && matches!(entry.lifecycle, ExtensionLifecycle::Activated)
+            && entry.detail.as_deref() == Some("tool extension activated during bootstrap")
     }));
     assert!(report.entries.iter().any(|entry| {
         entry.id.as_deref() == Some("service")
             && matches!(entry.lifecycle, ExtensionLifecycle::Validated)
+            && entry.detail.as_deref()
+                == Some("service extensions remain metadata-only in this slice")
+    }));
+    assert!(report.entries.iter().any(|entry| {
+        entry.id.as_deref() == Some("notes")
+            && matches!(entry.lifecycle, ExtensionLifecycle::Validated)
+            && entry.detail.as_deref()
+                == Some("skill extension validated as metadata-only by manifest policy")
     }));
     assert!(report.entries.iter().any(|entry| {
         entry.id.as_deref() == Some("ops")
@@ -90,12 +104,17 @@ fn initialize_extensions_marks_failed_entries() {
         "manifest_version: 1\nid: missing-entry\ntitle: Missing Entry\nkind: workflow\n",
     )
     .unwrap();
+    std::fs::write(
+        manifests_dir.join("service-on-boot.yaml"),
+        "manifest_version: 1\nid: service-on-boot\ntitle: Service On Boot\nkind: service\nactivation: on-boot\n",
+    )
+    .unwrap();
 
     let report = initialize_extensions(&vela_home, &resolved_with(vec![])).unwrap();
-    assert_eq!(report.discovered_manifest_count, 4);
-    assert_eq!(report.discovered_count, 3);
+    assert_eq!(report.discovered_manifest_count, 5);
+    assert_eq!(report.discovered_count, 4);
     assert_eq!(report.activated_count, 0);
-    assert_eq!(report.failed_count, 4);
+    assert_eq!(report.failed_count, 5);
     let duplicate_failed = report
         .entries
         .iter()
@@ -114,6 +133,12 @@ fn initialize_extensions_marks_failed_entries() {
         entry.id.as_deref() == Some("missing-entry")
             && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
             && entry.detail.as_deref() == Some("activation requires a non-empty entry path")
+    }));
+    assert!(report.entries.iter().any(|entry| {
+        entry.id.as_deref() == Some("service-on-boot")
+            && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
+            && entry.detail.as_deref()
+                == Some("service extensions cannot request on-boot activation in this slice")
     }));
 
     let _ = std::fs::remove_dir_all(&vela_home);

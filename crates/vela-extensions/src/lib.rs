@@ -156,7 +156,7 @@ fn finalize_record(
             match activation {
                 ExtensionActivation::MetadataOnly => ExtensionRecord {
                     lifecycle: ExtensionLifecycle::Validated,
-                    detail: Some("metadata-only extension in this slice".to_string()),
+                    detail: Some(metadata_only_detail(base.kind.as_ref())),
                     ..base
                 },
                 ExtensionActivation::OnBoot => {
@@ -168,7 +168,7 @@ fn finalize_record(
                         },
                         None => ExtensionRecord {
                             lifecycle: ExtensionLifecycle::Activated,
-                            detail: Some("activation completed during bootstrap".to_string()),
+                            detail: Some(activation_success_detail(base.kind.as_ref())),
                             ..base
                         },
                     }
@@ -180,9 +180,9 @@ fn finalize_record(
 
 fn activation_failure(kind: Option<&ExtensionKind>, entry: Option<&str>) -> Option<String> {
     match kind {
-        Some(ExtensionKind::Service) => {
-            Some("service extensions remain metadata-only in this slice".to_string())
-        }
+        Some(ExtensionKind::Service) => Some(
+            "service extensions cannot request on-boot activation in this slice".to_string(),
+        ),
         Some(ExtensionKind::Tool | ExtensionKind::Skill | ExtensionKind::Workflow) => {
             match entry.map(str::trim).filter(|value| !value.is_empty()) {
                 Some(_) => None,
@@ -190,5 +190,41 @@ fn activation_failure(kind: Option<&ExtensionKind>, entry: Option<&str>) -> Opti
             }
         }
         None => Some("activation requires a known extension kind".to_string()),
+    }
+}
+
+fn metadata_only_detail(kind: Option<&ExtensionKind>) -> String {
+    match kind {
+        Some(ExtensionKind::Service) => {
+            "service extensions remain metadata-only in this slice".to_string()
+        }
+        Some(ExtensionKind::Tool) => {
+            "tool extension validated as metadata-only by manifest policy".to_string()
+        }
+        Some(ExtensionKind::Skill) => {
+            "skill extension validated as metadata-only by manifest policy".to_string()
+        }
+        Some(ExtensionKind::Workflow) => {
+            "workflow extension validated as metadata-only by manifest policy".to_string()
+        }
+        None => "metadata-only activation requires a known extension kind".to_string(),
+    }
+}
+
+fn activation_success_detail(kind: Option<&ExtensionKind>) -> String {
+    match kind {
+        Some(ExtensionKind::Tool) => {
+            "tool extension activated during bootstrap".to_string()
+        }
+        Some(ExtensionKind::Skill) => {
+            "skill extension activated during bootstrap".to_string()
+        }
+        Some(ExtensionKind::Workflow) => {
+            "workflow extension activated during bootstrap".to_string()
+        }
+        Some(ExtensionKind::Service) => {
+            "service extensions cannot activate during bootstrap in this slice".to_string()
+        }
+        None => "extension activated during bootstrap".to_string(),
     }
 }
