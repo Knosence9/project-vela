@@ -430,12 +430,18 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                     .get("action")
                     .and_then(Value::as_str)
                     .unwrap_or("add");
-                let target = payload
+                let target = match payload
                     .get("target")
                     .and_then(Value::as_str)
                     .map(vela_memory::MemoryTarget::parse)
-                    .transpose()?
-                    .unwrap_or(vela_memory::MemoryTarget::User);
+                    .transpose()
+                {
+                    Ok(target) => target.unwrap_or(vela_memory::MemoryTarget::User),
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
                 let old_text = payload.get("old_text").and_then(Value::as_str);
                 let new_text = payload.get("new_text").and_then(Value::as_str);
                 if let Some(text) = new_text {
@@ -445,7 +451,7 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                         continue;
                     }
                 }
-                let candidate = stage_memory_candidate(
+                let candidate = match stage_memory_candidate(
                     vela_home,
                     target,
                     action,
@@ -458,7 +464,13 @@ pub fn generate_candidates(vela_home: &Path, input: SuggestionInput) -> Result<S
                     payload.get("source").and_then(Value::as_str),
                     Some(&input.session_id),
                     Some(&input.session_title),
-                )?;
+                ) {
+                    Ok(candidate) => candidate,
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
                 if let Some(text) = new_text {
                     memory_seen.insert(normalize_dedupe_text(text));
                 }

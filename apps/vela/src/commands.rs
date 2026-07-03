@@ -35,8 +35,40 @@ pub(crate) fn run_command(bootstrap: &vela_runtime::BootstrapReport, cli: &Cli) 
             );
             Ok(())
         }
-        Some(other) => {
-            println!("placeholder command: {:?}", other);
+        Some(Commands::Setup) => {
+            println!("placeholder command: Setup");
+            Ok(())
+        }
+        Some(Commands::Model) => {
+            println!("placeholder command: Model");
+            Ok(())
+        }
+        Some(Commands::Config) => {
+            println!("placeholder command: Config");
+            Ok(())
+        }
+        Some(Commands::Tools) => {
+            println!("placeholder command: Tools");
+            Ok(())
+        }
+        Some(Commands::Mcp) => {
+            println!("placeholder command: Mcp");
+            Ok(())
+        }
+        Some(Commands::Update) => {
+            println!("placeholder command: Update");
+            Ok(())
+        }
+        Some(Commands::Auth) => {
+            println!("placeholder command: Auth");
+            Ok(())
+        }
+        Some(Commands::Pairing) => {
+            println!("placeholder command: Pairing");
+            Ok(())
+        }
+        Some(Commands::Version) => {
+            println!("placeholder command: Version");
             Ok(())
         }
     }

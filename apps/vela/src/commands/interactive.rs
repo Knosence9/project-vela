@@ -17,20 +17,7 @@ pub(crate) fn run_chat(bootstrap: &vela_runtime::BootstrapReport, args: &ChatArg
         args.model.as_deref(),
         args.checkpoints,
     )?;
-    println!(
-        "runtime session: action={} id={} title={} mode={}",
-        report.session.action.label(),
-        report.session.session_id,
-        report.session.title,
-        report.session.interaction_mode.label(),
-    );
-    if let Some(response) = report.response {
-        println!("\n{}", response);
-    }
-    println!(
-        "\nlifecycle: turn={} phases={} last={}",
-        report.turn_id, report.lifecycle_phase_count, report.final_phase
-    );
+    print_chat_report(&report);
     if args.checkpoints {
         println!(
             "\ncheckpoints: signals={} candidates={}",
@@ -56,6 +43,11 @@ pub(crate) fn run_default_chat(bootstrap: &vela_runtime::BootstrapReport, cli: &
         None,
         false,
     )?;
+    print_chat_report(&report);
+    Ok(())
+}
+
+fn print_chat_report(report: &vela_runtime::ChatTurnReport) {
     println!(
         "runtime session: action={} id={} title={} mode={}",
         report.session.action.label(),
@@ -63,14 +55,13 @@ pub(crate) fn run_default_chat(bootstrap: &vela_runtime::BootstrapReport, cli: &
         report.session.title,
         report.session.interaction_mode.label(),
     );
-    if let Some(response) = report.response {
+    if let Some(response) = report.response.as_deref() {
         println!("\n{}", response);
     }
     println!(
         "\nlifecycle: turn={} phases={} last={}",
         report.turn_id, report.lifecycle_phase_count, report.final_phase
     );
-    Ok(())
 }
 
 pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()> {

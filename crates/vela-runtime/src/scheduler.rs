@@ -11,19 +11,41 @@ pub fn setup_scheduler(bootstrap: &BootstrapReport) -> Result<SchedulerSetupRepo
     let jobs_existed_before = jobs_path.is_file();
 
     if !config_existed_before {
-        std::fs::write(
-            &config_path,
-            serde_json::to_string_pretty(&json!({
-                "version": 1,
-                "default_source": "scheduler",
-                "session_command_name": "cron",
-                "active_profile": bootstrap.active_profile,
-                "transport_mode": "local-bootstrap",
-            }))?,
-        )?;
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&config_path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(
+                    serde_json::to_string_pretty(&json!({
+                        "version": 1,
+                        "default_source": "scheduler",
+                        "session_command_name": "cron",
+                        "active_profile": bootstrap.active_profile,
+                        "transport_mode": "local-bootstrap",
+                    }))?
+                    .as_bytes(),
+                )?;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     if !jobs_existed_before {
-        std::fs::write(&jobs_path, "[]")?;
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&jobs_path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(b"[]")?;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
     }
 
     let job_count = load_scheduler_jobs(&jobs_path)?.len();
@@ -270,7 +292,7 @@ pub fn add_scheduled_job(
         job.schedule == schedule
             && job.task == task
             && job.source == source
-            && matches!(job.status.as_str(), "pending" | "running")
+            && matches!(job.status.as_str(), "pending" | "running" | "failed")
     }) {
         drop(lock);
         bail!("matching scheduled job is already registered");

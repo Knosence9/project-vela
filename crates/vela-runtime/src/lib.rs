@@ -5,6 +5,7 @@ use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 use vela_config::{BootstrapConfig, ConfigSource, ResolvedConfig};

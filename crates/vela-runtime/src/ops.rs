@@ -273,7 +273,7 @@ pub fn stage_memory_review_candidate(
         origin.as_ref().map(|(id, _)| id.as_str()),
         origin.as_ref().map(|(_, title)| title.as_str()),
     )?;
-    append_review_event(
+    if let Err(error) = append_review_event(
         bootstrap,
         candidate.origin_session_id.as_deref(),
         "review_candidate_created",
@@ -286,7 +286,9 @@ pub fn stage_memory_review_candidate(
             "origin_session_title": candidate.origin_session_title.clone(),
         })
         .to_string(),
-    )?;
+    ) {
+        tracing::warn!(candidate_id=%candidate.id, error=%error, "failed to append review_candidate_created event");
+    }
     Ok(candidate)
 }
 
@@ -312,7 +314,7 @@ pub fn stage_skill_review_candidate(
         origin.as_ref().map(|(id, _)| id.as_str()),
         origin.as_ref().map(|(_, title)| title.as_str()),
     )?;
-    append_review_event(
+    if let Err(error) = append_review_event(
         bootstrap,
         candidate.origin_session_id.as_deref(),
         "review_candidate_created",
@@ -325,7 +327,9 @@ pub fn stage_skill_review_candidate(
             "origin_session_title": candidate.origin_session_title.clone(),
         })
         .to_string(),
-    )?;
+    ) {
+        tracing::warn!(candidate_id=%candidate.id, error=%error, "failed to append review_candidate_created event");
+    }
     Ok(candidate)
 }
 
@@ -336,7 +340,7 @@ pub fn promote_review_candidate(
 ) -> Result<vela_review::PromotionReport> {
     let candidate = vela_review::get_candidate(&bootstrap.vela_home, id)?;
     let report = vela_review::promote_candidate(&bootstrap.vela_home, id)?;
-    append_review_event(
+    if let Err(error) = append_review_event(
         bootstrap,
         candidate.origin_session_id.as_deref(),
         "review_candidate_promoted",
@@ -348,14 +352,16 @@ pub fn promote_review_candidate(
             "origin_session_title": candidate.origin_session_title.clone(),
         })
         .to_string(),
-    )?;
+    ) {
+        tracing::warn!(candidate_id=%report.candidate_id, error=%error, "failed to append review_candidate_promoted event");
+    }
     Ok(report)
 }
 
 /// Rejects a queued review candidate.
 pub fn reject_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<()> {
     let candidate = vela_review::reject_candidate(&bootstrap.vela_home, id)?;
-    append_review_event(
+    if let Err(error) = append_review_event(
         bootstrap,
         candidate.origin_session_id.as_deref(),
         "review_candidate_rejected",
@@ -365,6 +371,8 @@ pub fn reject_review_candidate(bootstrap: &BootstrapReport, id: &str) -> Result<
             "origin_session_title": candidate.origin_session_title.clone(),
         })
         .to_string(),
-    )?;
+    ) {
+        tracing::warn!(candidate_id=%id, error=%error, "failed to append review_candidate_rejected event");
+    }
     Ok(())
 }

@@ -34,9 +34,9 @@ pub(crate) struct Cli {
     pub(crate) safe_mode: bool,
     #[arg(short = 'p', long = "profile")]
     pub(crate) profile: Option<String>,
-    #[arg(long = "cli", default_value_t = false)]
+    #[arg(long = "cli", default_value_t = false, group = "run_mode")]
     pub(crate) cli_mode: bool,
-    #[arg(long = "tui", default_value_t = false)]
+    #[arg(long = "tui", default_value_t = false, group = "run_mode")]
     pub(crate) tui_mode: bool,
     #[arg(long = "version", default_value_t = false)]
     pub(crate) version: bool,

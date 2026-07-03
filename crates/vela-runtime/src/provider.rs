@@ -625,10 +625,11 @@ fn classify_provider_continuation(response: &str) -> ProviderContinuation {
     }
     let json_body = trimmed
         .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
         .and_then(|value| value.strip_suffix("```"))
         .map(str::trim)
         .unwrap_or(trimmed);
-    let looks_like_tool_envelope = json_body.starts_with('{') || trimmed.starts_with("```json");
+    let looks_like_tool_envelope = json_body.starts_with('{') || trimmed.starts_with("```");
     let Ok(request) = serde_json::from_str::<RuntimeToolRequest>(json_body) else {
         return if looks_like_tool_envelope {
             ProviderContinuation::InvalidToolRequest
@@ -880,6 +881,23 @@ fn persist_runtime_tool_result(
     Ok(())
 }
 
+fn ollama_http_client() -> Result<&'static reqwest::blocking::Client> {
+    static CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+    let result = CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|error| error.to_string())
+    });
+    match result {
+        Ok(client) => Ok(client),
+        Err(error) => Err(anyhow::anyhow!(
+            "failed to build Ollama HTTP client: {error}"
+        )),
+    }
+}
+
 fn call_ollama_generate(
     base_url: &str,
     model: &str,
@@ -887,11 +905,7 @@ fn call_ollama_generate(
     images: Option<Vec<String>>,
 ) -> Result<String> {
     let url = format!("{}/api/generate", base_url.trim_end_matches('/'));
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(60))
-        .build()
-        .context("failed to build Ollama HTTP client")?;
+    let client = ollama_http_client()?;
     let response = client
         .post(&url)
         .json(&OllamaGenerateRequest {

@@ -345,7 +345,7 @@ pub fn resolve_runtime_session(
     state_db_path: &Path,
     request: &SessionRequest,
 ) -> Result<SessionRuntimeReport> {
-    let conn = Connection::open(state_db_path)
+    let mut conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
 
     let interaction_mode = if request.query_present || request.image_present {
@@ -362,25 +362,30 @@ pub fn resolve_runtime_session(
         } else {
             SessionAction::ResumedByTitle
         };
-        touch_session(&conn, &session.id)?;
-        append_event(
-            &conn,
-            &session.id,
-            "session_resumed",
-            json!({
-                "action": action.label(),
-                "resume_target": resume,
-                "interaction_mode": interaction_mode.label(),
-            })
-            .to_string(),
-        )?;
-        append_request_message_if_present(&conn, &session.id, request)?;
-        return Ok(SessionRuntimeReport {
-            session_id: session.id,
-            action,
-            interaction_mode,
-            title: session.title,
-        });
+        let report = {
+            let tx = conn.unchecked_transaction()?;
+            touch_session(&tx, &session.id)?;
+            append_event(
+                &tx,
+                &session.id,
+                "session_resumed",
+                json!({
+                    "action": action.label(),
+                    "resume_target": resume,
+                    "interaction_mode": interaction_mode.label(),
+                })
+                .to_string(),
+            )?;
+            tx.commit()?;
+            SessionRuntimeReport {
+                session_id: session.id,
+                action,
+                interaction_mode,
+                title: session.title,
+            }
+        };
+        append_request_message_if_present(&conn, &report.session_id, request)?;
+        return Ok(report);
     }
 
     if let Some(target) = request.continue_last.as_deref() {
@@ -399,57 +404,66 @@ pub fn resolve_runtime_session(
             let session = latest_session_in_subtree(&conn, &anchor.id)?.unwrap_or(anchor.clone());
             (session, Some(anchor.id), Some(anchor.title))
         };
-        touch_session(&conn, &session.id)?;
-        append_event(
-            &conn,
-            &session.id,
-            "session_resumed",
-            json!({
-                "action": action.label(),
-                "continue_target": target,
-                "continue_anchor_session_id": anchor_id,
-                "continue_anchor_title": anchor_title,
-                "resolved_session_id": session.id,
-                "interaction_mode": interaction_mode.label(),
-            })
-            .to_string(),
-        )?;
-        append_request_message_if_present(&conn, &session.id, request)?;
-        return Ok(SessionRuntimeReport {
-            session_id: session.id,
-            action,
-            interaction_mode,
-            title: session.title,
-        });
+        let report = {
+            let tx = conn.unchecked_transaction()?;
+            touch_session(&tx, &session.id)?;
+            append_event(
+                &tx,
+                &session.id,
+                "session_resumed",
+                json!({
+                    "action": action.label(),
+                    "continue_target": target,
+                    "continue_anchor_session_id": anchor_id,
+                    "continue_anchor_title": anchor_title,
+                    "resolved_session_id": session.id,
+                    "interaction_mode": interaction_mode.label(),
+                })
+                .to_string(),
+            )?;
+            tx.commit()?;
+            SessionRuntimeReport {
+                session_id: session.id,
+                action,
+                interaction_mode,
+                title: session.title,
+            }
+        };
+        append_request_message_if_present(&conn, &report.session_id, request)?;
+        return Ok(report);
     }
 
     let now = unix_timestamp();
     let unique = unix_timestamp_nanos();
     let session_id = format!("session-{}", unique);
     let title = format!("{}-{}", request.command_name, unique);
-    conn.execute(
-        "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
-        params![
-            session_id,
-            title,
-            request.command_name,
-            interaction_mode.label(),
-            now
-        ],
-    )?;
-    append_event(
-        &conn,
-        &session_id,
-        "session_created",
-        json!({
-            "command_name": request.command_name,
-            "interaction_mode": interaction_mode.label(),
-            "query_present": request.query_present,
-            "image_present": request.image_present,
-        })
-        .to_string(),
-    )?;
+    {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
+            params![
+                session_id,
+                title,
+                request.command_name,
+                interaction_mode.label(),
+                now
+            ],
+        )?;
+        append_event(
+            &tx,
+            &session_id,
+            "session_created",
+            json!({
+                "command_name": request.command_name,
+                "interaction_mode": interaction_mode.label(),
+                "query_present": request.query_present,
+                "image_present": request.image_present,
+            })
+            .to_string(),
+        )?;
+        tx.commit()?;
+    }
     append_request_message_if_present(&conn, &session_id, request)?;
 
     Ok(SessionRuntimeReport {
