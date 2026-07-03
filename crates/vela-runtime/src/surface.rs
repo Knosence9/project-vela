@@ -75,6 +75,8 @@ pub struct ScheduledJob {
     #[serde(default)]
     pub last_outcome: Option<String>,
     #[serde(default)]
+    pub last_progression: Option<String>,
+    #[serde(default)]
     pub last_error: Option<String>,
     #[serde(default)]
     pub run_count: u64,

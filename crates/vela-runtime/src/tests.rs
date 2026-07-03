@@ -387,6 +387,10 @@ fn scheduler_executes_and_recovers_jobs() {
     assert_eq!(first_job.status, "pending");
     assert_eq!(first_job.run_count, 1);
     assert_eq!(first_job.last_outcome.as_deref(), Some("completed"));
+    assert_eq!(
+        first_job.last_progression.as_deref(),
+        Some("completed-rescheduled")
+    );
     assert!(first_job.next_run_at > first_job.created_at);
 
     let setup = setup_scheduler(&bootstrap).unwrap();
@@ -414,6 +418,10 @@ fn scheduler_executes_and_recovers_jobs() {
     assert_eq!(recovered_job.run_count, 2);
     assert_eq!(recovered_job.recovery_count, 1);
     assert_eq!(recovered_job.last_outcome.as_deref(), Some("completed"));
+    assert_eq!(
+        recovered_job.last_progression.as_deref(),
+        Some("completed-rescheduled")
+    );
     assert!(recovered_job.last_recovered_at.is_some());
 
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();

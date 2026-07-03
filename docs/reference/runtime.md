@@ -44,6 +44,7 @@
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
 - `vela gateway --start` resumes the latest `gateway` command session when one already exists
 - `vela cron --start` resumes the latest `cron` command session when one already exists, executes due durable jobs, and recovers stale in-flight jobs before retrying them
+- scheduled jobs now surface explicit progression states in CLI status (`registered`, `started-attempt`, `recovered-for-retry`, `completed-rescheduled`, `failed-rescheduled`) so recurring next-run behavior is visible without reading raw job timestamps alone
 
 ## Kernel vs provider boundary
 - keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel
@@ -68,4 +69,4 @@
 - more advanced compression policies beyond the current bounded contract (trimmed non-empty summaries, duplicate-latest rejection, bounded summary length, touched-session updates, and explicit persisted operator summaries)
 - deeper extension lifecycle hooks and capability activation beyond the current explicit activation matrix (tool/skill/workflow on-boot with entry path, service metadata-only, unsupported service on-boot failure)
 - richer reload ownership reporting beyond the first explicit restart-only ownership drift records
-- richer recurring scheduling semantics beyond the first durable execution/recovery sweep and next-run rescheduling model
+- richer recurring scheduling semantics beyond the current explicit progression states and next-run rescheduling model

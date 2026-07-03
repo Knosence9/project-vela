@@ -751,12 +751,14 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     assert!(show_stdout.contains(job_id));
     assert!(show_stdout.contains("task=ping status"));
     assert!(show_stdout.contains("next_run_at="));
+    assert!(show_stdout.contains("progression=Some(\"registered\")"));
 
     let list = run_vela(&vela_home, &["cron", "--list"]);
     assert!(list.status.success(), "{}", stderr_text(&list));
     let list_stdout = stdout_text(&list);
     assert!(list_stdout.contains(job_id));
     assert!(list_stdout.contains("run_count=0"));
+    assert!(list_stdout.contains("progression=Some(\"registered\")"));
 
     let invalid = run_vela(&vela_home, &["cron", "--schedule", "0 * * * *"]);
     assert!(!invalid.status.success());
@@ -799,6 +801,7 @@ fn cron_start_executes_due_jobs() {
     assert!(show_stdout.contains("status=pending"));
     assert!(show_stdout.contains("run_count=1"));
     assert!(show_stdout.contains("outcome=Some(\"completed\")"));
+    assert!(show_stdout.contains("progression=Some(\"completed-rescheduled\")"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
