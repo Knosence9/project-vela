@@ -262,6 +262,7 @@ fn continue_target_prefers_latest_session_in_branch_subtree() {
     )
     .unwrap();
     assert_eq!(continued_exact.continue_resolution.as_deref(), Some("exact-anchor"));
+    assert_eq!(continued_exact.continue_target.as_deref(), Some("branch-b"));
 
     let continued_latest = resolve_runtime_session(
         &report.state_db_path,
@@ -277,6 +278,7 @@ fn continue_target_prefers_latest_session_in_branch_subtree() {
     )
     .unwrap();
     assert_eq!(continued_latest.continue_resolution.as_deref(), Some("latest-global"));
+    assert_eq!(continued_latest.continue_target.as_deref(), Some(""));
     assert!(continued_latest.continue_anchor_session_id.is_none());
 
     let _ = fs::remove_dir_all(&vela_home);
