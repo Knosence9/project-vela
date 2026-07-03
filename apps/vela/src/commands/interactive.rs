@@ -165,13 +165,24 @@ pub(crate) fn run_extensions(
             report.session_before.as_ref().map(|item| item.id.as_str()),
             report.session_after.as_ref().map(|item| item.id.as_str()),
         );
-        if report.restart_required_fields.is_empty() {
+        if report.restart_required_drifts.is_empty() {
             println!("restart required: none");
         } else {
             println!(
                 "restart required: {}",
-                report.restart_required_fields.join(", ")
+                report
+                    .restart_required_drifts
+                    .iter()
+                    .map(|item| format!("{}@{}", item.field, item.owner))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
+            for drift in &report.restart_required_drifts {
+                println!(
+                    "restart required [{}]: owner={} detail={}",
+                    drift.field, drift.owner, drift.detail
+                );
+            }
         }
         for entry in &report.extensions.entries {
             print_extension_record(entry);

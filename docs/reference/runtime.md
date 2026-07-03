@@ -36,7 +36,7 @@
 - Vela now discovers extension manifests from `~/.vela/extensions/` (or `extensions.manifests_dir` in config), applies config-driven enable/disable overrides, and surfaces lifecycle-aware extension entries through `vela status`
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
 - tool, skill, and workflow extensions may activate on boot when they provide a non-empty entry path; service extensions remain metadata-only in this slice, and unsupported service `on-boot` requests fail explicitly in status/reload output
-- `vela extensions --reload` now re-reads extension config + manifest files, recomputes lifecycle transitions, refreshes extension state without resetting durable session state, and reports runtime config drift that still requires restart
+- `vela extensions --reload` now re-reads extension config + manifest files, recomputes lifecycle transitions, refreshes extension state without resetting durable session state, and reports restart-only runtime drift as explicit owned config boundaries (for example `runtime.provider@kernel-runtime`)
 - `vela chat --image ...` can call a configured runtime provider for first-pass image turns, with Ollama currently serving as the first image-capable provider behind the kernel boundary
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
@@ -55,7 +55,7 @@
 - keep durable session/state ownership in-kernel (`vela-state`, runtime lifecycle, approvals, persistence, scheduler continuity, and scheduler execution recovery)
 - keep policy-bearing memory/review/session mutation paths in-kernel until stronger trust boundaries exist
 - allow extensions to describe discoverable capabilities, tool/skill/workflow metadata, and bounded activation hooks
-- treat extension reload as an extensions-owned surface only; provider, network, interface, security, and other kernel-owned runtime settings remain restart-only even when config drift is detected during reload
+- treat extension reload as an extensions-owned surface only; provider, network, interface, security, hooks, and other kernel-owned runtime settings remain restart-only even when config drift is detected during reload, and surface as explicit ownership drift records in reload output
 - keep service-style extensions metadata-only in this slice while tool/skill/workflow entries may activate when they provide valid entrypoints; explicit manifest `metadata-only` requests validate without activation, while unsupported service `on-boot` requests fail clearly
 - treat the current registry as metadata-first scaffolding with bounded activation semantics, not arbitrary third-party code execution
 
@@ -67,4 +67,5 @@
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
 - more advanced compression policies beyond the current bounded contract (trimmed non-empty summaries, duplicate-latest rejection, bounded summary length, touched-session updates, and explicit persisted operator summaries)
 - deeper extension lifecycle hooks and capability activation beyond the current explicit activation matrix (tool/skill/workflow on-boot with entry path, service metadata-only, unsupported service on-boot failure)
+- richer reload ownership reporting beyond the first explicit restart-only ownership drift records
 - richer recurring scheduling semantics beyond the first durable execution/recovery sweep and next-run rescheduling model

@@ -120,6 +120,7 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     assert!(reloaded.preserved_session);
     assert_eq!(before.id, after.id);
     assert_eq!(before.title, after.title);
+    assert_eq!(reloaded.restart_required_drifts.len(), 0);
 
     std::fs::write(
         vela_home.join("extensions").join("demo.yaml"),
@@ -135,6 +136,33 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     assert!(failed.preserved_session);
     assert_eq!(before.id, after_failed.id);
     assert_eq!(before.title, after_failed.title);
+
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: changed\n  ollama_base_url: http://127.0.0.1:22555\nextensions: {}\n",
+    )
+    .unwrap();
+    let drifted = reload_extensions(&bootstrap).unwrap();
+    assert_eq!(drifted.restart_required_drifts.len(), 3);
+    assert!(drifted
+        .summary_line()
+        .contains("restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime"));
+    assert!(drifted.restart_required_drifts.iter().any(|item| {
+        item.field == "runtime.provider"
+            && item.owner == "kernel-runtime"
+            && item.detail == "provider backend changes remain restart-only during extension reload"
+    }));
+    assert!(drifted.restart_required_drifts.iter().any(|item| {
+        item.field == "runtime.model"
+            && item.owner == "kernel-runtime"
+            && item.detail == "runtime model changes remain restart-only during extension reload"
+    }));
+    assert!(drifted.restart_required_drifts.iter().any(|item| {
+        item.field == "runtime.ollama_base_url"
+            && item.owner == "kernel-runtime"
+            && item.detail
+                == "provider transport endpoint changes remain restart-only during extension reload"
+    }));
 
     let _ = std::fs::remove_dir_all(&vela_home);
 }
