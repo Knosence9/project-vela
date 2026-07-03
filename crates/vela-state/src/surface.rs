@@ -345,7 +345,7 @@ pub fn resolve_runtime_session(
     state_db_path: &Path,
     request: &SessionRequest,
 ) -> Result<SessionRuntimeReport> {
-    let mut conn = Connection::open(state_db_path)
+    let conn = Connection::open(state_db_path)
         .with_context(|| format!("failed to open {}", state_db_path.display()))?;
 
     let interaction_mode = if request.query_present || request.image_present {
