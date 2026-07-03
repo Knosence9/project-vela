@@ -1,4 +1,5 @@
 use super::*;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone)]
 /// Represents `PersistenceReport` data exposed by this crate.
@@ -661,7 +662,7 @@ pub fn compress_session(
     if summary.is_empty() {
         anyhow::bail!("compression summary cannot be empty");
     }
-    if summary.chars().count() > SESSION_COMPRESSION_CHAR_LIMIT {
+    if summary.graphemes(true).count() > SESSION_COMPRESSION_CHAR_LIMIT {
         anyhow::bail!(
             "compression summary exceeds {} characters",
             SESSION_COMPRESSION_CHAR_LIMIT
