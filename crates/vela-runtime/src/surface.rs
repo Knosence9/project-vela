@@ -89,22 +89,34 @@ pub struct ScheduledJob {
 }
 
 #[derive(Debug, Clone)]
+/// Describes one kernel-owned runtime config drift detected during extension reload.
+pub struct RestartRequiredRuntimeDrift {
+    pub field: String,
+    pub owner: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone)]
 /// Captures extension reload results plus restart-only runtime drift.
 pub struct ExtensionReloadReport {
     pub extensions: ExtensionsReport,
     pub preserved_session: bool,
     pub session_before: Option<SessionSummary>,
     pub session_after: Option<SessionSummary>,
-    pub restart_required_fields: Vec<String>,
+    pub restart_required_drifts: Vec<RestartRequiredRuntimeDrift>,
 }
 
 impl ExtensionReloadReport {
     /// Renders a compact reload summary including restart-required config drift.
     pub fn summary_line(&self) -> String {
-        let restart_required = if self.restart_required_fields.is_empty() {
+        let restart_required = if self.restart_required_drifts.is_empty() {
             "none".to_string()
         } else {
-            self.restart_required_fields.join(",")
+            self.restart_required_drifts
+                .iter()
+                .map(|item| format!("{}@{}", item.field, item.owner))
+                .collect::<Vec<_>>()
+                .join(",")
         };
         format!(
             "{} session_preserved={} restart_required={}",
@@ -230,38 +242,73 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         preserved_session,
         session_before,
         session_after,
-        restart_required_fields: restart_required_runtime_fields(
+        restart_required_drifts: restart_required_runtime_drifts(
             &bootstrap.resolved_config,
             &resolved_config,
         ),
     })
 }
 
-fn restart_required_runtime_fields(
+fn restart_required_runtime_drifts(
     previous: &ResolvedConfig,
     reloaded: &ResolvedConfig,
-) -> Vec<String> {
+) -> Vec<RestartRequiredRuntimeDrift> {
     let mut fields = Vec::new();
     if previous.display_interface != reloaded.display_interface {
-        fields.push("display_interface".to_string());
+        fields.push(RestartRequiredRuntimeDrift {
+            field: "display.interface".to_string(),
+            owner: "kernel-interface".to_string(),
+            detail: "display interface changes remain restart-only during extension reload"
+                .to_string(),
+        });
     }
     if previous.hooks_auto_accept != reloaded.hooks_auto_accept {
-        fields.push("hooks_auto_accept".to_string());
+        fields.push(RestartRequiredRuntimeDrift {
+            field: "hooks.auto_accept".to_string(),
+            owner: "kernel-hooks".to_string(),
+            detail: "hook auto-accept policy remains restart-only during extension reload"
+                .to_string(),
+        });
     }
     if previous.security_redact_secrets != reloaded.security_redact_secrets {
-        fields.push("security_redact_secrets".to_string());
+        fields.push(RestartRequiredRuntimeDrift {
+            field: "security.redact_secrets".to_string(),
+            owner: "kernel-security".to_string(),
+            detail: "security redaction policy remains restart-only during extension reload"
+                .to_string(),
+        });
     }
     if previous.network_force_ipv4 != reloaded.network_force_ipv4 {
-        fields.push("network_force_ipv4".to_string());
+        fields.push(RestartRequiredRuntimeDrift {
+            field: "network.force_ipv4".to_string(),
+            owner: "kernel-network".to_string(),
+            detail: "network stack settings remain restart-only during extension reload"
+                .to_string(),
+        });
     }
     if previous.runtime_provider != reloaded.runtime_provider {
-        fields.push("runtime_provider".to_string());
+        fields.push(RestartRequiredRuntimeDrift {
+            field: "runtime.provider".to_string(),
+            owner: "kernel-runtime".to_string(),
+            detail: "provider backend changes remain restart-only during extension reload"
+                .to_string(),
+        });
     }
     if previous.runtime_model != reloaded.runtime_model {
-        fields.push("runtime_model".to_string());
+        fields.push(RestartRequiredRuntimeDrift {
+            field: "runtime.model".to_string(),
+            owner: "kernel-runtime".to_string(),
+            detail: "runtime model changes remain restart-only during extension reload"
+                .to_string(),
+        });
     }
     if previous.runtime_ollama_base_url != reloaded.runtime_ollama_base_url {
-        fields.push("runtime_ollama_base_url".to_string());
+        fields.push(RestartRequiredRuntimeDrift {
+            field: "runtime.ollama_base_url".to_string(),
+            owner: "kernel-runtime".to_string(),
+            detail: "provider transport endpoint changes remain restart-only during extension reload"
+                .to_string(),
+        });
     }
     fields
 }

@@ -296,7 +296,7 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     assert!(reload_stdout.contains("extensions reloaded: extensions: dir="));
     assert!(reload_stdout.contains("activated=1"));
     assert!(reload_stdout.contains("session preserved: true"));
-    assert!(reload_stdout.contains("restart required:"));
+    assert!(reload_stdout.contains("restart required: none"));
     assert!(reload_stdout.contains("extension [activated]: id=Some(\"demo\")"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
