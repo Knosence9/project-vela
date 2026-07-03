@@ -218,6 +218,43 @@ fn default_runtime_session_surfaces_in_status() {
 }
 
 #[test]
+/// Verifies that extension status surfaces activation-boundary outcomes for validated, activated, and failed entries.
+fn extension_status_surfaces_activation_boundaries() {
+    let vela_home = temp_vela_home("extension-activation-boundaries");
+    std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
+    std::fs::write(
+        vela_home.join("extensions").join("tool-meta.yaml"),
+        "manifest_version: 1\nid: tool-meta\ntitle: Tool Meta\nkind: tool\nactivation: metadata-only\nentry: extensions/tool-meta.wasm\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home.join("extensions").join("workflow.yaml"),
+        "manifest_version: 1\nid: workflow\ntitle: Workflow\nkind: workflow\nentry: extensions/workflow.flow\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home.join("extensions").join("service-on-boot.yaml"),
+        "manifest_version: 1\nid: service-on-boot\ntitle: Service On Boot\nkind: service\nactivation: on-boot\n",
+    )
+    .unwrap();
+
+    let status = run_vela(&vela_home, &["status"]);
+    assert!(status.status.success(), "{}", stderr_text(&status));
+    let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("validated=1"));
+    assert!(status_stdout.contains("activated=1"));
+    assert!(status_stdout.contains("failed=1"));
+    assert!(status_stdout.contains("extension [validated]: id=Some(\"tool-meta\")"));
+    assert!(status_stdout.contains("detail=Some(\"tool extension validated as metadata-only by manifest policy\")"));
+    assert!(status_stdout.contains("extension [activated]: id=Some(\"workflow\")"));
+    assert!(status_stdout.contains("detail=Some(\"workflow extension activated during bootstrap\")"));
+    assert!(status_stdout.contains("extension [failed]: id=Some(\"service-on-boot\")"));
+    assert!(status_stdout.contains("detail=Some(\"service extensions cannot request on-boot activation in this slice\")"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that extension status surfaces config-disabled entries and reload preserves the active session while surfacing restart-only runtime drift.
 fn extensions_status_and_reload_are_visible_via_cli() {
     let vela_home = temp_vela_home("extensions");
