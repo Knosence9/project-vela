@@ -49,6 +49,31 @@ fn resolve_runtime_execution_wraps_ollama_provider_backend() {
 }
 
 #[test]
+/// Verifies that runtime execution resolves the mock backend through the provider boundary.
+fn resolve_runtime_execution_wraps_mock_provider_backend() {
+    let resolved = ResolvedConfig {
+        runtime_provider: Some("mock".to_string()),
+        runtime_model: Some("mock-1".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let execution = resolve_runtime_execution(&resolved, None, None).unwrap();
+    let provider = execution
+        .provider
+        .as_deref()
+        .expect("resolved provider backend");
+
+    assert_eq!(execution.provider_label.as_deref(), Some("mock"));
+    assert_eq!(execution.model.as_deref(), Some("mock-1"));
+    assert_eq!(provider.label(), "mock");
+    assert_eq!(provider.model(), Some("mock-1"));
+    assert_eq!(provider.direct_response_source(), "runtime-mock");
+    assert_eq!(provider.tool_loop_response_source(), "runtime-mock-tool-loop");
+    assert!(!provider.supports_images());
+    provider.validate().unwrap();
+}
+
+#[test]
 /// Verifies that extension reload re-reads config and manifests without resetting durable session state.
 fn reload_extensions_rereads_config_without_resetting_sessions() {
     let vela_home = std::env::temp_dir().join(format!(
@@ -656,6 +681,70 @@ fn execute_chat_turn_uses_ollama_provider_when_configured() {
 }
 
 #[test]
+/// Verifies that configured mock execution is used for text chat turns.
+fn execute_chat_turn_uses_mock_provider_when_configured() {
+    let mut bootstrap = test_bootstrap("mock-turn");
+    bootstrap.resolved_config.runtime_provider = Some("mock".to_string());
+    bootstrap.resolved_config.runtime_model = Some("mock-1".to_string());
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("hello from mock".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.response.as_deref(), Some("Mock provider says hi."));
+    assert_eq!(report.response_source, "runtime-mock");
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that mock provider image requests fall back to the local kernel path when image support is unavailable.
+fn execute_chat_turn_falls_back_for_mock_provider_image_requests() {
+    let mut bootstrap = test_bootstrap("mock-image-fallback");
+    bootstrap.resolved_config.runtime_provider = Some("mock".to_string());
+    bootstrap.resolved_config.runtime_model = Some("mock-1".to_string());
+    let image_path = bootstrap.vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: false,
+            query_text: None,
+            image_present: true,
+            image_path: Some(image_path.display().to_string()),
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.response_source, "runtime-kernel");
+    assert!(report
+        .response
+        .as_deref()
+        .unwrap_or_default()
+        .contains("No provider-backed image execution was available"));
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that a configured provider turn can retrieve targeted memory, session, and skill context through runtime tools.
 fn execute_chat_turn_retrieves_targeted_internal_context() {
     let (base_url, server) = spawn_mock_ollama_sequence(vec![
@@ -890,6 +979,46 @@ fn execute_chat_turn_runs_first_runtime_tool_loop() {
         Some("runtime-ollama-tool-loop")
     );
     server.join().unwrap();
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that the mock provider can execute the bounded local tool loop.
+fn execute_chat_turn_runs_mock_provider_tool_loop() {
+    let mut bootstrap = test_bootstrap("mock-tool-loop");
+    bootstrap.resolved_config.runtime_provider = Some("mock".to_string());
+    bootstrap.resolved_config.runtime_model = Some("mock-1".to_string());
+    std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
+    std::fs::write(
+        bootstrap
+            .vela_home
+            .join("skills")
+            .join("deploy-staging")
+            .join("SKILL.md"),
+        "# deploy-staging\n\nDeploys staging.",
+    )
+    .unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("need the tool loop".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.response.as_deref(), Some("Mock tool-informed final answer."));
+    assert_eq!(report.response_source, "runtime-mock-tool-loop");
+    assert_eq!(report.lifecycle_phase_count, 8);
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
 

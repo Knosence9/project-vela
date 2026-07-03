@@ -21,7 +21,7 @@
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
-- `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama currently serving as the first provider implementation behind that boundary
+- `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama and a deterministic mock backend now serving as supported provider implementations behind that boundary
 - configured provider-backed turns can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
 - approved read-only runtime tools now include targeted internal context retrieval for memory, session history, and skill content (`view_memory`, `search_session_history`, `view_skill`) in addition to the earlier snapshot/list tools
 - provider-backed turns now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
@@ -37,7 +37,7 @@
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
 - tool, skill, and workflow extensions may activate on boot when they provide a non-empty entry path; service extensions remain metadata-only in this slice, and unsupported service `on-boot` requests fail explicitly in status/reload output
 - `vela extensions --reload` now re-reads extension config + manifest files, recomputes lifecycle transitions, refreshes extension state without resetting durable session state, and reports restart-only runtime drift as explicit owned config boundaries (for example `runtime.provider@kernel-runtime`)
-- `vela chat --image ...` can call a configured runtime provider for first-pass image turns, with Ollama currently serving as the first image-capable provider behind the kernel boundary
+- `vela chat --image ...` can call a configured runtime provider for first-pass image turns, with Ollama currently serving as the image-capable backend while the mock backend falls back explicitly to the local kernel path in this slice
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
 - repeated resume/continue paths update `updated_at` on the matching session row
@@ -62,7 +62,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states at the session level
-- additional provider implementations beyond the first Ollama-backed provider boundary, while preserving the bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
+- broader provider capability parity beyond the current Ollama + text-only mock backend matrix, while preserving the bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model

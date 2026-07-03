@@ -378,6 +378,25 @@ fn chat_query_uses_configured_ollama_provider() {
 }
 
 #[test]
+/// Verifies that a configured mock provider is used for chat text turns.
+fn chat_query_uses_configured_mock_provider() {
+    let vela_home = temp_vela_home("mock-chat");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
+    )
+    .unwrap();
+
+    let turn = run_vela(&vela_home, &["chat", "--query", "hello from mock cli"]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Mock provider says hi."));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that an image-only chat turn still produces an assistant response.
 fn chat_image_executes_runtime_turn() {
     let vela_home = temp_vela_home("image-turn");
@@ -421,6 +440,31 @@ fn chat_image_uses_configured_ollama_provider() {
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Gemma inspected the image."));
     server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured mock provider falls back cleanly for image turns it does not support.
+fn chat_image_falls_back_for_configured_mock_provider() {
+    let vela_home = temp_vela_home("mock-image-fallback");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let image_path = vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &["chat", "--image", image_path.to_str().expect("image path")],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Vela executed a local image turn."));
+    assert!(turn_stdout.contains("No provider-backed image execution was available"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
