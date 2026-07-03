@@ -11,6 +11,7 @@ pub(crate) trait RuntimeProviderBackend {
     fn label(&self) -> &str;
     fn model(&self) -> Option<&str>;
     fn validate(&self) -> Result<()>;
+    fn supports_images(&self) -> bool;
     fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String>;
     fn direct_response_source(&self) -> &'static str;
     fn tool_loop_response_source(&self) -> &'static str;
@@ -21,6 +22,12 @@ struct OllamaRuntimeProvider {
     label: String,
     model: Option<String>,
     base_url: String,
+}
+
+#[derive(Debug, Clone)]
+struct MockRuntimeProvider {
+    label: String,
+    model: Option<String>,
 }
 
 impl RuntimeProviderBackend for OllamaRuntimeProvider {
@@ -36,6 +43,10 @@ impl RuntimeProviderBackend for OllamaRuntimeProvider {
         validate_ollama_base_url(&self.base_url)
     }
 
+    fn supports_images(&self) -> bool {
+        true
+    }
+
     fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
         let model = self.model.as_deref().context(
             "runtime provider 'ollama' requires a model (for example a Gemma family model)",
@@ -49,6 +60,57 @@ impl RuntimeProviderBackend for OllamaRuntimeProvider {
 
     fn tool_loop_response_source(&self) -> &'static str {
         "runtime-ollama-tool-loop"
+    }
+}
+
+impl RuntimeProviderBackend for MockRuntimeProvider {
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn supports_images(&self) -> bool {
+        false
+    }
+
+    fn generate(&self, prompt: &str, _images: Option<Vec<String>>) -> Result<String> {
+        if prompt.contains("Tool result for view_memory:user:") {
+            return Ok("Mock context-aware answer.".to_string());
+        }
+        if prompt.contains("Tool result for list_skills:") {
+            return Ok("Mock tool-informed final answer.".to_string());
+        }
+        if prompt.contains("Tool result for memory_snapshot:") {
+            return Ok(r#"{"tool":"list_skills"}"#.to_string());
+        }
+        if prompt.contains("unsupported or malformed tool envelope") {
+            return Ok("Mock recovered answer.".to_string());
+        }
+        if prompt.contains("retrieve targeted context") {
+            return Ok(r#"{"tool":"view_memory","target":"user"}"#.to_string());
+        }
+        if prompt.contains("need the tool loop") {
+            return Ok(r#"{"tool":"memory_snapshot"}"#.to_string());
+        }
+        if prompt.contains("recover from invalid tool") {
+            return Ok(r#"{"tool":"shell_exec"}"#.to_string());
+        }
+        Ok("Mock provider says hi.".to_string())
+    }
+
+    fn direct_response_source(&self) -> &'static str {
+        "runtime-mock"
+    }
+
+    fn tool_loop_response_source(&self) -> &'static str {
+        "runtime-mock-tool-loop"
     }
 }
 
@@ -263,7 +325,7 @@ pub(crate) fn render_chat_response(
             .as_deref()
             .unwrap_or("(unspecified image path)");
         if let Some(provider) = execution.provider.as_deref() {
-            if let Some(image_path) = request.image_path.as_deref() {
+            if let Some(image_path) = request.image_path.as_deref().filter(|_| provider.supports_images()) {
                 provider.validate()?;
                 let image_base64 = encode_image_as_base64(image_path)?;
                 let user_prompt = request
@@ -398,6 +460,10 @@ pub(crate) fn resolve_runtime_execution(
                 .runtime_ollama_base_url
                 .clone()
                 .unwrap_or_else(|| "http://127.0.0.1:11434".to_string()),
+        }) as Box<dyn RuntimeProviderBackend>),
+        Some("mock") => Some(Box::new(MockRuntimeProvider {
+            label: "mock".to_string(),
+            model: model.clone(),
         }) as Box<dyn RuntimeProviderBackend>),
         Some(other) => bail!("unsupported runtime provider {other:?}"),
         None => None,
