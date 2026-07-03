@@ -642,6 +642,7 @@ fn sessions_branch_and_compress_are_inspectable() {
     );
     let continue_root_stdout = stdout_text(&continue_root);
     assert!(continue_root_stdout.contains(&format!("id={}", branch_child_session)));
+    assert!(continue_root_stdout.contains("Session: branch-a-child"));
 
     let continue_branch = run_vela(
         &vela_home,
@@ -654,6 +655,7 @@ fn sessions_branch_and_compress_are_inspectable() {
     );
     let continue_branch_stdout = stdout_text(&continue_branch);
     assert!(continue_branch_stdout.contains(&format!("id={}", branch_child_session)));
+    assert!(continue_branch_stdout.contains("Session: branch-a-child"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
