@@ -227,6 +227,9 @@ fn continue_target_prefers_latest_session_in_branch_subtree() {
     )
     .unwrap();
     assert_eq!(continued.session_id, branch_a_child.session_id);
+    assert_eq!(continued.continue_resolution.as_deref(), Some("latest-in-subtree"));
+    assert_eq!(continued.continue_target.as_deref(), Some(root.title.as_str()));
+    assert_eq!(continued.continue_anchor_session_id.as_deref(), Some(root.session_id.as_str()));
 
     let continued_branch = resolve_runtime_session(
         &report.state_db_path,
@@ -242,6 +245,41 @@ fn continue_target_prefers_latest_session_in_branch_subtree() {
     )
     .unwrap();
     assert_eq!(continued_branch.session_id, branch_a_child.session_id);
+    assert_eq!(continued_branch.continue_resolution.as_deref(), Some("latest-in-subtree"));
+    assert_eq!(continued_branch.continue_anchor_session_id.as_deref(), Some(branch_a.session_id.as_str()));
+
+    let continued_exact = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("continue branch-b".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: Some("branch-b".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(continued_exact.continue_resolution.as_deref(), Some("exact-anchor"));
+    assert_eq!(continued_exact.continue_target.as_deref(), Some("branch-b"));
+
+    let continued_latest = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("continue latest".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: Some(String::new()),
+        },
+    )
+    .unwrap();
+    assert_eq!(continued_latest.continue_resolution.as_deref(), Some("latest-global"));
+    assert_eq!(continued_latest.continue_target.as_deref(), Some(""));
+    assert!(continued_latest.continue_anchor_session_id.is_none());
 
     let _ = fs::remove_dir_all(&vela_home);
 }
