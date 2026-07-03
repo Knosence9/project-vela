@@ -115,8 +115,9 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
         .unwrap()
         .expect("session after reload");
 
-    assert_eq!(reloaded.activated_count, 1);
-    assert_eq!(reloaded.disabled_count, 0);
+    assert_eq!(reloaded.extensions.activated_count, 1);
+    assert_eq!(reloaded.extensions.disabled_count, 0);
+    assert!(reloaded.preserved_session);
     assert_eq!(before.id, after.id);
     assert_eq!(before.title, after.title);
 
@@ -129,8 +130,9 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     let after_failed = current_session_summary(&bootstrap)
         .unwrap()
         .expect("session after failed reload");
-    assert_eq!(failed.failed_count, 1);
-    assert_eq!(failed.activated_count, 0);
+    assert_eq!(failed.extensions.failed_count, 1);
+    assert_eq!(failed.extensions.activated_count, 0);
+    assert!(failed.preserved_session);
     assert_eq!(before.id, after_failed.id);
     assert_eq!(before.title, after_failed.title);
 

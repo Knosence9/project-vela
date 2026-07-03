@@ -218,7 +218,7 @@ fn default_runtime_session_surfaces_in_status() {
 }
 
 #[test]
-/// Verifies that extension status surfaces config-disabled entries and reload preserves the active session.
+/// Verifies that extension status surfaces config-disabled entries and reload preserves the active session while surfacing restart-only runtime drift.
 fn extensions_status_and_reload_are_visible_via_cli() {
     let vela_home = temp_vela_home("extensions");
     std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
@@ -229,7 +229,7 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     .unwrap();
     std::fs::write(
         vela_home.join("config.yaml"),
-        "extensions:\n  entries:\n    demo:\n      enabled: false\n",
+        "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: http://127.0.0.1:11434\nextensions:\n  entries:\n    demo:\n      enabled: false\n",
     )
     .unwrap();
 
@@ -241,20 +241,25 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     assert!(status_stdout.contains("activation=Some(\"on-boot\")"));
     assert!(status_stdout.contains("extension [disabled]: id=Some(\"demo\")"));
 
-    let session_turn = run_vela(&vela_home, &["chat", "--query", "keep my session"]);
+    let session_turn = run_vela(&vela_home, &[]);
     assert!(
         session_turn.status.success(),
         "{}",
         stderr_text(&session_turn)
     );
 
-    std::fs::write(vela_home.join("config.yaml"), "extensions: {}\n").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: changed\n  ollama_base_url: http://127.0.0.1:22555\nextensions: {}\n",
+    )
+    .unwrap();
     let reload = run_vela(&vela_home, &["extensions", "--reload"]);
     assert!(reload.status.success(), "{}", stderr_text(&reload));
     let reload_stdout = stdout_text(&reload);
     assert!(reload_stdout.contains("extensions reloaded: extensions: dir="));
     assert!(reload_stdout.contains("activated=1"));
     assert!(reload_stdout.contains("session preserved: true"));
+    assert!(reload_stdout.contains("restart required:"));
     assert!(reload_stdout.contains("extension [activated]: id=Some(\"demo\")"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
