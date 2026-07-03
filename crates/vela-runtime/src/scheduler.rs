@@ -312,6 +312,7 @@ pub fn add_scheduled_job(
         last_failed_at: None,
         last_recovered_at: None,
         last_outcome: None,
+        last_progression: Some("registered".to_string()),
         last_error: None,
         run_count: 0,
         recovery_count: 0,
@@ -365,6 +366,7 @@ fn process_scheduler_jobs(
             job.updated_at = now;
             job.last_recovered_at = Some(now);
             job.last_outcome = Some("recovered".to_string());
+            job.last_progression = Some("recovered-for-retry".to_string());
             job.recovery_count += 1;
             job.execution_token = None;
             job.lease_expires_at = None;
@@ -431,6 +433,7 @@ fn execute_scheduled_job(
     job.updated_at = now;
     job.last_started_at = Some(now);
     job.last_outcome = Some("running".to_string());
+    job.last_progression = Some("started-attempt".to_string());
     job.last_error = None;
     job.execution_token = Some(execution_token.clone());
     job.lease_expires_at = Some(now + SCHEDULER_RECOVERY_LEASE_SECONDS);
@@ -479,6 +482,7 @@ fn execute_scheduled_job(
                 job.updated_at = completed_at;
                 job.last_completed_at = Some(completed_at);
                 job.last_outcome = Some("completed".to_string());
+                job.last_progression = Some("completed-rescheduled".to_string());
                 job.last_error = None;
                 job.run_count += 1;
                 job.last_session_id = Some(report.session.session_id.clone());
@@ -521,6 +525,7 @@ fn execute_scheduled_job(
                 job.updated_at = failed_at;
                 job.last_failed_at = Some(failed_at);
                 job.last_outcome = Some("failed".to_string());
+                job.last_progression = Some("failed-rescheduled".to_string());
                 job.last_error = Some(error.to_string());
                 job.next_run_at = next_scheduler_run_at(&job.schedule, failed_at);
                 job.execution_token = None;
