@@ -583,6 +583,20 @@ fn sessions_branch_and_compress_are_inspectable() {
     assert!(branch_stdout.contains("title=branch-a"));
     let branch_session = parse_field(&branch_stdout, "session").expect("branch session id");
 
+    let branch_b = run_vela(
+        &vela_home,
+        &[
+            "sessions",
+            "--branch",
+            parent_session,
+            "--title",
+            "branch-b",
+        ],
+    );
+    assert!(branch_b.status.success(), "{}", stderr_text(&branch_b));
+    let branch_b_stdout = stdout_text(&branch_b);
+    let branch_b_session = parse_field(&branch_b_stdout, "session").expect("branch b session id");
+
     let branch_child = run_vela(
         &vela_home,
         &[
@@ -633,8 +647,9 @@ fn sessions_branch_and_compress_are_inspectable() {
         stderr_text(&parent_show)
     );
     let parent_show_stdout = stdout_text(&parent_show);
-    assert!(parent_show_stdout.contains("children [1]:"));
+    assert!(parent_show_stdout.contains("children [2]:"));
     assert!(parent_show_stdout.contains("title=branch-a"));
+    assert!(parent_show_stdout.contains("title=branch-b"));
 
     let continue_root = run_vela(
         &vela_home,
@@ -648,6 +663,8 @@ fn sessions_branch_and_compress_are_inspectable() {
     let continue_root_stdout = stdout_text(&continue_root);
     assert!(continue_root_stdout.contains(&format!("id={}", branch_child_session)));
     assert!(continue_root_stdout.contains("Session: branch-a-child"));
+    assert!(continue_root_stdout.contains("continue resolution: mode=latest-in-subtree"));
+    assert!(continue_root_stdout.contains(&format!("anchor_id=Some(\"{}\")", parent_session)));
 
     let continue_branch = run_vela(
         &vela_home,
@@ -661,6 +678,17 @@ fn sessions_branch_and_compress_are_inspectable() {
     let continue_branch_stdout = stdout_text(&continue_branch);
     assert!(continue_branch_stdout.contains(&format!("id={}", branch_child_session)));
     assert!(continue_branch_stdout.contains("Session: branch-a-child"));
+    assert!(continue_branch_stdout.contains("continue resolution: mode=latest-in-subtree"));
+    assert!(continue_branch_stdout.contains(&format!("anchor_id=Some(\"{}\")", branch_session)));
+
+    let continue_exact = run_vela(
+        &vela_home,
+        &["chat", "--continue", "branch-b", "--query", "follow exact"],
+    );
+    assert!(continue_exact.status.success(), "{}", stderr_text(&continue_exact));
+    let continue_exact_stdout = stdout_text(&continue_exact);
+    assert!(continue_exact_stdout.contains(&format!("id={}", branch_b_session)));
+    assert!(continue_exact_stdout.contains("continue resolution: mode=exact-anchor"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

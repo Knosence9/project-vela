@@ -29,6 +29,10 @@ pub struct SessionRuntimeReport {
     pub action: SessionAction,
     pub interaction_mode: InteractionMode,
     pub title: String,
+    pub continue_target: Option<String>,
+    pub continue_resolution: Option<String>,
+    pub continue_anchor_session_id: Option<String>,
+    pub continue_anchor_title: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +386,10 @@ pub fn resolve_runtime_session(
                 action,
                 interaction_mode,
                 title: session.title,
+                continue_target: None,
+                continue_resolution: None,
+                continue_anchor_session_id: None,
+                continue_anchor_title: None,
             }
         };
         append_request_message_if_present(&conn, &report.session_id, request)?;
@@ -394,15 +402,25 @@ pub fn resolve_runtime_session(
         } else {
             SessionAction::ResumedByTitle
         };
-        let (session, anchor_id, anchor_title) = if target.trim().is_empty() {
+        let (session, anchor_id, anchor_title, continue_resolution) = if target.trim().is_empty() {
             let session = latest_session(&conn)?
                 .with_context(|| format!("session not found for continue target {target}"))?;
-            (session.clone(), Some(session.id), Some(session.title))
+            (session, None, None, "latest-global")
         } else {
             let anchor = find_session_by_id_or_title(&conn, target)?
                 .with_context(|| format!("session not found for continue target {target}"))?;
             let session = latest_session_in_subtree(&conn, &anchor.id)?.unwrap_or(anchor.clone());
-            (session, Some(anchor.id), Some(anchor.title))
+            let continue_resolution = if session.id == anchor.id {
+                "exact-anchor"
+            } else {
+                "latest-in-subtree"
+            };
+            (
+                session,
+                Some(anchor.id),
+                Some(anchor.title),
+                continue_resolution,
+            )
         };
         let report = {
             let tx = conn.unchecked_transaction()?;
@@ -417,6 +435,7 @@ pub fn resolve_runtime_session(
                     "continue_anchor_session_id": anchor_id,
                     "continue_anchor_title": anchor_title,
                     "resolved_session_id": session.id,
+                    "continue_resolution": continue_resolution,
                     "interaction_mode": interaction_mode.label(),
                 })
                 .to_string(),
@@ -427,6 +446,10 @@ pub fn resolve_runtime_session(
                 action,
                 interaction_mode,
                 title: session.title,
+                continue_target: Some(target.to_string()),
+                continue_resolution: Some(continue_resolution.to_string()),
+                continue_anchor_session_id: anchor_id,
+                continue_anchor_title: anchor_title,
             }
         };
         append_request_message_if_present(&conn, &report.session_id, request)?;
@@ -471,6 +494,10 @@ pub fn resolve_runtime_session(
         action: SessionAction::Created,
         interaction_mode,
         title,
+        continue_target: None,
+        continue_resolution: None,
+        continue_anchor_session_id: None,
+        continue_anchor_title: None,
     })
 }
 
@@ -733,6 +760,10 @@ pub fn resolve_command_session(
             action: SessionAction::ResumedLatest,
             interaction_mode,
             title: session.title,
+            continue_target: None,
+            continue_resolution: None,
+            continue_anchor_session_id: None,
+            continue_anchor_title: None,
         });
     }
 
@@ -772,5 +803,9 @@ pub fn resolve_command_session(
         action: SessionAction::Created,
         interaction_mode,
         title,
+        continue_target: None,
+        continue_resolution: None,
+        continue_anchor_session_id: None,
+        continue_anchor_title: None,
     })
 }

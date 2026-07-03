@@ -32,6 +32,7 @@
 - `vela sessions --branch <session> --title <new-title> [--note ...]` can fork a durable child session with explicit parent lineage and copied continuity
 - `vela sessions --compress <session> --summary ...` can persist compressed continuity summaries without mutating durable memory directly
 - `vela sessions --show <session>` exposes branch parentage, immediate child sessions, and compression counts through the session inspection surface
+- title-based `--continue <title>` now resolves to either the exact anchor session or the latest descendant in that anchor's branch subtree, and CLI output reports whether resolution was `exact-anchor`, `latest-in-subtree`, or `latest-global`
 - Vela now discovers extension manifests from `~/.vela/extensions/` (or `extensions.manifests_dir` in config), applies config-driven enable/disable overrides, and surfaces lifecycle-aware extension entries through `vela status`
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
 - `vela extensions --reload` now re-reads extension config + manifest files, recomputes lifecycle transitions, refreshes extension state without resetting durable session state, and reports runtime config drift that still requires restart
