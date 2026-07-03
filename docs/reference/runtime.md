@@ -34,7 +34,7 @@
 - `vela sessions --show <session>` exposes branch parentage, immediate child sessions, and compression counts through the session inspection surface
 - Vela now discovers extension manifests from `~/.vela/extensions/` (or `extensions.manifests_dir` in config), applies config-driven enable/disable overrides, and surfaces lifecycle-aware extension entries through `vela status`
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
-- `vela extensions --reload` now re-reads config + manifest files, recomputes lifecycle transitions, and refreshes extension state without resetting durable session state
+- `vela extensions --reload` now re-reads extension config + manifest files, recomputes lifecycle transitions, refreshes extension state without resetting durable session state, and reports runtime config drift that still requires restart
 - `vela chat --image ...` can call a configured runtime provider for first-pass image turns, with Ollama currently serving as the first image-capable provider behind the kernel boundary
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
@@ -53,6 +53,7 @@
 - keep durable session/state ownership in-kernel (`vela-state`, runtime lifecycle, approvals, persistence, scheduler continuity, and scheduler execution recovery)
 - keep policy-bearing memory/review/session mutation paths in-kernel until stronger trust boundaries exist
 - allow extensions to describe discoverable capabilities, tool/skill/workflow metadata, and bounded activation hooks
+- treat extension reload as an extensions-owned surface only; provider, network, interface, security, and other kernel-owned runtime settings remain restart-only even when config drift is detected during reload
 - keep service-style extensions metadata-only in this slice while tool/skill/workflow entries may activate when they provide valid entrypoints
 - treat the current registry as metadata-first scaffolding with bounded activation semantics, not arbitrary third-party code execution
 

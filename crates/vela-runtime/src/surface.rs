@@ -89,6 +89,33 @@ pub struct ScheduledJob {
 }
 
 #[derive(Debug, Clone)]
+/// Captures extension reload results plus restart-only runtime drift.
+pub struct ExtensionReloadReport {
+    pub extensions: ExtensionsReport,
+    pub preserved_session: bool,
+    pub session_before: Option<SessionSummary>,
+    pub session_after: Option<SessionSummary>,
+    pub restart_required_fields: Vec<String>,
+}
+
+impl ExtensionReloadReport {
+    /// Renders a compact reload summary including restart-required config drift.
+    pub fn summary_line(&self) -> String {
+        let restart_required = if self.restart_required_fields.is_empty() {
+            "none".to_string()
+        } else {
+            self.restart_required_fields.join(",")
+        };
+        format!(
+            "{} session_preserved={} restart_required={}",
+            self.extensions.summary_line(),
+            self.preserved_session,
+            restart_required,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
 /// Aggregates the initialized runtime subsystems and resolved configuration.
 pub struct BootstrapReport {
     pub vela_home: std::path::PathBuf,
@@ -185,11 +212,58 @@ pub fn current_command_session_summary(
     vela_state::current_command_session_summary(&bootstrap.persistence.state_db_path, command_name)
 }
 
-/// Reloads extension discovery from the latest config and manifest files without resetting durable session state.
-pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionsReport> {
+/// Reloads extension discovery from the latest extension config and manifest files without resetting kernel-owned runtime state.
+pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadReport> {
+    let session_before = current_session_summary(bootstrap)?;
     let (_, resolved_config) =
         vela_config::reload_config_snapshot(&bootstrap.vela_home, bootstrap.ignored_user_config)?;
-    vela_extensions::initialize_extensions(&bootstrap.vela_home, &resolved_config)
+    let extensions =
+        vela_extensions::initialize_extensions(&bootstrap.vela_home, &resolved_config)?;
+    let session_after = current_session_summary(bootstrap)?;
+    let preserved_session = match (session_before.as_ref(), session_after.as_ref()) {
+        (Some(before), Some(after)) => before.id == after.id,
+        (None, None) => true,
+        _ => false,
+    };
+    Ok(ExtensionReloadReport {
+        extensions,
+        preserved_session,
+        session_before,
+        session_after,
+        restart_required_fields: restart_required_runtime_fields(
+            &bootstrap.resolved_config,
+            &resolved_config,
+        ),
+    })
+}
+
+fn restart_required_runtime_fields(
+    previous: &ResolvedConfig,
+    reloaded: &ResolvedConfig,
+) -> Vec<String> {
+    let mut fields = Vec::new();
+    if previous.display_interface != reloaded.display_interface {
+        fields.push("display_interface".to_string());
+    }
+    if previous.hooks_auto_accept != reloaded.hooks_auto_accept {
+        fields.push("hooks_auto_accept".to_string());
+    }
+    if previous.security_redact_secrets != reloaded.security_redact_secrets {
+        fields.push("security_redact_secrets".to_string());
+    }
+    if previous.network_force_ipv4 != reloaded.network_force_ipv4 {
+        fields.push("network_force_ipv4".to_string());
+    }
+    if previous.runtime_provider != reloaded.runtime_provider {
+        fields.push("runtime_provider".to_string());
+    }
+    if previous.runtime_model != reloaded.runtime_model {
+        fields.push("runtime_model".to_string());
+    }
+    if previous.runtime_ollama_base_url != reloaded.runtime_ollama_base_url {
+        fields.push("runtime_ollama_base_url".to_string());
+    }
+    fields
 }
 
 /// Resolves or creates a runtime session for an interactive request.

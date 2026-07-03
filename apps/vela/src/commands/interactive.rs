@@ -147,22 +147,23 @@ pub(crate) fn run_extensions(
     args: &ExtensionsArgs,
 ) -> Result<()> {
     if args.reload {
-        let before = vela_runtime::current_session_summary(bootstrap)?;
         let report = vela_runtime::reload_extensions(bootstrap)?;
-        let after = vela_runtime::current_session_summary(bootstrap)?;
-        let session_preserved = match (before.as_ref(), after.as_ref()) {
-            (Some(before), Some(after)) => before.id == after.id,
-            (None, None) => true,
-            _ => false,
-        };
         println!("extensions reloaded: {}", report.summary_line());
         println!(
             "session preserved: {} before={:?} after={:?}",
-            session_preserved,
-            before.as_ref().map(|item| item.id.as_str()),
-            after.as_ref().map(|item| item.id.as_str()),
+            report.preserved_session,
+            report.session_before.as_ref().map(|item| item.id.as_str()),
+            report.session_after.as_ref().map(|item| item.id.as_str()),
         );
-        for entry in &report.entries {
+        if report.restart_required_fields.is_empty() {
+            println!("restart required: none");
+        } else {
+            println!(
+                "restart required: {}",
+                report.restart_required_fields.join(", ")
+            );
+        }
+        for entry in &report.extensions.entries {
             print_extension_record(entry);
         }
     } else {
