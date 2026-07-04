@@ -37,6 +37,12 @@ fn resolve_runtime_execution_wraps_ollama_provider_backend() {
         .expect("resolved provider backend");
 
     assert_eq!(execution.provider_label.as_deref(), Some("ollama"));
+    assert_eq!(execution.provider_capabilities, Some(RuntimeProviderCapabilities {
+        supports_text: true,
+        supports_tool_loop: true,
+        supports_reflection_retry: true,
+        supports_images: true,
+    }));
     assert_eq!(execution.model.as_deref(), Some("gemma3:4b"));
     assert_eq!(provider.label(), "ollama");
     assert_eq!(provider.model(), Some("gemma3:4b"));
@@ -64,6 +70,12 @@ fn resolve_runtime_execution_wraps_mock_provider_backend() {
         .expect("resolved provider backend");
 
     assert_eq!(execution.provider_label.as_deref(), Some("mock"));
+    assert_eq!(execution.provider_capabilities, Some(RuntimeProviderCapabilities {
+        supports_text: true,
+        supports_tool_loop: true,
+        supports_reflection_retry: true,
+        supports_images: false,
+    }));
     assert_eq!(execution.model.as_deref(), Some("mock-1"));
     assert_eq!(provider.label(), "mock");
     assert_eq!(provider.model(), Some("mock-1"));
