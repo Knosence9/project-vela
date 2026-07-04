@@ -5,6 +5,7 @@ pub(crate) struct RenderedChatResponse {
     pub(crate) source: &'static str,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    pub(crate) provider_capability_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,6 +413,10 @@ pub(crate) fn render_chat_response(
             source: "runtime-kernel",
             provider: execution.provider_label,
             model: execution.model,
+            provider_capability_summary: execution
+                .provider_capabilities
+                .as_ref()
+                .map(RuntimeProviderCapabilities::summary_line),
         });
     }
 
@@ -447,6 +452,10 @@ pub(crate) fn render_chat_response(
             source: "runtime-kernel",
             provider: None,
             model: None,
+            provider_capability_summary: execution
+                .provider_capabilities
+                .as_ref()
+                .map(RuntimeProviderCapabilities::summary_line),
         });
     }
 
@@ -463,6 +472,10 @@ pub(crate) fn render_chat_response(
             source: "runtime-kernel",
             provider: execution.provider_label,
             model: execution.model,
+            provider_capability_summary: execution
+                .provider_capabilities
+                .as_ref()
+                .map(RuntimeProviderCapabilities::summary_line),
         });
     }
 
@@ -471,6 +484,10 @@ pub(crate) fn render_chat_response(
         source: "runtime-kernel",
         provider: execution.provider_label,
         model: execution.model,
+        provider_capability_summary: execution
+            .provider_capabilities
+            .as_ref()
+            .map(RuntimeProviderCapabilities::summary_line),
     })
 }
 
@@ -546,6 +563,7 @@ fn handle_reflection_outcome(
             source: "runtime-kernel",
             provider: None,
             model: None,
+            provider_capability_summary: None,
         }));
     }
     record_reflection_and_retry(
@@ -658,6 +676,7 @@ fn execute_provider_turn(
                     },
                     provider: Some(provider.label().to_string()),
                     model: provider.model().map(str::to_string),
+                    provider_capability_summary: Some(provider.capabilities().summary_line()),
                 });
             }
             ProviderContinuation::InvalidToolRequest => {
@@ -706,24 +725,28 @@ fn execute_provider_turn(
             source: provider.tool_loop_response_source(),
             provider: Some(provider.label().to_string()),
             model: provider.model().map(str::to_string),
+            provider_capability_summary: Some(provider.capabilities().summary_line()),
         }),
         ProviderContinuation::ToolRequest(_) => Ok(RenderedChatResponse {
             content: Some("Vela reached the maximum bounded tool steps and fell back to a deterministic runtime response instead of continuing indefinitely.".to_string()),
             source: "runtime-kernel",
             provider: None,
             model: None,
+            provider_capability_summary: Some(provider.capabilities().summary_line()),
         }),
         ProviderContinuation::InvalidToolRequest => Ok(RenderedChatResponse {
             content: Some("Vela received an invalid provider continuation after the bounded tool loop and fell back to a deterministic runtime response.".to_string()),
             source: "runtime-kernel",
             provider: None,
             model: None,
+            provider_capability_summary: Some(provider.capabilities().summary_line()),
         }),
         ProviderContinuation::EmptyResponse => Ok(RenderedChatResponse {
             content: Some("Vela received an empty provider continuation after the bounded tool loop and fell back to a deterministic runtime response.".to_string()),
             source: "runtime-kernel",
             provider: None,
             model: None,
+            provider_capability_summary: Some(provider.capabilities().summary_line()),
         }),
     }
 }

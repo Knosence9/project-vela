@@ -372,6 +372,7 @@ fn chat_query_uses_configured_ollama_provider() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Gemma local reply."));
+    assert!(turn_stdout.contains("response route: source=runtime-ollama provider=ollama model=gemma3:4b capabilities=text=true tool_loop=true reflection_retry=true images=true"));
     server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();
@@ -392,6 +393,7 @@ fn chat_query_uses_configured_mock_provider() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Mock provider says hi."));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=false"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -465,6 +467,7 @@ fn chat_image_falls_back_for_configured_mock_provider() {
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Vela executed a local image turn."));
     assert!(turn_stdout.contains("No provider-backed image execution was available"));
+    assert!(turn_stdout.contains("response route: source=runtime-kernel provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=false"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

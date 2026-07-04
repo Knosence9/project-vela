@@ -68,8 +68,19 @@ fn print_chat_report(report: &vela_runtime::ChatTurnReport) {
     if let Some(response) = report.response.as_deref() {
         println!("\n{}", response);
     }
+    print!("\nresponse route: source={}", report.response_source);
+    if let Some(provider) = report.response_provider.as_deref() {
+        print!(" provider={}", provider);
+    }
+    if let Some(model) = report.response_model.as_deref() {
+        print!(" model={}", model);
+    }
+    if let Some(capabilities) = report.response_provider_capabilities.as_deref() {
+        print!(" capabilities={}", capabilities);
+    }
+    println!();
     println!(
-        "\nlifecycle: turn={} phases={} last={}",
+        "lifecycle: turn={} phases={} last={}",
         report.turn_id, report.lifecycle_phase_count, report.final_phase
     );
 }

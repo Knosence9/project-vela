@@ -39,6 +39,7 @@
 - tool, skill, and workflow extensions may activate on boot when they provide a non-empty entry path; service extensions remain metadata-only in this slice, and unsupported service `on-boot` requests fail explicitly in status/reload output
 - `vela extensions --reload` now re-reads extension config + manifest files, recomputes lifecycle transitions, refreshes extension state without resetting durable session state, and fails explicitly when kernel-owned runtime drift is detected, surfacing owned config boundaries such as `runtime.provider@kernel-runtime`
 - `vela chat --image ...` can call a configured runtime provider for first-pass image turns, with Ollama currently serving as the image-capable backend while the mock backend falls back explicitly to the local kernel path in this slice
+- runtime turn CLI output now prints the resolved response route (`source`, optional `provider`, optional `model`, and advertised provider capabilities) so backend differences stay visible even when execution falls back to the kernel path
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
 - repeated resume/continue paths update `updated_at` on the matching session row
