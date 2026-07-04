@@ -22,6 +22,7 @@
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
 - `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama and a deterministic mock backend now serving as supported provider implementations behind that boundary
+- provider capabilities are now treated as an explicit matrix rather than implicit backend quirks: both supported backends advertise text, bounded tool-loop, and reflection/retry support, while only Ollama currently advertises image support
 - configured provider-backed turns can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
 - approved read-only runtime tools now include targeted internal context retrieval for memory, session history, and skill content (`view_memory`, `search_session_history`, `view_skill`) in addition to the earlier snapshot/list tools
 - provider-backed turns now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
@@ -62,7 +63,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states at the session level
-- broader provider capability parity beyond the current Ollama + text-only mock backend matrix, while preserving the bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
+- deeper provider capability parity beyond the current explicit matrix (shared text/tool-loop/reflection support, Ollama-only image support), while preserving the bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model

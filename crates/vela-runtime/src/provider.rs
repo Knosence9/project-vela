@@ -7,11 +7,34 @@ pub(crate) struct RenderedChatResponse {
     pub(crate) model: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeProviderCapabilities {
+    pub(crate) supports_text: bool,
+    pub(crate) supports_tool_loop: bool,
+    pub(crate) supports_reflection_retry: bool,
+    pub(crate) supports_images: bool,
+}
+
+impl RuntimeProviderCapabilities {
+    pub(crate) fn summary_line(&self) -> String {
+        format!(
+            "text={} tool_loop={} reflection_retry={} images={}",
+            self.supports_text,
+            self.supports_tool_loop,
+            self.supports_reflection_retry,
+            self.supports_images,
+        )
+    }
+}
+
 pub(crate) trait RuntimeProviderBackend {
     fn label(&self) -> &str;
     fn model(&self) -> Option<&str>;
     fn validate(&self) -> Result<()>;
-    fn supports_images(&self) -> bool;
+    fn capabilities(&self) -> RuntimeProviderCapabilities;
+    fn supports_images(&self) -> bool {
+        self.capabilities().supports_images
+    }
     fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String>;
     fn direct_response_source(&self) -> &'static str;
     fn tool_loop_response_source(&self) -> &'static str;
@@ -43,8 +66,13 @@ impl RuntimeProviderBackend for OllamaRuntimeProvider {
         validate_ollama_base_url(&self.base_url)
     }
 
-    fn supports_images(&self) -> bool {
-        true
+    fn capabilities(&self) -> RuntimeProviderCapabilities {
+        RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: true,
+        }
     }
 
     fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
@@ -76,8 +104,13 @@ impl RuntimeProviderBackend for MockRuntimeProvider {
         Ok(())
     }
 
-    fn supports_images(&self) -> bool {
-        false
+    fn capabilities(&self) -> RuntimeProviderCapabilities {
+        RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: false,
+        }
     }
 
     fn generate(&self, prompt: &str, _images: Option<Vec<String>>) -> Result<String> {
@@ -191,6 +224,7 @@ const MAX_RUNTIME_REFLECTION_ATTEMPTS: usize = 2;
 pub(crate) struct RuntimeExecutionConfig {
     pub(crate) provider: Option<Box<dyn RuntimeProviderBackend>>,
     pub(crate) provider_label: Option<String>,
+    pub(crate) provider_capabilities: Option<RuntimeProviderCapabilities>,
     pub(crate) model: Option<String>,
 }
 
@@ -317,6 +351,11 @@ pub(crate) fn render_chat_response(
         .as_deref()
         .map(|summary| format!("\n\nCompressed continuity summary:\n{}", summary))
         .unwrap_or_default();
+    let provider_capability_summary = execution
+        .provider_capabilities
+        .as_ref()
+        .map(|caps| format!("\nProvider capabilities: {}", caps.summary_line()))
+        .unwrap_or_default();
     let memory_lines = memory.lines().count();
 
     if request.image_present {
@@ -361,13 +400,14 @@ pub(crate) fn render_chat_response(
 
         return Ok(RenderedChatResponse {
             content: Some(format!(
-                "Vela executed a local image turn.\n\nImage: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo provider-backed image execution was available, so this deterministic local-kernel scaffold response kept persistence, review, and continuity live.",
+                "Vela executed a local image turn.\n\nImage: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}{}\n\nNo provider-backed image execution was available, so this deterministic local-kernel scaffold response kept persistence, review, and continuity live.",
                 image_path,
                 session.title,
                 session.session_id,
                 memory_lines,
                 skills.len(),
                 reviews.len(),
+                provider_capability_summary,
             )),
             source: "runtime-kernel",
             provider: execution.provider_label,
@@ -395,13 +435,14 @@ pub(crate) fn render_chat_response(
 
         return Ok(RenderedChatResponse {
             content: Some(format!(
-                "Vela executed a local kernel turn.\n\nQuery: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}\n\nNo provider-backed execution was available, so this deterministic local-kernel scaffold response kept persistence, review, and continuity live.",
+                "Vela executed a local kernel turn.\n\nQuery: {}\nSession: {} ({})\nMemory snapshot lines: {}\nLoaded skills: {}\nPending review candidates: {}{}\n\nNo provider-backed execution was available, so this deterministic local-kernel scaffold response kept persistence, review, and continuity live.",
                 query.trim(),
                 session.title,
                 session.session_id,
                 memory_lines,
                 skills.len(),
                 reviews.len(),
+                provider_capability_summary,
             )),
             source: "runtime-kernel",
             provider: None,
@@ -412,11 +453,12 @@ pub(crate) fn render_chat_response(
     if matches!(session.action, SessionAction::Created) {
         return Ok(RenderedChatResponse {
             content: Some(format!(
-                "Interactive Vela runtime ready. Session: {} ({}). Loaded skills: {}. Pending review candidates: {}.",
+                "Interactive Vela runtime ready. Session: {} ({}). Loaded skills: {}. Pending review candidates: {}.{}",
                 session.title,
                 session.session_id,
                 skills.len(),
                 reviews.len(),
+                provider_capability_summary,
             )),
             source: "runtime-kernel",
             provider: execution.provider_label,
@@ -468,10 +510,12 @@ pub(crate) fn resolve_runtime_execution(
         Some(other) => bail!("unsupported runtime provider {other:?}"),
         None => None,
     };
+    let provider_capabilities = provider.as_deref().map(|provider| provider.capabilities());
 
     Ok(RuntimeExecutionConfig {
         provider,
         provider_label,
+        provider_capabilities,
         model,
     })
 }
