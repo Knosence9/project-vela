@@ -106,6 +106,7 @@ pub struct ExtensionReloadReport {
     pub session_before: Option<SessionSummary>,
     pub session_after: Option<SessionSummary>,
     pub restart_required_drifts: Vec<RestartRequiredRuntimeDrift>,
+    pub ownership_blocked: bool,
 }
 
 impl ExtensionReloadReport {
@@ -121,11 +122,25 @@ impl ExtensionReloadReport {
                 .join(",")
         };
         format!(
-            "{} session_preserved={} restart_required={}",
+            "{} session_preserved={} restart_required={} ownership_blocked={}",
             self.extensions.summary_line(),
             self.preserved_session,
             restart_required,
+            self.ownership_blocked,
         )
+    }
+
+    pub fn ownership_block_reason(&self) -> Option<String> {
+        self.ownership_blocked.then(|| {
+            format!(
+                "extension reload blocked by kernel-owned runtime drift: {}",
+                self.restart_required_drifts
+                    .iter()
+                    .map(|item| format!("{}@{}", item.field, item.owner))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
     }
 }
 
@@ -239,15 +254,15 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         (None, None) => true,
         _ => false,
     };
+    let restart_required_drifts =
+        restart_required_runtime_drifts(&bootstrap.resolved_config, &resolved_config);
     Ok(ExtensionReloadReport {
         extensions,
         preserved_session,
         session_before,
         session_after,
-        restart_required_drifts: restart_required_runtime_drifts(
-            &bootstrap.resolved_config,
-            &resolved_config,
-        ),
+        ownership_blocked: !restart_required_drifts.is_empty(),
+        restart_required_drifts,
     })
 }
 
