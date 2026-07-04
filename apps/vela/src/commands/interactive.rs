@@ -187,6 +187,9 @@ pub(crate) fn run_extensions(
         for entry in &report.extensions.entries {
             print_extension_record(entry);
         }
+        if let Some(reason) = report.ownership_block_reason() {
+            anyhow::bail!(reason);
+        }
     } else {
         println!("{}", bootstrap.extensions.summary_line());
         for entry in &bootstrap.extensions.entries {

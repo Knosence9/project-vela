@@ -145,6 +145,7 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     assert!(reloaded.preserved_session);
     assert_eq!(before.id, after.id);
     assert_eq!(before.title, after.title);
+    assert!(!reloaded.ownership_blocked);
     assert_eq!(reloaded.restart_required_drifts.len(), 0);
 
     std::fs::write(
@@ -161,6 +162,7 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     assert!(failed.preserved_session);
     assert_eq!(before.id, after_failed.id);
     assert_eq!(before.title, after_failed.title);
+    assert!(!failed.ownership_blocked);
 
     std::fs::write(
         vela_home.join("config.yaml"),
@@ -168,10 +170,17 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     )
     .unwrap();
     let drifted = reload_extensions(&bootstrap).unwrap();
+    assert!(drifted.ownership_blocked);
     assert_eq!(drifted.restart_required_drifts.len(), 3);
     assert!(drifted
         .summary_line()
-        .contains("restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime"));
+        .contains("restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime ownership_blocked=true"));
+    assert_eq!(
+        drifted.ownership_block_reason().as_deref(),
+        Some(
+            "extension reload blocked by kernel-owned runtime drift: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime"
+        )
+    );
     assert!(drifted.restart_required_drifts.iter().any(|item| {
         item.field == "runtime.provider"
             && item.owner == "kernel-runtime"
