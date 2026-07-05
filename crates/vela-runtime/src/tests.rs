@@ -622,6 +622,10 @@ fn execute_chat_turn_uses_ollama_provider_for_image_requests() {
         metadata.get("model").and_then(|v| v.as_str()),
         Some("gemma3:4b")
     );
+    assert_eq!(
+        metadata.get("provider_capabilities").and_then(|v| v.as_str()),
+        Some("text=true tool_loop=true reflection_retry=true images=true")
+    );
     server.join().unwrap();
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
@@ -697,6 +701,12 @@ fn execute_chat_turn_uses_ollama_provider_when_configured() {
 
     assert_eq!(report.response.as_deref(), Some("Gemma says hi."));
     assert_eq!(report.response_source, "runtime-ollama");
+    assert_eq!(report.response_provider.as_deref(), Some("ollama"));
+    assert_eq!(report.response_model.as_deref(), Some("gemma3:4b"));
+    assert_eq!(
+        report.response_provider_capabilities.as_deref(),
+        Some("text=true tool_loop=true reflection_retry=true images=true")
+    );
     server.join().unwrap();
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
@@ -727,6 +737,12 @@ fn execute_chat_turn_uses_mock_provider_when_configured() {
 
     assert_eq!(report.response.as_deref(), Some("Mock provider says hi."));
     assert_eq!(report.response_source, "runtime-mock");
+    assert_eq!(report.response_provider.as_deref(), Some("mock"));
+    assert_eq!(report.response_model.as_deref(), Some("mock-1"));
+    assert_eq!(
+        report.response_provider_capabilities.as_deref(),
+        Some("text=true tool_loop=true reflection_retry=true images=false")
+    );
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
 
@@ -757,6 +773,12 @@ fn execute_chat_turn_falls_back_for_mock_provider_image_requests() {
     .unwrap();
 
     assert_eq!(report.response_source, "runtime-kernel");
+    assert_eq!(report.response_provider.as_deref(), Some("mock"));
+    assert_eq!(report.response_model.as_deref(), Some("mock-1"));
+    assert_eq!(
+        report.response_provider_capabilities.as_deref(),
+        Some("text=true tool_loop=true reflection_retry=true images=false")
+    );
     assert!(report
         .response
         .as_deref()
