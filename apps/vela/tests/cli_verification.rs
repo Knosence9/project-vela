@@ -245,11 +245,16 @@ fn extension_status_surfaces_activation_boundaries() {
     assert!(status_stdout.contains("activated=1"));
     assert!(status_stdout.contains("failed=1"));
     assert!(status_stdout.contains("extension [validated]: id=Some(\"tool-meta\")"));
-    assert!(status_stdout.contains("detail=Some(\"tool extension validated as metadata-only by manifest policy\")"));
+    assert!(status_stdout
+        .contains("detail=Some(\"tool extension validated as metadata-only by manifest policy\")"));
     assert!(status_stdout.contains("extension [activated]: id=Some(\"workflow\")"));
-    assert!(status_stdout.contains("detail=Some(\"workflow extension activated during bootstrap\")"));
+    assert!(
+        status_stdout.contains("detail=Some(\"workflow extension activated during bootstrap\")")
+    );
     assert!(status_stdout.contains("extension [failed]: id=Some(\"service-on-boot\")"));
-    assert!(status_stdout.contains("detail=Some(\"service extensions cannot request on-boot activation in this slice\")"));
+    assert!(status_stdout.contains(
+        "detail=Some(\"service extensions cannot request on-boot activation in this slice\")"
+    ));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -769,7 +774,11 @@ fn sessions_branch_and_compress_are_inspectable() {
         &vela_home,
         &["chat", "--continue", "branch-b", "--query", "follow exact"],
     );
-    assert!(continue_exact.status.success(), "{}", stderr_text(&continue_exact));
+    assert!(
+        continue_exact.status.success(),
+        "{}",
+        stderr_text(&continue_exact)
+    );
     let continue_exact_stdout = stdout_text(&continue_exact);
     assert!(continue_exact_stdout.contains(&format!("id={}", branch_b_session)));
     assert!(continue_exact_stdout.contains("continue resolution: mode=exact-anchor"));

@@ -365,7 +365,11 @@ pub(crate) fn render_chat_response(
             .as_deref()
             .unwrap_or("(unspecified image path)");
         if let Some(provider) = execution.provider.as_deref() {
-            if let Some(image_path) = request.image_path.as_deref().filter(|_| provider.supports_images()) {
+            if let Some(image_path) = request
+                .image_path
+                .as_deref()
+                .filter(|_| provider.supports_images())
+            {
                 provider.validate()?;
                 let image_base64 = encode_image_as_base64(image_path)?;
                 let user_prompt = request

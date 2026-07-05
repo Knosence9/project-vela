@@ -37,12 +37,15 @@ fn resolve_runtime_execution_wraps_ollama_provider_backend() {
         .expect("resolved provider backend");
 
     assert_eq!(execution.provider_label.as_deref(), Some("ollama"));
-    assert_eq!(execution.provider_capabilities, Some(RuntimeProviderCapabilities {
-        supports_text: true,
-        supports_tool_loop: true,
-        supports_reflection_retry: true,
-        supports_images: true,
-    }));
+    assert_eq!(
+        execution.provider_capabilities,
+        Some(RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: true,
+        })
+    );
     assert_eq!(execution.model.as_deref(), Some("gemma3:4b"));
     assert_eq!(provider.label(), "ollama");
     assert_eq!(provider.model(), Some("gemma3:4b"));
@@ -70,17 +73,23 @@ fn resolve_runtime_execution_wraps_mock_provider_backend() {
         .expect("resolved provider backend");
 
     assert_eq!(execution.provider_label.as_deref(), Some("mock"));
-    assert_eq!(execution.provider_capabilities, Some(RuntimeProviderCapabilities {
-        supports_text: true,
-        supports_tool_loop: true,
-        supports_reflection_retry: true,
-        supports_images: false,
-    }));
+    assert_eq!(
+        execution.provider_capabilities,
+        Some(RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: false,
+        })
+    );
     assert_eq!(execution.model.as_deref(), Some("mock-1"));
     assert_eq!(provider.label(), "mock");
     assert_eq!(provider.model(), Some("mock-1"));
     assert_eq!(provider.direct_response_source(), "runtime-mock");
-    assert_eq!(provider.tool_loop_response_source(), "runtime-mock-tool-loop");
+    assert_eq!(
+        provider.tool_loop_response_source(),
+        "runtime-mock-tool-loop"
+    );
     assert!(!provider.supports_images());
     provider.validate().unwrap();
 }
@@ -623,7 +632,9 @@ fn execute_chat_turn_uses_ollama_provider_for_image_requests() {
         Some("gemma3:4b")
     );
     assert_eq!(
-        metadata.get("provider_capabilities").and_then(|v| v.as_str()),
+        metadata
+            .get("provider_capabilities")
+            .and_then(|v| v.as_str()),
         Some("text=true tool_loop=true reflection_retry=true images=true")
     );
     server.join().unwrap();
@@ -1059,7 +1070,10 @@ fn execute_chat_turn_runs_mock_provider_tool_loop() {
     )
     .unwrap();
 
-    assert_eq!(report.response.as_deref(), Some("Mock tool-informed final answer."));
+    assert_eq!(
+        report.response.as_deref(),
+        Some("Mock tool-informed final answer.")
+    );
     assert_eq!(report.response_source, "runtime-mock-tool-loop");
     assert_eq!(report.lifecycle_phase_count, 8);
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
