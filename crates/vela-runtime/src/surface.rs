@@ -776,6 +776,8 @@ pub fn request_mcp_bridge_call(
     if payload.is_empty() {
         bail!("mcp bridge payload cannot be empty");
     }
+    serde_json::from_str::<serde_json::Value>(payload)
+        .map_err(|err| anyhow::anyhow!("mcp bridge payload must be valid JSON: {err}"))?;
     let note = note
         .map(str::trim)
         .filter(|value| !value.is_empty())

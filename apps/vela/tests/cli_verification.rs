@@ -470,6 +470,21 @@ fn mcp_bridge_requests_are_visible_via_cli() {
     assert!(listing_stdout.contains("server=memory"));
     assert!(listing_stdout.contains("tool=list_tools"));
 
+    let invalid = run_vela(
+        &vela_home,
+        &[
+            "mcp",
+            "--bridge",
+            "memory",
+            "--tool",
+            "list_tools",
+            "--payload",
+            "not-json",
+        ],
+    );
+    assert!(!invalid.status.success());
+    assert!(stderr_text(&invalid).contains("must be valid JSON"));
+
     let duplicate = run_vela(
         &vela_home,
         &[

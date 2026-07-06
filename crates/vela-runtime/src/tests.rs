@@ -583,6 +583,10 @@ fn mcp_bridge_requests_persist_and_dedupe_pending_requests() {
     let err = request_mcp_bridge_call(&bootstrap, "memory", "list_tools", "{}", None).unwrap_err();
     assert!(err.to_string().contains("already pending"));
 
+    let invalid =
+        request_mcp_bridge_call(&bootstrap, "memory", "list_tools", "not-json", None).unwrap_err();
+    assert!(invalid.to_string().contains("must be valid JSON"));
+
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
 
