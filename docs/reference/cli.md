@@ -13,6 +13,7 @@ README-visible flows to preserve:
 - `vela`
 - `vela gateway setup`
 - `vela gateway start`
+- `vela gateway --webhook-url <url> --payload <text> [--event-type <name>]`
 - `vela claw migrate`
 - `vela claw migrate --dry-run`
 - `vela claw migrate --preset user-data`
@@ -109,8 +110,13 @@ README-visible shared slash commands:
 - `vela_cli.main` imports `vela_bootstrap` first for Windows UTF-8 safety.
 - `vela_cli.main` can set `VELA_DEFER_AGENT_STARTUP=1` on fast chat paths.
 
+## Known Rust gateway surface
+- `vela gateway --setup` ensures durable gateway config plus inbox/outbox directories
+- `vela gateway --start` starts or resumes the gateway-scoped runtime session
+- `vela gateway --webhook-url <url> --payload <text> [--event-type <name>]` delivers one bounded outbound webhook payload through the kernel-owned gateway path and persists an outbox record
+
 ## Still needed
-- exact subcommands under groups like `gateway`, `sessions`, `auth`, `cron`, and `dashboard`
+- exact subcommands under groups like `sessions`, `auth`, `cron`, and `dashboard`
 - help output shape and wording
 - exit code semantics
 - interactive vs non-interactive behavior

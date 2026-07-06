@@ -79,7 +79,7 @@ fn resolve_runtime_execution_wraps_mock_provider_backend() {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
-            supports_images: false,
+            supports_images: true,
         })
     );
     assert_eq!(execution.model.as_deref(), Some("mock-1"));
@@ -90,7 +90,7 @@ fn resolve_runtime_execution_wraps_mock_provider_backend() {
         provider.tool_loop_response_source(),
         "runtime-mock-tool-loop"
     );
-    assert!(!provider.supports_images());
+    assert!(provider.supports_images());
     provider.validate().unwrap();
 }
 
@@ -380,6 +380,126 @@ fn gateway_start_resumes_same_session_without_duplicate_bootstrap_message() {
     assert_eq!(first_summary.message_count, 1);
     assert_eq!(summary.message_count, 1);
     assert_eq!(summary.event_count, first_summary.event_count + 2);
+
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies gateway webhook delivery persists an outbox record and logs durable session activity.
+fn gateway_webhook_delivery_persists_outbox_and_logs_session_activity() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let bootstrap = test_bootstrap("gateway-webhook-success");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://{}/hook",
+        listener.local_addr().expect("webhook listener addr")
+    );
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept webhook request");
+        let mut request_bytes = Vec::new();
+        let mut buf = [0u8; 4096];
+        let header_end;
+        let expected_total_len;
+        loop {
+            let read = stream.read(&mut buf).expect("read webhook request");
+            assert!(read > 0, "webhook request closed before headers arrived");
+            request_bytes.extend_from_slice(&buf[..read]);
+            if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                let end = end + 4;
+                let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
+                let content_length = head
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("Content-Length: ")
+                            .or_else(|| line.strip_prefix("content-length: "))
+                    })
+                    .expect("Content-Length header")
+                    .trim()
+                    .parse::<usize>()
+                    .expect("parse Content-Length");
+                header_end = end;
+                expected_total_len = header_end + content_length;
+                break;
+            }
+        }
+        while request_bytes.len() < expected_total_len {
+            let read = stream.read(&mut buf).expect("read webhook request body");
+            assert!(read > 0, "webhook request closed before body finished");
+            request_bytes.extend_from_slice(&buf[..read]);
+        }
+        let request = String::from_utf8_lossy(&request_bytes[..expected_total_len]).into_owned();
+        let (head, body_text) = request
+            .split_once("\r\n\r\n")
+            .expect("split HTTP headers/body");
+        assert!(
+            head.lines()
+                .next()
+                .expect("request line")
+                .starts_with("POST /hook HTTP/1.1"),
+            "unexpected request line: {head}"
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(body_text).expect("decode webhook payload");
+        assert_eq!(
+            payload.get("event_type").and_then(|v| v.as_str()),
+            Some("delivery.test")
+        );
+        assert_eq!(
+            payload.get("payload").and_then(|v| v.as_str()),
+            Some("ping gateway")
+        );
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .expect("write webhook response");
+    });
+
+    let report =
+        deliver_gateway_webhook(&bootstrap, &url, "ping gateway", Some("delivery.test")).unwrap();
+    assert_eq!(report.status_code, 200);
+    assert!(report.outbox_record_path.is_file());
+    let outbox = std::fs::read_to_string(&report.outbox_record_path).unwrap();
+    assert!(outbox.contains("\"result\": \"delivered\""));
+    assert!(outbox.contains("delivery.test"));
+    assert!(outbox.contains("ping gateway"));
+
+    let summary = current_command_session_summary(&bootstrap, "gateway")
+        .unwrap()
+        .expect("gateway session summary");
+    assert!(summary.message_count >= 2);
+    assert!(summary.event_count >= 2);
+
+    handle.join().unwrap();
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies gateway webhook delivery records a failed attempt when the remote endpoint is unavailable.
+fn gateway_webhook_delivery_records_failed_attempts() {
+    let bootstrap = test_bootstrap("gateway-webhook-failure");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/hook", listener.local_addr().unwrap());
+    drop(listener);
+
+    let err = deliver_gateway_webhook(&bootstrap, &url, "ping gateway", Some("delivery.test"))
+        .unwrap_err();
+    assert!(!err.to_string().is_empty());
+
+    let outbox_dir = bootstrap.vela_home.join("gateway").join("outbox");
+    let record = std::fs::read_dir(&outbox_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .expect("failed outbox record");
+    let outbox = std::fs::read_to_string(record).unwrap();
+    assert!(outbox.contains("\"result\": \"failed\""));
+    assert!(outbox.contains("delivery.test"));
+
+    let summary = current_command_session_summary(&bootstrap, "gateway")
+        .unwrap()
+        .expect("gateway session summary");
+    assert!(summary.event_count >= 2);
 
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
@@ -685,6 +805,46 @@ fn execute_chat_turn_routes_mixed_text_and_image_requests_through_ollama_image_p
 }
 
 #[test]
+/// Verifies that mixed text+image requests execute through the mock provider path and reflect the user query.
+fn execute_chat_turn_routes_mixed_text_and_image_requests_through_mock_provider() {
+    let mut bootstrap = test_bootstrap("mock-mixed-turn");
+    bootstrap.resolved_config.runtime_provider = Some("mock".to_string());
+    bootstrap.resolved_config.runtime_model = Some("mock-1".to_string());
+    let image_path = bootstrap.vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("summarize the mock diagram".to_string()),
+            image_present: true,
+            image_path: Some(image_path.to_string_lossy().into_owned()),
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.response.as_deref(),
+        Some("Mock provider inspected the image for request: summarize the mock diagram.")
+    );
+    assert_eq!(report.response_source, "runtime-mock");
+    assert_eq!(report.response_provider.as_deref(), Some("mock"));
+    assert_eq!(report.response_model.as_deref(), Some("mock-1"));
+    assert_eq!(
+        report.response_provider_capabilities.as_deref(),
+        Some("text=true tool_loop=true reflection_retry=true images=true")
+    );
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that configured Ollama execution is used for text chat turns.
 fn execute_chat_turn_uses_ollama_provider_when_configured() {
     let (base_url, server) = spawn_mock_ollama("Gemma says hi.", "gemma3:4b", "hello there", None);
@@ -752,14 +912,14 @@ fn execute_chat_turn_uses_mock_provider_when_configured() {
     assert_eq!(report.response_model.as_deref(), Some("mock-1"));
     assert_eq!(
         report.response_provider_capabilities.as_deref(),
-        Some("text=true tool_loop=true reflection_retry=true images=false")
+        Some("text=true tool_loop=true reflection_retry=true images=true")
     );
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
 
 #[test]
-/// Verifies that mock provider image requests fall back to the local kernel path when image support is unavailable.
-fn execute_chat_turn_falls_back_for_mock_provider_image_requests() {
+/// Verifies that mock provider image requests execute through the provider path with explicit route details.
+fn execute_chat_turn_uses_mock_provider_for_image_requests() {
     let mut bootstrap = test_bootstrap("mock-image-fallback");
     bootstrap.resolved_config.runtime_provider = Some("mock".to_string());
     bootstrap.resolved_config.runtime_model = Some("mock-1".to_string());
@@ -783,18 +943,17 @@ fn execute_chat_turn_falls_back_for_mock_provider_image_requests() {
     )
     .unwrap();
 
-    assert_eq!(report.response_source, "runtime-kernel");
+    assert_eq!(
+        report.response.as_deref(),
+        Some("Mock provider inspected the image.")
+    );
+    assert_eq!(report.response_source, "runtime-mock");
     assert_eq!(report.response_provider.as_deref(), Some("mock"));
     assert_eq!(report.response_model.as_deref(), Some("mock-1"));
     assert_eq!(
         report.response_provider_capabilities.as_deref(),
-        Some("text=true tool_loop=true reflection_retry=true images=false")
+        Some("text=true tool_loop=true reflection_retry=true images=true")
     );
-    assert!(report
-        .response
-        .as_deref()
-        .unwrap_or_default()
-        .contains("No provider-backed image execution was available"));
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
 
@@ -1080,6 +1239,51 @@ fn execute_chat_turn_runs_mock_provider_tool_loop() {
 }
 
 #[test]
+/// Verifies that the mock provider can execute the bounded local tool loop during mixed text+image turns.
+fn execute_chat_turn_runs_mock_provider_image_tool_loop() {
+    let mut bootstrap = test_bootstrap("mock-image-tool-loop");
+    bootstrap.resolved_config.runtime_provider = Some("mock".to_string());
+    bootstrap.resolved_config.runtime_model = Some("mock-1".to_string());
+    let image_path = bootstrap.vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
+    std::fs::write(
+        bootstrap
+            .vela_home
+            .join("skills")
+            .join("deploy-staging")
+            .join("SKILL.md"),
+        "# deploy-staging\n\nDeploys staging.",
+    )
+    .unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("need the tool loop for this image".to_string()),
+            image_present: true,
+            image_path: Some(image_path.to_string_lossy().into_owned()),
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.response.as_deref(),
+        Some("Mock tool-informed final answer.")
+    );
+    assert_eq!(report.response_source, "runtime-mock-tool-loop");
+    assert_eq!(report.lifecycle_phase_count, 8);
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that the runtime can reflect on an invalid tool request and recover with a bounded retry.
 fn execute_chat_turn_reflects_and_recovers_from_invalid_tool_request() {
     let (base_url, server) = spawn_mock_ollama_sequence(vec![
@@ -1142,6 +1346,58 @@ fn execute_chat_turn_reflects_and_recovers_from_invalid_tool_request() {
         ]
     );
     server.join().unwrap();
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that mock image-backed turns can recover from one invalid provider tool request with bounded reflection.
+fn execute_chat_turn_reflects_and_recovers_from_invalid_tool_request_during_mock_image_turn() {
+    let mut bootstrap = test_bootstrap("mock-image-reflect-recover");
+    bootstrap.resolved_config.runtime_provider = Some("mock".to_string());
+    bootstrap.resolved_config.runtime_model = Some("mock-1".to_string());
+    let image_path = bootstrap.vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("recover from invalid tool in this image".to_string()),
+            image_present: true,
+            image_path: Some(image_path.to_string_lossy().into_owned()),
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.response.as_deref(), Some("Mock recovered answer."));
+    assert_eq!(report.response_source, "runtime-mock");
+    assert_eq!(report.lifecycle_phase_count, 6);
+    let inspection = inspect_latest_session(&bootstrap, 20)
+        .unwrap()
+        .expect("mock image reflection inspection");
+    let lifecycle: Vec<_> = inspection
+        .lifecycle
+        .iter()
+        .filter(|record| record.turn_id == report.turn_id)
+        .map(|record| (record.phase.as_str(), record.step))
+        .collect();
+    assert_eq!(
+        lifecycle,
+        vec![
+            ("receive", None),
+            ("deliberate", None),
+            ("reflect", Some(1)),
+            ("retry", Some(1)),
+            ("respond", None),
+            ("finish", None),
+        ]
+    );
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
 
@@ -1377,5 +1633,64 @@ fn execute_chat_turn_falls_back_after_exhausting_reflection_retries() {
         ]
     );
     server.join().unwrap();
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that repeated invalid mock image-turn continuations fall back after the bounded reflection limit.
+fn execute_chat_turn_falls_back_after_exhausting_reflection_retries_during_mock_image_turn() {
+    let mut bootstrap = test_bootstrap("mock-image-reflect-fallback");
+    bootstrap.resolved_config.runtime_provider = Some("mock".to_string());
+    bootstrap.resolved_config.runtime_model = Some("mock-1".to_string());
+    let image_path = bootstrap.vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("exhaust reflection retries in this image".to_string()),
+            image_present: true,
+            image_path: Some(image_path.to_string_lossy().into_owned()),
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.response_source, "runtime-kernel");
+    assert!(report
+        .response
+        .as_deref()
+        .unwrap_or_default()
+        .contains("exhausted the bounded reflection limit"));
+    assert_eq!(report.lifecycle_phase_count, 9);
+    let inspection = inspect_latest_session(&bootstrap, 20)
+        .unwrap()
+        .expect("mock image reflection fallback inspection");
+    let lifecycle: Vec<_> = inspection
+        .lifecycle
+        .iter()
+        .filter(|record| record.turn_id == report.turn_id)
+        .map(|record| (record.phase.as_str(), record.step))
+        .collect();
+    assert_eq!(
+        lifecycle,
+        vec![
+            ("receive", None),
+            ("deliberate", None),
+            ("reflect", Some(1)),
+            ("retry", Some(1)),
+            ("reflect", Some(2)),
+            ("retry", Some(2)),
+            ("reflect", Some(3)),
+            ("respond", None),
+            ("finish", None),
+        ]
+    );
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }

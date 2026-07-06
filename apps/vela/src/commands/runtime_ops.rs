@@ -24,8 +24,27 @@ pub(crate) fn run_gateway(
             report.inbox_dir.display(),
             report.outbox_dir.display(),
         );
-    }
-    if !args.setup && !args.start {
+    } else if let Some(url) = args.webhook_url.as_deref() {
+        let payload = args
+            .payload
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--payload is required with --webhook-url"))?;
+        let report = vela_runtime::deliver_gateway_webhook(
+            bootstrap,
+            url,
+            payload,
+            args.event_type.as_deref(),
+        )?;
+        println!(
+            "gateway webhook delivered: session={} action={} status={} event={} url={} outbox={}",
+            report.session.session_id,
+            report.session.action.label(),
+            report.status_code,
+            report.event_type,
+            report.url,
+            report.outbox_record_path.display(),
+        );
+    } else {
         let report = vela_runtime::setup_gateway(bootstrap)?;
         match vela_runtime::current_command_session_summary(bootstrap, "gateway")? {
             Some(session) => println!(

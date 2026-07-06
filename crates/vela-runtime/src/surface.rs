@@ -18,6 +18,17 @@ pub struct GatewayStartReport {
 }
 
 #[derive(Debug, Clone)]
+/// Captures one externally delivered gateway webhook plus its durable outbox record.
+pub struct GatewayWebhookDeliveryReport {
+    pub setup: GatewaySetupReport,
+    pub session: SessionRuntimeReport,
+    pub event_type: String,
+    pub url: String,
+    pub outbox_record_path: std::path::PathBuf,
+    pub status_code: u16,
+}
+
+#[derive(Debug, Clone)]
 /// Describes the durable scheduler files ensured during bootstrap.
 pub struct SchedulerSetupReport {
     pub scheduler_dir: std::path::PathBuf,
@@ -422,4 +433,177 @@ pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> 
         }
     }
     Ok(GatewayStartReport { setup, session })
+}
+
+/// Delivers a bounded outbound webhook payload through the durable gateway surface.
+pub fn deliver_gateway_webhook(
+    bootstrap: &BootstrapReport,
+    url: &str,
+    payload: &str,
+    event_type: Option<&str>,
+) -> Result<GatewayWebhookDeliveryReport> {
+    let url = url.trim();
+    if url.is_empty() {
+        bail!("gateway webhook url cannot be empty");
+    }
+    let payload = payload.trim();
+    if payload.is_empty() {
+        bail!("gateway webhook payload cannot be empty");
+    }
+    let event_type = event_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("gateway.webhook")
+        .to_string();
+
+    let start = start_gateway(bootstrap)?;
+    let delivery_id = format!("gateway-webhook-{}", unix_timestamp_nanos());
+    let outbox_record_path = start.setup.outbox_dir.join(format!("{delivery_id}.json"));
+    let request_body = json!({
+        "delivery_id": &delivery_id,
+        "event_type": &event_type,
+        "payload": payload,
+        "session_id": &start.session.session_id,
+        "source": "gateway",
+        "active_profile": bootstrap.active_profile,
+    });
+    let request_text = serde_json::to_string(&request_body)?;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let response = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(request_text)
+        .send();
+
+    match response {
+        Ok(response) => {
+            let status_code = response.status().as_u16();
+            let response_body = response.text().unwrap_or_default();
+            if !(200..300).contains(&status_code) {
+                std::fs::write(
+                    &outbox_record_path,
+                    serde_json::to_string_pretty(&json!({
+                        "delivery_id": &delivery_id,
+                        "result": "failed",
+                        "url": url,
+                        "event_type": &event_type,
+                        "payload": payload,
+                        "status_code": status_code,
+                        "response_body": response_body,
+                        "session_id": &start.session.session_id,
+                        "source": "gateway",
+                    }))?,
+                )?;
+                let _ = vela_state::append_event_to_session(
+                    &bootstrap.persistence.state_db_path,
+                    &start.session.session_id,
+                    "gateway_webhook_delivery_failed",
+                    json!({
+                        "delivery_id": &delivery_id,
+                        "url": url,
+                        "event_type": &event_type,
+                        "status_code": status_code,
+                        "outbox_record_path": &outbox_record_path,
+                    })
+                    .to_string(),
+                )?;
+                bail!("gateway webhook delivery failed with status {status_code}");
+            }
+
+            std::fs::write(
+                &outbox_record_path,
+                serde_json::to_string_pretty(&json!({
+                    "delivery_id": &delivery_id,
+                    "result": "delivered",
+                    "url": url,
+                    "event_type": &event_type,
+                    "payload": payload,
+                    "status_code": status_code,
+                    "response_body": response_body,
+                    "session_id": &start.session.session_id,
+                    "source": "gateway",
+                }))?,
+            )?;
+            let event_logged = vela_state::append_event_to_session(
+                &bootstrap.persistence.state_db_path,
+                &start.session.session_id,
+                "gateway_webhook_delivered",
+                json!({
+                    "delivery_id": &delivery_id,
+                    "url": url,
+                    "event_type": &event_type,
+                    "status_code": status_code,
+                    "outbox_record_path": &outbox_record_path,
+                    "source": "gateway",
+                })
+                .to_string(),
+            )?;
+            if !event_logged {
+                tracing::warn!(session_id=%start.session.session_id, "failed to append gateway_webhook_delivered event");
+            }
+            let message_logged = vela_state::append_message_to_session(
+                &bootstrap.persistence.state_db_path,
+                &start.session.session_id,
+                "system",
+                &format!("Gateway webhook delivered to {url}."),
+                Some(
+                    json!({
+                        "source": "gateway",
+                        "direction": "egress",
+                        "transport": "webhook",
+                        "event_type": &event_type,
+                        "outbox_record_path": &outbox_record_path,
+                    })
+                    .to_string(),
+                ),
+            )?;
+            if !message_logged {
+                tracing::warn!(session_id=%start.session.session_id, "failed to append gateway webhook message");
+            }
+            Ok(GatewayWebhookDeliveryReport {
+                setup: start.setup,
+                session: start.session,
+                event_type,
+                url: url.to_string(),
+                outbox_record_path,
+                status_code,
+            })
+        }
+        Err(error) => {
+            std::fs::write(
+                &outbox_record_path,
+                serde_json::to_string_pretty(&json!({
+                    "delivery_id": &delivery_id,
+                    "result": "failed",
+                    "url": url,
+                    "event_type": &event_type,
+                    "payload": payload,
+                    "error": error.to_string(),
+                    "session_id": &start.session.session_id,
+                    "source": "gateway",
+                }))?,
+            )?;
+            let event_logged = vela_state::append_event_to_session(
+                &bootstrap.persistence.state_db_path,
+                &start.session.session_id,
+                "gateway_webhook_delivery_failed",
+                json!({
+                    "delivery_id": &delivery_id,
+                    "url": url,
+                    "event_type": &event_type,
+                    "error": error.to_string(),
+                    "outbox_record_path": &outbox_record_path,
+                    "source": "gateway",
+                })
+                .to_string(),
+            )?;
+            if !event_logged {
+                tracing::warn!(session_id=%start.session.session_id, "failed to append gateway_webhook_delivery_failed event");
+            }
+            Err(error.into())
+        }
+    }
 }
