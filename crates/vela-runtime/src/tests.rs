@@ -548,6 +548,49 @@ fn subagent_delegation_persists_and_dedupes_pending_requests() {
 }
 
 #[test]
+/// Verifies that bounded MCP bridge requests persist and duplicate pending requests are rejected.
+fn mcp_bridge_requests_persist_and_dedupe_pending_requests() {
+    let bootstrap = test_bootstrap("mcp-bridge");
+
+    let first = request_mcp_bridge_call(
+        &bootstrap,
+        "memory",
+        "list_tools",
+        "{}",
+        Some("bounded bridge request"),
+    )
+    .unwrap();
+    assert_eq!(first.record.server, "memory");
+    assert_eq!(first.record.tool, "list_tools");
+    assert_eq!(first.record.status, "pending");
+
+    let records = list_mcp_bridge_calls(&bootstrap).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].id, first.record.id);
+
+    let fetched = get_mcp_bridge_call(&bootstrap, &first.record.id)
+        .unwrap()
+        .expect("mcp bridge record");
+    assert_eq!(fetched.payload, "{}");
+    assert_eq!(fetched.note.as_deref(), Some("bounded bridge request"));
+
+    let summary = current_command_session_summary(&bootstrap, "mcp")
+        .unwrap()
+        .expect("mcp session summary");
+    assert!(summary.message_count >= 1);
+    assert!(summary.event_count >= 1);
+
+    let err = request_mcp_bridge_call(&bootstrap, "memory", "list_tools", "{}", None).unwrap_err();
+    assert!(err.to_string().contains("already pending"));
+
+    let invalid =
+        request_mcp_bridge_call(&bootstrap, "memory", "list_tools", "not-json", None).unwrap_err();
+    assert!(invalid.to_string().contains("must be valid JSON"));
+
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
 /// Verifies scheduler restart continuity while preserving registered durable jobs.
 fn scheduler_start_resumes_same_session_and_preserves_registered_jobs() {
     let bootstrap = test_bootstrap("scheduler-resume");

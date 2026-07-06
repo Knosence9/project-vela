@@ -438,6 +438,72 @@ fn agents_delegation_is_visible_via_cli() {
 }
 
 #[test]
+/// Verifies that bounded MCP bridge requests are exposed through the CLI and remain inspectable.
+fn mcp_bridge_requests_are_visible_via_cli() {
+    let vela_home = temp_vela_home("mcp");
+
+    let bridge = run_vela(
+        &vela_home,
+        &[
+            "mcp",
+            "--bridge",
+            "memory",
+            "--tool",
+            "list_tools",
+            "--payload",
+            "{}",
+            "--note",
+            "bounded bridge request",
+        ],
+    );
+    assert!(bridge.status.success(), "{}", stderr_text(&bridge));
+    let bridge_stdout = stdout_text(&bridge);
+    assert!(bridge_stdout.contains("mcp bridge requested: id=mcp-bridge-"));
+    assert!(bridge_stdout.contains("server=memory"));
+    assert!(bridge_stdout.contains("tool=list_tools"));
+    assert!(bridge_stdout.contains("status=pending"));
+
+    let listing = run_vela(&vela_home, &["mcp", "--list"]);
+    assert!(listing.status.success(), "{}", stderr_text(&listing));
+    let listing_stdout = stdout_text(&listing);
+    assert!(listing_stdout.contains("mcp bridge requests [1]:"));
+    assert!(listing_stdout.contains("server=memory"));
+    assert!(listing_stdout.contains("tool=list_tools"));
+
+    let invalid = run_vela(
+        &vela_home,
+        &[
+            "mcp",
+            "--bridge",
+            "memory",
+            "--tool",
+            "list_tools",
+            "--payload",
+            "not-json",
+        ],
+    );
+    assert!(!invalid.status.success());
+    assert!(stderr_text(&invalid).contains("must be valid JSON"));
+
+    let duplicate = run_vela(
+        &vela_home,
+        &[
+            "mcp",
+            "--bridge",
+            "memory",
+            "--tool",
+            "list_tools",
+            "--payload",
+            "{}",
+        ],
+    );
+    assert!(!duplicate.status.success());
+    assert!(stderr_text(&duplicate).contains("already pending"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that gateway webhook delivery is exposed as a real external CLI surface.
 fn gateway_webhook_delivery_executes_via_cli() {
     let vela_home = temp_vela_home("gateway-webhook");

@@ -52,10 +52,7 @@ pub(crate) fn run_command(bootstrap: &vela_runtime::BootstrapReport, cli: &Cli) 
             println!("placeholder command: Tools");
             Ok(())
         }
-        Some(Commands::Mcp) => {
-            println!("placeholder command: Mcp");
-            Ok(())
-        }
+        Some(Commands::Mcp(args)) => runtime_ops::run_mcp(bootstrap, args),
         Some(Commands::Update) => {
             println!("placeholder command: Update");
             Ok(())

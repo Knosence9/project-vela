@@ -15,6 +15,7 @@ README-visible flows to preserve:
 - `vela gateway start`
 - `vela gateway --webhook-url <url> --payload <text> [--event-type <name>]`
 - `vela agents --delegate <task> --role <role> [--note <text>]`
+- `vela mcp --bridge <server> --tool <tool> --payload <json> [--note <text>]`
 - `vela claw migrate`
 - `vela claw migrate --dry-run`
 - `vela claw migrate --preset user-data`
@@ -120,6 +121,11 @@ README-visible shared slash commands:
 - `vela agents --delegate <task> --role <role> [--note <text>]` records one bounded subagent delegation request through the kernel-owned runtime surface and persists it for later inspection
 - `vela agents --list` shows durable delegation requests
 - `vela agents --show <id>` shows one durable delegation request by id
+
+## Known Rust MCP surface
+- `vela mcp --bridge <server> --tool <tool> --payload <json> [--note <text>]` records one bounded durable MCP bridge request through the kernel-owned runtime surface
+- `vela mcp --list` shows durable MCP bridge requests
+- `vela mcp --show <id>` shows one durable MCP bridge request by id
 
 ## Still needed
 - exact subcommands under groups like `sessions`, `auth`, `cron`, and `dashboard`
