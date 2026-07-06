@@ -121,6 +121,7 @@ README-visible shared slash commands:
 ## Known Rust scheduler delivery surface
 - `vela cron --add <task> --schedule <expr> [--delivery-webhook-url <url>] [--delivery-event-type <name>]` registers one durable scheduled job and can route completed/failed job outcomes through the gateway webhook delivery path
 - `vela cron --list` and `vela cron --show <id>` surface the configured delivery target plus the latest delivery outcome/error state
+- `vela cron --report` summarizes durable scheduler state across jobs, outcomes, recoveries, and delivery status without inspecting raw JSON
 
 ## Known Rust delegation surface
 - `vela agents --delegate <task> --role <role> [--note <text>]` records one bounded subagent delegation request through the kernel-owned runtime surface and persists it for later inspection
