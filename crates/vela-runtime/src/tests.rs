@@ -21,6 +21,31 @@ fn test_bootstrap(prefix: &str) -> BootstrapReport {
 }
 
 #[test]
+/// Verifies that the supported backend API contracts stay explicit and stable for current bounded backends.
+fn supported_runtime_backend_contracts_are_explicit() {
+    let contracts = supported_runtime_backend_contracts();
+    assert_eq!(contracts.len(), 2);
+    assert!(contracts.iter().any(|contract| {
+        contract.id == "ollama"
+            && contract.transport == "http-json"
+            && contract.requires_model
+            && contract.default_base_url == Some("http://127.0.0.1:11434")
+            && contract.direct_response_source == "runtime-ollama"
+            && contract.tool_loop_response_source == "runtime-ollama-tool-loop"
+            && contract.capabilities.supports_images
+    }));
+    assert!(contracts.iter().any(|contract| {
+        contract.id == "mock"
+            && contract.transport == "in-process"
+            && !contract.requires_model
+            && contract.default_base_url.is_none()
+            && contract.direct_response_source == "runtime-mock"
+            && contract.tool_loop_response_source == "runtime-mock-tool-loop"
+            && contract.capabilities.supports_tool_loop
+    }));
+}
+
+#[test]
 /// Verifies that runtime execution resolves the Ollama backend through the provider boundary.
 fn resolve_runtime_execution_wraps_ollama_provider_backend() {
     let resolved = ResolvedConfig {
@@ -55,6 +80,32 @@ fn resolve_runtime_execution_wraps_ollama_provider_backend() {
         "runtime-ollama-tool-loop"
     );
     provider.validate().unwrap();
+}
+
+#[test]
+/// Verifies that backend API resolution stays aligned with config and override semantics.
+fn resolve_runtime_backend_contract_prefers_override_and_config() {
+    let resolved = ResolvedConfig {
+        runtime_provider: Some("ollama".to_string()),
+        runtime_model: Some("gemma3:4b".to_string()),
+        runtime_ollama_base_url: Some("http://127.0.0.1:11434".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let configured = resolve_runtime_backend_contract(&resolved, None)
+        .unwrap()
+        .expect("configured backend contract");
+    assert_eq!(configured.id, "ollama");
+    assert_eq!(configured.transport, "http-json");
+
+    let overridden = resolve_runtime_backend_contract(&resolved, Some("mock"))
+        .unwrap()
+        .expect("override backend contract");
+    assert_eq!(overridden.id, "mock");
+    assert_eq!(overridden.transport, "in-process");
+
+    let err = resolve_runtime_backend_contract(&resolved, Some("unknown")).unwrap_err();
+    assert!(err.to_string().contains("unsupported runtime provider"));
 }
 
 #[test]

@@ -132,6 +132,9 @@ README-visible shared slash commands:
 - `vela mcp --list` shows durable MCP bridge requests
 - `vela mcp --show <id>` shows one durable MCP bridge request by id
 
+## Backend API status surface
+- `vela status` now prints the explicit backend API contract list plus the resolved backend contract from config so future adapters can target stable kernel-owned interfaces
+
 ## Still needed
 - exact subcommands under groups like `sessions`, `auth`, `cron`, and `dashboard`
 - help output shape and wording
