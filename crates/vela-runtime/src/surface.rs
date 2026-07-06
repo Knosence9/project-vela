@@ -28,6 +28,36 @@ pub struct GatewayWebhookDeliveryReport {
     pub status_code: u16,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents one durable bounded subagent delegation request.
+pub struct SubagentDelegationRecord {
+    pub id: String,
+    pub role: String,
+    pub task: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub session_id: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+/// Describes the durable subagent delegation files ensured during bootstrap.
+pub struct SubagentDelegationSetupReport {
+    pub agents_dir: std::path::PathBuf,
+    pub delegations_path: std::path::PathBuf,
+    pub delegations_existed_before: bool,
+    pub delegation_count: usize,
+}
+
+#[derive(Debug, Clone)]
+/// Captures one durable subagent delegation request plus the resolved command session.
+pub struct SubagentDelegationRequestReport {
+    pub setup: SubagentDelegationSetupReport,
+    pub session: SessionRuntimeReport,
+    pub record: SubagentDelegationRecord,
+}
+
 #[derive(Debug, Clone)]
 /// Describes the durable scheduler files ensured during bootstrap.
 pub struct SchedulerSetupReport {
@@ -433,6 +463,172 @@ pub fn start_gateway(bootstrap: &BootstrapReport) -> Result<GatewayStartReport> 
         }
     }
     Ok(GatewayStartReport { setup, session })
+}
+
+fn load_subagent_delegations(path: &std::path::Path) -> Result<Vec<SubagentDelegationRecord>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&content)?)
+}
+
+fn save_subagent_delegations(
+    path: &std::path::Path,
+    records: &[SubagentDelegationRecord],
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("delegations path has no parent directory"))?;
+    let temp_path = parent.join(format!(
+        "{}.tmp-{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("delegations.json"),
+        unix_timestamp_nanos()
+    ));
+    std::fs::write(&temp_path, serde_json::to_string_pretty(records)?)?;
+    std::fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
+/// Ensures the durable subagent delegation registry exists.
+pub fn setup_subagent_delegations(
+    bootstrap: &BootstrapReport,
+) -> Result<SubagentDelegationSetupReport> {
+    let agents_dir = bootstrap.vela_home.join("agents");
+    std::fs::create_dir_all(&agents_dir)?;
+    let delegations_path = agents_dir.join("delegations.json");
+    let delegations_existed_before = delegations_path.is_file();
+    if !delegations_existed_before {
+        std::fs::write(&delegations_path, "[]\n")?;
+    }
+    let delegation_count = load_subagent_delegations(&delegations_path)?.len();
+    Ok(SubagentDelegationSetupReport {
+        agents_dir,
+        delegations_path,
+        delegations_existed_before,
+        delegation_count,
+    })
+}
+
+/// Records one bounded subagent delegation request through the kernel-owned runtime surface.
+pub fn request_subagent_delegation(
+    bootstrap: &BootstrapReport,
+    role: &str,
+    task: &str,
+    note: Option<&str>,
+) -> Result<SubagentDelegationRequestReport> {
+    let role = role.trim();
+    if role.is_empty() {
+        bail!("delegation role cannot be empty");
+    }
+    let task = task.trim();
+    if task.is_empty() {
+        bail!("delegation task cannot be empty");
+    }
+    let note = note
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let setup = setup_subagent_delegations(bootstrap)?;
+    let session = vela_state::resolve_command_session(
+        &bootstrap.persistence.state_db_path,
+        "agents",
+        InteractionMode::Interactive,
+    )?;
+    let mut records = load_subagent_delegations(&setup.delegations_path)?;
+    if records
+        .iter()
+        .any(|record| record.status == "pending" && record.role == role && record.task == task)
+    {
+        bail!(
+            "delegation for role {:?} with task {:?} is already pending",
+            role,
+            task
+        );
+    }
+    let now = unix_timestamp();
+    let record = SubagentDelegationRecord {
+        id: format!("delegation-{}", unix_timestamp_nanos()),
+        role: role.to_string(),
+        task: task.to_string(),
+        status: "pending".to_string(),
+        created_at: now,
+        updated_at: now,
+        session_id: session.session_id.clone(),
+        note,
+    };
+    records.push(record.clone());
+    save_subagent_delegations(&setup.delegations_path, &records)?;
+
+    let event_logged = vela_state::append_event_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "delegation_requested",
+        json!({
+            "delegation_id": record.id,
+            "role": record.role,
+            "task": record.task,
+            "note": record.note,
+            "delegations_path": setup.delegations_path,
+            "source": "agents",
+            "action": session.action.label(),
+        })
+        .to_string(),
+    )?;
+    if !event_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append delegation_requested event");
+    }
+    let message_logged = vela_state::append_message_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "system",
+        &format!("Delegation requested for role {}.", record.role),
+        Some(
+            json!({
+                "source": "agents",
+                "direction": "egress",
+                "delegation_id": record.id,
+                "task": record.task,
+                "note": record.note,
+            })
+            .to_string(),
+        ),
+    )?;
+    if !message_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append delegation request message");
+    }
+
+    Ok(SubagentDelegationRequestReport {
+        setup,
+        session,
+        record,
+    })
+}
+
+/// Returns every durable subagent delegation record currently stored for the repo.
+pub fn list_subagent_delegations(
+    bootstrap: &BootstrapReport,
+) -> Result<Vec<SubagentDelegationRecord>> {
+    let setup = setup_subagent_delegations(bootstrap)?;
+    load_subagent_delegations(&setup.delegations_path)
+}
+
+/// Returns one durable subagent delegation record by id when it exists.
+pub fn get_subagent_delegation(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<Option<SubagentDelegationRecord>> {
+    let normalized = id.trim();
+    if normalized.is_empty() {
+        bail!("delegation id cannot be empty");
+    }
+    let records = list_subagent_delegations(bootstrap)?;
+    Ok(records.into_iter().find(|record| record.id == normalized))
 }
 
 /// Delivers a bounded outbound webhook payload through the durable gateway surface.

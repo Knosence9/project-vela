@@ -133,6 +133,20 @@ pub(crate) struct CronArgs {
 }
 
 #[derive(Debug, Default, Args)]
+pub(crate) struct AgentsArgs {
+    #[arg(long = "delegate", group = "action")]
+    pub(crate) delegate: Option<String>,
+    #[arg(long = "role", requires = "delegate")]
+    pub(crate) role: Option<String>,
+    #[arg(long = "note", requires = "delegate")]
+    pub(crate) note: Option<String>,
+    #[arg(long = "list", default_value_t = false, group = "action")]
+    pub(crate) list: bool,
+    #[arg(long = "show", group = "action")]
+    pub(crate) show: Option<String>,
+}
+
+#[derive(Debug, Default, Args)]
 pub(crate) struct LogsArgs {
     #[arg(short = 'f', long = "follow", default_value_t = false)]
     pub(crate) follow: bool,
@@ -271,6 +285,7 @@ pub(crate) enum Commands {
     Memory(MemoryArgs),
     Review(ReviewArgs),
     Cron(CronArgs),
+    Agents(AgentsArgs),
     Mcp,
     Status,
     Update,

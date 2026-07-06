@@ -1,4 +1,4 @@
-use crate::cli::{CronArgs, GatewayArgs, SessionsArgs};
+use crate::cli::{AgentsArgs, CronArgs, GatewayArgs, SessionsArgs};
 use anyhow::Result;
 
 pub(crate) fn run_gateway(
@@ -161,6 +161,80 @@ pub(crate) fn run_sessions(
             "sessions placeholder: list={} browse={}",
             args.list, args.browse
         );
+    }
+    Ok(())
+}
+
+pub(crate) fn run_agents(
+    bootstrap: &vela_runtime::BootstrapReport,
+    args: &AgentsArgs,
+) -> Result<()> {
+    if let Some(task) = args.delegate.as_deref() {
+        let role = args
+            .role
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--role is required with --delegate"))?;
+        let report =
+            vela_runtime::request_subagent_delegation(bootstrap, role, task, args.note.as_deref())?;
+        println!(
+            "delegation requested: id={} role={} status={} session={} task={} note={:?}",
+            report.record.id,
+            report.record.role,
+            report.record.status,
+            report.session.session_id,
+            report.record.task,
+            report.record.note,
+        );
+    } else if args.list {
+        let records = vela_runtime::list_subagent_delegations(bootstrap)?;
+        println!("delegations [{}]:", records.len());
+        for record in records {
+            println!(
+                "- {} :: role={} status={} created_at={} updated_at={} session={} task={} note={:?}",
+                record.id,
+                record.role,
+                record.status,
+                record.created_at,
+                record.updated_at,
+                record.session_id,
+                record.task,
+                record.note,
+            );
+        }
+    } else if let Some(id) = args.show.as_deref() {
+        match vela_runtime::get_subagent_delegation(bootstrap, id)? {
+            Some(record) => println!(
+                "delegation: id={} role={} status={} created_at={} updated_at={} session={} task={} note={:?}",
+                record.id,
+                record.role,
+                record.status,
+                record.created_at,
+                record.updated_at,
+                record.session_id,
+                record.task,
+                record.note,
+            ),
+            None => println!("delegation: not found for {:?}", id),
+        }
+    } else {
+        let setup = vela_runtime::setup_subagent_delegations(bootstrap)?;
+        match vela_runtime::current_command_session_summary(bootstrap, "agents")? {
+            Some(session) => println!(
+                "agents ready: dir={} delegations={} session={} title={} messages={} events={}",
+                setup.agents_dir.display(),
+                setup.delegation_count,
+                session.id,
+                session.title,
+                session.message_count,
+                session.event_count,
+            ),
+            None => println!(
+                "agents ready: dir={} delegations={} session=none file={}",
+                setup.agents_dir.display(),
+                setup.delegation_count,
+                setup.delegations_path.display(),
+            ),
+        }
     }
     Ok(())
 }

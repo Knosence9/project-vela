@@ -17,6 +17,7 @@
 - interactive vs single-turn mode is derived from whether query/image input is present
 - `status` reports the latest active session identity and first-pass extension registry state
 - `gateway` now bootstraps durable gateway directories/config, can resume a gateway-specific runtime session, and can deliver a bounded outbound webhook payload with a persisted outbox record
+- `agents` now persists bounded subagent delegation requests through a dedicated command-scoped runtime surface
 - `cron` now bootstraps durable scheduler config/job state, can resume a scheduler-specific runtime session, and can execute due jobs through the kernel scheduler path
 
 ## Current runtime behavior
@@ -46,6 +47,7 @@
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
 - `vela gateway --start` resumes the latest `gateway` command session when one already exists
 - `vela gateway --webhook-url <url> --payload <text> [--event-type <name>]` posts one JSON payload through the gateway surface, appends durable gateway delivery events/messages, and writes a delivery record into `~/.vela/gateway/outbox/`
+- `vela agents --delegate <task> --role <role> [--note <text>]` records one durable bounded subagent delegation request in `~/.vela/agents/delegations.json`, appends a delegation event/message, and rejects duplicate pending requests for the same role/task pair
 - `vela cron --start` resumes the latest `cron` command session when one already exists, executes due durable jobs, and recovers stale in-flight jobs before retrying them
 - scheduled jobs now surface explicit progression states in CLI status (`registered`, `started-attempt`, `recovered-for-retry`, `completed-rescheduled`, `failed-rescheduled`) so recurring next-run behavior is visible without reading raw job timestamps alone
 

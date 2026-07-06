@@ -505,6 +505,49 @@ fn gateway_webhook_delivery_records_failed_attempts() {
 }
 
 #[test]
+/// Verifies that bounded subagent delegation persists and duplicate pending requests are rejected.
+fn subagent_delegation_persists_and_dedupes_pending_requests() {
+    let bootstrap = test_bootstrap("agents-delegation");
+
+    let first = request_subagent_delegation(
+        &bootstrap,
+        "researcher",
+        "Investigate provider routing",
+        Some("bounded follow-up"),
+    )
+    .unwrap();
+    assert_eq!(first.record.role, "researcher");
+    assert_eq!(first.record.status, "pending");
+
+    let records = list_subagent_delegations(&bootstrap).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].id, first.record.id);
+
+    let fetched = get_subagent_delegation(&bootstrap, &first.record.id)
+        .unwrap()
+        .expect("delegation record");
+    assert_eq!(fetched.task, "Investigate provider routing");
+    assert_eq!(fetched.note.as_deref(), Some("bounded follow-up"));
+
+    let summary = current_command_session_summary(&bootstrap, "agents")
+        .unwrap()
+        .expect("agents session summary");
+    assert!(summary.message_count >= 1);
+    assert!(summary.event_count >= 1);
+
+    let err = request_subagent_delegation(
+        &bootstrap,
+        "researcher",
+        "Investigate provider routing",
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("already pending"));
+
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
 /// Verifies scheduler restart continuity while preserving registered durable jobs.
 fn scheduler_start_resumes_same_session_and_preserves_registered_jobs() {
     let bootstrap = test_bootstrap("scheduler-resume");
