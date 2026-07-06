@@ -459,26 +459,54 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
             ),
             None => println!("backend experiment slot: not found for {:?}", id),
         }
+    } else if args.show_policy {
+        let policy = vela_runtime::get_model_lab_policy(bootstrap)?;
+        println!(
+            "model lab policy: version={} summary={:?}",
+            policy.version, policy.summary,
+        );
+        println!("graduation gates [{}]:", policy.graduation_gates.len());
+        for gate in policy.graduation_gates {
+            println!("- {}", gate);
+        }
+        println!(
+            "allowed strategies [{}]: {}",
+            policy.allowed_experiment_strategies.len(),
+            policy.allowed_experiment_strategies.join(",")
+        );
+        println!(
+            "prohibited behaviors [{}]:",
+            policy.prohibited_behaviors.len()
+        );
+        for item in policy.prohibited_behaviors {
+            println!("- {}", item);
+        }
+        println!("required evidence [{}]:", policy.required_evidence.len());
+        for item in policy.required_evidence {
+            println!("- {}", item);
+        }
     } else {
         let setup = vela_runtime::setup_backend_evals(bootstrap)?;
         match vela_runtime::current_command_session_summary(bootstrap, "eval")? {
             Some(session) => println!(
-                "eval ready: dir={} runs={} slots={} session={} title={} messages={} events={}",
+                "eval ready: dir={} runs={} slots={} policy={} session={} title={} messages={} events={}",
                 setup.evals_dir.display(),
                 setup.run_count,
                 setup.slot_count,
+                setup.policy_path.display(),
                 session.id,
                 session.title,
                 session.message_count,
                 session.event_count,
             ),
             None => println!(
-                "eval ready: dir={} runs={} slots={} session=none file={} slots_file={}",
+                "eval ready: dir={} runs={} slots={} session=none file={} slots_file={} policy_file={}",
                 setup.evals_dir.display(),
                 setup.run_count,
                 setup.slot_count,
                 setup.runs_path.display(),
                 setup.slots_path.display(),
+                setup.policy_path.display(),
             ),
         }
     }

@@ -773,6 +773,28 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
 }
 
 #[test]
+/// Verifies that the model-lab policy is visible through the eval surface.
+fn model_lab_policy_is_visible_via_eval_surface() {
+    let vela_home = temp_vela_home("model-lab-policy");
+
+    let show_policy = run_vela(&vela_home, &["eval", "--show-policy"]);
+    assert!(
+        show_policy.status.success(),
+        "{}",
+        stderr_text(&show_policy)
+    );
+    let policy_stdout = stdout_text(&show_policy);
+    assert!(policy_stdout.contains("model lab policy: version=1"));
+    assert!(policy_stdout.contains(
+        "allowed strategies [3]: shadow-routing,offline replay,bounded backend comparison"
+    ));
+    assert!(policy_stdout.contains("graduation gates [3]:"));
+    assert!(policy_stdout.contains("required evidence [3]:"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that the bounded architecture experiment slot is published and can drive a persisted eval run.
 fn backend_experiment_slot_is_visible_and_runnable() {
     let vela_home = temp_vela_home("eval-slot");

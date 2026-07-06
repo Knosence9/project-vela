@@ -200,6 +200,8 @@ pub(crate) struct EvalArgs {
     pub(crate) list_slots: bool,
     #[arg(long = "show-slot", group = "action")]
     pub(crate) show_slot: Option<String>,
+    #[arg(long = "show-policy", default_value_t = false, group = "action")]
+    pub(crate) show_policy: bool,
 }
 
 #[derive(Debug, Default, Args)]
