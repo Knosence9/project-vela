@@ -89,6 +89,50 @@ pub struct McpBridgeRequestReport {
     pub record: McpBridgeCallRecord,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents one backend-specific result captured by the eval harness.
+pub struct BackendEvalResultRecord {
+    pub backend_id: String,
+    pub transport: String,
+    pub status: String,
+    pub duration_ms: u64,
+    pub response_source: Option<String>,
+    pub response_model: Option<String>,
+    pub provider_capabilities: Option<String>,
+    pub response_chars: usize,
+    pub response_preview: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents one durable backend eval run stored in `runs.json`.
+pub struct BackendEvalRunRecord {
+    pub id: String,
+    pub prompt: String,
+    pub backends: Vec<String>,
+    pub created_at: i64,
+    pub session_id: String,
+    pub model_override: Option<String>,
+    pub results: Vec<BackendEvalResultRecord>,
+}
+
+#[derive(Debug, Clone)]
+/// Describes the durable backend eval files ensured during bootstrap.
+pub struct BackendEvalSetupReport {
+    pub evals_dir: std::path::PathBuf,
+    pub runs_path: std::path::PathBuf,
+    pub runs_existed_before: bool,
+    pub run_count: usize,
+}
+
+#[derive(Debug, Clone)]
+/// Captures one backend eval run plus the resolved command session.
+pub struct BackendEvalRunReport {
+    pub setup: BackendEvalSetupReport,
+    pub session: SessionRuntimeReport,
+    pub record: BackendEvalRunRecord,
+}
+
 #[derive(Debug, Clone)]
 /// Describes the durable scheduler files ensured during bootstrap.
 pub struct SchedulerSetupReport {
@@ -605,6 +649,49 @@ fn acquire_mcp_bridge_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> 
     bail!("timed out waiting for mcp bridge lock")
 }
 
+fn load_backend_eval_runs(path: &std::path::Path) -> Result<Vec<BackendEvalRunRecord>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&content)?)
+}
+
+fn save_backend_eval_runs(path: &std::path::Path, runs: &[BackendEvalRunRecord]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("backend eval path has no parent directory"))?;
+    let temp_path = parent.join(format!(
+        "{}.tmp-{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("runs.json"),
+        unix_timestamp_nanos()
+    ));
+    std::fs::write(&temp_path, serde_json::to_string_pretty(runs)?)?;
+    std::fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
+fn acquire_backend_eval_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> {
+    let lock_path = path.with_extension("json.lock");
+    for _ in 0..100 {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => return Ok(SchedulerJobsLock { lock_path }),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => sleep(Duration::from_millis(25)),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    bail!("timed out waiting for backend eval lock")
+}
+
 /// Ensures the durable subagent delegation registry exists.
 pub fn setup_subagent_delegations(
     bootstrap: &BootstrapReport,
@@ -914,6 +1001,235 @@ pub fn get_mcp_bridge_call(
     }
     let records = list_mcp_bridge_calls(bootstrap)?;
     Ok(records.into_iter().find(|record| record.id == normalized))
+}
+
+/// Ensures the durable backend eval registry exists.
+pub fn setup_backend_evals(bootstrap: &BootstrapReport) -> Result<BackendEvalSetupReport> {
+    let evals_dir = bootstrap.vela_home.join("evals");
+    std::fs::create_dir_all(&evals_dir)?;
+    let runs_path = evals_dir.join("runs.json");
+    let runs_existed_before = runs_path.is_file();
+    if !runs_existed_before {
+        std::fs::write(&runs_path, "[]\n")?;
+    }
+    let run_count = load_backend_eval_runs(&runs_path)?.len();
+    Ok(BackendEvalSetupReport {
+        evals_dir,
+        runs_path,
+        runs_existed_before,
+        run_count,
+    })
+}
+
+/// Executes a repeatable bounded backend evaluation run and persists the results.
+pub fn run_backend_eval(
+    bootstrap: &BootstrapReport,
+    prompt: &str,
+    backends: &[String],
+    model_override: Option<&str>,
+) -> Result<BackendEvalRunReport> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        bail!("backend eval prompt cannot be empty");
+    }
+    let normalized_backends: Vec<String> = backends
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(|item| match item.to_ascii_lowercase().as_str() {
+            "llama.cpp" => "llamacpp".to_string(),
+            other => other.to_string(),
+        })
+        .collect();
+    if normalized_backends.is_empty() {
+        bail!("backend eval requires at least one --backend <id>");
+    }
+
+    let setup = setup_backend_evals(bootstrap)?;
+    let session = vela_state::resolve_command_session(
+        &bootstrap.persistence.state_db_path,
+        "eval",
+        InteractionMode::Interactive,
+    )?;
+
+    let mut results = Vec::new();
+    for backend in &normalized_backends {
+        let started = std::time::Instant::now();
+        let contract = resolve_runtime_backend_contract(&bootstrap.resolved_config, Some(backend))
+            .ok()
+            .flatten();
+        let transport = contract
+            .as_ref()
+            .map(|item| item.transport.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let capabilities = contract
+            .as_ref()
+            .map(|item| item.capabilities.summary_line());
+        let result = match resolve_runtime_execution(
+            &bootstrap.resolved_config,
+            Some(backend.as_str()),
+            model_override,
+        ) {
+            Ok(execution) => {
+                let duration_ms;
+                match execution.provider.as_deref() {
+                    Some(provider) => match provider
+                        .validate()
+                        .and_then(|_| provider.generate(prompt, None))
+                    {
+                        Ok(response) => {
+                            duration_ms = started.elapsed().as_millis() as u64;
+                            BackendEvalResultRecord {
+                                backend_id: backend.clone(),
+                                transport: transport.clone(),
+                                status: "passed".to_string(),
+                                duration_ms,
+                                response_source: Some(
+                                    provider.direct_response_source().to_string(),
+                                ),
+                                response_model: execution.model.clone(),
+                                provider_capabilities: capabilities.clone(),
+                                response_chars: response.chars().count(),
+                                response_preview: Some(response.chars().take(120).collect()),
+                                error: None,
+                            }
+                        }
+                        Err(err) => {
+                            duration_ms = started.elapsed().as_millis() as u64;
+                            BackendEvalResultRecord {
+                                backend_id: backend.clone(),
+                                transport: transport.clone(),
+                                status: "failed".to_string(),
+                                duration_ms,
+                                response_source: None,
+                                response_model: execution.model.clone(),
+                                provider_capabilities: capabilities.clone(),
+                                response_chars: 0,
+                                response_preview: None,
+                                error: Some(err.to_string()),
+                            }
+                        }
+                    },
+                    None => {
+                        duration_ms = started.elapsed().as_millis() as u64;
+                        BackendEvalResultRecord {
+                            backend_id: backend.clone(),
+                            transport: transport.clone(),
+                            status: "failed".to_string(),
+                            duration_ms,
+                            response_source: None,
+                            response_model: execution.model.clone(),
+                            provider_capabilities: capabilities.clone(),
+                            response_chars: 0,
+                            response_preview: None,
+                            error: Some(
+                                "backend did not resolve to a provider execution path".to_string(),
+                            ),
+                        }
+                    }
+                }
+            }
+            Err(err) => BackendEvalResultRecord {
+                backend_id: backend.clone(),
+                transport: transport.clone(),
+                status: "failed".to_string(),
+                duration_ms: started.elapsed().as_millis() as u64,
+                response_source: None,
+                response_model: model_override
+                    .map(str::to_string)
+                    .or_else(|| bootstrap.resolved_config.runtime_model.clone()),
+                provider_capabilities: capabilities.clone(),
+                response_chars: 0,
+                response_preview: None,
+                error: Some(err.to_string()),
+            },
+        };
+        results.push(result);
+    }
+
+    let record = BackendEvalRunRecord {
+        id: format!("eval-{}", unix_timestamp_nanos()),
+        prompt: prompt.to_string(),
+        backends: normalized_backends,
+        created_at: unix_timestamp(),
+        session_id: session.session_id.clone(),
+        model_override: model_override
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        results,
+    };
+
+    let _lock = acquire_backend_eval_lock(&setup.runs_path)?;
+    let mut runs = load_backend_eval_runs(&setup.runs_path)?;
+    runs.push(record.clone());
+    save_backend_eval_runs(&setup.runs_path, &runs)?;
+
+    let event_logged = vela_state::append_event_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "backend_eval_completed",
+        json!({
+            "eval_id": record.id,
+            "backends": record.backends,
+            "model_override": record.model_override,
+            "results": record.results,
+            "runs_path": setup.runs_path,
+            "source": "eval",
+            "action": session.action.label(),
+        })
+        .to_string(),
+    )?;
+    if !event_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append backend_eval_completed event");
+    }
+    let message_logged = vela_state::append_message_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "system",
+        &format!(
+            "Backend eval completed for {} backend(s).",
+            record.backends.len()
+        ),
+        Some(
+            json!({
+                "source": "eval",
+                "direction": "egress",
+                "eval_id": record.id,
+                "backends": record.backends,
+                "model_override": record.model_override,
+            })
+            .to_string(),
+        ),
+    )?;
+    if !message_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append backend eval message");
+    }
+
+    Ok(BackendEvalRunReport {
+        setup,
+        session,
+        record,
+    })
+}
+
+/// Returns every durable backend eval run currently stored for the repo.
+pub fn list_backend_evals(bootstrap: &BootstrapReport) -> Result<Vec<BackendEvalRunRecord>> {
+    let setup = setup_backend_evals(bootstrap)?;
+    load_backend_eval_runs(&setup.runs_path)
+}
+
+/// Returns one durable backend eval run by id when it exists.
+pub fn get_backend_eval(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<Option<BackendEvalRunRecord>> {
+    let normalized = id.trim();
+    if normalized.is_empty() {
+        bail!("backend eval id cannot be empty");
+    }
+    let runs = list_backend_evals(bootstrap)?;
+    Ok(runs.into_iter().find(|run| run.id == normalized))
 }
 
 /// Delivers a bounded outbound webhook payload through the durable gateway surface.

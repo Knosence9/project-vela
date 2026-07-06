@@ -135,6 +135,11 @@ README-visible shared slash commands:
 ## Backend API status surface
 - `vela status` now prints the explicit backend API contract list plus the resolved backend contract from config, including bounded local backends such as Ollama, mock, and llama.cpp, so future adapters can target stable kernel-owned interfaces
 
+## Backend eval surface
+- `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run
+- `vela eval --list` shows durable backend eval runs
+- `vela eval --show <id>` shows one durable backend eval run with per-backend results
+
 ## Still needed
 - exact subcommands under groups like `sessions`, `auth`, `cron`, and `dashboard`
 - help output shape and wording

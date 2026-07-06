@@ -183,6 +183,20 @@ pub(crate) struct DashboardArgs {
 }
 
 #[derive(Debug, Default, Args)]
+pub(crate) struct EvalArgs {
+    #[arg(long = "run", group = "action")]
+    pub(crate) run: Option<String>,
+    #[arg(long = "backend")]
+    pub(crate) backends: Vec<String>,
+    #[arg(long = "model")]
+    pub(crate) model: Option<String>,
+    #[arg(long = "list", default_value_t = false, group = "action")]
+    pub(crate) list: bool,
+    #[arg(long = "show", group = "action")]
+    pub(crate) show: Option<String>,
+}
+
+#[derive(Debug, Default, Args)]
 pub(crate) struct ExtensionsArgs {
     #[arg(long = "reload", default_value_t = false, group = "action")]
     pub(crate) reload: bool,
@@ -307,6 +321,7 @@ pub(crate) enum Commands {
     Cron(CronArgs),
     Agents(AgentsArgs),
     Mcp(McpArgs),
+    Eval(EvalArgs),
     Status,
     Update,
     Dashboard(DashboardArgs),
