@@ -142,6 +142,7 @@ README-visible shared slash commands:
 - `vela eval --show <id>` shows one durable backend eval run with per-backend results
 - `vela eval --list-slots` shows published bounded architecture experiment slots
 - `vela eval --show-slot <id>` shows one bounded architecture experiment slot by id
+- `vela eval --show-policy` shows the durable model-lab criteria and boundaries that govern deeper model-core experimentation
 
 ## Still needed
 - exact subcommands under groups like `sessions`, `auth`, `cron`, and `dashboard`

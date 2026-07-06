@@ -90,6 +90,17 @@ pub struct McpBridgeRequestReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents the durable model-lab policy that governs deeper experimentation.
+pub struct ModelLabPolicyRecord {
+    pub version: u32,
+    pub summary: String,
+    pub graduation_gates: Vec<String>,
+    pub allowed_experiment_strategies: Vec<String>,
+    pub prohibited_behaviors: Vec<String>,
+    pub required_evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Represents one bounded architecture experiment slot that can drive future routing work.
 pub struct BackendExperimentSlotRecord {
     pub id: String,
@@ -135,8 +146,10 @@ pub struct BackendEvalSetupReport {
     pub evals_dir: std::path::PathBuf,
     pub runs_path: std::path::PathBuf,
     pub slots_path: std::path::PathBuf,
+    pub policy_path: std::path::PathBuf,
     pub runs_existed_before: bool,
     pub slots_existed_before: bool,
+    pub policy_existed_before: bool,
     pub run_count: usize,
     pub slot_count: usize,
 }
@@ -665,6 +678,33 @@ fn acquire_mcp_bridge_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> 
     bail!("timed out waiting for mcp bridge lock")
 }
 
+fn default_model_lab_policy() -> ModelLabPolicyRecord {
+    ModelLabPolicyRecord {
+        version: 1,
+        summary: "Deeper model-core work must stay bounded, reversible, and evidence-driven before it can influence the live kernel route.".to_string(),
+        graduation_gates: vec![
+            "document a bounded experiment surface before changing runtime routing".to_string(),
+            "capture repeatable eval evidence across at least two backends".to_string(),
+            "preserve restart-only ownership boundaries for runtime config and transport changes".to_string(),
+        ],
+        allowed_experiment_strategies: vec![
+            "shadow-routing".to_string(),
+            "offline replay".to_string(),
+            "bounded backend comparison".to_string(),
+        ],
+        prohibited_behaviors: vec![
+            "silent live-route mutation without an explicit bounded slot".to_string(),
+            "remote model execution by default for local-backend slices".to_string(),
+            "unreviewed persistence or policy mutation from experimental paths".to_string(),
+        ],
+        required_evidence: vec![
+            "persisted eval runs with per-backend outcomes".to_string(),
+            "bounded failure-path coverage".to_string(),
+            "operator-visible docs or CLI inspection surface".to_string(),
+        ],
+    }
+}
+
 fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
     vec![BackendExperimentSlotRecord {
         id: "ternary-preview".to_string(),
@@ -697,6 +737,17 @@ fn load_backend_experiment_slots(
     let content = std::fs::read_to_string(path)?;
     if content.trim().is_empty() {
         return Ok(default_backend_experiment_slots());
+    }
+    Ok(serde_json::from_str(&content)?)
+}
+
+fn load_model_lab_policy(path: &std::path::Path) -> Result<ModelLabPolicyRecord> {
+    if !path.exists() {
+        return Ok(default_model_lab_policy());
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(default_model_lab_policy());
     }
     Ok(serde_json::from_str(&content)?)
 }
@@ -1062,6 +1113,7 @@ pub fn setup_backend_evals(bootstrap: &BootstrapReport) -> Result<BackendEvalSet
     std::fs::create_dir_all(&evals_dir)?;
     let runs_path = evals_dir.join("runs.json");
     let slots_path = evals_dir.join("slots.json");
+    let policy_path = evals_dir.join("policy.json");
     let runs_existed_before = runs_path.is_file();
     if !runs_existed_before {
         std::fs::write(&runs_path, "[]\n")?;
@@ -1073,14 +1125,23 @@ pub fn setup_backend_evals(bootstrap: &BootstrapReport) -> Result<BackendEvalSet
             serde_json::to_string_pretty(&default_backend_experiment_slots())?,
         )?;
     }
+    let policy_existed_before = policy_path.is_file();
+    if !policy_existed_before {
+        std::fs::write(
+            &policy_path,
+            serde_json::to_string_pretty(&default_model_lab_policy())?,
+        )?;
+    }
     let run_count = load_backend_eval_runs(&runs_path)?.len();
     let slot_count = load_backend_experiment_slots(&slots_path)?.len();
     Ok(BackendEvalSetupReport {
         evals_dir,
         runs_path,
         slots_path,
+        policy_path,
         runs_existed_before,
         slots_existed_before,
+        policy_existed_before,
         run_count,
         slot_count,
     })
@@ -1318,6 +1379,12 @@ pub fn list_backend_experiment_slots(
 ) -> Result<Vec<BackendExperimentSlotRecord>> {
     let setup = setup_backend_evals(bootstrap)?;
     load_backend_experiment_slots(&setup.slots_path)
+}
+
+/// Returns the durable model-lab policy for the repo.
+pub fn get_model_lab_policy(bootstrap: &BootstrapReport) -> Result<ModelLabPolicyRecord> {
+    let setup = setup_backend_evals(bootstrap)?;
+    load_model_lab_policy(&setup.policy_path)
 }
 
 /// Returns one bounded architecture experiment slot by id when it exists.
