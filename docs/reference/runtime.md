@@ -21,6 +21,7 @@
 - `mcp` now persists bounded MCP bridge requests through a dedicated command-scoped runtime surface
 - `cron` now bootstraps durable scheduler config/job state, can resume a scheduler-specific runtime session, can execute due jobs through the kernel scheduler path, and can deliver job outcomes through the gateway webhook path
 - `eval` now bootstraps a durable backend-comparison harness that can execute bounded prompt comparisons across selected backends and persist per-backend results for later inspection
+- the eval harness now also publishes one bounded architecture experiment slot (`ternary-preview`) for future ternary/sparse routing work without changing the live kernel route
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
@@ -45,6 +46,7 @@
 - `vela chat --image ...` and mixed `vela chat --query ... --image ...` turns can call a configured runtime provider for first-pass image execution, with Ollama and the deterministic mock backend serving that path directly while llama.cpp falls back to the deterministic kernel image scaffold because its bounded contract is text-only
 - runtime turn CLI output now prints the resolved response route (`source`, optional `provider`, optional `model`, and advertised provider capabilities) so backend differences stay visible even when execution falls back to the kernel path
 - `vela eval --run <prompt> --backend <id>...` now records one durable eval run in `~/.vela/evals/runs.json`, capturing per-backend status, duration, response routing, provider capabilities, and bounded previews/errors so backend comparisons are repeatable without reading raw logs
+- `vela eval --run-slot ternary-preview ...` now drives the first bounded architecture experiment slot from `~/.vela/evals/slots.json`, recording which slot was used so future routing experiments stay inspectable and reversible
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
 - repeated resume/continue paths update `updated_at` on the matching session row
@@ -73,7 +75,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states at the session level
-- deeper provider capability parity beyond the current explicit matrix (shared text/tool-loop/reflection support, but intentionally different image and transport behavior), while preserving the bounded iterative tool loop, bounded reflection/retry rules, first-pass internal context retrieval tools, and the new persisted backend eval harness
+- deeper provider capability parity beyond the current explicit matrix (shared text/tool-loop/reflection support, but intentionally different image and transport behavior), while preserving the bounded iterative tool loop, bounded reflection/retry rules, first-pass internal context retrieval tools, the persisted backend eval harness, and the first bounded architecture experiment slot
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model

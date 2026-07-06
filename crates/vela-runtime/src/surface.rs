@@ -90,6 +90,18 @@ pub struct McpBridgeRequestReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents one bounded architecture experiment slot that can drive future routing work.
+pub struct BackendExperimentSlotRecord {
+    pub id: String,
+    pub status: String,
+    pub strategy: String,
+    pub summary: Option<String>,
+    pub hypothesis: Option<String>,
+    pub default_prompt: String,
+    pub allowed_backends: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Represents one backend-specific result captured by the eval harness.
 pub struct BackendEvalResultRecord {
     pub backend_id: String,
@@ -112,6 +124,7 @@ pub struct BackendEvalRunRecord {
     pub backends: Vec<String>,
     pub created_at: i64,
     pub session_id: String,
+    pub experiment_slot: Option<String>,
     pub model_override: Option<String>,
     pub results: Vec<BackendEvalResultRecord>,
 }
@@ -121,8 +134,11 @@ pub struct BackendEvalRunRecord {
 pub struct BackendEvalSetupReport {
     pub evals_dir: std::path::PathBuf,
     pub runs_path: std::path::PathBuf,
+    pub slots_path: std::path::PathBuf,
     pub runs_existed_before: bool,
+    pub slots_existed_before: bool,
     pub run_count: usize,
+    pub slot_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -649,6 +665,18 @@ fn acquire_mcp_bridge_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> 
     bail!("timed out waiting for mcp bridge lock")
 }
 
+fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
+    vec![BackendExperimentSlotRecord {
+        id: "ternary-preview".to_string(),
+        status: "bounded-preview".to_string(),
+        strategy: "shadow-routing".to_string(),
+        summary: Some("Compare candidate backends under one durable experiment slot without altering the live kernel route.".to_string()),
+        hypothesis: Some("A future ternary or sparse router can be evaluated safely by replaying the same prompt across a bounded backend set before any runtime routing changes land.".to_string()),
+        default_prompt: "Evaluate whether a ternary-style routing candidate would preserve concise, grounded backend behavior for this request.".to_string(),
+        allowed_backends: vec!["mock".to_string(), "llamacpp".to_string(), "ollama".to_string()],
+    }]
+}
+
 fn load_backend_eval_runs(path: &std::path::Path) -> Result<Vec<BackendEvalRunRecord>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -656,6 +684,19 @@ fn load_backend_eval_runs(path: &std::path::Path) -> Result<Vec<BackendEvalRunRe
     let content = std::fs::read_to_string(path)?;
     if content.trim().is_empty() {
         return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&content)?)
+}
+
+fn load_backend_experiment_slots(
+    path: &std::path::Path,
+) -> Result<Vec<BackendExperimentSlotRecord>> {
+    if !path.exists() {
+        return Ok(default_backend_experiment_slots());
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(default_backend_experiment_slots());
     }
     Ok(serde_json::from_str(&content)?)
 }
@@ -690,6 +731,18 @@ fn acquire_backend_eval_lock(path: &std::path::Path) -> Result<SchedulerJobsLock
         }
     }
     bail!("timed out waiting for backend eval lock")
+}
+
+fn normalize_eval_backends(backends: &[String]) -> Vec<String> {
+    backends
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(|item| match item.to_ascii_lowercase().as_str() {
+            "llama.cpp" => "llamacpp".to_string(),
+            other => other.to_string(),
+        })
+        .collect()
 }
 
 /// Ensures the durable subagent delegation registry exists.
@@ -1008,16 +1061,28 @@ pub fn setup_backend_evals(bootstrap: &BootstrapReport) -> Result<BackendEvalSet
     let evals_dir = bootstrap.vela_home.join("evals");
     std::fs::create_dir_all(&evals_dir)?;
     let runs_path = evals_dir.join("runs.json");
+    let slots_path = evals_dir.join("slots.json");
     let runs_existed_before = runs_path.is_file();
     if !runs_existed_before {
         std::fs::write(&runs_path, "[]\n")?;
     }
+    let slots_existed_before = slots_path.is_file();
+    if !slots_existed_before {
+        std::fs::write(
+            &slots_path,
+            serde_json::to_string_pretty(&default_backend_experiment_slots())?,
+        )?;
+    }
     let run_count = load_backend_eval_runs(&runs_path)?.len();
+    let slot_count = load_backend_experiment_slots(&slots_path)?.len();
     Ok(BackendEvalSetupReport {
         evals_dir,
         runs_path,
+        slots_path,
         runs_existed_before,
+        slots_existed_before,
         run_count,
+        slot_count,
     })
 }
 
@@ -1028,19 +1093,44 @@ pub fn run_backend_eval(
     backends: &[String],
     model_override: Option<&str>,
 ) -> Result<BackendEvalRunReport> {
+    run_backend_eval_internal(bootstrap, prompt, backends, model_override, None)
+}
+
+/// Executes one bounded architecture experiment slot against the selected or default backend set.
+pub fn run_backend_eval_slot(
+    bootstrap: &BootstrapReport,
+    slot_id: &str,
+    backends: &[String],
+    model_override: Option<&str>,
+) -> Result<BackendEvalRunReport> {
+    let slot = get_backend_experiment_slot(bootstrap, slot_id)?
+        .ok_or_else(|| anyhow::anyhow!("backend experiment slot {:?} not found", slot_id))?;
+    let effective_backends: Vec<String> = if backends.is_empty() {
+        slot.allowed_backends.clone()
+    } else {
+        normalize_eval_backends(backends)
+    };
+    run_backend_eval_internal(
+        bootstrap,
+        &slot.default_prompt,
+        &effective_backends,
+        model_override,
+        Some(slot.id),
+    )
+}
+
+fn run_backend_eval_internal(
+    bootstrap: &BootstrapReport,
+    prompt: &str,
+    backends: &[String],
+    model_override: Option<&str>,
+    experiment_slot: Option<String>,
+) -> Result<BackendEvalRunReport> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
         bail!("backend eval prompt cannot be empty");
     }
-    let normalized_backends: Vec<String> = backends
-        .iter()
-        .map(|item| item.trim())
-        .filter(|item| !item.is_empty())
-        .map(|item| match item.to_ascii_lowercase().as_str() {
-            "llama.cpp" => "llamacpp".to_string(),
-            other => other.to_string(),
-        })
-        .collect();
+    let normalized_backends = normalize_eval_backends(backends);
     if normalized_backends.is_empty() {
         bail!("backend eval requires at least one --backend <id>");
     }
@@ -1153,6 +1243,7 @@ pub fn run_backend_eval(
         backends: normalized_backends,
         created_at: unix_timestamp(),
         session_id: session.session_id.clone(),
+        experiment_slot,
         model_override: model_override
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1172,6 +1263,7 @@ pub fn run_backend_eval(
         json!({
             "eval_id": record.id,
             "backends": record.backends,
+            "experiment_slot": record.experiment_slot,
             "model_override": record.model_override,
             "results": record.results,
             "runs_path": setup.runs_path,
@@ -1197,6 +1289,7 @@ pub fn run_backend_eval(
                 "direction": "egress",
                 "eval_id": record.id,
                 "backends": record.backends,
+                "experiment_slot": record.experiment_slot,
                 "model_override": record.model_override,
             })
             .to_string(),
@@ -1217,6 +1310,27 @@ pub fn run_backend_eval(
 pub fn list_backend_evals(bootstrap: &BootstrapReport) -> Result<Vec<BackendEvalRunRecord>> {
     let setup = setup_backend_evals(bootstrap)?;
     load_backend_eval_runs(&setup.runs_path)
+}
+
+/// Returns every bounded architecture experiment slot currently published for the repo.
+pub fn list_backend_experiment_slots(
+    bootstrap: &BootstrapReport,
+) -> Result<Vec<BackendExperimentSlotRecord>> {
+    let setup = setup_backend_evals(bootstrap)?;
+    load_backend_experiment_slots(&setup.slots_path)
+}
+
+/// Returns one bounded architecture experiment slot by id when it exists.
+pub fn get_backend_experiment_slot(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<Option<BackendExperimentSlotRecord>> {
+    let normalized = id.trim();
+    if normalized.is_empty() {
+        bail!("backend experiment slot id cannot be empty");
+    }
+    let slots = list_backend_experiment_slots(bootstrap)?;
+    Ok(slots.into_iter().find(|slot| slot.id == normalized))
 }
 
 /// Returns one durable backend eval run by id when it exists.

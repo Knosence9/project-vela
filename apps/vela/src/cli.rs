@@ -186,6 +186,8 @@ pub(crate) struct DashboardArgs {
 pub(crate) struct EvalArgs {
     #[arg(long = "run", group = "action")]
     pub(crate) run: Option<String>,
+    #[arg(long = "run-slot", group = "action")]
+    pub(crate) run_slot: Option<String>,
     #[arg(long = "backend")]
     pub(crate) backends: Vec<String>,
     #[arg(long = "model")]
@@ -194,6 +196,10 @@ pub(crate) struct EvalArgs {
     pub(crate) list: bool,
     #[arg(long = "show", group = "action")]
     pub(crate) show: Option<String>,
+    #[arg(long = "list-slots", default_value_t = false, group = "action")]
+    pub(crate) list_slots: bool,
+    #[arg(long = "show-slot", group = "action")]
+    pub(crate) show_slot: Option<String>,
 }
 
 #[derive(Debug, Default, Args)]
