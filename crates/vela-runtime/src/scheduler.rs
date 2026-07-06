@@ -554,7 +554,7 @@ fn execute_scheduled_job(
                     "response_model": report.response_model,
                     "session_id": report.session.session_id,
                 }),
-            )?;
+            );
             Ok(true)
         }
         Err(error) => {
@@ -606,7 +606,7 @@ fn execute_scheduled_job(
                     "failed_at": failed_at,
                     "error": error.to_string(),
                 }),
-            )?;
+            );
             Err(error)
         }
     }
@@ -621,83 +621,90 @@ fn maybe_deliver_scheduler_job_outcome(
     delivery_webhook_url: Option<&str>,
     delivery_event_type: Option<&str>,
     payload: serde_json::Value,
-) -> Result<()> {
+) {
     let Some(delivery_webhook_url) = delivery_webhook_url else {
-        return Ok(());
+        return;
     };
-    let payload_text = serde_json::to_string(&payload)?;
-    let attempted_at = unix_timestamp();
-    match deliver_gateway_webhook(
-        bootstrap,
-        delivery_webhook_url,
-        &payload_text,
-        delivery_event_type,
-    ) {
-        Ok(report) => {
-            let lock = acquire_scheduler_jobs_lock(jobs_path)?;
-            let mut jobs = load_scheduler_jobs(jobs_path)?;
-            if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
-                job.updated_at = attempted_at;
-                job.last_delivery_at = Some(attempted_at);
-                job.last_delivery_outcome = Some("delivered".to_string());
-                job.last_delivery_error = None;
-            }
-            save_scheduler_jobs(jobs_path, &jobs)?;
-            drop(lock);
 
-            let event_logged = vela_state::append_event_to_session(
-                &bootstrap.persistence.state_db_path,
-                scheduler_session_id,
-                "scheduler_job_delivery_completed",
-                json!({
-                    "job_id": job_id,
-                    "delivery_at": attempted_at,
-                    "execution_token": execution_token,
-                    "delivery_session_id": report.session.session_id,
-                    "event_type": report.event_type,
-                    "url": report.url,
-                    "status_code": report.status_code,
-                    "outbox_record_path": report.outbox_record_path,
-                })
-                .to_string(),
-            )?;
-            if !event_logged {
-                tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job delivery completion event");
+    let result = (|| -> Result<()> {
+        let payload_text = serde_json::to_string(&payload)?;
+        let attempted_at = unix_timestamp();
+        match deliver_gateway_webhook(
+            bootstrap,
+            delivery_webhook_url,
+            &payload_text,
+            delivery_event_type,
+        ) {
+            Ok(report) => {
+                let lock = acquire_scheduler_jobs_lock(jobs_path)?;
+                let mut jobs = load_scheduler_jobs(jobs_path)?;
+                if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
+                    job.updated_at = attempted_at;
+                    job.last_delivery_at = Some(attempted_at);
+                    job.last_delivery_outcome = Some("delivered".to_string());
+                    job.last_delivery_error = None;
+                }
+                save_scheduler_jobs(jobs_path, &jobs)?;
+                drop(lock);
+
+                let event_logged = vela_state::append_event_to_session(
+                    &bootstrap.persistence.state_db_path,
+                    scheduler_session_id,
+                    "scheduler_job_delivery_completed",
+                    json!({
+                        "job_id": job_id,
+                        "delivery_at": attempted_at,
+                        "execution_token": execution_token,
+                        "delivery_session_id": report.session.session_id,
+                        "event_type": report.event_type,
+                        "url": report.url,
+                        "status_code": report.status_code,
+                        "outbox_record_path": report.outbox_record_path,
+                    })
+                    .to_string(),
+                )?;
+                if !event_logged {
+                    tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job delivery completion event");
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                let lock = acquire_scheduler_jobs_lock(jobs_path)?;
+                let mut jobs = load_scheduler_jobs(jobs_path)?;
+                if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
+                    job.updated_at = attempted_at;
+                    job.last_delivery_at = Some(attempted_at);
+                    job.last_delivery_outcome = Some("failed".to_string());
+                    job.last_delivery_error = Some(error_text.clone());
+                }
+                save_scheduler_jobs(jobs_path, &jobs)?;
+                drop(lock);
+
+                let event_logged = vela_state::append_event_to_session(
+                    &bootstrap.persistence.state_db_path,
+                    scheduler_session_id,
+                    "scheduler_job_delivery_failed",
+                    json!({
+                        "job_id": job_id,
+                        "delivery_at": attempted_at,
+                        "execution_token": execution_token,
+                        "url": delivery_webhook_url,
+                        "event_type": delivery_event_type.unwrap_or("scheduler.job.outcome"),
+                        "error": error_text,
+                    })
+                    .to_string(),
+                )?;
+                if !event_logged {
+                    tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job delivery failure event");
+                }
             }
         }
-        Err(error) => {
-            let error_text = error.to_string();
-            let lock = acquire_scheduler_jobs_lock(jobs_path)?;
-            let mut jobs = load_scheduler_jobs(jobs_path)?;
-            if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
-                job.updated_at = attempted_at;
-                job.last_delivery_at = Some(attempted_at);
-                job.last_delivery_outcome = Some("failed".to_string());
-                job.last_delivery_error = Some(error_text.clone());
-            }
-            save_scheduler_jobs(jobs_path, &jobs)?;
-            drop(lock);
+        Ok(())
+    })();
 
-            let event_logged = vela_state::append_event_to_session(
-                &bootstrap.persistence.state_db_path,
-                scheduler_session_id,
-                "scheduler_job_delivery_failed",
-                json!({
-                    "job_id": job_id,
-                    "delivery_at": attempted_at,
-                    "execution_token": execution_token,
-                    "url": delivery_webhook_url,
-                    "event_type": delivery_event_type.unwrap_or("scheduler.job.outcome"),
-                    "error": error_text,
-                })
-                .to_string(),
-            )?;
-            if !event_logged {
-                tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job delivery failure event");
-            }
-        }
+    if let Err(error) = result {
+        tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, error=%error, "scheduler delivery bookkeeping failed after job execution settled");
     }
-    Ok(())
 }
 
 fn backfill_scheduler_job(job: &mut ScheduledJob, now: i64) {
