@@ -15,7 +15,7 @@
 - `--continue <name>` now resumes the latest session in the matched branch subtree, so continuing a parent or branch title prefers the freshest related descendant
 - bare `--continue` resumes the latest session
 - interactive vs single-turn mode is derived from whether query/image input is present
-- `status` reports the latest active session identity and first-pass extension registry state
+- `status` reports the latest active session identity, explicit backend API contracts, resolved backend selection, and first-pass extension registry state
 - `gateway` now bootstraps durable gateway directories/config, can resume a gateway-specific runtime session, and can deliver a bounded outbound webhook payload with a persisted outbox record
 - `agents` now persists bounded subagent delegation requests through a dedicated command-scoped runtime surface
 - `mcp` now persists bounded MCP bridge requests through a dedicated command-scoped runtime surface
@@ -24,6 +24,7 @@
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
 - `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama and a deterministic mock backend now serving as supported provider implementations behind that boundary
+- the backend API contract is now explicit: Vela exposes stable backend descriptors (API version, backend id, transport kind, model requirement, response-source mapping, and capability matrix) so future adapters and experiments can target a bounded kernel-owned interface instead of implicit provider wiring
 - provider capabilities are now treated as an explicit matrix rather than implicit backend quirks: both supported backends advertise text, bounded tool-loop, reflection/retry support, and first-pass image support
 - configured provider-backed turns, including image-backed turns for the supported providers, can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
 - approved read-only runtime tools now include targeted internal context retrieval for memory, session history, and skill content (`view_memory`, `search_session_history`, `view_skill`) in addition to the earlier snapshot/list tools

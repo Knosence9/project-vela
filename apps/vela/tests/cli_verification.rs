@@ -276,6 +276,10 @@ fn default_runtime_session_surfaces_in_status() {
     let status = run_vela(&vela_home, &["status"]);
     assert!(status.status.success(), "{}", stderr_text(&status));
     let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("backend api [2]:"));
+    assert!(status_stdout.contains("id=ollama transport=http-json"));
+    assert!(status_stdout.contains("id=mock transport=in-process"));
+    assert!(status_stdout.contains("resolved backend: none"));
     assert!(status_stdout.contains("active session: id=session-"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();

@@ -117,6 +117,15 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
         bootstrap.resolved_config.runtime_model,
         bootstrap.resolved_config.runtime_ollama_base_url,
     );
+    let backend_contracts = vela_runtime::supported_runtime_backend_contracts();
+    println!("backend api [{}]:", backend_contracts.len());
+    for contract in backend_contracts {
+        println!("- {}", contract.summary_line());
+    }
+    match vela_runtime::resolve_runtime_backend_contract(&bootstrap.resolved_config, None)? {
+        Some(contract) => println!("resolved backend: {}", contract.summary_line()),
+        None => println!("resolved backend: none"),
+    }
     println!(
         "persistence: state_db={} existed_before={} bootstrap_runs={} sessions_dir={} snapshot_pattern={}",
         bootstrap.persistence.state_db_path.display(),

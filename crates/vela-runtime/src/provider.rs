@@ -8,16 +8,16 @@ pub(crate) struct RenderedChatResponse {
     pub(crate) provider_capability_summary: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeProviderCapabilities {
-    pub(crate) supports_text: bool,
-    pub(crate) supports_tool_loop: bool,
-    pub(crate) supports_reflection_retry: bool,
-    pub(crate) supports_images: bool,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeProviderCapabilities {
+    pub supports_text: bool,
+    pub supports_tool_loop: bool,
+    pub supports_reflection_retry: bool,
+    pub supports_images: bool,
 }
 
 impl RuntimeProviderCapabilities {
-    pub(crate) fn summary_line(&self) -> String {
+    pub fn summary_line(&self) -> String {
         format!(
             "text={} tool_loop={} reflection_retry={} images={}",
             self.supports_text,
@@ -25,6 +25,96 @@ impl RuntimeProviderCapabilities {
             self.supports_reflection_retry,
             self.supports_images,
         )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeBackendContract {
+    pub api_version: u32,
+    pub id: &'static str,
+    pub transport: &'static str,
+    pub requires_model: bool,
+    pub default_base_url: Option<&'static str>,
+    pub direct_response_source: &'static str,
+    pub tool_loop_response_source: &'static str,
+    pub capabilities: RuntimeProviderCapabilities,
+}
+
+impl RuntimeBackendContract {
+    pub fn summary_line(&self) -> String {
+        format!(
+            "api=v{} id={} transport={} requires_model={} default_base_url={:?} sources=({}, {}) capabilities=({})",
+            self.api_version,
+            self.id,
+            self.transport,
+            self.requires_model,
+            self.default_base_url,
+            self.direct_response_source,
+            self.tool_loop_response_source,
+            self.capabilities.summary_line(),
+        )
+    }
+}
+
+pub fn supported_runtime_backend_contracts() -> Vec<RuntimeBackendContract> {
+    vec![ollama_backend_contract(), mock_backend_contract()]
+}
+
+pub fn resolve_runtime_backend_contract(
+    resolved: &ResolvedConfig,
+    provider_override: Option<&str>,
+) -> Result<Option<RuntimeBackendContract>> {
+    let provider_label = provider_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .or_else(|| {
+            resolved
+                .runtime_provider
+                .as_ref()
+                .map(|s| s.trim().to_ascii_lowercase())
+        });
+    match provider_label.as_deref() {
+        Some("ollama") => Ok(Some(ollama_backend_contract())),
+        Some("mock") => Ok(Some(mock_backend_contract())),
+        Some(other) => bail!("unsupported runtime provider {other:?}"),
+        None => Ok(None),
+    }
+}
+
+fn ollama_backend_contract() -> RuntimeBackendContract {
+    RuntimeBackendContract {
+        api_version: 1,
+        id: "ollama",
+        transport: "http-json",
+        requires_model: true,
+        default_base_url: Some("http://127.0.0.1:11434"),
+        direct_response_source: "runtime-ollama",
+        tool_loop_response_source: "runtime-ollama-tool-loop",
+        capabilities: RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: true,
+        },
+    }
+}
+
+fn mock_backend_contract() -> RuntimeBackendContract {
+    RuntimeBackendContract {
+        api_version: 1,
+        id: "mock",
+        transport: "in-process",
+        requires_model: false,
+        default_base_url: None,
+        direct_response_source: "runtime-mock",
+        tool_loop_response_source: "runtime-mock-tool-loop",
+        capabilities: RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: true,
+        },
     }
 }
 
@@ -68,12 +158,7 @@ impl RuntimeProviderBackend for OllamaRuntimeProvider {
     }
 
     fn capabilities(&self) -> RuntimeProviderCapabilities {
-        RuntimeProviderCapabilities {
-            supports_text: true,
-            supports_tool_loop: true,
-            supports_reflection_retry: true,
-            supports_images: true,
-        }
+        ollama_backend_contract().capabilities
     }
 
     fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
@@ -84,11 +169,11 @@ impl RuntimeProviderBackend for OllamaRuntimeProvider {
     }
 
     fn direct_response_source(&self) -> &'static str {
-        "runtime-ollama"
+        ollama_backend_contract().direct_response_source
     }
 
     fn tool_loop_response_source(&self) -> &'static str {
-        "runtime-ollama-tool-loop"
+        ollama_backend_contract().tool_loop_response_source
     }
 }
 
@@ -106,12 +191,7 @@ impl RuntimeProviderBackend for MockRuntimeProvider {
     }
 
     fn capabilities(&self) -> RuntimeProviderCapabilities {
-        RuntimeProviderCapabilities {
-            supports_text: true,
-            supports_tool_loop: true,
-            supports_reflection_retry: true,
-            supports_images: true,
-        }
+        mock_backend_contract().capabilities
     }
 
     fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
@@ -164,11 +244,11 @@ impl RuntimeProviderBackend for MockRuntimeProvider {
     }
 
     fn direct_response_source(&self) -> &'static str {
-        "runtime-mock"
+        mock_backend_contract().direct_response_source
     }
 
     fn tool_loop_response_source(&self) -> &'static str {
-        "runtime-mock-tool-loop"
+        mock_backend_contract().tool_loop_response_source
     }
 }
 
@@ -524,29 +604,23 @@ pub(crate) fn resolve_runtime_execution(
     provider_override: Option<&str>,
     model_override: Option<&str>,
 ) -> Result<RuntimeExecutionConfig> {
-    let provider_label = provider_override
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_ascii_lowercase())
-        .or_else(|| {
-            resolved
-                .runtime_provider
-                .as_ref()
-                .map(|s| s.trim().to_ascii_lowercase())
-        });
+    let contract = resolve_runtime_backend_contract(resolved, provider_override)?;
+    let provider_label = contract.as_ref().map(|item| item.id.to_string());
     let model = model_override
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .or_else(|| resolved.runtime_model.clone());
-    let provider = match provider_label.as_deref() {
+    let provider = match contract.as_ref().map(|item| item.id) {
         Some("ollama") => Some(Box::new(OllamaRuntimeProvider {
             label: "ollama".to_string(),
             model: model.clone(),
-            base_url: resolved
-                .runtime_ollama_base_url
-                .clone()
-                .unwrap_or_else(|| "http://127.0.0.1:11434".to_string()),
+            base_url: resolved.runtime_ollama_base_url.clone().unwrap_or_else(|| {
+                ollama_backend_contract()
+                    .default_base_url
+                    .unwrap_or("http://127.0.0.1:11434")
+                    .to_string()
+            }),
         }) as Box<dyn RuntimeProviderBackend>),
         Some("mock") => Some(Box::new(MockRuntimeProvider {
             label: "mock".to_string(),
@@ -555,7 +629,7 @@ pub(crate) fn resolve_runtime_execution(
         Some(other) => bail!("unsupported runtime provider {other:?}"),
         None => None,
     };
-    let provider_capabilities = provider.as_deref().map(|provider| provider.capabilities());
+    let provider_capabilities = contract.map(|item| item.capabilities);
 
     Ok(RuntimeExecutionConfig {
         provider,
