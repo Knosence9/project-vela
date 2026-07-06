@@ -347,6 +347,72 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     let _ = std::fs::remove_dir_all(&vela_home);
 }
 
+#[test]
+/// Verifies that extension reload compares against a durable ownership baseline across fresh bootstraps.
+fn reload_extensions_uses_durable_ownership_baseline_across_bootstraps() {
+    let vela_home = std::env::temp_dir().join(format!(
+        "vela-runtime-ext-reload-baseline-{}",
+        unix_timestamp_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&vela_home);
+    std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
+    std::fs::write(
+        vela_home.join("extensions").join("demo.yaml"),
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: http://127.0.0.1:11434\nextensions: {}\n",
+    )
+    .unwrap();
+
+    let (_, old_resolved_config) = vela_config::reload_config_snapshot(&vela_home, false).unwrap();
+    ensure_runtime_config_ownership_baseline(&vela_home, &old_resolved_config).unwrap();
+    let baseline_path = runtime_config_ownership_baseline_path(&vela_home);
+    assert!(baseline_path.is_file());
+    let baseline_before = std::fs::read_to_string(&baseline_path).unwrap();
+    assert!(baseline_before.contains("\"runtime_provider\": \"ollama\""));
+
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: changed\n  ollama_base_url: http://127.0.0.1:22555\nextensions: {}\n",
+    )
+    .unwrap();
+
+    let (_, new_resolved_config) = vela_config::reload_config_snapshot(&vela_home, false).unwrap();
+    let second = BootstrapReport {
+        vela_home: vela_home.clone(),
+        active_profile: None,
+        loaded_env_paths: vec![],
+        ignored_user_config: false,
+        config_sources: vec![],
+        resolved_config: new_resolved_config,
+        persistence: vela_state::initialize_persistence(&vela_home).unwrap(),
+        memory: vela_memory::initialize_memory(&vela_home).unwrap(),
+        skills: vela_skills::initialize_skills(&vela_home).unwrap(),
+        reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
+        extensions: vela_extensions::initialize_extensions(
+            &vela_home,
+            &vela_config::reload_config_snapshot(&vela_home, false)
+                .unwrap()
+                .1,
+        )
+        .unwrap(),
+    };
+    let drifted = reload_extensions(&second).unwrap();
+    assert!(drifted.ownership_blocked);
+    assert_eq!(drifted.restart_required_drifts.len(), 3);
+    assert!(drifted
+        .restart_required_drifts
+        .iter()
+        .any(|item| item.field == "runtime.provider"));
+    let baseline_after = std::fs::read_to_string(&baseline_path).unwrap();
+    assert!(baseline_after.contains("\"runtime_provider\": \"ollama\""));
+
+    let _ = std::fs::remove_dir_all(&vela_home);
+}
+
 struct MockOllamaExchange<'a> {
     response_body: &'a str,
     expected_model: &'a str,

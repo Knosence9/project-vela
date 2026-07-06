@@ -267,6 +267,48 @@ pub struct ExtensionReloadReport {
     pub ownership_blocked: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeConfigOwnershipBaseline {
+    display_interface: Option<String>,
+    hooks_auto_accept: Option<bool>,
+    security_redact_secrets: Option<bool>,
+    network_force_ipv4: Option<bool>,
+    runtime_provider: Option<String>,
+    runtime_model: Option<String>,
+    runtime_ollama_base_url: Option<String>,
+    runtime_llamacpp_base_url: Option<String>,
+}
+
+impl RuntimeConfigOwnershipBaseline {
+    fn from_resolved_config(config: &ResolvedConfig) -> Self {
+        Self {
+            display_interface: config.display_interface.clone(),
+            hooks_auto_accept: config.hooks_auto_accept,
+            security_redact_secrets: config.security_redact_secrets,
+            network_force_ipv4: config.network_force_ipv4,
+            runtime_provider: config.runtime_provider.clone(),
+            runtime_model: config.runtime_model.clone(),
+            runtime_ollama_base_url: config.runtime_ollama_base_url.clone(),
+            runtime_llamacpp_base_url: config.runtime_llamacpp_base_url.clone(),
+        }
+    }
+
+    fn into_resolved_config(self) -> ResolvedConfig {
+        ResolvedConfig {
+            display_interface: self.display_interface,
+            hooks_auto_accept: self.hooks_auto_accept,
+            security_redact_secrets: self.security_redact_secrets,
+            network_force_ipv4: self.network_force_ipv4,
+            runtime_provider: self.runtime_provider,
+            runtime_model: self.runtime_model,
+            runtime_ollama_base_url: self.runtime_ollama_base_url,
+            runtime_llamacpp_base_url: self.runtime_llamacpp_base_url,
+            extension_manifests_dir: None,
+            extension_entries: vec![],
+        }
+    }
+}
+
 impl ExtensionReloadReport {
     /// Renders a compact reload summary including restart-required config drift.
     pub fn summary_line(&self) -> String {
@@ -366,6 +408,7 @@ pub fn initialize_bootstrap(
     let reviews = vela_review::initialize_reviews(&config.vela_home)?;
     let extensions =
         vela_extensions::initialize_extensions(&config.vela_home, &config.resolved_config)?;
+    ensure_runtime_config_ownership_baseline(&config.vela_home, &config.resolved_config)?;
     Ok(BootstrapReport::from_parts(
         config,
         persistence,
@@ -412,16 +455,83 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         (None, None) => true,
         _ => false,
     };
+    let previous_config = load_runtime_config_ownership_baseline(&bootstrap.vela_home)?
+        .unwrap_or_else(|| bootstrap.resolved_config.clone());
     let restart_required_drifts =
-        restart_required_runtime_drifts(&bootstrap.resolved_config, &resolved_config);
+        restart_required_runtime_drifts(&previous_config, &resolved_config);
+    let ownership_blocked = !restart_required_drifts.is_empty();
+    if !ownership_blocked {
+        persist_runtime_config_ownership_baseline(&bootstrap.vela_home, &resolved_config)?;
+    }
     Ok(ExtensionReloadReport {
         extensions,
         preserved_session,
         session_before,
         session_after,
-        ownership_blocked: !restart_required_drifts.is_empty(),
+        ownership_blocked,
         restart_required_drifts,
     })
+}
+
+pub(crate) fn runtime_config_ownership_baseline_path(
+    vela_home: &std::path::Path,
+) -> std::path::PathBuf {
+    vela_home
+        .join("runtime")
+        .join("reload-ownership-baseline.json")
+}
+
+pub(crate) fn ensure_runtime_config_ownership_baseline(
+    vela_home: &std::path::Path,
+    resolved_config: &ResolvedConfig,
+) -> Result<()> {
+    let path = runtime_config_ownership_baseline_path(vela_home);
+    if path.exists() {
+        return Ok(());
+    }
+    persist_runtime_config_ownership_baseline(vela_home, resolved_config)
+}
+
+pub(crate) fn load_runtime_config_ownership_baseline(
+    vela_home: &std::path::Path,
+) -> Result<Option<ResolvedConfig>> {
+    let path = runtime_config_ownership_baseline_path(vela_home);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(None);
+    }
+    let baseline: RuntimeConfigOwnershipBaseline = serde_json::from_str(&content)
+        .with_context(|| format!("failed to decode {}", path.display()))?;
+    Ok(Some(baseline.into_resolved_config()))
+}
+
+pub(crate) fn persist_runtime_config_ownership_baseline(
+    vela_home: &std::path::Path,
+    resolved_config: &ResolvedConfig,
+) -> Result<()> {
+    let path = runtime_config_ownership_baseline_path(vela_home);
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("runtime ownership baseline path has no parent"))?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
+    let temp_path = parent.join(format!(
+        "{}.tmp-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("reload-ownership-baseline.json"),
+        unix_timestamp_nanos()
+    ));
+    let baseline = RuntimeConfigOwnershipBaseline::from_resolved_config(resolved_config);
+    std::fs::write(&temp_path, serde_json::to_string_pretty(&baseline)?)
+        .with_context(|| format!("failed to write {}", temp_path.display()))?;
+    std::fs::rename(&temp_path, &path)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    Ok(())
 }
 
 fn restart_required_runtime_drifts(
