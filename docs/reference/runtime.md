@@ -23,9 +23,9 @@
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
-- `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama and a deterministic mock backend now serving as supported provider implementations behind that boundary
+- `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama, a deterministic mock backend, and a bounded llama.cpp backend now serving as supported provider implementations behind that boundary
 - the backend API contract is now explicit: Vela exposes stable backend descriptors (API version, backend id, transport kind, model requirement, response-source mapping, and capability matrix) so future adapters and experiments can target a bounded kernel-owned interface instead of implicit provider wiring
-- provider capabilities are now treated as an explicit matrix rather than implicit backend quirks: both supported backends advertise text, bounded tool-loop, reflection/retry support, and first-pass image support
+- provider capabilities are now treated as an explicit matrix rather than implicit backend quirks: Ollama and mock advertise text, bounded tool-loop, reflection/retry support, and first-pass image support, while the bounded llama.cpp backend advertises text/tool-loop/reflection support without direct image attachments
 - configured provider-backed turns, including image-backed turns for the supported providers, can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
 - approved read-only runtime tools now include targeted internal context retrieval for memory, session history, and skill content (`view_memory`, `search_session_history`, `view_skill`) in addition to the earlier snapshot/list tools
 - provider-backed turns, including supported image-backed turns, now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
@@ -41,7 +41,7 @@
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
 - tool, skill, and workflow extensions may activate on boot when they provide a non-empty entry path; service extensions remain metadata-only in this slice, and unsupported service `on-boot` requests fail explicitly in status/reload output
 - `vela extensions --reload` now re-reads extension config + manifest files, recomputes lifecycle transitions, refreshes extension state without resetting durable session state, and fails explicitly when kernel-owned runtime drift is detected, surfacing owned config boundaries such as `runtime.provider@kernel-runtime`
-- `vela chat --image ...` and mixed `vela chat --query ... --image ...` turns can call a configured runtime provider for first-pass image execution, with both Ollama and the deterministic mock backend now serving that path through the provider boundary
+- `vela chat --image ...` and mixed `vela chat --query ... --image ...` turns can call a configured runtime provider for first-pass image execution, with Ollama and the deterministic mock backend serving that path directly while llama.cpp falls back to the deterministic kernel image scaffold because its bounded contract is text-only
 - runtime turn CLI output now prints the resolved response route (`source`, optional `provider`, optional `model`, and advertised provider capabilities) so backend differences stay visible even when execution falls back to the kernel path
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
@@ -59,7 +59,7 @@
 - keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel
 - keep provider-specific request transport, response decoding, and provider-local safety validation behind a provider backend boundary
 - treat Ollama as the first provider implementation rather than the runtime’s permanent hard-coded execution path
-- preserve local-only Ollama safety (`VELA_ALLOW_REMOTE_OLLAMA` opt-in for remote endpoints) inside the Ollama provider implementation
+- preserve local-only provider safety (`VELA_ALLOW_REMOTE_OLLAMA` and `VELA_ALLOW_REMOTE_LLAMACPP` opt-ins for remote endpoints) inside the provider implementations
 
 ## Kernel vs extension boundary
 - keep durable session/state ownership in-kernel (`vela-state`, runtime lifecycle, approvals, persistence, scheduler continuity, and scheduler execution recovery)

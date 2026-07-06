@@ -108,7 +108,7 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
         );
     }
     println!(
-        "resolved config: display.interface={:?} hooks_auto_accept={:?} security.redact_secrets={:?} network.force_ipv4={:?} runtime.provider={:?} runtime.model={:?} runtime.ollama_base_url={:?}",
+        "resolved config: display.interface={:?} hooks_auto_accept={:?} security.redact_secrets={:?} network.force_ipv4={:?} runtime.provider={:?} runtime.model={:?} runtime.ollama_base_url={:?} runtime.llamacpp_base_url={:?}",
         bootstrap.resolved_config.display_interface,
         bootstrap.resolved_config.hooks_auto_accept,
         bootstrap.resolved_config.security_redact_secrets,
@@ -116,6 +116,7 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
         bootstrap.resolved_config.runtime_provider,
         bootstrap.resolved_config.runtime_model,
         bootstrap.resolved_config.runtime_ollama_base_url,
+        bootstrap.resolved_config.runtime_llamacpp_base_url,
     );
     let backend_contracts = vela_runtime::supported_runtime_backend_contracts();
     println!("backend api [{}]:", backend_contracts.len());

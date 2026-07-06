@@ -102,7 +102,11 @@ fn load_resolved_config(config_sources: &mut [ConfigSource]) -> Result<ResolvedC
         network_force_ipv4: decoded.network.and_then(|n| n.force_ipv4),
         runtime_provider: decoded.runtime.as_ref().and_then(|r| r.provider.clone()),
         runtime_model: decoded.runtime.as_ref().and_then(|r| r.model.clone()),
-        runtime_ollama_base_url: decoded.runtime.and_then(|r| r.ollama_base_url),
+        runtime_ollama_base_url: decoded
+            .runtime
+            .as_ref()
+            .and_then(|r| r.ollama_base_url.clone()),
+        runtime_llamacpp_base_url: decoded.runtime.and_then(|r| r.llamacpp_base_url),
         extension_manifests_dir: decoded
             .extensions
             .and_then(|extensions| extensions.manifests_dir),
@@ -184,6 +188,7 @@ struct RuntimeConfig {
     provider: Option<String>,
     model: Option<String>,
     ollama_base_url: Option<String>,
+    llamacpp_base_url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

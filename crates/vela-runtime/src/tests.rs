@@ -24,7 +24,7 @@ fn test_bootstrap(prefix: &str) -> BootstrapReport {
 /// Verifies that the supported backend API contracts stay explicit and stable for current bounded backends.
 fn supported_runtime_backend_contracts_are_explicit() {
     let contracts = supported_runtime_backend_contracts();
-    assert_eq!(contracts.len(), 2);
+    assert_eq!(contracts.len(), 3);
     assert!(contracts.iter().any(|contract| {
         contract.id == "ollama"
             && contract.transport == "http-json"
@@ -42,6 +42,15 @@ fn supported_runtime_backend_contracts_are_explicit() {
             && contract.direct_response_source == "runtime-mock"
             && contract.tool_loop_response_source == "runtime-mock-tool-loop"
             && contract.capabilities.supports_tool_loop
+    }));
+    assert!(contracts.iter().any(|contract| {
+        contract.id == "llamacpp"
+            && contract.transport == "http-json"
+            && contract.requires_model
+            && contract.default_base_url == Some("http://127.0.0.1:8080")
+            && contract.direct_response_source == "runtime-llamacpp"
+            && contract.tool_loop_response_source == "runtime-llamacpp-tool-loop"
+            && !contract.capabilities.supports_images
     }));
 }
 
@@ -104,8 +113,73 @@ fn resolve_runtime_backend_contract_prefers_override_and_config() {
     assert_eq!(overridden.id, "mock");
     assert_eq!(overridden.transport, "in-process");
 
+    let llamacpp = resolve_runtime_backend_contract(&resolved, Some("llama.cpp"))
+        .unwrap()
+        .expect("llama.cpp backend contract");
+    assert_eq!(llamacpp.id, "llamacpp");
+    assert_eq!(llamacpp.transport, "http-json");
+
     let err = resolve_runtime_backend_contract(&resolved, Some("unknown")).unwrap_err();
     assert!(err.to_string().contains("unsupported runtime provider"));
+}
+
+#[test]
+/// Verifies that runtime execution resolves the llama.cpp backend through the provider boundary.
+fn resolve_runtime_execution_wraps_llamacpp_provider_backend() {
+    let resolved = ResolvedConfig {
+        runtime_provider: Some("llamacpp".to_string()),
+        runtime_model: Some("phi-3-mini".to_string()),
+        runtime_llamacpp_base_url: Some("http://127.0.0.1:8080".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let execution = resolve_runtime_execution(&resolved, None, None).unwrap();
+    let provider = execution
+        .provider
+        .as_deref()
+        .expect("resolved provider backend");
+
+    assert_eq!(execution.provider_label.as_deref(), Some("llamacpp"));
+    assert_eq!(
+        execution.provider_capabilities,
+        Some(RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: false,
+        })
+    );
+    assert_eq!(execution.model.as_deref(), Some("phi-3-mini"));
+    assert_eq!(provider.label(), "llamacpp");
+    assert_eq!(provider.model(), Some("phi-3-mini"));
+    assert_eq!(provider.direct_response_source(), "runtime-llamacpp");
+    assert_eq!(
+        provider.tool_loop_response_source(),
+        "runtime-llamacpp-tool-loop"
+    );
+    assert!(!provider.supports_images());
+    provider.validate().unwrap();
+}
+
+#[test]
+/// Verifies that the llama.cpp provider keeps local-only endpoint policy by default.
+fn llamacpp_provider_rejects_remote_base_url_without_opt_in() {
+    let resolved = ResolvedConfig {
+        runtime_provider: Some("llamacpp".to_string()),
+        runtime_model: Some("phi-3-mini".to_string()),
+        runtime_llamacpp_base_url: Some("http://10.0.0.15:8080".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let execution = resolve_runtime_execution(&resolved, None, None).unwrap();
+    let provider = execution
+        .provider
+        .as_deref()
+        .expect("resolved provider backend");
+    let err = provider.validate().unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("refusing non-local llama.cpp endpoint"));
 }
 
 #[test]
