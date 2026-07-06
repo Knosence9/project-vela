@@ -310,11 +310,14 @@ fn pending_dir(vela_home: &Path) -> PathBuf {
     vela_home.join("pending").join("skills")
 }
 
-fn ensure_no_pending_conflict(vela_home: &Path, name: &str, conflicting_actions: &[&str]) -> Result<()> {
-    if let Some(conflict) = list_pending(vela_home)?
-        .into_iter()
-        .find(|pending| pending.name == name && conflicting_actions.contains(&pending.action.as_str()))
-    {
+fn ensure_no_pending_conflict(
+    vela_home: &Path,
+    name: &str,
+    conflicting_actions: &[&str],
+) -> Result<()> {
+    if let Some(conflict) = list_pending(vela_home)?.into_iter().find(|pending| {
+        pending.name == name && conflicting_actions.contains(&pending.action.as_str())
+    }) {
         bail!(
             "skill {:?} already has pending {} action {}",
             name,
@@ -366,8 +369,8 @@ fn render_skill(name: &str, description: Option<&str>, body: Option<&str>) -> St
 }
 
 fn extract_description(path: &Path) -> Result<Option<String>> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let mut lines = content.lines().peekable();
     while let Some(line) = lines.next() {
         if line.trim() == "---" {
@@ -421,12 +424,17 @@ mod tests {
 
     #[test]
     fn stage_skill_actions_reject_duplicate_or_conflicting_pending_work() {
-        let vela_home = std::env::temp_dir().join(format!("vela-skills-test-{}", unix_timestamp_nanos()));
+        let vela_home =
+            std::env::temp_dir().join(format!("vela-skills-test-{}", unix_timestamp_nanos()));
         initialize_skills(&vela_home).unwrap();
 
-        let pending = stage_create_skill(&vela_home, "deploy-staging", Some("desc"), Some("body")).unwrap();
-        let err = stage_create_skill(&vela_home, "deploy-staging", Some("desc"), Some("body")).unwrap_err();
-        assert!(err.to_string().contains("already has pending create action"));
+        let pending =
+            stage_create_skill(&vela_home, "deploy-staging", Some("desc"), Some("body")).unwrap();
+        let err = stage_create_skill(&vela_home, "deploy-staging", Some("desc"), Some("body"))
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("already has pending create action"));
 
         reject_pending(&vela_home, &pending.id).unwrap();
         create_skill(&vela_home, "deploy-staging", Some("desc"), Some("body")).unwrap();

@@ -180,9 +180,9 @@ fn finalize_record(
 
 fn activation_failure(kind: Option<&ExtensionKind>, entry: Option<&str>) -> Option<String> {
     match kind {
-        Some(ExtensionKind::Service) => Some(
-            "service extensions cannot request on-boot activation in this slice".to_string(),
-        ),
+        Some(ExtensionKind::Service) => {
+            Some("service extensions cannot request on-boot activation in this slice".to_string())
+        }
         Some(ExtensionKind::Tool | ExtensionKind::Skill | ExtensionKind::Workflow) => {
             match entry.map(str::trim).filter(|value| !value.is_empty()) {
                 Some(_) => None,
@@ -213,12 +213,8 @@ fn metadata_only_detail(kind: Option<&ExtensionKind>) -> String {
 
 fn activation_success_detail(kind: Option<&ExtensionKind>) -> String {
     match kind {
-        Some(ExtensionKind::Tool) => {
-            "tool extension activated during bootstrap".to_string()
-        }
-        Some(ExtensionKind::Skill) => {
-            "skill extension activated during bootstrap".to_string()
-        }
+        Some(ExtensionKind::Tool) => "tool extension activated during bootstrap".to_string(),
+        Some(ExtensionKind::Skill) => "skill extension activated during bootstrap".to_string(),
         Some(ExtensionKind::Workflow) => {
             "workflow extension activated during bootstrap".to_string()
         }
