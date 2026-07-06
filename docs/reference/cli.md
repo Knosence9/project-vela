@@ -137,8 +137,11 @@ README-visible shared slash commands:
 
 ## Backend eval surface
 - `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run
+- `vela eval --run-slot ternary-preview [--backend <id>...] [--model <name>]` executes the first bounded architecture experiment slot without changing the live kernel route
 - `vela eval --list` shows durable backend eval runs
 - `vela eval --show <id>` shows one durable backend eval run with per-backend results
+- `vela eval --list-slots` shows published bounded architecture experiment slots
+- `vela eval --show-slot <id>` shows one bounded architecture experiment slot by id
 
 ## Still needed
 - exact subcommands under groups like `sessions`, `auth`, `cron`, and `dashboard`

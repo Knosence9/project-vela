@@ -331,9 +331,41 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
             args.model.as_deref(),
         )?;
         println!(
-            "backend eval run: id={} session={} backends={} results={} prompt={:?}",
+            "backend eval run: id={} session={} slot={:?} backends={} results={} prompt={:?}",
             report.record.id,
             report.session.session_id,
+            report.record.experiment_slot,
+            report.record.backends.join(","),
+            report.record.results.len(),
+            report.record.prompt,
+        );
+        for result in &report.record.results {
+            println!(
+                "- backend={} transport={} status={} duration_ms={} source={:?} model={:?} response_chars={} capabilities={:?} error={:?} preview={:?}",
+                result.backend_id,
+                result.transport,
+                result.status,
+                result.duration_ms,
+                result.response_source,
+                result.response_model,
+                result.response_chars,
+                result.provider_capabilities,
+                result.error,
+                result.response_preview,
+            );
+        }
+    } else if let Some(slot) = args.run_slot.as_deref() {
+        let report = vela_runtime::run_backend_eval_slot(
+            bootstrap,
+            slot,
+            &args.backends,
+            args.model.as_deref(),
+        )?;
+        println!(
+            "backend eval run: id={} session={} slot={:?} backends={} results={} prompt={:?}",
+            report.record.id,
+            report.session.session_id,
+            report.record.experiment_slot,
             report.record.backends.join(","),
             report.record.results.len(),
             report.record.prompt,
@@ -358,10 +390,11 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
         println!("backend eval runs [{}]:", runs.len());
         for run in runs {
             println!(
-                "- {} :: created_at={} session={} backends={} results={} prompt={:?}",
+                "- {} :: created_at={} session={} slot={:?} backends={} results={} prompt={:?}",
                 run.id,
                 run.created_at,
                 run.session_id,
+                run.experiment_slot,
                 run.backends.join(","),
                 run.results.len(),
                 run.prompt,
@@ -371,10 +404,11 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
         match vela_runtime::get_backend_eval(bootstrap, id)? {
             Some(run) => {
                 println!(
-                    "backend eval: id={} created_at={} session={} backends={} results={} prompt={:?}",
+                    "backend eval: id={} created_at={} session={} slot={:?} backends={} results={} prompt={:?}",
                     run.id,
                     run.created_at,
                     run.session_id,
+                    run.experiment_slot,
                     run.backends.join(","),
                     run.results.len(),
                     run.prompt,
@@ -397,23 +431,54 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
             }
             None => println!("backend eval: not found for {:?}", id),
         }
+    } else if args.list_slots {
+        let slots = vela_runtime::list_backend_experiment_slots(bootstrap)?;
+        println!("backend experiment slots [{}]:", slots.len());
+        for slot in slots {
+            println!(
+                "- {} :: status={} strategy={} backends={} prompt={:?} summary={:?}",
+                slot.id,
+                slot.status,
+                slot.strategy,
+                slot.allowed_backends.join(","),
+                slot.default_prompt,
+                slot.summary,
+            );
+        }
+    } else if let Some(id) = args.show_slot.as_deref() {
+        match vela_runtime::get_backend_experiment_slot(bootstrap, id)? {
+            Some(slot) => println!(
+                "backend experiment slot: id={} status={} strategy={} backends={} prompt={:?} summary={:?} hypothesis={:?}",
+                slot.id,
+                slot.status,
+                slot.strategy,
+                slot.allowed_backends.join(","),
+                slot.default_prompt,
+                slot.summary,
+                slot.hypothesis,
+            ),
+            None => println!("backend experiment slot: not found for {:?}", id),
+        }
     } else {
         let setup = vela_runtime::setup_backend_evals(bootstrap)?;
         match vela_runtime::current_command_session_summary(bootstrap, "eval")? {
             Some(session) => println!(
-                "eval ready: dir={} runs={} session={} title={} messages={} events={}",
+                "eval ready: dir={} runs={} slots={} session={} title={} messages={} events={}",
                 setup.evals_dir.display(),
                 setup.run_count,
+                setup.slot_count,
                 session.id,
                 session.title,
                 session.message_count,
                 session.event_count,
             ),
             None => println!(
-                "eval ready: dir={} runs={} session=none file={}",
+                "eval ready: dir={} runs={} slots={} session=none file={} slots_file={}",
                 setup.evals_dir.display(),
                 setup.run_count,
+                setup.slot_count,
                 setup.runs_path.display(),
+                setup.slots_path.display(),
             ),
         }
     }
