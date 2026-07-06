@@ -21,7 +21,7 @@
 - `mcp` now persists bounded MCP bridge requests through a dedicated command-scoped runtime surface
 - `cron` now bootstraps durable scheduler config/job state, can resume a scheduler-specific runtime session, can execute due jobs through the kernel scheduler path, and can deliver job outcomes through the gateway webhook path
 - `eval` now bootstraps a durable backend-comparison harness that can execute bounded prompt comparisons across selected backends and persist per-backend results for later inspection
-- the eval harness now also publishes one bounded architecture experiment slot (`ternary-preview`) for future ternary/sparse routing work without changing the live kernel route
+- the eval harness now publishes multiple bounded provider experiment slots (`ternary-preview`, `local-first-replay`, and `capability-parity-scan`) so broader provider experimentation can happen through durable, named lanes without changing the live kernel route
 - a durable model-lab policy now lives alongside eval state so deeper model-core work stays governed by explicit graduation gates, allowed strategies, prohibited behaviors, and required evidence
 
 ## Current runtime behavior

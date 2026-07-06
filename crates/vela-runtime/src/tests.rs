@@ -348,6 +348,44 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
 }
 
 #[test]
+/// Verifies that legacy slot registries are upgraded with the current default provider experiment slots.
+fn setup_backend_evals_upgrades_legacy_slot_registry() {
+    let bootstrap = test_bootstrap("eval-slot-upgrade");
+    let evals_dir = bootstrap.vela_home.join("evals");
+    std::fs::create_dir_all(&evals_dir).unwrap();
+    let slots_path = evals_dir.join("slots.json");
+    std::fs::write(
+        &slots_path,
+        serde_json::to_string_pretty(&vec![BackendExperimentSlotRecord {
+            id: "ternary-preview".to_string(),
+            status: "bounded-preview".to_string(),
+            strategy: "shadow-routing".to_string(),
+            summary: Some("legacy slot".to_string()),
+            hypothesis: Some("legacy hypothesis".to_string()),
+            default_prompt: "legacy prompt".to_string(),
+            allowed_backends: vec!["mock".to_string()],
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let setup = setup_backend_evals(&bootstrap).unwrap();
+    assert_eq!(setup.slot_count, 3);
+
+    let slots = list_backend_experiment_slots(&bootstrap).unwrap();
+    assert_eq!(slots.len(), 3);
+    assert!(slots.iter().any(|slot| slot.id == "ternary-preview"));
+    assert!(slots.iter().any(|slot| slot.id == "local-first-replay"));
+    assert!(slots.iter().any(|slot| slot.id == "capability-parity-scan"));
+
+    let persisted = std::fs::read_to_string(&slots_path).unwrap();
+    assert!(persisted.contains("local-first-replay"));
+    assert!(persisted.contains("capability-parity-scan"));
+
+    let _ = std::fs::remove_dir_all(&bootstrap.vela_home);
+}
+
+#[test]
 /// Verifies that extension reload compares against a durable ownership baseline across fresh bootstraps.
 fn reload_extensions_uses_durable_ownership_baseline_across_bootstraps() {
     let vela_home = std::env::temp_dir().join(format!(

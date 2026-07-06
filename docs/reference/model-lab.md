@@ -29,3 +29,5 @@ Keep deeper model-core experimentation bounded, reversible, and evidence-driven 
 - `~/.vela/evals/slots.json`
 - `vela eval --list-slots`
 - `vela eval --run-slot ternary-preview`
+- `vela eval --run-slot local-first-replay`
+- `vela eval --run-slot capability-parity-scan`
