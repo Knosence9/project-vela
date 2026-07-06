@@ -130,6 +130,10 @@ pub(crate) struct CronArgs {
     pub(crate) schedule: Option<String>,
     #[arg(long = "source", requires = "add")]
     pub(crate) source: Option<String>,
+    #[arg(long = "delivery-webhook-url", requires = "add")]
+    pub(crate) delivery_webhook_url: Option<String>,
+    #[arg(long = "delivery-event-type", requires = "delivery_webhook_url")]
+    pub(crate) delivery_event_type: Option<String>,
 }
 
 #[derive(Debug, Default, Args)]

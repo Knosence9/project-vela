@@ -1183,7 +1183,17 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
 
     let add = run_vela(
         &vela_home,
-        &["cron", "--add", "ping status", "--schedule", "0 * * * *"],
+        &[
+            "cron",
+            "--add",
+            "ping status",
+            "--schedule",
+            "0 * * * *",
+            "--delivery-webhook-url",
+            "https://example.test/hook",
+            "--delivery-event-type",
+            "scheduler.job.outcome",
+        ],
     );
     assert!(add.status.success(), "{}", stderr_text(&add));
     let add_stdout = stdout_text(&add);
@@ -1198,6 +1208,8 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     assert!(show_stdout.contains("task=ping status"));
     assert!(show_stdout.contains("next_run_at="));
     assert!(show_stdout.contains("progression=Some(\"registered\")"));
+    assert!(show_stdout.contains("delivery_webhook_url=Some(\"https://example.test/hook\")"));
+    assert!(show_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
 
     let list = run_vela(&vela_home, &["cron", "--list"]);
     assert!(list.status.success(), "{}", stderr_text(&list));
@@ -1205,6 +1217,7 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     assert!(list_stdout.contains(job_id));
     assert!(list_stdout.contains("run_count=0"));
     assert!(list_stdout.contains("progression=Some(\"registered\")"));
+    assert!(list_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
 
     let invalid = run_vela(&vela_home, &["cron", "--schedule", "0 * * * *"]);
     assert!(!invalid.status.success());
@@ -1216,11 +1229,76 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
 #[test]
 /// Verifies that starting the scheduler executes due jobs and records durable run metadata.
 fn cron_start_executes_due_jobs() {
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
     let vela_home = temp_vela_home("cron-start");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind scheduler webhook");
+    listener
+        .set_nonblocking(true)
+        .expect("configure scheduler webhook listener");
+    let url = format!(
+        "http://{}{}",
+        listener.local_addr().expect("scheduler webhook addr"),
+        "/deliver"
+    );
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(pair) => break pair,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for scheduler delivery"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept scheduler delivery: {error}"),
+            }
+        };
+        let request = read_mock_http_request(&mut stream);
+        let (_, body_text) = request.split_once("\r\n\r\n").expect("split headers/body");
+        let payload: serde_json::Value =
+            serde_json::from_str(body_text).expect("decode webhook JSON body");
+        assert_eq!(
+            payload.get("event_type").and_then(|v| v.as_str()),
+            Some("scheduler.job.outcome")
+        );
+        let nested: serde_json::Value = serde_json::from_str(
+            payload
+                .get("payload")
+                .and_then(|v| v.as_str())
+                .expect("nested payload"),
+        )
+        .expect("decode nested payload");
+        assert_eq!(
+            nested.get("outcome").and_then(|v| v.as_str()),
+            Some("completed")
+        );
+        assert_eq!(
+            nested.get("task").and_then(|v| v.as_str()),
+            Some("ping status")
+        );
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .expect("write scheduler webhook response");
+    });
 
     let add = run_vela(
         &vela_home,
-        &["cron", "--add", "ping status", "--schedule", "* * * * *"],
+        &[
+            "cron",
+            "--add",
+            "ping status",
+            "--schedule",
+            "* * * * *",
+            "--delivery-webhook-url",
+            &url,
+            "--delivery-event-type",
+            "scheduler.job.outcome",
+        ],
     );
     assert!(add.status.success(), "{}", stderr_text(&add));
     let add_stdout = stdout_text(&add);
@@ -1248,6 +1326,8 @@ fn cron_start_executes_due_jobs() {
     assert!(show_stdout.contains("run_count=1"));
     assert!(show_stdout.contains("outcome=Some(\"completed\")"));
     assert!(show_stdout.contains("progression=Some(\"completed-rescheduled\")"));
+    assert!(show_stdout.contains("delivery_outcome=Some(\"delivered\")"));
 
+    server.join().unwrap();
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

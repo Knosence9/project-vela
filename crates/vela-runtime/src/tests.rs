@@ -348,12 +348,14 @@ fn spawn_mock_ollama(
 fn scheduler_jobs_persist_and_dedupe() {
     let bootstrap = test_bootstrap("scheduler-test");
 
-    let first = add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None).unwrap();
+    let first =
+        add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None, None, None).unwrap();
     let jobs = list_scheduled_jobs(&bootstrap).unwrap();
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].id, first.id);
 
-    let err = add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None).unwrap_err();
+    let err =
+        add_scheduled_job(&bootstrap, "0 * * * *", "ping status", None, None, None).unwrap_err();
     assert!(err.to_string().contains("already registered"));
 
     let fetched = get_scheduled_job(&bootstrap, &first.id).unwrap();
@@ -599,7 +601,15 @@ fn scheduler_start_resumes_same_session_and_preserves_registered_jobs() {
     let first_summary = current_command_session_summary(&bootstrap, "cron")
         .unwrap()
         .expect("initial cron session summary");
-    let added = add_scheduled_job(&bootstrap, "*/5 * * * *", "ping status", Some("test")).unwrap();
+    let added = add_scheduled_job(
+        &bootstrap,
+        "*/5 * * * *",
+        "ping status",
+        Some("test"),
+        None,
+        None,
+    )
+    .unwrap();
     let setup = setup_scheduler(&bootstrap).unwrap();
     let lock = acquire_scheduler_jobs_lock(&setup.jobs_path).unwrap();
     let mut jobs = load_scheduler_jobs(&setup.jobs_path).unwrap();
@@ -628,7 +638,15 @@ fn scheduler_start_resumes_same_session_and_preserves_registered_jobs() {
 /// Verifies scheduler execution reschedules completed jobs and recovers stale running jobs safely.
 fn scheduler_executes_and_recovers_jobs() {
     let bootstrap = test_bootstrap("scheduler-exec-recover");
-    let added = add_scheduled_job(&bootstrap, "* * * * *", "ping status", Some("test")).unwrap();
+    let added = add_scheduled_job(
+        &bootstrap,
+        "* * * * *",
+        "ping status",
+        Some("test"),
+        None,
+        None,
+    )
+    .unwrap();
     let setup = setup_scheduler(&bootstrap).unwrap();
     let lock = acquire_scheduler_jobs_lock(&setup.jobs_path).unwrap();
     let mut jobs = load_scheduler_jobs(&setup.jobs_path).unwrap();
@@ -684,6 +702,170 @@ fn scheduler_executes_and_recovers_jobs() {
         Some("completed-rescheduled")
     );
     assert!(recovered_job.last_recovered_at.is_some());
+
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies scheduler job outcomes can be delivered through the gateway webhook path.
+fn scheduler_job_delivery_uses_gateway_webhook() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let bootstrap = test_bootstrap("scheduler-delivery-success");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/hook", listener.local_addr().unwrap());
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept scheduler webhook request");
+        let mut request_bytes = Vec::new();
+        let mut buf = [0u8; 4096];
+        let header_end;
+        let expected_total_len;
+        loop {
+            let read = stream
+                .read(&mut buf)
+                .expect("read scheduler webhook request");
+            assert!(
+                read > 0,
+                "scheduler webhook request closed before headers arrived"
+            );
+            request_bytes.extend_from_slice(&buf[..read]);
+            if let Some(end) = request_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                let end = end + 4;
+                let head = String::from_utf8_lossy(&request_bytes[..end]).into_owned();
+                let content_length = head
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("Content-Length: ")
+                            .or_else(|| line.strip_prefix("content-length: "))
+                    })
+                    .expect("Content-Length header")
+                    .trim()
+                    .parse::<usize>()
+                    .expect("parse Content-Length");
+                header_end = end;
+                expected_total_len = header_end + content_length;
+                break;
+            }
+        }
+        while request_bytes.len() < expected_total_len {
+            let read = stream
+                .read(&mut buf)
+                .expect("read scheduler webhook request body");
+            assert!(
+                read > 0,
+                "scheduler webhook request closed before body finished"
+            );
+            request_bytes.extend_from_slice(&buf[..read]);
+        }
+        let request = String::from_utf8_lossy(&request_bytes[..expected_total_len]).into_owned();
+        let (_, body_text) = request.split_once("\r\n\r\n").expect("split headers/body");
+        let payload: serde_json::Value = serde_json::from_str(body_text).expect("decode payload");
+        assert_eq!(
+            payload.get("event_type").and_then(|v| v.as_str()),
+            Some("scheduler.job.outcome")
+        );
+        let nested: serde_json::Value = serde_json::from_str(
+            payload
+                .get("payload")
+                .and_then(|v| v.as_str())
+                .expect("nested payload"),
+        )
+        .expect("decode nested payload");
+        assert_eq!(
+            nested.get("outcome").and_then(|v| v.as_str()),
+            Some("completed")
+        );
+        assert_eq!(
+            nested.get("task").and_then(|v| v.as_str()),
+            Some("ping status")
+        );
+        let reply = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok";
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let added = add_scheduled_job(
+        &bootstrap,
+        "* * * * *",
+        "ping status",
+        Some("test"),
+        Some(&url),
+        Some("scheduler.job.outcome"),
+    )
+    .unwrap();
+    let setup = setup_scheduler(&bootstrap).unwrap();
+    let lock = acquire_scheduler_jobs_lock(&setup.jobs_path).unwrap();
+    let mut jobs = load_scheduler_jobs(&setup.jobs_path).unwrap();
+    let job = jobs
+        .iter_mut()
+        .find(|job| job.id == added.id)
+        .expect("scheduler job");
+    job.next_run_at = unix_timestamp() - 1;
+    save_scheduler_jobs(&setup.jobs_path, &jobs).unwrap();
+    drop(lock);
+
+    let start = start_scheduler(&bootstrap).unwrap();
+    assert_eq!(start.executed_job_count, 1);
+    let job = get_scheduled_job(&bootstrap, &added.id).unwrap();
+    assert_eq!(job.last_delivery_outcome.as_deref(), Some("delivered"));
+    assert!(job.last_delivery_at.is_some());
+    assert!(job.last_delivery_error.is_none());
+
+    let outbox_dir = bootstrap.vela_home.join("gateway").join("outbox");
+    let outbox_record = std::fs::read_dir(&outbox_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .expect("scheduler delivery outbox record");
+    let outbox = std::fs::read_to_string(outbox_record).unwrap();
+    assert!(outbox.contains("scheduler.job.outcome"));
+    assert!(outbox.contains("\"result\": \"delivered\""));
+
+    handle.join().unwrap();
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies scheduler delivery failures are recorded without losing the completed job outcome.
+fn scheduler_job_delivery_failures_are_recorded() {
+    let bootstrap = test_bootstrap("scheduler-delivery-failure");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/hook", listener.local_addr().unwrap());
+    drop(listener);
+
+    let added = add_scheduled_job(
+        &bootstrap,
+        "* * * * *",
+        "ping status",
+        Some("test"),
+        Some(&url),
+        Some("scheduler.job.outcome"),
+    )
+    .unwrap();
+    let setup = setup_scheduler(&bootstrap).unwrap();
+    let lock = acquire_scheduler_jobs_lock(&setup.jobs_path).unwrap();
+    let mut jobs = load_scheduler_jobs(&setup.jobs_path).unwrap();
+    let job = jobs
+        .iter_mut()
+        .find(|job| job.id == added.id)
+        .expect("scheduler job");
+    job.next_run_at = unix_timestamp() - 1;
+    save_scheduler_jobs(&setup.jobs_path, &jobs).unwrap();
+    drop(lock);
+
+    let start = start_scheduler(&bootstrap).unwrap();
+    assert_eq!(start.executed_job_count, 1);
+    assert_eq!(start.failed_job_count, 0);
+
+    let job = get_scheduled_job(&bootstrap, &added.id).unwrap();
+    assert_eq!(job.last_outcome.as_deref(), Some("completed"));
+    assert_eq!(job.last_delivery_outcome.as_deref(), Some("failed"));
+    assert!(!job
+        .last_delivery_error
+        .as_deref()
+        .unwrap_or_default()
+        .is_empty());
 
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }

@@ -286,17 +286,30 @@ pub fn add_scheduled_job(
     schedule: &str,
     task: &str,
     source: Option<&str>,
+    delivery_webhook_url: Option<&str>,
+    delivery_event_type: Option<&str>,
 ) -> Result<ScheduledJob> {
     let setup = setup_scheduler(bootstrap)?;
     let schedule = normalize_scheduler_schedule(schedule)?;
     let task = normalize_scheduler_task(task)?;
     let source = normalize_scheduler_source(source);
+    let delivery_webhook_url = normalize_scheduler_delivery_webhook_url(delivery_webhook_url)?;
+    let delivery_event_type = if delivery_webhook_url.is_some() {
+        Some(
+            normalize_scheduler_delivery_event_type(delivery_event_type)
+                .unwrap_or_else(|| "scheduler.job.outcome".to_string()),
+        )
+    } else {
+        None
+    };
     let lock = acquire_scheduler_jobs_lock(&setup.jobs_path)?;
     let mut jobs = load_scheduler_jobs(&setup.jobs_path)?;
     if jobs.iter().any(|job| {
         job.schedule == schedule
             && job.task == task
             && job.source == source
+            && job.delivery_webhook_url == delivery_webhook_url
+            && job.delivery_event_type == delivery_event_type
             && matches!(job.status.as_str(), "pending" | "running" | "failed")
     }) {
         drop(lock);
@@ -324,6 +337,11 @@ pub fn add_scheduled_job(
         last_session_id: None,
         execution_token: None,
         lease_expires_at: None,
+        delivery_webhook_url,
+        delivery_event_type,
+        last_delivery_at: None,
+        last_delivery_outcome: None,
+        last_delivery_error: None,
     };
     jobs.push(job.clone());
     save_scheduler_jobs(&setup.jobs_path, &jobs)?;
@@ -444,6 +462,8 @@ fn execute_scheduled_job(
     job.lease_expires_at = Some(now + SCHEDULER_RECOVERY_LEASE_SECONDS);
     let task = job.task.clone();
     let schedule = job.schedule.clone();
+    let delivery_webhook_url = job.delivery_webhook_url.clone();
+    let delivery_event_type = job.delivery_event_type.clone();
     save_scheduler_jobs(jobs_path, &jobs)?;
     drop(lock);
 
@@ -514,6 +534,27 @@ fn execute_scheduled_job(
             if !event_logged {
                 tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job completion event");
             }
+            maybe_deliver_scheduler_job_outcome(
+                bootstrap,
+                scheduler_session_id,
+                jobs_path,
+                job_id,
+                &execution_token,
+                delivery_webhook_url.as_deref(),
+                delivery_event_type.as_deref(),
+                json!({
+                    "job_id": job_id,
+                    "schedule": schedule,
+                    "task": task,
+                    "outcome": "completed",
+                    "completed_at": completed_at,
+                    "response_source": report.response_source,
+                    "response": report.response,
+                    "response_provider": report.response_provider,
+                    "response_model": report.response_model,
+                    "session_id": report.session.session_id,
+                }),
+            );
             Ok(true)
         }
         Err(error) => {
@@ -549,8 +590,120 @@ fn execute_scheduled_job(
             if !event_logged {
                 tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job failure event");
             }
+            maybe_deliver_scheduler_job_outcome(
+                bootstrap,
+                scheduler_session_id,
+                jobs_path,
+                job_id,
+                &execution_token,
+                delivery_webhook_url.as_deref(),
+                delivery_event_type.as_deref(),
+                json!({
+                    "job_id": job_id,
+                    "schedule": schedule,
+                    "task": task,
+                    "outcome": "failed",
+                    "failed_at": failed_at,
+                    "error": error.to_string(),
+                }),
+            );
             Err(error)
         }
+    }
+}
+
+fn maybe_deliver_scheduler_job_outcome(
+    bootstrap: &BootstrapReport,
+    scheduler_session_id: &str,
+    jobs_path: &std::path::Path,
+    job_id: &str,
+    execution_token: &str,
+    delivery_webhook_url: Option<&str>,
+    delivery_event_type: Option<&str>,
+    payload: serde_json::Value,
+) {
+    let Some(delivery_webhook_url) = delivery_webhook_url else {
+        return;
+    };
+
+    let result = (|| -> Result<()> {
+        let payload_text = serde_json::to_string(&payload)?;
+        let attempted_at = unix_timestamp();
+        match deliver_gateway_webhook(
+            bootstrap,
+            delivery_webhook_url,
+            &payload_text,
+            delivery_event_type,
+        ) {
+            Ok(report) => {
+                let lock = acquire_scheduler_jobs_lock(jobs_path)?;
+                let mut jobs = load_scheduler_jobs(jobs_path)?;
+                if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
+                    job.updated_at = attempted_at;
+                    job.last_delivery_at = Some(attempted_at);
+                    job.last_delivery_outcome = Some("delivered".to_string());
+                    job.last_delivery_error = None;
+                }
+                save_scheduler_jobs(jobs_path, &jobs)?;
+                drop(lock);
+
+                let event_logged = vela_state::append_event_to_session(
+                    &bootstrap.persistence.state_db_path,
+                    scheduler_session_id,
+                    "scheduler_job_delivery_completed",
+                    json!({
+                        "job_id": job_id,
+                        "delivery_at": attempted_at,
+                        "execution_token": execution_token,
+                        "delivery_session_id": report.session.session_id,
+                        "event_type": report.event_type,
+                        "url": report.url,
+                        "status_code": report.status_code,
+                        "outbox_record_path": report.outbox_record_path,
+                    })
+                    .to_string(),
+                )?;
+                if !event_logged {
+                    tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job delivery completion event");
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                let lock = acquire_scheduler_jobs_lock(jobs_path)?;
+                let mut jobs = load_scheduler_jobs(jobs_path)?;
+                if let Some(job) = jobs.iter_mut().find(|job| job.id == job_id) {
+                    job.updated_at = attempted_at;
+                    job.last_delivery_at = Some(attempted_at);
+                    job.last_delivery_outcome = Some("failed".to_string());
+                    job.last_delivery_error = Some(error_text.clone());
+                }
+                save_scheduler_jobs(jobs_path, &jobs)?;
+                drop(lock);
+
+                let event_logged = vela_state::append_event_to_session(
+                    &bootstrap.persistence.state_db_path,
+                    scheduler_session_id,
+                    "scheduler_job_delivery_failed",
+                    json!({
+                        "job_id": job_id,
+                        "delivery_at": attempted_at,
+                        "execution_token": execution_token,
+                        "url": delivery_webhook_url,
+                        "event_type": delivery_event_type.unwrap_or("scheduler.job.outcome"),
+                        "error": error_text,
+                    })
+                    .to_string(),
+                )?;
+                if !event_logged {
+                    tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, "failed to append scheduler job delivery failure event");
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        tracing::warn!(session_id=%scheduler_session_id, job_id=%job_id, error=%error, "scheduler delivery bookkeeping failed after job execution settled");
     }
 }
 
