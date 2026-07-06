@@ -497,7 +497,7 @@ pub fn deliver_gateway_webhook(
                         "source": "gateway",
                     }))?,
                 )?;
-                let _ = vela_state::append_event_to_session(
+                let event_logged = vela_state::append_event_to_session(
                     &bootstrap.persistence.state_db_path,
                     &start.session.session_id,
                     "gateway_webhook_delivery_failed",
@@ -510,6 +510,9 @@ pub fn deliver_gateway_webhook(
                     })
                     .to_string(),
                 )?;
+                if !event_logged {
+                    tracing::warn!(session_id=%start.session.session_id, "failed to append gateway_webhook_delivery_failed event");
+                }
                 bail!("gateway webhook delivery failed with status {status_code}");
             }
 
