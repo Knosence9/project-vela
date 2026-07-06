@@ -21,6 +21,7 @@ pub(crate) fn run_command(bootstrap: &vela_runtime::BootstrapReport, cli: &Cli) 
         Some(Commands::Gateway(args)) => runtime_ops::run_gateway(bootstrap, args),
         Some(Commands::Sessions(args)) => runtime_ops::run_sessions(bootstrap, args),
         Some(Commands::Cron(args)) => runtime_ops::run_cron(bootstrap, args),
+        Some(Commands::Agents(args)) => runtime_ops::run_agents(bootstrap, args),
         Some(Commands::Logs(args)) => {
             println!(
                 "logs placeholder: follow={} since={:?}",

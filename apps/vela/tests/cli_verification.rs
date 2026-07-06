@@ -392,6 +392,52 @@ fn gateway_start_resumes_same_session_via_cli() {
 }
 
 #[test]
+/// Verifies that bounded subagent delegation is exposed through the CLI and remains inspectable.
+fn agents_delegation_is_visible_via_cli() {
+    let vela_home = temp_vela_home("agents");
+
+    let delegate = run_vela(
+        &vela_home,
+        &[
+            "agents",
+            "--delegate",
+            "Investigate provider routing",
+            "--role",
+            "researcher",
+            "--note",
+            "bounded follow-up",
+        ],
+    );
+    assert!(delegate.status.success(), "{}", stderr_text(&delegate));
+    let delegate_stdout = stdout_text(&delegate);
+    assert!(delegate_stdout.contains("delegation requested: id=delegation-"));
+    assert!(delegate_stdout.contains("role=researcher"));
+    assert!(delegate_stdout.contains("status=pending"));
+
+    let listing = run_vela(&vela_home, &["agents", "--list"]);
+    assert!(listing.status.success(), "{}", stderr_text(&listing));
+    let listing_stdout = stdout_text(&listing);
+    assert!(listing_stdout.contains("delegations [1]:"));
+    assert!(listing_stdout.contains("role=researcher"));
+    assert!(listing_stdout.contains("Investigate provider routing"));
+
+    let duplicate = run_vela(
+        &vela_home,
+        &[
+            "agents",
+            "--delegate",
+            "Investigate provider routing",
+            "--role",
+            "researcher",
+        ],
+    );
+    assert!(!duplicate.status.success());
+    assert!(stderr_text(&duplicate).contains("already pending"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that gateway webhook delivery is exposed as a real external CLI surface.
 fn gateway_webhook_delivery_executes_via_cli() {
     let vela_home = temp_vela_home("gateway-webhook");
