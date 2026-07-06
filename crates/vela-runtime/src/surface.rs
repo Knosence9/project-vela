@@ -495,6 +495,24 @@ fn save_subagent_delegations(
     Ok(())
 }
 
+fn acquire_subagent_delegations_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> {
+    let lock_path = path.with_extension("json.lock");
+    for _ in 0..100 {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => {
+                return Ok(SchedulerJobsLock { lock_path });
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => sleep(Duration::from_millis(25)),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    bail!("timed out waiting for subagent delegations lock")
+}
+
 /// Ensures the durable subagent delegation registry exists.
 pub fn setup_subagent_delegations(
     bootstrap: &BootstrapReport,
@@ -540,6 +558,7 @@ pub fn request_subagent_delegation(
         "agents",
         InteractionMode::Interactive,
     )?;
+    let _lock = acquire_subagent_delegations_lock(&setup.delegations_path)?;
     let mut records = load_subagent_delegations(&setup.delegations_path)?;
     if records
         .iter()
@@ -565,7 +584,7 @@ pub fn request_subagent_delegation(
     records.push(record.clone());
     save_subagent_delegations(&setup.delegations_path, &records)?;
 
-    let event_logged = vela_state::append_event_to_session(
+    let event_logged = match vela_state::append_event_to_session(
         &bootstrap.persistence.state_db_path,
         &session.session_id,
         "delegation_requested",
@@ -579,11 +598,17 @@ pub fn request_subagent_delegation(
             "action": session.action.label(),
         })
         .to_string(),
-    )?;
+    ) {
+        Ok(logged) => logged,
+        Err(err) => {
+            tracing::warn!(session_id=%session.session_id, error=%err, "failed to append delegation_requested event");
+            false
+        }
+    };
     if !event_logged {
         tracing::warn!(session_id=%session.session_id, "failed to append delegation_requested event");
     }
-    let message_logged = vela_state::append_message_to_session(
+    let message_logged = match vela_state::append_message_to_session(
         &bootstrap.persistence.state_db_path,
         &session.session_id,
         "system",
@@ -598,7 +623,13 @@ pub fn request_subagent_delegation(
             })
             .to_string(),
         ),
-    )?;
+    ) {
+        Ok(logged) => logged,
+        Err(err) => {
+            tracing::warn!(session_id=%session.session_id, error=%err, "failed to append delegation request message");
+            false
+        }
+    };
     if !message_logged {
         tracing::warn!(session_id=%session.session_id, "failed to append delegation request message");
     }
