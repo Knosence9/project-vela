@@ -1,4 +1,4 @@
-use crate::cli::{AgentsArgs, CronArgs, GatewayArgs, SessionsArgs};
+use crate::cli::{AgentsArgs, CronArgs, GatewayArgs, McpArgs, SessionsArgs};
 use anyhow::Result;
 
 pub(crate) fn run_gateway(
@@ -233,6 +233,89 @@ pub(crate) fn run_agents(
                 setup.agents_dir.display(),
                 setup.delegation_count,
                 setup.delegations_path.display(),
+            ),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn run_mcp(bootstrap: &vela_runtime::BootstrapReport, args: &McpArgs) -> Result<()> {
+    if let Some(server) = args.bridge.as_deref() {
+        let tool = args
+            .tool
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--tool is required with --bridge"))?;
+        let payload = args
+            .payload
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--payload is required with --bridge"))?;
+        let report = vela_runtime::request_mcp_bridge_call(
+            bootstrap,
+            server,
+            tool,
+            payload,
+            args.note.as_deref(),
+        )?;
+        println!(
+            "mcp bridge requested: id={} server={} tool={} status={} session={} payload={} note={:?}",
+            report.record.id,
+            report.record.server,
+            report.record.tool,
+            report.record.status,
+            report.session.session_id,
+            report.record.payload,
+            report.record.note,
+        );
+    } else if args.list {
+        let records = vela_runtime::list_mcp_bridge_calls(bootstrap)?;
+        println!("mcp bridge requests [{}]:", records.len());
+        for record in records {
+            println!(
+                "- {} :: server={} tool={} status={} created_at={} updated_at={} session={} payload={} note={:?}",
+                record.id,
+                record.server,
+                record.tool,
+                record.status,
+                record.created_at,
+                record.updated_at,
+                record.session_id,
+                record.payload,
+                record.note,
+            );
+        }
+    } else if let Some(id) = args.show.as_deref() {
+        match vela_runtime::get_mcp_bridge_call(bootstrap, id)? {
+            Some(record) => println!(
+                "mcp bridge request: id={} server={} tool={} status={} created_at={} updated_at={} session={} payload={} note={:?}",
+                record.id,
+                record.server,
+                record.tool,
+                record.status,
+                record.created_at,
+                record.updated_at,
+                record.session_id,
+                record.payload,
+                record.note,
+            ),
+            None => println!("mcp bridge request: not found for {:?}", id),
+        }
+    } else {
+        let setup = vela_runtime::setup_mcp_bridge(bootstrap)?;
+        match vela_runtime::current_command_session_summary(bootstrap, "mcp")? {
+            Some(session) => println!(
+                "mcp ready: dir={} requests={} session={} title={} messages={} events={}",
+                setup.mcp_dir.display(),
+                setup.request_count,
+                session.id,
+                session.title,
+                session.message_count,
+                session.event_count,
+            ),
+            None => println!(
+                "mcp ready: dir={} requests={} session=none file={}",
+                setup.mcp_dir.display(),
+                setup.request_count,
+                setup.requests_path.display(),
             ),
         }
     }

@@ -147,6 +147,22 @@ pub(crate) struct AgentsArgs {
 }
 
 #[derive(Debug, Default, Args)]
+pub(crate) struct McpArgs {
+    #[arg(long = "bridge", group = "action")]
+    pub(crate) bridge: Option<String>,
+    #[arg(long = "tool", requires = "bridge")]
+    pub(crate) tool: Option<String>,
+    #[arg(long = "payload", requires = "bridge")]
+    pub(crate) payload: Option<String>,
+    #[arg(long = "note", requires = "bridge")]
+    pub(crate) note: Option<String>,
+    #[arg(long = "list", default_value_t = false, group = "action")]
+    pub(crate) list: bool,
+    #[arg(long = "show", group = "action")]
+    pub(crate) show: Option<String>,
+}
+
+#[derive(Debug, Default, Args)]
 pub(crate) struct LogsArgs {
     #[arg(short = 'f', long = "follow", default_value_t = false)]
     pub(crate) follow: bool,
@@ -286,7 +302,7 @@ pub(crate) enum Commands {
     Review(ReviewArgs),
     Cron(CronArgs),
     Agents(AgentsArgs),
-    Mcp,
+    Mcp(McpArgs),
     Status,
     Update,
     Dashboard(DashboardArgs),

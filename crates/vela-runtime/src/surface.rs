@@ -58,6 +58,37 @@ pub struct SubagentDelegationRequestReport {
     pub record: SubagentDelegationRecord,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents one durable bounded MCP bridge request.
+pub struct McpBridgeCallRecord {
+    pub id: String,
+    pub server: String,
+    pub tool: String,
+    pub payload: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub session_id: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+/// Describes the durable MCP bridge files ensured during bootstrap.
+pub struct McpBridgeSetupReport {
+    pub mcp_dir: std::path::PathBuf,
+    pub requests_path: std::path::PathBuf,
+    pub requests_existed_before: bool,
+    pub request_count: usize,
+}
+
+#[derive(Debug, Clone)]
+/// Captures one durable MCP bridge request plus the resolved command session.
+pub struct McpBridgeRequestReport {
+    pub setup: McpBridgeSetupReport,
+    pub session: SessionRuntimeReport,
+    pub record: McpBridgeCallRecord,
+}
+
 #[derive(Debug, Clone)]
 /// Describes the durable scheduler files ensured during bootstrap.
 pub struct SchedulerSetupReport {
@@ -513,6 +544,51 @@ fn acquire_subagent_delegations_lock(path: &std::path::Path) -> Result<Scheduler
     bail!("timed out waiting for subagent delegations lock")
 }
 
+fn load_mcp_bridge_calls(path: &std::path::Path) -> Result<Vec<McpBridgeCallRecord>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&content)?)
+}
+
+fn save_mcp_bridge_calls(path: &std::path::Path, records: &[McpBridgeCallRecord]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("mcp bridge path has no parent directory"))?;
+    let temp_path = parent.join(format!(
+        "{}.tmp-{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("requests.json"),
+        unix_timestamp_nanos()
+    ));
+    std::fs::write(&temp_path, serde_json::to_string_pretty(records)?)?;
+    std::fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
+fn acquire_mcp_bridge_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> {
+    let lock_path = path.with_extension("json.lock");
+    for _ in 0..100 {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => {
+                return Ok(SchedulerJobsLock { lock_path });
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => sleep(Duration::from_millis(25)),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    bail!("timed out waiting for mcp bridge lock")
+}
+
 /// Ensures the durable subagent delegation registry exists.
 pub fn setup_subagent_delegations(
     bootstrap: &BootstrapReport,
@@ -659,6 +735,166 @@ pub fn get_subagent_delegation(
         bail!("delegation id cannot be empty");
     }
     let records = list_subagent_delegations(bootstrap)?;
+    Ok(records.into_iter().find(|record| record.id == normalized))
+}
+
+/// Ensures the durable MCP bridge registry exists.
+pub fn setup_mcp_bridge(bootstrap: &BootstrapReport) -> Result<McpBridgeSetupReport> {
+    let mcp_dir = bootstrap.vela_home.join("mcp");
+    std::fs::create_dir_all(&mcp_dir)?;
+    let requests_path = mcp_dir.join("requests.json");
+    let requests_existed_before = requests_path.is_file();
+    if !requests_existed_before {
+        std::fs::write(&requests_path, "[]\n")?;
+    }
+    let request_count = load_mcp_bridge_calls(&requests_path)?.len();
+    Ok(McpBridgeSetupReport {
+        mcp_dir,
+        requests_path,
+        requests_existed_before,
+        request_count,
+    })
+}
+
+/// Records one bounded MCP bridge request through the kernel-owned runtime surface.
+pub fn request_mcp_bridge_call(
+    bootstrap: &BootstrapReport,
+    server: &str,
+    tool: &str,
+    payload: &str,
+    note: Option<&str>,
+) -> Result<McpBridgeRequestReport> {
+    let server = server.trim();
+    if server.is_empty() {
+        bail!("mcp bridge server cannot be empty");
+    }
+    let tool = tool.trim();
+    if tool.is_empty() {
+        bail!("mcp bridge tool cannot be empty");
+    }
+    let payload = payload.trim();
+    if payload.is_empty() {
+        bail!("mcp bridge payload cannot be empty");
+    }
+    let note = note
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let setup = setup_mcp_bridge(bootstrap)?;
+    let session = vela_state::resolve_command_session(
+        &bootstrap.persistence.state_db_path,
+        "mcp",
+        InteractionMode::Interactive,
+    )?;
+    let _lock = acquire_mcp_bridge_lock(&setup.requests_path)?;
+    let mut records = load_mcp_bridge_calls(&setup.requests_path)?;
+    if records.iter().any(|record| {
+        record.status == "pending"
+            && record.server == server
+            && record.tool == tool
+            && record.payload == payload
+    }) {
+        bail!(
+            "mcp bridge request for server {:?}, tool {:?}, and payload {:?} is already pending",
+            server,
+            tool,
+            payload
+        );
+    }
+    let now = unix_timestamp();
+    let record = McpBridgeCallRecord {
+        id: format!("mcp-bridge-{}", unix_timestamp_nanos()),
+        server: server.to_string(),
+        tool: tool.to_string(),
+        payload: payload.to_string(),
+        status: "pending".to_string(),
+        created_at: now,
+        updated_at: now,
+        session_id: session.session_id.clone(),
+        note,
+    };
+    records.push(record.clone());
+    save_mcp_bridge_calls(&setup.requests_path, &records)?;
+
+    let event_logged = match vela_state::append_event_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "mcp_bridge_requested",
+        json!({
+            "request_id": record.id,
+            "server": record.server,
+            "tool": record.tool,
+            "payload": record.payload,
+            "note": record.note,
+            "requests_path": setup.requests_path,
+            "source": "mcp",
+            "action": session.action.label(),
+        })
+        .to_string(),
+    ) {
+        Ok(logged) => logged,
+        Err(err) => {
+            tracing::warn!(session_id=%session.session_id, error=%err, "failed to append mcp_bridge_requested event");
+            false
+        }
+    };
+    if !event_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append mcp_bridge_requested event");
+    }
+    let message_logged = match vela_state::append_message_to_session(
+        &bootstrap.persistence.state_db_path,
+        &session.session_id,
+        "system",
+        &format!(
+            "MCP bridge requested for server {} tool {}.",
+            record.server, record.tool
+        ),
+        Some(
+            json!({
+                "source": "mcp",
+                "direction": "egress",
+                "request_id": record.id,
+                "server": record.server,
+                "tool": record.tool,
+                "payload": record.payload,
+                "note": record.note,
+            })
+            .to_string(),
+        ),
+    ) {
+        Ok(logged) => logged,
+        Err(err) => {
+            tracing::warn!(session_id=%session.session_id, error=%err, "failed to append mcp bridge request message");
+            false
+        }
+    };
+    if !message_logged {
+        tracing::warn!(session_id=%session.session_id, "failed to append mcp bridge request message");
+    }
+
+    Ok(McpBridgeRequestReport {
+        setup,
+        session,
+        record,
+    })
+}
+
+/// Returns every durable MCP bridge request currently stored for the repo.
+pub fn list_mcp_bridge_calls(bootstrap: &BootstrapReport) -> Result<Vec<McpBridgeCallRecord>> {
+    let setup = setup_mcp_bridge(bootstrap)?;
+    load_mcp_bridge_calls(&setup.requests_path)
+}
+
+/// Returns one durable MCP bridge request by id when it exists.
+pub fn get_mcp_bridge_call(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<Option<McpBridgeCallRecord>> {
+    let normalized = id.trim();
+    if normalized.is_empty() {
+        bail!("mcp bridge request id cannot be empty");
+    }
+    let records = list_mcp_bridge_calls(bootstrap)?;
     Ok(records.into_iter().find(|record| record.id == normalized))
 }
 
