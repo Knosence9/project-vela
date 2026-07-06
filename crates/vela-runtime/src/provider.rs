@@ -57,7 +57,11 @@ impl RuntimeBackendContract {
 }
 
 pub fn supported_runtime_backend_contracts() -> Vec<RuntimeBackendContract> {
-    vec![ollama_backend_contract(), mock_backend_contract()]
+    vec![
+        ollama_backend_contract(),
+        mock_backend_contract(),
+        llamacpp_backend_contract(),
+    ]
 }
 
 pub fn resolve_runtime_backend_contract(
@@ -77,6 +81,7 @@ pub fn resolve_runtime_backend_contract(
     match provider_label.as_deref() {
         Some("ollama") => Ok(Some(ollama_backend_contract())),
         Some("mock") => Ok(Some(mock_backend_contract())),
+        Some("llamacpp") | Some("llama.cpp") => Ok(Some(llamacpp_backend_contract())),
         Some(other) => bail!("unsupported runtime provider {other:?}"),
         None => Ok(None),
     }
@@ -118,6 +123,24 @@ fn mock_backend_contract() -> RuntimeBackendContract {
     }
 }
 
+fn llamacpp_backend_contract() -> RuntimeBackendContract {
+    RuntimeBackendContract {
+        api_version: 1,
+        id: "llamacpp",
+        transport: "http-json",
+        requires_model: true,
+        default_base_url: Some("http://127.0.0.1:8080"),
+        direct_response_source: "runtime-llamacpp",
+        tool_loop_response_source: "runtime-llamacpp-tool-loop",
+        capabilities: RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: false,
+        },
+    }
+}
+
 pub(crate) trait RuntimeProviderBackend {
     fn label(&self) -> &str;
     fn model(&self) -> Option<&str>;
@@ -142,6 +165,13 @@ struct OllamaRuntimeProvider {
 struct MockRuntimeProvider {
     label: String,
     model: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LlamaCppRuntimeProvider {
+    label: String,
+    model: Option<String>,
+    base_url: String,
 }
 
 impl RuntimeProviderBackend for OllamaRuntimeProvider {
@@ -174,6 +204,42 @@ impl RuntimeProviderBackend for OllamaRuntimeProvider {
 
     fn tool_loop_response_source(&self) -> &'static str {
         ollama_backend_contract().tool_loop_response_source
+    }
+}
+
+impl RuntimeProviderBackend for LlamaCppRuntimeProvider {
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    fn validate(&self) -> Result<()> {
+        validate_llamacpp_base_url(&self.base_url)
+    }
+
+    fn capabilities(&self) -> RuntimeProviderCapabilities {
+        llamacpp_backend_contract().capabilities
+    }
+
+    fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
+        if images.is_some() {
+            bail!("runtime provider 'llamacpp' does not support direct image attachments");
+        }
+        let model = self.model.as_deref().context(
+            "runtime provider 'llamacpp' requires a model (for example a GGUF-backed model served by llama.cpp)",
+        )?;
+        call_llamacpp_completion(&self.base_url, model, prompt)
+    }
+
+    fn direct_response_source(&self) -> &'static str {
+        llamacpp_backend_contract().direct_response_source
+    }
+
+    fn tool_loop_response_source(&self) -> &'static str {
+        llamacpp_backend_contract().tool_loop_response_source
     }
 }
 
@@ -405,6 +471,19 @@ struct OllamaGenerateResponse {
     response: String,
 }
 
+#[derive(Debug, Serialize)]
+struct LlamaCppCompletionRequest<'a> {
+    model: &'a str,
+    prompt: &'a str,
+    n_predict: u32,
+    stream: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlamaCppCompletionResponse {
+    content: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct RuntimeToolRequest {
     tool: String,
@@ -625,6 +704,19 @@ pub(crate) fn resolve_runtime_execution(
         Some("mock") => Some(Box::new(MockRuntimeProvider {
             label: "mock".to_string(),
             model: model.clone(),
+        }) as Box<dyn RuntimeProviderBackend>),
+        Some("llamacpp") => Some(Box::new(LlamaCppRuntimeProvider {
+            label: "llamacpp".to_string(),
+            model: model.clone(),
+            base_url: resolved
+                .runtime_llamacpp_base_url
+                .clone()
+                .unwrap_or_else(|| {
+                    llamacpp_backend_contract()
+                        .default_base_url
+                        .unwrap_or("http://127.0.0.1:8080")
+                        .to_string()
+                }),
         }) as Box<dyn RuntimeProviderBackend>),
         Some(other) => bail!("unsupported runtime provider {other:?}"),
         None => None,
@@ -1159,6 +1251,27 @@ fn call_ollama_generate(
     Ok(payload.response.trim().to_string())
 }
 
+fn call_llamacpp_completion(base_url: &str, model: &str, prompt: &str) -> Result<String> {
+    let url = format!("{}/completion", base_url.trim_end_matches('/'));
+    let client = ollama_http_client()?;
+    let response = client
+        .post(&url)
+        .json(&LlamaCppCompletionRequest {
+            model,
+            prompt,
+            n_predict: 256,
+            stream: false,
+        })
+        .send()
+        .with_context(|| format!("failed to call llama.cpp at {url}"))?
+        .error_for_status()
+        .with_context(|| format!("llama.cpp returned an error for {url}"))?;
+    let payload: LlamaCppCompletionResponse = response
+        .json()
+        .context("failed to decode llama.cpp response")?;
+    Ok(payload.content.trim().to_string())
+}
+
 fn encode_image_as_base64(path: &str) -> Result<String> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read image attachment {:?}", path))?;
@@ -1166,7 +1279,30 @@ fn encode_image_as_base64(path: &str) -> Result<String> {
 }
 
 fn validate_ollama_base_url(base_url: &str) -> Result<()> {
-    if std::env::var("VELA_ALLOW_REMOTE_OLLAMA")
+    validate_local_base_url(
+        base_url,
+        "Ollama",
+        "VELA_ALLOW_REMOTE_OLLAMA",
+        "refusing non-local Ollama endpoint",
+    )
+}
+
+fn validate_llamacpp_base_url(base_url: &str) -> Result<()> {
+    validate_local_base_url(
+        base_url,
+        "llama.cpp",
+        "VELA_ALLOW_REMOTE_LLAMACPP",
+        "refusing non-local llama.cpp endpoint",
+    )
+}
+
+fn validate_local_base_url(
+    base_url: &str,
+    backend_name: &str,
+    allow_remote_env: &str,
+    refusal_prefix: &str,
+) -> Result<()> {
+    if std::env::var(allow_remote_env)
         .ok()
         .map(|value| {
             matches!(
@@ -1180,10 +1316,10 @@ fn validate_ollama_base_url(base_url: &str) -> Result<()> {
     }
 
     let parsed = reqwest::Url::parse(base_url)
-        .with_context(|| format!("invalid Ollama base URL {:?}", base_url))?;
+        .with_context(|| format!("invalid {backend_name} base URL {:?}", base_url))?;
     let host = parsed
         .host_str()
-        .context("Ollama base URL is missing a host")?;
+        .with_context(|| format!("{backend_name} base URL is missing a host"))?;
     let is_local = host.eq_ignore_ascii_case("localhost")
         || host
             .parse::<IpAddr>()
@@ -1196,7 +1332,7 @@ fn validate_ollama_base_url(base_url: &str) -> Result<()> {
 
     if !is_local {
         bail!(
-            "refusing non-local Ollama endpoint {:?}; set VELA_ALLOW_REMOTE_OLLAMA=1 to opt in explicitly",
+            "{refusal_prefix} {:?}; set {allow_remote_env}=1 to opt in explicitly",
             base_url
         );
     }

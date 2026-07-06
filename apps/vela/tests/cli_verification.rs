@@ -10,6 +10,12 @@ struct MockOllamaExchange<'a> {
     expected_image_base64: Option<&'a str>,
 }
 
+/// Describes one expected mock llama.cpp request/response exchange.
+struct MockLlamaCppExchange<'a> {
+    expected_model: &'a str,
+    prompt_fragment: &'a str,
+}
+
 /// Reads a full mock HTTP request body using the advertised content length.
 fn read_mock_http_request(stream: &mut std::net::TcpStream) -> String {
     use std::io::Read;
@@ -162,6 +168,96 @@ fn spawn_mock_ollama(
     }])
 }
 
+/// Verifies that a captured mock llama.cpp request matches the expected exchange contract.
+fn assert_mock_llamacpp_request(request: &str, exchange: &MockLlamaCppExchange<'_>) {
+    let (head, body_text) = request
+        .split_once("\r\n\r\n")
+        .expect("split HTTP headers/body");
+    let request_line = head.lines().next().expect("HTTP request line");
+    assert!(
+        request_line.starts_with("POST /completion HTTP/1.1"),
+        "unexpected request line: {request_line}"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(body_text).expect("decode mock llama.cpp JSON body");
+    assert_eq!(
+        payload.get("model").and_then(|v| v.as_str()),
+        Some(exchange.expected_model)
+    );
+    assert_eq!(payload.get("stream").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(payload.get("n_predict").and_then(|v| v.as_u64()), Some(256));
+    let prompt = payload
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .expect("prompt field");
+    assert!(
+        prompt.contains(exchange.prompt_fragment),
+        "prompt missing fragment: {}",
+        exchange.prompt_fragment
+    );
+}
+
+/// Spawns a one-shot mock llama.cpp server that validates the request contract.
+fn spawn_mock_llamacpp(
+    response_body: &'static str,
+    expected_model: &'static str,
+    prompt_fragment: &'static str,
+) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock llama.cpp");
+    listener
+        .set_nonblocking(true)
+        .expect("configure mock llama.cpp listener nonblocking mode");
+    let addr = format!(
+        "http://{}",
+        listener.local_addr().expect("mock llama.cpp addr")
+    );
+    let handle = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(pair) => break pair,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for mock llama.cpp request"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept mock llama.cpp request: {error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set mock llama.cpp read timeout");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .expect("set mock llama.cpp write timeout");
+        let request = read_mock_http_request(&mut stream);
+        assert_mock_llamacpp_request(
+            &request,
+            &MockLlamaCppExchange {
+                expected_model,
+                prompt_fragment,
+            },
+        );
+        let payload = serde_json::json!({ "content": response_body }).to_string();
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        stream
+            .write_all(reply.as_bytes())
+            .expect("write mock llama.cpp response");
+        stream.flush().expect("flush mock llama.cpp response");
+    });
+    (addr, handle)
+}
+
 /// Spawns a mock webhook endpoint that validates one JSON delivery request.
 fn spawn_mock_webhook(
     expected_path: &'static str,
@@ -276,9 +372,10 @@ fn default_runtime_session_surfaces_in_status() {
     let status = run_vela(&vela_home, &["status"]);
     assert!(status.status.success(), "{}", stderr_text(&status));
     let status_stdout = stdout_text(&status);
-    assert!(status_stdout.contains("backend api [2]:"));
+    assert!(status_stdout.contains("backend api [3]:"));
     assert!(status_stdout.contains("id=ollama transport=http-json"));
     assert!(status_stdout.contains("id=mock transport=in-process"));
+    assert!(status_stdout.contains("id=llamacpp transport=http-json"));
     assert!(status_stdout.contains("resolved backend: none"));
     assert!(status_stdout.contains("active session: id=session-"));
 
@@ -592,6 +689,32 @@ fn chat_query_uses_configured_ollama_provider() {
 }
 
 #[test]
+/// Verifies that a configured llama.cpp provider is used for chat text turns.
+fn chat_query_uses_configured_llamacpp_provider() {
+    let vela_home = temp_vela_home("llamacpp-chat");
+    let (base_url, server) =
+        spawn_mock_llamacpp("Phi local reply.", "phi-3-mini", "hello from llama.cpp cli");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: llamacpp\n  model: phi-3-mini\n  llamacpp_base_url: {}\n",
+            base_url
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(&vela_home, &["chat", "--query", "hello from llama.cpp cli"]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Phi local reply."));
+    assert!(turn_stdout.contains("response route: source=runtime-llamacpp provider=llamacpp model=phi-3-mini capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that a configured mock provider is used for chat text turns.
 fn chat_query_uses_configured_mock_provider() {
     let vela_home = temp_vela_home("mock-chat");
@@ -655,6 +778,33 @@ fn chat_image_uses_configured_ollama_provider() {
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Gemma inspected the image."));
     server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured llama.cpp provider falls back cleanly for image turns it does not directly support.
+fn chat_image_with_configured_llamacpp_provider_falls_back_to_local_kernel() {
+    let vela_home = temp_vela_home("llamacpp-image-fallback");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let image_path = vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: llamacpp\n  model: phi-3-mini\n  llamacpp_base_url: http://127.0.0.1:8080\n",
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &["chat", "--image", image_path.to_str().expect("image path")],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Vela executed a local image turn."));
+    assert!(turn_stdout.contains(
+        "Provider capabilities: text=true tool_loop=true reflection_retry=true images=false"
+    ));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

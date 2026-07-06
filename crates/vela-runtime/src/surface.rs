@@ -412,6 +412,12 @@ fn restart_required_runtime_drifts(
             "kernel-runtime",
             "provider transport endpoint changes remain restart-only during extension reload"
         ),
+        drift!(
+            previous.runtime_llamacpp_base_url != reloaded.runtime_llamacpp_base_url,
+            "runtime.llamacpp_base_url",
+            "kernel-runtime",
+            "provider transport endpoint changes remain restart-only during extension reload"
+        ),
     ]
     .into_iter()
     .flatten()

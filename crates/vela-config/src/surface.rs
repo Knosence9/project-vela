@@ -21,6 +21,7 @@ pub struct ResolvedConfig {
     pub runtime_provider: Option<String>,
     pub runtime_model: Option<String>,
     pub runtime_ollama_base_url: Option<String>,
+    pub runtime_llamacpp_base_url: Option<String>,
     pub extension_manifests_dir: Option<String>,
     pub extension_entries: Vec<ResolvedExtensionConfigEntry>,
 }
