@@ -816,15 +816,48 @@ fn default_model_lab_policy() -> ModelLabPolicyRecord {
 }
 
 fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
-    vec![BackendExperimentSlotRecord {
-        id: "ternary-preview".to_string(),
-        status: "bounded-preview".to_string(),
-        strategy: "shadow-routing".to_string(),
-        summary: Some("Compare candidate backends under one durable experiment slot without altering the live kernel route.".to_string()),
-        hypothesis: Some("A future ternary or sparse router can be evaluated safely by replaying the same prompt across a bounded backend set before any runtime routing changes land.".to_string()),
-        default_prompt: "Evaluate whether a ternary-style routing candidate would preserve concise, grounded backend behavior for this request.".to_string(),
-        allowed_backends: vec!["mock".to_string(), "llamacpp".to_string(), "ollama".to_string()],
-    }]
+    vec![
+        BackendExperimentSlotRecord {
+            id: "ternary-preview".to_string(),
+            status: "bounded-preview".to_string(),
+            strategy: "shadow-routing".to_string(),
+            summary: Some("Compare candidate backends under one durable experiment slot without altering the live kernel route.".to_string()),
+            hypothesis: Some("A future ternary or sparse router can be evaluated safely by replaying the same prompt across a bounded backend set before any runtime routing changes land.".to_string()),
+            default_prompt: "Evaluate whether a ternary-style routing candidate would preserve concise, grounded backend behavior for this request.".to_string(),
+            allowed_backends: vec!["mock".to_string(), "llamacpp".to_string(), "ollama".to_string()],
+        },
+        BackendExperimentSlotRecord {
+            id: "local-first-replay".to_string(),
+            status: "bounded-preview".to_string(),
+            strategy: "offline-replay".to_string(),
+            summary: Some("Replay the same prompt through the published backends to compare local-first behavior without mutating the live route.".to_string()),
+            hypothesis: Some("A durable offline replay lane can reveal whether local-first backends stay concise and comparable before any operator changes the runtime default.".to_string()),
+            default_prompt: "Replay this request across the bounded backends and compare whether local-first execution stays concise and operator-visible.".to_string(),
+            allowed_backends: vec!["llamacpp".to_string(), "mock".to_string(), "ollama".to_string()],
+        },
+        BackendExperimentSlotRecord {
+            id: "capability-parity-scan".to_string(),
+            status: "bounded-preview".to_string(),
+            strategy: "bounded-backend-comparison".to_string(),
+            summary: Some("Compare the published backend capability matrix under one bounded experiment slot so parity work stays explicit.".to_string()),
+            hypothesis: Some("A bounded parity scan can highlight backend capability differences early enough to guide future provider work without broadening the live kernel contract.".to_string()),
+            default_prompt: "Compare the bounded backend capability matrix for this request and highlight where behavior still differs across providers.".to_string(),
+            allowed_backends: vec!["mock".to_string(), "llamacpp".to_string(), "ollama".to_string()],
+        },
+    ]
+}
+
+fn merged_backend_experiment_slots(
+    existing: Vec<BackendExperimentSlotRecord>,
+) -> Vec<BackendExperimentSlotRecord> {
+    let defaults = default_backend_experiment_slots();
+    let mut merged = existing;
+    for slot in defaults {
+        if !merged.iter().any(|existing| existing.id == slot.id) {
+            merged.push(slot);
+        }
+    }
+    merged
 }
 
 fn load_backend_eval_runs(path: &std::path::Path) -> Result<Vec<BackendEvalRunRecord>> {
@@ -848,7 +881,30 @@ fn load_backend_experiment_slots(
     if content.trim().is_empty() {
         return Ok(default_backend_experiment_slots());
     }
-    Ok(serde_json::from_str(&content)?)
+    let existing: Vec<BackendExperimentSlotRecord> = serde_json::from_str(&content)?;
+    Ok(merged_backend_experiment_slots(existing))
+}
+
+fn ensure_backend_experiment_slots(
+    path: &std::path::Path,
+) -> Result<Vec<BackendExperimentSlotRecord>> {
+    let slots = load_backend_experiment_slots(path)?;
+    let content = if path.exists() {
+        std::fs::read_to_string(path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let persisted_count = if content.trim().is_empty() {
+        0
+    } else {
+        serde_json::from_str::<Vec<BackendExperimentSlotRecord>>(&content)
+            .map(|items| items.len())
+            .unwrap_or(0)
+    };
+    if !path.exists() || persisted_count != slots.len() {
+        std::fs::write(path, serde_json::to_string_pretty(&slots)?)?;
+    }
+    Ok(slots)
 }
 
 fn load_model_lab_policy(path: &std::path::Path) -> Result<ModelLabPolicyRecord> {
@@ -1243,7 +1299,7 @@ pub fn setup_backend_evals(bootstrap: &BootstrapReport) -> Result<BackendEvalSet
         )?;
     }
     let run_count = load_backend_eval_runs(&runs_path)?.len();
-    let slot_count = load_backend_experiment_slots(&slots_path)?.len();
+    let slot_count = ensure_backend_experiment_slots(&slots_path)?.len();
     Ok(BackendEvalSetupReport {
         evals_dir,
         runs_path,

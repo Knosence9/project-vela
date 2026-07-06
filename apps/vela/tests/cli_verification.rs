@@ -804,35 +804,32 @@ fn model_lab_policy_is_visible_via_eval_surface() {
 }
 
 #[test]
-/// Verifies that the bounded architecture experiment slot is published and can drive a persisted eval run.
+/// Verifies that the bounded provider experiment slots are published and can drive persisted eval runs.
 fn backend_experiment_slot_is_visible_and_runnable() {
     let vela_home = temp_vela_home("eval-slot");
-    let (llamacpp_base_url, llamacpp_server) = spawn_mock_llamacpp(
-        "Ternary preview reply.",
-        "phi-3-mini",
-        "Evaluate whether a ternary-style routing candidate",
-    );
     std::fs::create_dir_all(&vela_home).unwrap();
     std::fs::write(
         vela_home.join("config.yaml"),
-        format!(
-            "runtime:\n  model: phi-3-mini\n  llamacpp_base_url: {}\n",
-            llamacpp_base_url
-        ),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
     )
     .unwrap();
 
     let list_slots = run_vela(&vela_home, &["eval", "--list-slots"]);
     assert!(list_slots.status.success(), "{}", stderr_text(&list_slots));
     let list_slots_stdout = stdout_text(&list_slots);
-    assert!(list_slots_stdout.contains("backend experiment slots [1]:"));
+    assert!(list_slots_stdout.contains("backend experiment slots [3]:"));
     assert!(list_slots_stdout
         .contains("ternary-preview :: status=bounded-preview strategy=shadow-routing"));
+    assert!(list_slots_stdout
+        .contains("local-first-replay :: status=bounded-preview strategy=offline-replay"));
+    assert!(list_slots_stdout.contains(
+        "capability-parity-scan :: status=bounded-preview strategy=bounded-backend-comparison"
+    ));
 
-    let show_slot = run_vela(&vela_home, &["eval", "--show-slot", "ternary-preview"]);
+    let show_slot = run_vela(&vela_home, &["eval", "--show-slot", "local-first-replay"]);
     assert!(show_slot.status.success(), "{}", stderr_text(&show_slot));
     let show_slot_stdout = stdout_text(&show_slot);
-    assert!(show_slot_stdout.contains("backend experiment slot: id=ternary-preview status=bounded-preview strategy=shadow-routing"));
+    assert!(show_slot_stdout.contains("backend experiment slot: id=local-first-replay status=bounded-preview strategy=offline-replay"));
     assert!(show_slot_stdout.contains("hypothesis=Some("));
 
     let run_slot = run_vela(
@@ -840,18 +837,17 @@ fn backend_experiment_slot_is_visible_and_runnable() {
         &[
             "eval",
             "--run-slot",
-            "ternary-preview",
+            "capability-parity-scan",
             "--backend",
-            "llamacpp",
+            "mock",
             "--model",
-            "phi-3-mini",
+            "mock-1",
         ],
     );
     assert!(run_slot.status.success(), "{}", stderr_text(&run_slot));
     let run_slot_stdout = stdout_text(&run_slot);
-    assert!(run_slot_stdout.contains("slot=Some(\"ternary-preview\")"));
-    assert!(run_slot_stdout.contains("backend=llamacpp transport=http-json status=passed"));
-    llamacpp_server.join().unwrap();
+    assert!(run_slot_stdout.contains("slot=Some(\"capability-parity-scan\")"));
+    assert!(run_slot_stdout.contains("backend=mock transport=in-process status=passed"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
