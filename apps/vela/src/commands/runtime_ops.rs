@@ -547,6 +547,61 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
                 job.id, job.schedule, job.source, job.status, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_progression, job.last_error, job.delivery_webhook_url, job.delivery_event_type, job.last_delivery_outcome, job.last_delivery_error, job.task
             );
         }
+    } else if args.report {
+        let report = vela_runtime::setup_scheduler(bootstrap)?;
+        let jobs = vela_runtime::list_scheduled_jobs(bootstrap)?;
+        let pending_count = jobs.iter().filter(|job| job.status == "pending").count();
+        let completed_count = jobs
+            .iter()
+            .filter(|job| job.last_outcome.as_deref() == Some("completed"))
+            .count();
+        let failed_count = jobs
+            .iter()
+            .filter(|job| job.last_outcome.as_deref() == Some("failed"))
+            .count();
+        let delivery_pending_count = jobs
+            .iter()
+            .filter(|job| job.delivery_webhook_url.is_some() && job.last_delivery_outcome.is_none())
+            .count();
+        let delivery_failed_count = jobs
+            .iter()
+            .filter(|job| job.last_delivery_outcome.as_deref() == Some("failed"))
+            .count();
+        let total_runs: u64 = jobs.iter().map(|job| job.run_count).sum();
+        let total_recoveries: u64 = jobs.iter().map(|job| job.recovery_count).sum();
+        let next_due = jobs.iter().min_by_key(|job| job.next_run_at);
+        match vela_runtime::current_command_session_summary(bootstrap, "cron")? {
+            Some(session) => println!(
+                "scheduler report: config={} jobs={} pending={} completed={} failed={} delivery_pending={} delivery_failed={} total_runs={} total_recoveries={} next_due={:?} session={} title={} messages={} events={}",
+                report.config_path.display(),
+                jobs.len(),
+                pending_count,
+                completed_count,
+                failed_count,
+                delivery_pending_count,
+                delivery_failed_count,
+                total_runs,
+                total_recoveries,
+                next_due.map(|job| format!("{}@{}", job.id, job.next_run_at)),
+                session.id,
+                session.title,
+                session.message_count,
+                session.event_count,
+            ),
+            None => println!(
+                "scheduler report: config={} jobs={} pending={} completed={} failed={} delivery_pending={} delivery_failed={} total_runs={} total_recoveries={} next_due={:?} session=none",
+                report.config_path.display(),
+                jobs.len(),
+                pending_count,
+                completed_count,
+                failed_count,
+                delivery_pending_count,
+                delivery_failed_count,
+                total_runs,
+                total_recoveries,
+                next_due.map(|job| format!("{}@{}", job.id, job.next_run_at)),
+            ),
+        }
     } else if let Some(task) = args.add.as_deref() {
         let schedule = args
             .schedule

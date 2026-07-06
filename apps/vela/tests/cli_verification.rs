@@ -1543,6 +1543,61 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
 }
 
 #[test]
+/// Verifies that the scheduler report summarizes durable job and delivery state.
+fn cron_report_summarizes_scheduler_state() {
+    let vela_home = temp_vela_home("cron-report");
+
+    let add = run_vela(
+        &vela_home,
+        &[
+            "cron",
+            "--add",
+            "ping status",
+            "--schedule",
+            "0 * * * *",
+            "--delivery-webhook-url",
+            "https://example.test/hook",
+            "--delivery-event-type",
+            "scheduler.job.outcome",
+        ],
+    );
+    assert!(add.status.success(), "{}", stderr_text(&add));
+    let add_stdout = stdout_text(&add);
+    let job_id = parse_field(&add_stdout, "added:")
+        .or_else(|| parse_field(&add_stdout, "job"))
+        .unwrap_or_else(|| add_stdout.split_whitespace().nth(3).expect("job id token"))
+        .to_string();
+
+    let jobs_path = vela_home.join("scheduler").join("jobs.json");
+    let mut jobs: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&jobs_path).unwrap()).unwrap();
+    let job = jobs.as_array_mut().unwrap().first_mut().expect("first job");
+    job["run_count"] = serde_json::Value::from(2);
+    job["recovery_count"] = serde_json::Value::from(1);
+    job["last_outcome"] = serde_json::Value::from("completed");
+    job["last_progression"] = serde_json::Value::from("completed-rescheduled");
+    job["last_delivery_outcome"] = serde_json::Value::from("failed");
+    job["next_run_at"] = serde_json::Value::from(42);
+    std::fs::write(&jobs_path, serde_json::to_string_pretty(&jobs).unwrap()).unwrap();
+
+    let report = run_vela(&vela_home, &["cron", "--report"]);
+    assert!(report.status.success(), "{}", stderr_text(&report));
+    let report_stdout = stdout_text(&report);
+    assert!(report_stdout.contains("scheduler report:"));
+    assert!(report_stdout.contains("jobs=1"));
+    assert!(report_stdout.contains("pending=1"));
+    assert!(report_stdout.contains("completed=1"));
+    assert!(report_stdout.contains("failed=0"));
+    assert!(report_stdout.contains("delivery_pending=0"));
+    assert!(report_stdout.contains("delivery_failed=1"));
+    assert!(report_stdout.contains("total_runs=2"));
+    assert!(report_stdout.contains("total_recoveries=1"));
+    assert!(report_stdout.contains(&format!("{}@42", job_id)));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that starting the scheduler executes due jobs and records durable run metadata.
 fn cron_start_executes_due_jobs() {
     use std::io::Write;

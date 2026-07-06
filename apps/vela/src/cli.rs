@@ -122,6 +122,8 @@ pub(crate) struct CronArgs {
     pub(crate) start: bool,
     #[arg(long = "list", default_value_t = false, group = "action")]
     pub(crate) list: bool,
+    #[arg(long = "report", default_value_t = false, group = "action")]
+    pub(crate) report: bool,
     #[arg(long = "add", group = "action")]
     pub(crate) add: Option<String>,
     #[arg(long = "show", group = "action")]
