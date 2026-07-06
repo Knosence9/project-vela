@@ -122,9 +122,10 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
     for contract in backend_contracts {
         println!("- {}", contract.summary_line());
     }
-    match vela_runtime::resolve_runtime_backend_contract(&bootstrap.resolved_config, None)? {
-        Some(contract) => println!("resolved backend: {}", contract.summary_line()),
-        None => println!("resolved backend: none"),
+    match vela_runtime::resolve_runtime_backend_contract(&bootstrap.resolved_config, None) {
+        Ok(Some(contract)) => println!("resolved backend: {}", contract.summary_line()),
+        Ok(None) => println!("resolved backend: none"),
+        Err(err) => println!("resolved backend: error ({err})"),
     }
     println!(
         "persistence: state_db={} existed_before={} bootstrap_runs={} sessions_dir={} snapshot_pattern={}",
