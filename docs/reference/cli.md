@@ -14,6 +14,7 @@ README-visible flows to preserve:
 - `vela gateway setup`
 - `vela gateway start`
 - `vela gateway --webhook-url <url> --payload <text> [--event-type <name>]`
+- `vela cron --add <task> --schedule <expr> [--delivery-webhook-url <url>] [--delivery-event-type <name>]`
 - `vela agents --delegate <task> --role <role> [--note <text>]`
 - `vela mcp --bridge <server> --tool <tool> --payload <json> [--note <text>]`
 - `vela claw migrate`
@@ -116,6 +117,10 @@ README-visible shared slash commands:
 - `vela gateway --setup` ensures durable gateway config plus inbox/outbox directories
 - `vela gateway --start` starts or resumes the gateway-scoped runtime session
 - `vela gateway --webhook-url <url> --payload <text> [--event-type <name>]` delivers one bounded outbound webhook payload through the kernel-owned gateway path and persists an outbox record
+
+## Known Rust scheduler delivery surface
+- `vela cron --add <task> --schedule <expr> [--delivery-webhook-url <url>] [--delivery-event-type <name>]` registers one durable scheduled job and can route completed/failed job outcomes through the gateway webhook delivery path
+- `vela cron --list` and `vela cron --show <id>` surface the configured delivery target plus the latest delivery outcome/error state
 
 ## Known Rust delegation surface
 - `vela agents --delegate <task> --role <role> [--note <text>]` records one bounded subagent delegation request through the kernel-owned runtime surface and persists it for later inspection

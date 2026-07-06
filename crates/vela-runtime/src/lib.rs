@@ -205,6 +205,28 @@ fn normalize_scheduler_source(source: Option<&str>) -> String {
         .to_string()
 }
 
+fn normalize_scheduler_delivery_webhook_url(url: Option<&str>) -> Result<Option<String>> {
+    let Some(url) = url.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|err| anyhow::anyhow!("invalid scheduler delivery webhook url: {err}"))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(Some(parsed.to_string())),
+        scheme => bail!(
+            "unsupported scheduler delivery webhook url scheme {:?}",
+            scheme
+        ),
+    }
+}
+
+fn normalize_scheduler_delivery_event_type(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 fn validate_scheduler_job_id(id: &str) -> Result<&str> {
     let normalized = id.trim();
     if normalized.is_empty()

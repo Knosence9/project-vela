@@ -19,7 +19,7 @@
 - `gateway` now bootstraps durable gateway directories/config, can resume a gateway-specific runtime session, and can deliver a bounded outbound webhook payload with a persisted outbox record
 - `agents` now persists bounded subagent delegation requests through a dedicated command-scoped runtime surface
 - `mcp` now persists bounded MCP bridge requests through a dedicated command-scoped runtime surface
-- `cron` now bootstraps durable scheduler config/job state, can resume a scheduler-specific runtime session, and can execute due jobs through the kernel scheduler path
+- `cron` now bootstraps durable scheduler config/job state, can resume a scheduler-specific runtime session, can execute due jobs through the kernel scheduler path, and can deliver job outcomes through the gateway webhook path
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
@@ -50,8 +50,9 @@
 - `vela gateway --webhook-url <url> --payload <text> [--event-type <name>]` posts one JSON payload through the gateway surface, appends durable gateway delivery events/messages, and writes a delivery record into `~/.vela/gateway/outbox/`
 - `vela agents --delegate <task> --role <role> [--note <text>]` records one durable bounded subagent delegation request in `~/.vela/agents/delegations.json`, appends a delegation event/message, and rejects duplicate pending requests for the same role/task pair
 - `vela mcp --bridge <server> --tool <tool> --payload <json> [--note <text>]` records one durable bounded MCP bridge request in `~/.vela/mcp/requests.json`, appends an MCP bridge event/message, and rejects duplicate pending server/tool/payload requests for the same command surface
-- `vela cron --start` resumes the latest `cron` command session when one already exists, executes due durable jobs, and recovers stale in-flight jobs before retrying them
-- scheduled jobs now surface explicit progression states in CLI status (`registered`, `started-attempt`, `recovered-for-retry`, `completed-rescheduled`, `failed-rescheduled`) so recurring next-run behavior is visible without reading raw job timestamps alone
+- `vela cron --start` resumes the latest `cron` command session when one already exists, executes due durable jobs, recovers stale in-flight jobs before retrying them, and can forward completed/failed job outcomes through the gateway webhook surface when a job carries a delivery target
+- `vela cron --add <task> --schedule <expr> [--delivery-webhook-url <url>] [--delivery-event-type <name>]` stores optional automated delivery metadata directly on the durable scheduled job record in `~/.vela/scheduler/jobs.json`
+- scheduled jobs now surface explicit progression states in CLI status (`registered`, `started-attempt`, `recovered-for-retry`, `completed-rescheduled`, `failed-rescheduled`) plus explicit delivery state (`delivery_webhook_url`, `delivery_event_type`, `last_delivery_outcome`, `last_delivery_error`) so recurring behavior is visible without reading raw timestamps alone
 
 ## Kernel vs provider boundary
 - keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel

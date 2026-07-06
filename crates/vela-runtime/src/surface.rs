@@ -163,6 +163,16 @@ pub struct ScheduledJob {
     pub execution_token: Option<String>,
     #[serde(default)]
     pub lease_expires_at: Option<i64>,
+    #[serde(default)]
+    pub delivery_webhook_url: Option<String>,
+    #[serde(default)]
+    pub delivery_event_type: Option<String>,
+    #[serde(default)]
+    pub last_delivery_at: Option<i64>,
+    #[serde(default)]
+    pub last_delivery_outcome: Option<String>,
+    #[serde(default)]
+    pub last_delivery_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -352,8 +352,8 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
         println!("scheduled jobs [{}]:", jobs.len());
         for job in jobs {
             println!(
-                "- {} :: schedule={} source={} status={} next_run_at={} run_count={} recovery_count={} outcome={:?} progression={:?} last_error={:?} task={}",
-                job.id, job.schedule, job.source, job.status, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_progression, job.last_error, job.task
+                "- {} :: schedule={} source={} status={} next_run_at={} run_count={} recovery_count={} outcome={:?} progression={:?} last_error={:?} delivery_webhook_url={:?} delivery_event_type={:?} delivery_outcome={:?} delivery_error={:?} task={}",
+                job.id, job.schedule, job.source, job.status, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_progression, job.last_error, job.delivery_webhook_url, job.delivery_event_type, job.last_delivery_outcome, job.last_delivery_error, job.task
             );
         }
     } else if let Some(task) = args.add.as_deref() {
@@ -361,17 +361,23 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
             .schedule
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("--add requires --schedule <expr>"))?;
-        let job =
-            vela_runtime::add_scheduled_job(bootstrap, schedule, task, args.source.as_deref())?;
+        let job = vela_runtime::add_scheduled_job(
+            bootstrap,
+            schedule,
+            task,
+            args.source.as_deref(),
+            args.delivery_webhook_url.as_deref(),
+            args.delivery_event_type.as_deref(),
+        )?;
         println!(
-            "scheduled job added: {} schedule={} source={} status={} next_run_at={} progression={:?} task={}",
-            job.id, job.schedule, job.source, job.status, job.next_run_at, job.last_progression, job.task
+            "scheduled job added: {} schedule={} source={} status={} next_run_at={} progression={:?} delivery_webhook_url={:?} delivery_event_type={:?} task={}",
+            job.id, job.schedule, job.source, job.status, job.next_run_at, job.last_progression, job.delivery_webhook_url, job.delivery_event_type, job.task
         );
     } else if let Some(id) = args.show.as_deref() {
         let job = vela_runtime::get_scheduled_job(bootstrap, id)?;
         println!(
-            "scheduled job: {} schedule={} source={} status={} created_at={} next_run_at={} run_count={} recovery_count={} outcome={:?} progression={:?} last_error={:?} task={}",
-            job.id, job.schedule, job.source, job.status, job.created_at, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_progression, job.last_error, job.task
+            "scheduled job: {} schedule={} source={} status={} created_at={} next_run_at={} run_count={} recovery_count={} outcome={:?} progression={:?} last_error={:?} delivery_webhook_url={:?} delivery_event_type={:?} delivery_at={:?} delivery_outcome={:?} delivery_error={:?} task={}",
+            job.id, job.schedule, job.source, job.status, job.created_at, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_progression, job.last_error, job.delivery_webhook_url, job.delivery_event_type, job.last_delivery_at, job.last_delivery_outcome, job.last_delivery_error, job.task
         );
     } else {
         let report = vela_runtime::setup_scheduler(bootstrap)?;
