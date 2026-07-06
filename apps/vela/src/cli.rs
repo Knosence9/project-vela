@@ -80,10 +80,16 @@ pub(crate) struct ChatArgs {
 
 #[derive(Debug, Default, Args)]
 pub(crate) struct GatewayArgs {
-    #[arg(long = "setup", default_value_t = false)]
+    #[arg(long = "setup", default_value_t = false, group = "action")]
     pub(crate) setup: bool,
-    #[arg(long = "start", default_value_t = false)]
+    #[arg(long = "start", default_value_t = false, group = "action")]
     pub(crate) start: bool,
+    #[arg(long = "webhook-url", group = "action")]
+    pub(crate) webhook_url: Option<String>,
+    #[arg(long = "payload", requires = "webhook_url")]
+    pub(crate) payload: Option<String>,
+    #[arg(long = "event-type", requires = "webhook_url")]
+    pub(crate) event_type: Option<String>,
 }
 
 #[derive(Debug, Default, Args)]

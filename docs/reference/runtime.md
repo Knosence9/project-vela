@@ -16,16 +16,16 @@
 - bare `--continue` resumes the latest session
 - interactive vs single-turn mode is derived from whether query/image input is present
 - `status` reports the latest active session identity and first-pass extension registry state
-- `gateway` now bootstraps durable gateway directories/config and can resume a gateway-specific runtime session
+- `gateway` now bootstraps durable gateway directories/config, can resume a gateway-specific runtime session, and can deliver a bounded outbound webhook payload with a persisted outbox record
 - `cron` now bootstraps durable scheduler config/job state, can resume a scheduler-specific runtime session, and can execute due jobs through the kernel scheduler path
 
 ## Current runtime behavior
 - bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
 - `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama and a deterministic mock backend now serving as supported provider implementations behind that boundary
-- provider capabilities are now treated as an explicit matrix rather than implicit backend quirks: both supported backends advertise text, bounded tool-loop, and reflection/retry support, while only Ollama currently advertises image support
-- configured provider-backed turns can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
+- provider capabilities are now treated as an explicit matrix rather than implicit backend quirks: both supported backends advertise text, bounded tool-loop, reflection/retry support, and first-pass image support
+- configured provider-backed turns, including image-backed turns for the supported providers, can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
 - approved read-only runtime tools now include targeted internal context retrieval for memory, session history, and skill content (`view_memory`, `search_session_history`, `view_skill`) in addition to the earlier snapshot/list tools
-- provider-backed turns now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
+- provider-backed turns, including supported image-backed turns, now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
 - retrieved tool context is injected back into the provider continuation path as durable tool-result artifacts, keeping context-aware reasoning auditable without allowing live mutation
 - each live runtime turn now persists ordered lifecycle phases (`receive`, `deliberate`, `tool-request`, `tool-result`, `reflect`, `retry`, `respond`, `finish`, plus `failed` on error paths)
 - session inspection now surfaces parsed runtime lifecycle records, explicit branch lineage, and persisted compression summaries alongside raw messages and events
@@ -38,13 +38,14 @@
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
 - tool, skill, and workflow extensions may activate on boot when they provide a non-empty entry path; service extensions remain metadata-only in this slice, and unsupported service `on-boot` requests fail explicitly in status/reload output
 - `vela extensions --reload` now re-reads extension config + manifest files, recomputes lifecycle transitions, refreshes extension state without resetting durable session state, and fails explicitly when kernel-owned runtime drift is detected, surfacing owned config boundaries such as `runtime.provider@kernel-runtime`
-- `vela chat --image ...` can call a configured runtime provider for first-pass image turns, with Ollama currently serving as the image-capable backend while the mock backend falls back explicitly to the local kernel path in this slice
+- `vela chat --image ...` and mixed `vela chat --query ... --image ...` turns can call a configured runtime provider for first-pass image execution, with both Ollama and the deterministic mock backend now serving that path through the provider boundary
 - runtime turn CLI output now prints the resolved response route (`source`, optional `provider`, optional `model`, and advertised provider capabilities) so backend differences stay visible even when execution falls back to the kernel path
 - `vela chat --query ... --checkpoints` can emit review signals and generate review candidates during live execution
 - when no provider is configured, or a request cannot use provider-backed execution, query/image turns fall back to deterministic local-kernel scaffold responses
 - repeated resume/continue paths update `updated_at` on the matching session row
 - active-session reporting currently resolves to the latest `updated_at` row in `sessions`
 - `vela gateway --start` resumes the latest `gateway` command session when one already exists
+- `vela gateway --webhook-url <url> --payload <text> [--event-type <name>]` posts one JSON payload through the gateway surface, appends durable gateway delivery events/messages, and writes a delivery record into `~/.vela/gateway/outbox/`
 - `vela cron --start` resumes the latest `cron` command session when one already exists, executes due durable jobs, and recovers stale in-flight jobs before retrying them
 - scheduled jobs now surface explicit progression states in CLI status (`registered`, `started-attempt`, `recovered-for-retry`, `completed-rescheduled`, `failed-rescheduled`) so recurring next-run behavior is visible without reading raw job timestamps alone
 
@@ -64,7 +65,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states at the session level
-- deeper provider capability parity beyond the current explicit matrix (shared text/tool-loop/reflection support, Ollama-only image support), while preserving the bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
+- deeper provider capability parity beyond the current explicit matrix (shared text/tool-loop/reflection/image support, but still intentionally different provider quality and transport behavior), while preserving the bounded iterative tool loop, bounded reflection/retry rules, and first-pass internal context retrieval tools
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model

@@ -162,6 +162,70 @@ fn spawn_mock_ollama(
     }])
 }
 
+/// Spawns a mock webhook endpoint that validates one JSON delivery request.
+fn spawn_mock_webhook(
+    expected_path: &'static str,
+    expected_event_type: &'static str,
+    expected_payload: &'static str,
+) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock webhook");
+    listener
+        .set_nonblocking(true)
+        .expect("configure mock webhook listener nonblocking mode");
+    let addr = format!(
+        "http://{}{}",
+        listener.local_addr().expect("mock webhook addr"),
+        expected_path
+    );
+    let handle = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(pair) => break pair,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for mock webhook request"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept mock webhook request: {error}"),
+            }
+        };
+        let request = read_mock_http_request(&mut stream);
+        let (head, body_text) = request
+            .split_once("\r\n\r\n")
+            .expect("split HTTP headers/body");
+        let request_line = head.lines().next().expect("HTTP request line");
+        assert!(
+            request_line.starts_with(&format!("POST {expected_path} HTTP/1.1")),
+            "unexpected request line: {request_line}"
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(body_text).expect("decode mock webhook JSON body");
+        assert_eq!(
+            payload.get("event_type").and_then(|v| v.as_str()),
+            Some(expected_event_type)
+        );
+        assert_eq!(
+            payload.get("payload").and_then(|v| v.as_str()),
+            Some(expected_payload)
+        );
+        assert_eq!(
+            payload.get("source").and_then(|v| v.as_str()),
+            Some("gateway")
+        );
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .expect("write mock webhook response");
+    });
+    (addr, handle)
+}
+
 /// Creates an isolated VELA_HOME path for one CLI integration test.
 fn temp_vela_home(prefix: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
@@ -328,6 +392,34 @@ fn gateway_start_resumes_same_session_via_cli() {
 }
 
 #[test]
+/// Verifies that gateway webhook delivery is exposed as a real external CLI surface.
+fn gateway_webhook_delivery_executes_via_cli() {
+    let vela_home = temp_vela_home("gateway-webhook");
+    let (url, server) = spawn_mock_webhook("/deliver", "delivery.test", "hello webhook");
+
+    let delivery = run_vela(
+        &vela_home,
+        &[
+            "gateway",
+            "--webhook-url",
+            &url,
+            "--payload",
+            "hello webhook",
+            "--event-type",
+            "delivery.test",
+        ],
+    );
+    assert!(delivery.status.success(), "{}", stderr_text(&delivery));
+    let delivery_stdout = stdout_text(&delivery);
+    assert!(delivery_stdout.contains("gateway webhook delivered: session="));
+    assert!(delivery_stdout.contains("status=200"));
+    assert!(delivery_stdout.contains("event=delivery.test"));
+
+    server.join().unwrap();
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that a chat query executes a local runtime turn and can emit checkpoint artifacts.
 fn chat_query_executes_runtime_turn_and_generates_candidates() {
     let vela_home = temp_vela_home("chat-turn");
@@ -398,7 +490,7 @@ fn chat_query_uses_configured_mock_provider() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Mock provider says hi."));
-    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -452,8 +544,8 @@ fn chat_image_uses_configured_ollama_provider() {
 }
 
 #[test]
-/// Verifies that a configured mock provider falls back cleanly for image turns it does not support.
-fn chat_image_falls_back_for_configured_mock_provider() {
+/// Verifies that a configured mock provider executes image turns through the provider path.
+fn chat_image_uses_configured_mock_provider() {
     let vela_home = temp_vela_home("mock-image-fallback");
     std::fs::create_dir_all(&vela_home).unwrap();
     let image_path = vela_home.join("diagram.png");
@@ -470,9 +562,40 @@ fn chat_image_falls_back_for_configured_mock_provider() {
     );
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
-    assert!(turn_stdout.contains("Vela executed a local image turn."));
-    assert!(turn_stdout.contains("No provider-backed image execution was available"));
-    assert!(turn_stdout.contains("response route: source=runtime-kernel provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    assert!(turn_stdout.contains("Mock provider inspected the image."));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured mock provider executes mixed text+image turns through the provider path.
+fn chat_query_and_image_use_configured_mock_provider() {
+    let vela_home = temp_vela_home("mock-mixed-image-turn");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let image_path = vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--query",
+            "summarize the mock diagram",
+            "--image",
+            image_path.to_str().expect("image path"),
+        ],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout
+        .contains("Mock provider inspected the image for request: summarize the mock diagram."));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -528,6 +651,47 @@ fn chat_query_uses_configured_ollama_tool_loop() {
     assert!(turn_stdout.contains("phases=8"));
     assert!(turn_stdout.contains("last=finish"));
     server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured mock provider can run the bounded tool loop during mixed text+image turns.
+fn chat_query_and_image_use_mock_provider_tool_loop() {
+    let vela_home = temp_vela_home("mock-image-tool-loop");
+    std::fs::create_dir_all(vela_home.join("skills").join("deploy-staging")).unwrap();
+    std::fs::write(
+        vela_home
+            .join("skills")
+            .join("deploy-staging")
+            .join("SKILL.md"),
+        "# deploy-staging\n\nDeploys staging.",
+    )
+    .unwrap();
+    let image_path = vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--query",
+            "need the tool loop for this image",
+            "--image",
+            image_path.to_str().expect("image path"),
+        ],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Mock tool-informed final answer."));
+    assert!(turn_stdout.contains("lifecycle: turn=turn-"));
+    assert!(turn_stdout.contains("phases=8"));
+    assert!(turn_stdout.contains("response route: source=runtime-mock-tool-loop provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -595,6 +759,120 @@ fn chat_query_recovers_from_invalid_tool_request() {
     std::env::remove_var("VELA_HOME");
     server.join().unwrap();
 
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured mock provider can recover from one invalid tool request during a mixed text+image turn.
+fn chat_query_and_image_recover_from_invalid_tool_request_with_mock_provider() {
+    let vela_home = temp_vela_home("mock-image-reflect-recover");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let image_path = vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--query",
+            "recover from invalid tool in this image",
+            "--image",
+            image_path.to_str().expect("image path"),
+        ],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Mock recovered answer."));
+    assert!(turn_stdout.contains("lifecycle: turn=turn-"));
+    assert!(turn_stdout.contains("phases=6"));
+    assert!(turn_stdout.contains("last=finish"));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
+
+    std::env::set_var("VELA_HOME", &vela_home);
+    let bootstrap = vela_runtime::initialize_bootstrap(None, false).unwrap();
+    let inspection = vela_runtime::inspect_latest_session(&bootstrap, 20)
+        .unwrap()
+        .expect("cli mock image reflection inspection");
+    let lifecycle: Vec<_> = inspection
+        .lifecycle
+        .iter()
+        .map(|record| record.phase.as_str())
+        .collect();
+    assert_eq!(
+        lifecycle,
+        vec![
+            "receive",
+            "deliberate",
+            "reflect",
+            "retry",
+            "respond",
+            "finish"
+        ]
+    );
+    std::env::remove_var("VELA_HOME");
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured mock provider falls back after exhausting bounded reflection retries during a mixed text+image turn.
+fn chat_query_and_image_fall_back_after_exhausting_reflection_retries_with_mock_provider() {
+    let vela_home = temp_vela_home("mock-image-reflect-fallback");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let image_path = vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--query",
+            "exhaust reflection retries in this image",
+            "--image",
+            image_path.to_str().expect("image path"),
+        ],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("exhausted the bounded reflection limit"));
+    assert!(turn_stdout.contains("lifecycle: turn=turn-"));
+    assert!(turn_stdout.contains("phases=9"));
+    assert!(turn_stdout.contains("last=finish"));
+
+    std::env::set_var("VELA_HOME", &vela_home);
+    let bootstrap = vela_runtime::initialize_bootstrap(None, false).unwrap();
+    let inspection = vela_runtime::inspect_latest_session(&bootstrap, 20)
+        .unwrap()
+        .expect("cli mock image reflection fallback inspection");
+    let lifecycle: Vec<_> = inspection
+        .lifecycle
+        .iter()
+        .map(|record| record.phase.as_str())
+        .collect();
+    assert_eq!(
+        lifecycle,
+        vec![
+            "receive",
+            "deliberate",
+            "reflect",
+            "retry",
+            "reflect",
+            "retry",
+            "reflect",
+            "respond",
+            "finish"
+        ]
+    );
+    std::env::remove_var("VELA_HOME");
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
 

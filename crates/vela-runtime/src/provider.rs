@@ -110,11 +110,11 @@ impl RuntimeProviderBackend for MockRuntimeProvider {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
-            supports_images: false,
+            supports_images: true,
         }
     }
 
-    fn generate(&self, prompt: &str, _images: Option<Vec<String>>) -> Result<String> {
+    fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
         if prompt.contains("Tool result for view_memory:user:") {
             return Ok("Mock context-aware answer.".to_string());
         }
@@ -125,6 +125,9 @@ impl RuntimeProviderBackend for MockRuntimeProvider {
             return Ok(r#"{"tool":"list_skills"}"#.to_string());
         }
         if prompt.contains("unsupported or malformed tool envelope") {
+            if prompt.contains("exhaust reflection retries") {
+                return Ok(r#"{"tool":"shell_exec"}"#.to_string());
+            }
             return Ok("Mock recovered answer.".to_string());
         }
         if prompt.contains("retrieve targeted context") {
@@ -133,8 +136,29 @@ impl RuntimeProviderBackend for MockRuntimeProvider {
         if prompt.contains("need the tool loop") {
             return Ok(r#"{"tool":"memory_snapshot"}"#.to_string());
         }
+        if prompt.contains("exhaust reflection retries") {
+            return Ok(r#"{"tool":"shell_exec"}"#.to_string());
+        }
         if prompt.contains("recover from invalid tool") {
             return Ok(r#"{"tool":"shell_exec"}"#.to_string());
+        }
+        if images.is_some() {
+            let request = prompt
+                .split("User image request:\n")
+                .nth(1)
+                .and_then(|tail| tail.split("\n\nAttached image name:").next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if let Some(request) = request.filter(|value| {
+                *value
+                    != "Please analyze the attached image and respond concisely with the most relevant details for the runtime session."
+            }) {
+                return Ok(format!(
+                    "Mock provider inspected the image for request: {}.",
+                    request
+                ));
+            }
+            return Ok("Mock provider inspected the image.".to_string());
         }
         Ok("Mock provider says hi.".to_string())
     }
