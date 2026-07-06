@@ -461,13 +461,22 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     )
     .unwrap();
     let reload = run_vela(&vela_home, &["extensions", "--reload"]);
-    assert!(reload.status.success(), "{}", stderr_text(&reload));
+    assert!(!reload.status.success());
     let reload_stdout = stdout_text(&reload);
+    let reload_stderr = stderr_text(&reload);
     assert!(reload_stdout.contains("extensions reloaded: extensions: dir="));
     assert!(reload_stdout.contains("activated=1"));
     assert!(reload_stdout.contains("session preserved: true"));
-    assert!(reload_stdout.contains("restart required: none"));
+    assert!(reload_stdout.contains(
+        "restart required: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime"
+    ));
+    assert!(reload_stdout.contains(
+        "restart required [runtime.provider]: owner=kernel-runtime detail=provider backend changes remain restart-only during extension reload"
+    ));
     assert!(reload_stdout.contains("extension [activated]: id=Some(\"demo\")"));
+    assert!(reload_stderr.contains(
+        "extension reload blocked by kernel-owned runtime drift: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime"
+    ));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
