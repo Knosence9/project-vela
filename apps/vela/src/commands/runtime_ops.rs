@@ -1,4 +1,4 @@
-use crate::cli::{AgentsArgs, CronArgs, GatewayArgs, McpArgs, SessionsArgs};
+use crate::cli::{AgentsArgs, CronArgs, EvalArgs, GatewayArgs, McpArgs, SessionsArgs};
 use anyhow::Result;
 
 pub(crate) fn run_gateway(
@@ -316,6 +316,104 @@ pub(crate) fn run_mcp(bootstrap: &vela_runtime::BootstrapReport, args: &McpArgs)
                 setup.mcp_dir.display(),
                 setup.request_count,
                 setup.requests_path.display(),
+            ),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArgs) -> Result<()> {
+    if let Some(prompt) = args.run.as_deref() {
+        let report = vela_runtime::run_backend_eval(
+            bootstrap,
+            prompt,
+            &args.backends,
+            args.model.as_deref(),
+        )?;
+        println!(
+            "backend eval run: id={} session={} backends={} results={} prompt={:?}",
+            report.record.id,
+            report.session.session_id,
+            report.record.backends.join(","),
+            report.record.results.len(),
+            report.record.prompt,
+        );
+        for result in &report.record.results {
+            println!(
+                "- backend={} transport={} status={} duration_ms={} source={:?} model={:?} response_chars={} capabilities={:?} error={:?} preview={:?}",
+                result.backend_id,
+                result.transport,
+                result.status,
+                result.duration_ms,
+                result.response_source,
+                result.response_model,
+                result.response_chars,
+                result.provider_capabilities,
+                result.error,
+                result.response_preview,
+            );
+        }
+    } else if args.list {
+        let runs = vela_runtime::list_backend_evals(bootstrap)?;
+        println!("backend eval runs [{}]:", runs.len());
+        for run in runs {
+            println!(
+                "- {} :: created_at={} session={} backends={} results={} prompt={:?}",
+                run.id,
+                run.created_at,
+                run.session_id,
+                run.backends.join(","),
+                run.results.len(),
+                run.prompt,
+            );
+        }
+    } else if let Some(id) = args.show.as_deref() {
+        match vela_runtime::get_backend_eval(bootstrap, id)? {
+            Some(run) => {
+                println!(
+                    "backend eval: id={} created_at={} session={} backends={} results={} prompt={:?}",
+                    run.id,
+                    run.created_at,
+                    run.session_id,
+                    run.backends.join(","),
+                    run.results.len(),
+                    run.prompt,
+                );
+                for result in run.results {
+                    println!(
+                        "- backend={} transport={} status={} duration_ms={} source={:?} model={:?} response_chars={} capabilities={:?} error={:?} preview={:?}",
+                        result.backend_id,
+                        result.transport,
+                        result.status,
+                        result.duration_ms,
+                        result.response_source,
+                        result.response_model,
+                        result.response_chars,
+                        result.provider_capabilities,
+                        result.error,
+                        result.response_preview,
+                    );
+                }
+            }
+            None => println!("backend eval: not found for {:?}", id),
+        }
+    } else {
+        let setup = vela_runtime::setup_backend_evals(bootstrap)?;
+        match vela_runtime::current_command_session_summary(bootstrap, "eval")? {
+            Some(session) => println!(
+                "eval ready: dir={} runs={} session={} title={} messages={} events={}",
+                setup.evals_dir.display(),
+                setup.run_count,
+                session.id,
+                session.title,
+                session.message_count,
+                session.event_count,
+            ),
+            None => println!(
+                "eval ready: dir={} runs={} session=none file={}",
+                setup.evals_dir.display(),
+                setup.run_count,
+                setup.runs_path.display(),
             ),
         }
     }

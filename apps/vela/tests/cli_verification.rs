@@ -715,6 +715,90 @@ fn chat_query_uses_configured_llamacpp_provider() {
 }
 
 #[test]
+/// Verifies that the backend eval harness can compare bounded backends and persist the run for inspection.
+fn backend_eval_harness_compares_backends_and_persists_results() {
+    let vela_home = temp_vela_home("eval-harness");
+    let (llamacpp_base_url, llamacpp_server) =
+        spawn_mock_llamacpp("Phi eval reply.", "phi-3-mini", "compare backend behavior");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  model: phi-3-mini\n  llamacpp_base_url: {}\n",
+            llamacpp_base_url
+        ),
+    )
+    .unwrap();
+
+    let run = run_vela(
+        &vela_home,
+        &[
+            "eval",
+            "--run",
+            "compare backend behavior",
+            "--backend",
+            "mock",
+            "--backend",
+            "llamacpp",
+            "--model",
+            "phi-3-mini",
+        ],
+    );
+    assert!(run.status.success(), "{}", stderr_text(&run));
+    let run_stdout = stdout_text(&run);
+    assert!(run_stdout.contains("backend eval run: id=eval-"));
+    assert!(run_stdout.contains("backend=mock transport=in-process status=passed"));
+    assert!(run_stdout.contains("backend=llamacpp transport=http-json status=passed"));
+    let eval_id = parse_field(&run_stdout, "id").expect("eval id").to_string();
+
+    let list = run_vela(&vela_home, &["eval", "--list"]);
+    assert!(list.status.success(), "{}", stderr_text(&list));
+    let list_stdout = stdout_text(&list);
+    assert!(list_stdout.contains("backend eval runs [1]:"));
+    assert!(list_stdout.contains(&eval_id));
+    assert!(list_stdout.contains("backends=mock,llamacpp"));
+
+    let show = run_vela(&vela_home, &["eval", "--show", &eval_id]);
+    assert!(show.status.success(), "{}", stderr_text(&show));
+    let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains(&format!("backend eval: id={}", eval_id)));
+    assert!(show_stdout.contains("backend=mock transport=in-process status=passed"));
+    assert!(show_stdout.contains("backend=llamacpp transport=http-json status=passed"));
+    llamacpp_server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that the backend eval harness records bounded provider failures without aborting the run.
+fn backend_eval_harness_records_provider_failures() {
+    let vela_home = temp_vela_home("eval-harness-failure");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  model: phi-3-mini\n  llamacpp_base_url: http://10.0.0.15:8080\n",
+    )
+    .unwrap();
+
+    let run = run_vela(
+        &vela_home,
+        &[
+            "eval",
+            "--run",
+            "compare backend failure",
+            "--backend",
+            "llamacpp",
+        ],
+    );
+    assert!(run.status.success(), "{}", stderr_text(&run));
+    let run_stdout = stdout_text(&run);
+    assert!(run_stdout.contains("backend=llamacpp transport=http-json status=failed"));
+    assert!(run_stdout.contains("refusing non-local llama.cpp endpoint"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that a configured mock provider is used for chat text turns.
 fn chat_query_uses_configured_mock_provider() {
     let vela_home = temp_vela_home("mock-chat");
