@@ -1642,6 +1642,33 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("delivery_error_excerpt=Some(\"webhook delivery failed after retry because downstream rejected the payload body\""));
     assert!(report_stdout.contains("last_error_excerpt=Some(\"temporary network failure while delivering scheduler webhook payload"));
 
+    let mut delivered_jobs: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&jobs_path).unwrap()).unwrap();
+    let delivered_job = delivered_jobs
+        .as_array_mut()
+        .unwrap()
+        .first_mut()
+        .expect("first job");
+    delivered_job["last_delivery_outcome"] = serde_json::Value::from("delivered");
+    delivered_job["last_delivery_error"] = serde_json::Value::Null;
+    std::fs::write(
+        &jobs_path,
+        serde_json::to_string_pretty(&delivered_jobs).unwrap(),
+    )
+    .unwrap();
+
+    let delivered_report = run_vela(&vela_home, &["cron", "--report"]);
+    assert!(
+        delivered_report.status.success(),
+        "{}",
+        stderr_text(&delivered_report)
+    );
+    let delivered_stdout = stdout_text(&delivered_report);
+    assert!(delivered_stdout.contains("delivery_failed=0"));
+    assert!(delivered_stdout.contains("delivery_delivered=1"));
+    assert!(delivered_stdout.contains("delivery_outcome=Some(\"delivered\")"));
+    assert!(delivered_stdout.contains("delivery_error_excerpt=None"));
+
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
 
