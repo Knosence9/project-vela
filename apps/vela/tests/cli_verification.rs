@@ -879,7 +879,6 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     );
     assert!(run_slot.status.success(), "{}", stderr_text(&run_slot));
     let run_slot_stdout = stdout_text(&run_slot);
-    let first_eval_id = parse_field(&run_slot_stdout, "id").expect("first eval id");
     assert!(run_slot_stdout.contains("slot=Some(\"capability-parity-scan\")"));
     assert!(run_slot_stdout.contains("parity_summary=Some(\""));
     assert!(run_slot_stdout.contains("parity=single-backend"));
@@ -895,6 +894,8 @@ fn backend_experiment_slot_is_visible_and_runnable() {
             "capability-parity-scan",
             "--backend",
             "mock",
+            "--backend",
+            "llamacpp",
             "--model",
             "mock-2",
         ],
@@ -905,11 +906,10 @@ fn backend_experiment_slot_is_visible_and_runnable() {
         stderr_text(&run_slot_second)
     );
     let run_slot_second_stdout = stdout_text(&run_slot_second);
-    let second_eval_id = parse_field(&run_slot_second_stdout, "id").expect("second eval id");
-    assert_ne!(first_eval_id, second_eval_id);
     assert!(run_slot_second_stdout.contains("slot=Some(\"capability-parity-scan\")"));
-    assert!(run_slot_second_stdout.contains("parity=single-backend"));
+    assert!(run_slot_second_stdout.contains("parity=diverged"));
     assert!(run_slot_second_stdout.contains("backend=mock transport=in-process status=passed"));
+    assert!(run_slot_second_stdout.contains("backend=llamacpp transport=http-json status=failed"));
 
     let show_ran_slot = run_vela(
         &vela_home,
@@ -921,11 +921,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
         stderr_text(&show_ran_slot)
     );
     let show_ran_slot_stdout = stdout_text(&show_ran_slot);
-    assert!(show_ran_slot_stdout.contains(&format!("latest_eval_id=Some(\"{}\")", second_eval_id)));
-    assert!(!show_ran_slot_stdout.contains(&format!("latest_eval_id=Some(\"{}\")", first_eval_id)));
-    assert!(show_ran_slot_stdout.contains("latest_backends=mock"));
-    assert!(show_ran_slot_stdout.contains("latest_results=1"));
-    assert!(show_ran_slot_stdout.contains("latest_parity_summary=Some(\"parity=single-backend"));
+    assert!(show_ran_slot_stdout.contains("latest_backends=mock,llamacpp"));
+    assert!(show_ran_slot_stdout.contains("latest_results=2"));
+    assert!(show_ran_slot_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
 
     let list_slots_after = run_vela(&vela_home, &["eval", "--list-slots"]);
     assert!(
@@ -937,14 +935,8 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_after_stdout.contains(
         "capability-parity-scan :: status=bounded-preview strategy=bounded-backend-comparison"
     ));
-    assert!(
-        list_slots_after_stdout.contains(&format!("latest_eval_id=Some(\"{}\")", second_eval_id))
-    );
-    assert!(
-        !list_slots_after_stdout.contains(&format!("latest_eval_id=Some(\"{}\")", first_eval_id))
-    );
-    assert!(list_slots_after_stdout.contains("latest_results=1"));
-    assert!(list_slots_after_stdout.contains("latest_parity_summary=Some(\"parity=single-backend"));
+    assert!(list_slots_after_stdout.contains("latest_results=2"));
+    assert!(list_slots_after_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
