@@ -346,12 +346,13 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
             args.model.as_deref(),
         )?;
         println!(
-            "backend eval run: id={} session={} slot={:?} backends={} results={} prompt={:?}",
+            "backend eval run: id={} session={} slot={:?} backends={} results={} parity_summary={:?} prompt={:?}",
             report.record.id,
             report.session.session_id,
             report.record.experiment_slot,
             report.record.backends.join(","),
             report.record.results.len(),
+            report.record.parity_summary,
             report.record.prompt,
         );
         for result in &report.record.results {
@@ -377,12 +378,13 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
             args.model.as_deref(),
         )?;
         println!(
-            "backend eval run: id={} session={} slot={:?} backends={} results={} prompt={:?}",
+            "backend eval run: id={} session={} slot={:?} backends={} results={} parity_summary={:?} prompt={:?}",
             report.record.id,
             report.session.session_id,
             report.record.experiment_slot,
             report.record.backends.join(","),
             report.record.results.len(),
+            report.record.parity_summary,
             report.record.prompt,
         );
         for result in &report.record.results {
@@ -405,13 +407,14 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
         println!("backend eval runs [{}]:", runs.len());
         for run in runs {
             println!(
-                "- {} :: created_at={} session={} slot={:?} backends={} results={} prompt={:?}",
+                "- {} :: created_at={} session={} slot={:?} backends={} results={} parity_summary={:?} prompt={:?}",
                 run.id,
                 run.created_at,
                 run.session_id,
                 run.experiment_slot,
                 run.backends.join(","),
                 run.results.len(),
+                run.parity_summary,
                 run.prompt,
             );
         }
@@ -419,13 +422,14 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
         match vela_runtime::get_backend_eval(bootstrap, id)? {
             Some(run) => {
                 println!(
-                    "backend eval: id={} created_at={} session={} slot={:?} backends={} results={} prompt={:?}",
+                    "backend eval: id={} created_at={} session={} slot={:?} backends={} results={} parity_summary={:?} prompt={:?}",
                     run.id,
                     run.created_at,
                     run.session_id,
                     run.experiment_slot,
                     run.backends.join(","),
                     run.results.len(),
+                    run.parity_summary,
                     run.prompt,
                 );
                 for result in run.results {

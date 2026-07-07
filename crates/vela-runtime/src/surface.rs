@@ -137,6 +137,8 @@ pub struct BackendEvalRunRecord {
     pub session_id: String,
     pub experiment_slot: Option<String>,
     pub model_override: Option<String>,
+    #[serde(default)]
+    pub parity_summary: Option<String>,
     pub results: Vec<BackendEvalResultRecord>,
 }
 
@@ -1380,6 +1382,67 @@ pub fn run_backend_eval_slot(
     )
 }
 
+fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<String> {
+    if results.is_empty() {
+        return None;
+    }
+
+    let passed = results
+        .iter()
+        .filter(|item| item.status == "passed")
+        .map(|item| item.backend_id.clone())
+        .collect::<Vec<_>>();
+    let failed = results
+        .iter()
+        .filter(|item| item.status != "passed")
+        .map(|item| item.backend_id.clone())
+        .collect::<Vec<_>>();
+
+    let mut capability_groups = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for result in results {
+        capability_groups
+            .entry(
+                result
+                    .provider_capabilities
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+            )
+            .or_default()
+            .push(result.backend_id.clone());
+    }
+
+    let capability_group_count = capability_groups.len();
+    let parity = if results.len() < 2 {
+        "single-backend"
+    } else if failed.is_empty() && capability_group_count <= 1 {
+        "aligned"
+    } else {
+        "diverged"
+    };
+    let capability_groups = capability_groups
+        .into_iter()
+        .map(|(caps, backends)| format!("{}=>{}", backends.join("+"), caps))
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    Some(format!(
+        "parity={} passed={} failed={} capability_groups={} {}",
+        parity,
+        if passed.is_empty() {
+            "none".to_string()
+        } else {
+            passed.join(",")
+        },
+        if failed.is_empty() {
+            "none".to_string()
+        } else {
+            failed.join(",")
+        },
+        capability_group_count,
+        capability_groups
+    ))
+}
+
 fn run_backend_eval_internal(
     bootstrap: &BootstrapReport,
     prompt: &str,
@@ -1498,6 +1561,7 @@ fn run_backend_eval_internal(
         results.push(result);
     }
 
+    let parity_summary = summarize_backend_eval_parity(&results);
     let record = BackendEvalRunRecord {
         id: format!("eval-{}", unix_timestamp_nanos()),
         prompt: prompt.to_string(),
@@ -1509,6 +1573,7 @@ fn run_backend_eval_internal(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string),
+        parity_summary,
         results,
     };
 

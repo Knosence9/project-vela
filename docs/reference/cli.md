@@ -140,10 +140,10 @@ README-visible shared slash commands:
 - `vela status` now prints the explicit backend API contract list plus the resolved backend contract from config, including bounded local backends such as Ollama, mock, and llama.cpp, so future adapters can target stable kernel-owned interfaces
 
 ## Backend eval surface
-- `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run
-- `vela eval --run-slot <slot-id> [--backend <id>...] [--model <name>]` executes one of the published bounded provider experiment slots (`ternary-preview`, `local-first-replay`, `capability-parity-scan`) without changing the live kernel route
-- `vela eval --list` shows durable backend eval runs
-- `vela eval --show <id>` shows one durable backend eval run with per-backend results
+- `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run and now emits a durable parity summary for that run
+- `vela eval --run-slot <slot-id> [--backend <id>...] [--model <name>]` executes one of the published bounded provider experiment slots (`ternary-preview`, `local-first-replay`, `capability-parity-scan`) without changing the live kernel route, while surfacing bounded parity summaries
+- `vela eval --list` shows durable backend eval runs plus stored parity summaries
+- `vela eval --show <id>` shows one durable backend eval run with per-backend results and its parity summary
 - `vela eval --list-slots` shows published bounded architecture experiment slots
 - `vela eval --show-slot <id>` shows one bounded architecture experiment slot by id
 - `vela eval --show-policy` shows the durable model-lab criteria and boundaries that govern deeper model-core experimentation
