@@ -269,6 +269,8 @@ pub struct ExtensionReloadReport {
     pub session_after: Option<SessionSummary>,
     pub restart_required_drifts: Vec<RestartRequiredRuntimeDrift>,
     pub ownership_blocked: bool,
+    pub ownership_baseline_path: std::path::PathBuf,
+    pub ownership_baseline_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,15 +346,25 @@ impl ExtensionReloadReport {
         )
     }
 
+    /// Renders the baseline checkpoint used for restart-only ownership enforcement.
+    pub fn ownership_baseline_line(&self) -> String {
+        format!(
+            "path={} source={}",
+            self.ownership_baseline_path.display(),
+            self.ownership_baseline_source
+        )
+    }
+
     pub fn ownership_block_reason(&self) -> Option<String> {
         self.ownership_blocked.then(|| {
             format!(
-                "extension reload blocked by kernel-owned runtime drift: {}",
+                "extension reload blocked by kernel-owned runtime drift: {} (restart vela with the updated config to refresh the ownership baseline at {})",
                 self.restart_required_drifts
                     .iter()
                     .map(|item| format!("{}@{}", item.field, item.owner))
                     .collect::<Vec<_>>()
-                    .join(", ")
+                    .join(", "),
+                self.ownership_baseline_path.display()
             )
         })
     }
@@ -469,8 +481,15 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         (None, None) => true,
         _ => false,
     };
-    let previous_config = load_runtime_config_ownership_baseline(&bootstrap.vela_home)?
-        .unwrap_or_else(|| bootstrap.resolved_config.clone());
+    let ownership_baseline_path = runtime_config_ownership_baseline_path(&bootstrap.vela_home);
+    let (previous_config, ownership_baseline_source) =
+        match load_runtime_config_ownership_baseline(&bootstrap.vela_home)? {
+            Some(config) => (config, "durable-baseline".to_string()),
+            None => (
+                bootstrap.resolved_config.clone(),
+                "bootstrap-fallback".to_string(),
+            ),
+        };
     let restart_required_drifts =
         restart_required_runtime_drifts(&previous_config, &resolved_config);
     let ownership_blocked = !restart_required_drifts.is_empty();
@@ -484,6 +503,8 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         session_after,
         ownership_blocked,
         restart_required_drifts,
+        ownership_baseline_path,
+        ownership_baseline_source,
     })
 }
 
