@@ -633,7 +633,10 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
         let jobs = vela_runtime::list_scheduled_jobs(bootstrap)?;
         let now = scheduler_now_timestamp();
         let pending_count = jobs.iter().filter(|job| job.status == "pending").count();
-        let running_count = jobs.iter().filter(|job| job.status == "running").count();
+        let running_count = jobs
+            .iter()
+            .filter(|job| scheduler_job_due_state(job, now) == "running")
+            .count();
         let completed_count = jobs
             .iter()
             .filter(|job| job.last_outcome.as_deref() == Some("completed"))
