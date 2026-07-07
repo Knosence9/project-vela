@@ -121,7 +121,7 @@ README-visible shared slash commands:
 ## Known Rust scheduler delivery surface
 - `vela cron --add <task> --schedule <expr> [--delivery-webhook-url <url>] [--delivery-event-type <name>]` registers one durable scheduled job and can route completed/failed job outcomes through the gateway webhook delivery path
 - `vela cron --list` and `vela cron --show <id>` surface the configured delivery target plus the latest delivery outcome/error state
-- `vela cron --report` summarizes durable scheduler state across jobs, outcomes, recoveries, and delivery status without inspecting raw JSON
+- `vela cron --report` summarizes durable scheduler state across jobs, outcomes, recoveries, and delivery status, and now prints bounded per-job last-run / last-failure details without inspecting raw JSON
 
 ## Known Rust extension reload surface
 - `vela extensions --reload` re-reads extension config and manifests without dropping session continuity, but now blocks when kernel-owned runtime drift is detected against the durable ownership baseline at `~/.vela/runtime/reload-ownership-baseline.json`
