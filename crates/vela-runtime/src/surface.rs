@@ -1712,10 +1712,22 @@ pub fn get_backend_experiment_slot_inspection(
     if normalized.is_empty() {
         bail!("backend experiment slot id cannot be empty");
     }
-    let slots = inspect_backend_experiment_slots(bootstrap)?;
-    Ok(slots
-        .into_iter()
-        .find(|inspection| inspection.slot.id == normalized))
+    let Some(slot) = get_backend_experiment_slot(bootstrap, normalized)? else {
+        return Ok(None);
+    };
+    let runs = list_backend_evals(bootstrap)?;
+    let latest = runs
+        .iter()
+        .rev()
+        .find(|run| run.experiment_slot.as_deref() == Some(normalized));
+    Ok(Some(BackendExperimentSlotInspection {
+        latest_eval_id: latest.map(|run| run.id.clone()),
+        latest_eval_created_at: latest.map(|run| run.created_at),
+        latest_eval_parity_summary: latest.and_then(|run| run.parity_summary.clone()),
+        latest_eval_backends: latest.map(|run| run.backends.clone()).unwrap_or_default(),
+        latest_eval_result_count: latest.map(|run| run.results.len()).unwrap_or(0),
+        slot,
+    }))
 }
 
 /// Returns the durable model-lab policy for the repo.
