@@ -1603,7 +1603,7 @@ fn cron_report_summarizes_scheduler_state() {
     job["recovery_count"] = serde_json::Value::from(1);
     job["last_started_at"] = serde_json::Value::from(11);
     job["last_completed_at"] = serde_json::Value::from(12);
-    job["last_failed_at"] = serde_json::Value::from(7);
+    job["last_failed_at"] = serde_json::Value::from(15);
     job["last_outcome"] = serde_json::Value::from("completed");
     job["last_progression"] = serde_json::Value::from("completed-rescheduled");
     job["last_error"] = serde_json::Value::from(
@@ -1628,9 +1628,9 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains(&format!("{}@42", job_id)));
     assert!(report_stdout.contains("scheduler jobs [1]:"));
     assert!(report_stdout.contains(&format!("- {} :: status=pending", job_id)));
-    assert!(report_stdout.contains("last_run_at=Some(12)"));
+    assert!(report_stdout.contains("last_run_at=Some(15)"));
     assert!(report_stdout.contains("last_completed_at=Some(12)"));
-    assert!(report_stdout.contains("last_failed_at=Some(7)"));
+    assert!(report_stdout.contains("last_failed_at=Some(15)"));
     assert!(report_stdout.contains("delivery_outcome=Some(\"failed\")"));
     assert!(report_stdout.contains("last_error_excerpt=Some(\"temporary network failure while delivering scheduler webhook payload"));
 
