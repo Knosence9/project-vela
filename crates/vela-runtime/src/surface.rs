@@ -165,6 +165,17 @@ pub struct BackendEvalRunReport {
 }
 
 #[derive(Debug, Clone)]
+/// Enriches a published experiment slot with the latest durable eval evidence for operators.
+pub struct BackendExperimentSlotInspection {
+    pub slot: BackendExperimentSlotRecord,
+    pub latest_eval_id: Option<String>,
+    pub latest_eval_created_at: Option<i64>,
+    pub latest_eval_parity_summary: Option<String>,
+    pub latest_eval_backends: Vec<String>,
+    pub latest_eval_result_count: usize,
+}
+
+#[derive(Debug, Clone)]
 /// Describes the durable scheduler files ensured during bootstrap.
 pub struct SchedulerSetupReport {
     pub scheduler_dir: std::path::PathBuf,
@@ -1665,6 +1676,46 @@ pub fn list_backend_experiment_slots(
 ) -> Result<Vec<BackendExperimentSlotRecord>> {
     let setup = setup_backend_evals(bootstrap)?;
     load_backend_experiment_slots(&setup.slots_path)
+}
+
+/// Returns every published experiment slot enriched with the latest durable eval evidence.
+pub fn inspect_backend_experiment_slots(
+    bootstrap: &BootstrapReport,
+) -> Result<Vec<BackendExperimentSlotInspection>> {
+    let slots = list_backend_experiment_slots(bootstrap)?;
+    let runs = list_backend_evals(bootstrap)?;
+    Ok(slots
+        .into_iter()
+        .map(|slot| {
+            let latest = runs
+                .iter()
+                .rev()
+                .find(|run| run.experiment_slot.as_deref() == Some(slot.id.as_str()));
+            BackendExperimentSlotInspection {
+                latest_eval_id: latest.map(|run| run.id.clone()),
+                latest_eval_created_at: latest.map(|run| run.created_at),
+                latest_eval_parity_summary: latest.and_then(|run| run.parity_summary.clone()),
+                latest_eval_backends: latest.map(|run| run.backends.clone()).unwrap_or_default(),
+                latest_eval_result_count: latest.map(|run| run.results.len()).unwrap_or(0),
+                slot,
+            }
+        })
+        .collect())
+}
+
+/// Returns one published experiment slot enriched with the latest durable eval evidence.
+pub fn get_backend_experiment_slot_inspection(
+    bootstrap: &BootstrapReport,
+    id: &str,
+) -> Result<Option<BackendExperimentSlotInspection>> {
+    let normalized = id.trim();
+    if normalized.is_empty() {
+        bail!("backend experiment slot id cannot be empty");
+    }
+    let slots = inspect_backend_experiment_slots(bootstrap)?;
+    Ok(slots
+        .into_iter()
+        .find(|inspection| inspection.slot.id == normalized))
 }
 
 /// Returns the durable model-lab policy for the repo.
