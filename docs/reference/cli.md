@@ -124,7 +124,7 @@ README-visible shared slash commands:
 - `vela cron --report` summarizes durable scheduler state across jobs, outcomes, recoveries, and delivery status, including delivered-delivery counts plus bounded per-job delivery timestamps, delivery event types, and delivery error excerpts without inspecting raw JSON
 
 ## Known Rust extension reload surface
-- `vela extensions --reload` re-reads extension config and manifests without dropping session continuity, but now blocks when kernel-owned runtime drift is detected against the durable ownership baseline at `~/.vela/runtime/reload-ownership-baseline.json`, surfacing per-setting owner/detail plus bounded previous/reloaded diffs
+- `vela extensions --reload` re-reads extension config and manifests without dropping session continuity, but now blocks when kernel-owned runtime drift is detected against the durable ownership baseline at `~/.vela/runtime/reload-ownership-baseline.json`, surfacing the exact baseline path/source plus per-setting owner/detail and bounded previous/reloaded diffs; blocked reloads now tell the operator to restart Vela with the updated config to refresh that baseline
 
 ## Known Rust delegation surface
 - `vela agents --delegate <task> --role <role> [--note <text>]` records one bounded subagent delegation request through the kernel-owned runtime surface and persists it for later inspection

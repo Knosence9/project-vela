@@ -187,6 +187,7 @@ pub(crate) fn run_extensions(
             report.session_before.as_ref().map(|item| item.id.as_str()),
             report.session_after.as_ref().map(|item| item.id.as_str()),
         );
+        println!("ownership baseline: {}", report.ownership_baseline_line());
         if report.restart_required_drifts.is_empty() {
             println!("restart required: none");
         } else {

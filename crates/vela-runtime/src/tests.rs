@@ -293,6 +293,11 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     assert_eq!(before.title, after.title);
     assert!(!reloaded.ownership_blocked);
     assert_eq!(reloaded.restart_required_drifts.len(), 0);
+    assert_eq!(reloaded.ownership_baseline_source, "bootstrap-fallback");
+    assert_eq!(
+        reloaded.ownership_baseline_path,
+        runtime_config_ownership_baseline_path(&vela_home)
+    );
 
     std::fs::write(
         vela_home.join("extensions").join("demo.yaml"),
@@ -318,14 +323,21 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     let drifted = reload_extensions(&bootstrap).unwrap();
     assert!(drifted.ownership_blocked);
     assert_eq!(drifted.restart_required_drifts.len(), 3);
+    assert_eq!(drifted.ownership_baseline_source, "durable-baseline");
+    assert_eq!(
+        drifted.ownership_baseline_path,
+        runtime_config_ownership_baseline_path(&vela_home)
+    );
     assert!(drifted
         .summary_line()
         .contains("restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime ownership_blocked=true"));
+    let expected_block_reason = format!(
+        "extension reload blocked by kernel-owned runtime drift: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime (restart vela with the updated config to refresh the ownership baseline at {})",
+        runtime_config_ownership_baseline_path(&vela_home).display()
+    );
     assert_eq!(
         drifted.ownership_block_reason().as_deref(),
-        Some(
-            "extension reload blocked by kernel-owned runtime drift: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime"
-        )
+        Some(expected_block_reason.as_str())
     );
     assert!(drifted.restart_required_drifts.iter().any(|item| {
         item.field == "runtime.provider"
@@ -447,6 +459,8 @@ fn reload_extensions_uses_durable_ownership_baseline_across_bootstraps() {
     let drifted = reload_extensions(&second).unwrap();
     assert!(drifted.ownership_blocked);
     assert_eq!(drifted.restart_required_drifts.len(), 3);
+    assert_eq!(drifted.ownership_baseline_source, "durable-baseline");
+    assert_eq!(drifted.ownership_baseline_path, baseline_path);
     assert!(drifted.restart_required_drifts.iter().any(|item| {
         item.field == "runtime.provider"
             && item.owner == "kernel-runtime"

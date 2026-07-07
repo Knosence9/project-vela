@@ -467,6 +467,13 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     assert!(reload_stdout.contains("extensions reloaded: extensions: dir="));
     assert!(reload_stdout.contains("activated=1"));
     assert!(reload_stdout.contains("session preserved: true"));
+    assert!(reload_stdout.contains(&format!(
+        "ownership baseline: path={} source=durable-baseline",
+        vela_home
+            .join("runtime")
+            .join("reload-ownership-baseline.json")
+            .display()
+    )));
     assert!(reload_stdout.contains(
         "restart required: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime"
     ));
@@ -480,9 +487,13 @@ fn extensions_status_and_reload_are_visible_via_cli() {
         "restart required [runtime.ollama_base_url]: owner=kernel-runtime detail=provider transport endpoint changes remain restart-only during extension reload previous=\"http://127.0.0.1:11434\" reloaded=\"http://127.0.0.1:22555\" action=restart-required"
     ));
     assert!(reload_stdout.contains("extension [activated]: id=Some(\"demo\")"));
-    assert!(reload_stderr.contains(
-        "extension reload blocked by kernel-owned runtime drift: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime"
-    ));
+    assert!(reload_stderr.contains(&format!(
+        "extension reload blocked by kernel-owned runtime drift: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime (restart vela with the updated config to refresh the ownership baseline at {})",
+        vela_home
+            .join("runtime")
+            .join("reload-ownership-baseline.json")
+            .display()
+    )));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
