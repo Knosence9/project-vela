@@ -1609,7 +1609,11 @@ fn cron_report_summarizes_scheduler_state() {
     job["last_error"] = serde_json::Value::from(
         "temporary network failure while delivering scheduler webhook payload to downstream sink",
     );
+    job["last_delivery_at"] = serde_json::Value::from(14);
     job["last_delivery_outcome"] = serde_json::Value::from("failed");
+    job["last_delivery_error"] = serde_json::Value::from(
+        "webhook delivery failed after retry because downstream rejected the payload body",
+    );
     job["next_run_at"] = serde_json::Value::from(42);
     std::fs::write(&jobs_path, serde_json::to_string_pretty(&jobs).unwrap()).unwrap();
 
@@ -1623,6 +1627,7 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("failed=0"));
     assert!(report_stdout.contains("delivery_pending=0"));
     assert!(report_stdout.contains("delivery_failed=1"));
+    assert!(report_stdout.contains("delivery_delivered=0"));
     assert!(report_stdout.contains("total_runs=2"));
     assert!(report_stdout.contains("total_recoveries=1"));
     assert!(report_stdout.contains(&format!("{}@42", job_id)));
@@ -1631,7 +1636,10 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("last_run_at=Some(15)"));
     assert!(report_stdout.contains("last_completed_at=Some(12)"));
     assert!(report_stdout.contains("last_failed_at=Some(15)"));
+    assert!(report_stdout.contains("delivery_at=Some(14)"));
+    assert!(report_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
     assert!(report_stdout.contains("delivery_outcome=Some(\"failed\")"));
+    assert!(report_stdout.contains("delivery_error_excerpt=Some(\"webhook delivery failed after retry because downstream rejected the payload body\""));
     assert!(report_stdout.contains("last_error_excerpt=Some(\"temporary network failure while delivering scheduler webhook payload"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();

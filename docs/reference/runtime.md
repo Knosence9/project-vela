@@ -61,7 +61,7 @@
 - `vela cron --start` resumes the latest `cron` command session when one already exists, executes due durable jobs, recovers stale in-flight jobs before retrying them, and can forward completed/failed job outcomes through the gateway webhook surface when a job carries a delivery target
 - `vela cron --add <task> --schedule <expr> [--delivery-webhook-url <url>] [--delivery-event-type <name>]` stores optional automated delivery metadata directly on the durable scheduled job record in `~/.vela/scheduler/jobs.json`
 - scheduled jobs now surface explicit progression states in CLI status (`registered`, `started-attempt`, `recovered-for-retry`, `completed-rescheduled`, `failed-rescheduled`) plus explicit delivery state (`delivery_webhook_url`, `delivery_event_type`, `last_delivery_outcome`, `last_delivery_error`) so recurring behavior is visible without reading raw timestamps alone
-- `vela cron --report` now aggregates durable scheduler visibility into one bounded summary (job counts, outcomes, delivery failures, recoveries, and next due job) and prints per-job last-run / last-failure details with bounded error excerpts so operators can inspect recurring health without scanning every job row
+- `vela cron --report` now aggregates durable scheduler visibility into one bounded summary (job counts, outcomes, delivery failures, delivered deliveries, recoveries, and next due job) and prints per-job last-run / last-failure details plus delivery timestamps, delivery event types, and bounded delivery/error excerpts so operators can inspect recurring health without scanning every job row
 
 ## Kernel vs provider boundary
 - keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel
