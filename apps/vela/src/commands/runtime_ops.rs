@@ -1,6 +1,21 @@
 use crate::cli::{AgentsArgs, CronArgs, EvalArgs, GatewayArgs, McpArgs, SessionsArgs};
 use anyhow::Result;
 
+fn scheduler_job_last_run_at(job: &vela_runtime::ScheduledJob) -> Option<i64> {
+    job.last_completed_at.or(job.last_started_at)
+}
+
+fn scheduler_job_last_error_excerpt(job: &vela_runtime::ScheduledJob) -> Option<String> {
+    job.last_error.as_ref().map(|error| {
+        let single_line = error.replace('\n', " ");
+        if single_line.chars().count() > 80 {
+            format!("{}…", single_line.chars().take(80).collect::<String>())
+        } else {
+            single_line
+        }
+    })
+}
+
 pub(crate) fn run_gateway(
     bootstrap: &vela_runtime::BootstrapReport,
     args: &GatewayArgs,
@@ -601,6 +616,25 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
                 total_recoveries,
                 next_due.map(|job| format!("{}@{}", job.id, job.next_run_at)),
             ),
+        }
+        println!("scheduler jobs [{}]:", jobs.len());
+        for job in &jobs {
+            println!(
+                "- {} :: status={} next_run_at={} last_run_at={:?} last_completed_at={:?} last_failed_at={:?} outcome={:?} progression={:?} run_count={} recovery_count={} delivery_outcome={:?} last_error_excerpt={:?} task={}",
+                job.id,
+                job.status,
+                job.next_run_at,
+                scheduler_job_last_run_at(job),
+                job.last_completed_at,
+                job.last_failed_at,
+                job.last_outcome,
+                job.last_progression,
+                job.run_count,
+                job.recovery_count,
+                job.last_delivery_outcome,
+                scheduler_job_last_error_excerpt(job),
+                job.task
+            );
         }
     } else if let Some(task) = args.add.as_deref() {
         let schedule = args

@@ -1579,8 +1579,14 @@ fn cron_report_summarizes_scheduler_state() {
     let job = jobs.as_array_mut().unwrap().first_mut().expect("first job");
     job["run_count"] = serde_json::Value::from(2);
     job["recovery_count"] = serde_json::Value::from(1);
+    job["last_started_at"] = serde_json::Value::from(11);
+    job["last_completed_at"] = serde_json::Value::from(12);
+    job["last_failed_at"] = serde_json::Value::from(7);
     job["last_outcome"] = serde_json::Value::from("completed");
     job["last_progression"] = serde_json::Value::from("completed-rescheduled");
+    job["last_error"] = serde_json::Value::from(
+        "temporary network failure while delivering scheduler webhook payload to downstream sink",
+    );
     job["last_delivery_outcome"] = serde_json::Value::from("failed");
     job["next_run_at"] = serde_json::Value::from(42);
     std::fs::write(&jobs_path, serde_json::to_string_pretty(&jobs).unwrap()).unwrap();
@@ -1598,6 +1604,13 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("total_runs=2"));
     assert!(report_stdout.contains("total_recoveries=1"));
     assert!(report_stdout.contains(&format!("{}@42", job_id)));
+    assert!(report_stdout.contains("scheduler jobs [1]:"));
+    assert!(report_stdout.contains(&format!("- {} :: status=pending", job_id)));
+    assert!(report_stdout.contains("last_run_at=Some(12)"));
+    assert!(report_stdout.contains("last_completed_at=Some(12)"));
+    assert!(report_stdout.contains("last_failed_at=Some(7)"));
+    assert!(report_stdout.contains("delivery_outcome=Some(\"failed\")"));
+    assert!(report_stdout.contains("last_error_excerpt=Some(\"temporary network failure while delivering scheduler webhook payload"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
