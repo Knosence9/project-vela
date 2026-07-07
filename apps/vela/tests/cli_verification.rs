@@ -1640,6 +1640,10 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
 /// Verifies that the scheduler report summarizes durable job and delivery state.
 fn cron_report_summarizes_scheduler_state() {
     let vela_home = temp_vela_home("cron-report");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
 
     let add = run_vela(
         &vela_home,
@@ -1681,7 +1685,7 @@ fn cron_report_summarizes_scheduler_state() {
     job["last_delivery_error"] = serde_json::Value::from(
         "webhook delivery failed after retry because downstream rejected the payload body",
     );
-    job["next_run_at"] = serde_json::Value::from(42);
+    job["next_run_at"] = serde_json::Value::from(now + 42);
     std::fs::write(&jobs_path, serde_json::to_string_pretty(&jobs).unwrap()).unwrap();
 
     let report = run_vela(&vela_home, &["cron", "--report"]);
@@ -1690,16 +1694,21 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("scheduler report:"));
     assert!(report_stdout.contains("jobs=1"));
     assert!(report_stdout.contains("pending=1"));
+    assert!(report_stdout.contains("running=0"));
     assert!(report_stdout.contains("completed=1"));
     assert!(report_stdout.contains("failed=0"));
+    assert!(report_stdout.contains("overdue=0"));
+    assert!(report_stdout.contains("lease_expired=0"));
     assert!(report_stdout.contains("delivery_pending=0"));
     assert!(report_stdout.contains("delivery_failed=1"));
     assert!(report_stdout.contains("delivery_delivered=0"));
     assert!(report_stdout.contains("total_runs=2"));
     assert!(report_stdout.contains("total_recoveries=1"));
-    assert!(report_stdout.contains(&format!("{}@42", job_id)));
+    assert!(report_stdout.contains(&format!("{}@{}", job_id, now + 42)));
     assert!(report_stdout.contains("scheduler jobs [1]:"));
     assert!(report_stdout.contains(&format!("- {} :: status=pending", job_id)));
+    assert!(report_stdout.contains("due_state=scheduled"));
+    assert!(report_stdout.contains("health_lag_seconds=None"));
     assert!(report_stdout.contains("last_run_at=Some(15)"));
     assert!(report_stdout.contains("last_completed_at=Some(12)"));
     assert!(report_stdout.contains("last_failed_at=Some(15)"));
@@ -1735,6 +1744,31 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(delivered_stdout.contains("delivery_delivered=1"));
     assert!(delivered_stdout.contains("delivery_outcome=Some(\"delivered\")"));
     assert!(delivered_stdout.contains("delivery_error_excerpt=None"));
+
+    let mut overdue_jobs: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&jobs_path).unwrap()).unwrap();
+    let overdue_job = overdue_jobs
+        .as_array_mut()
+        .unwrap()
+        .first_mut()
+        .expect("first job");
+    overdue_job["next_run_at"] = serde_json::Value::from(now - 30);
+    std::fs::write(
+        &jobs_path,
+        serde_json::to_string_pretty(&overdue_jobs).unwrap(),
+    )
+    .unwrap();
+
+    let overdue_report = run_vela(&vela_home, &["cron", "--report"]);
+    assert!(
+        overdue_report.status.success(),
+        "{}",
+        stderr_text(&overdue_report)
+    );
+    let overdue_stdout = stdout_text(&overdue_report);
+    assert!(overdue_stdout.contains("overdue=1"));
+    assert!(overdue_stdout.contains("due_state=overdue"));
+    assert!(overdue_stdout.contains("health_lag_seconds=Some("));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
