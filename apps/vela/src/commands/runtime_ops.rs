@@ -2,7 +2,14 @@ use crate::cli::{AgentsArgs, CronArgs, EvalArgs, GatewayArgs, McpArgs, SessionsA
 use anyhow::Result;
 
 fn scheduler_job_last_run_at(job: &vela_runtime::ScheduledJob) -> Option<i64> {
-    job.last_completed_at.or(job.last_started_at)
+    [
+        job.last_started_at,
+        job.last_completed_at,
+        job.last_failed_at,
+    ]
+    .into_iter()
+    .flatten()
+    .max()
 }
 
 fn scheduler_job_last_error_excerpt(job: &vela_runtime::ScheduledJob) -> Option<String> {
