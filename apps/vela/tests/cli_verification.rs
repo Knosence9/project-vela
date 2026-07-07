@@ -764,6 +764,7 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
     assert!(run_stdout.contains("backend eval run: id=eval-"));
     assert!(run_stdout.contains("slot=None"));
     assert!(run_stdout.contains("parity_summary=Some(\""));
+    assert!(run_stdout.contains("parity=diverged"));
     assert!(run_stdout.contains("passed=mock,llamacpp"));
     assert!(run_stdout.contains("capability_groups="));
     assert!(run_stdout.contains("backend=mock transport=in-process status=passed"));
@@ -778,6 +779,7 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
     assert!(list_stdout.contains("slot=None"));
     assert!(list_stdout.contains("backends=mock,llamacpp"));
     assert!(list_stdout.contains("parity_summary=Some(\""));
+    assert!(list_stdout.contains("parity=diverged"));
     assert!(list_stdout.contains("passed=mock,llamacpp"));
     assert!(list_stdout.contains("capability_groups="));
 
@@ -787,6 +789,7 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
     assert!(show_stdout.contains(&format!("backend eval: id={}", eval_id)));
     assert!(show_stdout.contains("slot=None"));
     assert!(show_stdout.contains("parity_summary=Some(\""));
+    assert!(show_stdout.contains("parity=diverged"));
     assert!(show_stdout.contains("passed=mock,llamacpp"));
     assert!(show_stdout.contains("capability_groups="));
     assert!(show_stdout.contains("backend=mock transport=in-process status=passed"));
@@ -863,6 +866,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     let run_slot_stdout = stdout_text(&run_slot);
     assert!(run_slot_stdout.contains("slot=Some(\"capability-parity-scan\")"));
     assert!(run_slot_stdout.contains("parity_summary=Some(\""));
+    assert!(run_slot_stdout.contains("parity=single-backend"));
     assert!(run_slot_stdout.contains("passed=mock"));
     assert!(run_slot_stdout.contains("capability_groups="));
     assert!(run_slot_stdout.contains("backend=mock transport=in-process status=passed"));

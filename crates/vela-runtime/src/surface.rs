@@ -1412,7 +1412,9 @@ fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<
     }
 
     let capability_group_count = capability_groups.len();
-    let parity = if failed.is_empty() && capability_group_count <= 1 {
+    let parity = if results.len() < 2 {
+        "single-backend"
+    } else if failed.is_empty() && capability_group_count <= 1 {
         "aligned"
     } else {
         "diverged"
