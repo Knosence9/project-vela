@@ -254,6 +254,8 @@ pub struct RestartRequiredRuntimeDrift {
     pub field: String,
     pub owner: String,
     pub detail: String,
+    pub previous_value: String,
+    pub reloaded_value: String,
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +308,16 @@ impl RuntimeConfigOwnershipBaseline {
             extension_manifests_dir: None,
             extension_entries: vec![],
         }
+    }
+}
+
+impl RestartRequiredRuntimeDrift {
+    /// Renders a bounded old/new diff for one restart-only runtime setting.
+    pub fn owned_setting_diff(&self) -> String {
+        format!(
+            "previous={} reloaded={} action=restart-required",
+            self.previous_value, self.reloaded_value
+        )
     }
 }
 
@@ -538,13 +550,19 @@ fn restart_required_runtime_drifts(
     previous: &ResolvedConfig,
     reloaded: &ResolvedConfig,
 ) -> Vec<RestartRequiredRuntimeDrift> {
+    fn render_runtime_config_value<T: serde::Serialize>(value: &T) -> String {
+        serde_json::to_string(value).unwrap_or_else(|_| "\"<unserializable>\"".to_string())
+    }
+
     macro_rules! drift {
-        ($condition:expr, $field:expr, $owner:expr, $detail:expr) => {
+        ($condition:expr, $field:expr, $owner:expr, $detail:expr, $previous:expr, $reloaded:expr) => {
             if $condition {
                 Some(RestartRequiredRuntimeDrift {
                     field: $field.to_string(),
                     owner: $owner.to_string(),
                     detail: $detail.to_string(),
+                    previous_value: render_runtime_config_value(&$previous),
+                    reloaded_value: render_runtime_config_value(&$reloaded),
                 })
             } else {
                 None
@@ -557,49 +575,65 @@ fn restart_required_runtime_drifts(
             previous.display_interface != reloaded.display_interface,
             "display.interface",
             "kernel-interface",
-            "display interface changes remain restart-only during extension reload"
+            "display interface changes remain restart-only during extension reload",
+            previous.display_interface,
+            reloaded.display_interface
         ),
         drift!(
             previous.hooks_auto_accept != reloaded.hooks_auto_accept,
             "hooks.auto_accept",
             "kernel-hooks",
-            "hook auto-accept policy remains restart-only during extension reload"
+            "hook auto-accept policy remains restart-only during extension reload",
+            previous.hooks_auto_accept,
+            reloaded.hooks_auto_accept
         ),
         drift!(
             previous.security_redact_secrets != reloaded.security_redact_secrets,
             "security.redact_secrets",
             "kernel-security",
-            "security redaction policy remains restart-only during extension reload"
+            "security redaction policy remains restart-only during extension reload",
+            previous.security_redact_secrets,
+            reloaded.security_redact_secrets
         ),
         drift!(
             previous.network_force_ipv4 != reloaded.network_force_ipv4,
             "network.force_ipv4",
             "kernel-network",
-            "network stack settings remain restart-only during extension reload"
+            "network stack settings remain restart-only during extension reload",
+            previous.network_force_ipv4,
+            reloaded.network_force_ipv4
         ),
         drift!(
             previous.runtime_provider != reloaded.runtime_provider,
             "runtime.provider",
             "kernel-runtime",
-            "provider backend changes remain restart-only during extension reload"
+            "provider backend changes remain restart-only during extension reload",
+            previous.runtime_provider,
+            reloaded.runtime_provider
         ),
         drift!(
             previous.runtime_model != reloaded.runtime_model,
             "runtime.model",
             "kernel-runtime",
-            "runtime model changes remain restart-only during extension reload"
+            "runtime model changes remain restart-only during extension reload",
+            previous.runtime_model,
+            reloaded.runtime_model
         ),
         drift!(
             previous.runtime_ollama_base_url != reloaded.runtime_ollama_base_url,
             "runtime.ollama_base_url",
             "kernel-runtime",
-            "provider transport endpoint changes remain restart-only during extension reload"
+            "provider transport endpoint changes remain restart-only during extension reload",
+            previous.runtime_ollama_base_url,
+            reloaded.runtime_ollama_base_url
         ),
         drift!(
             previous.runtime_llamacpp_base_url != reloaded.runtime_llamacpp_base_url,
             "runtime.llamacpp_base_url",
             "kernel-runtime",
-            "provider transport endpoint changes remain restart-only during extension reload"
+            "provider transport endpoint changes remain restart-only during extension reload",
+            previous.runtime_llamacpp_base_url,
+            reloaded.runtime_llamacpp_base_url
         ),
     ]
     .into_iter()

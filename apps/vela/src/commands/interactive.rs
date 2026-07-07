@@ -201,8 +201,11 @@ pub(crate) fn run_extensions(
             );
             for drift in &report.restart_required_drifts {
                 println!(
-                    "restart required [{}]: owner={} detail={}",
-                    drift.field, drift.owner, drift.detail
+                    "restart required [{}]: owner={} detail={} {}",
+                    drift.field,
+                    drift.owner,
+                    drift.detail,
+                    drift.owned_setting_diff()
                 );
             }
         }
