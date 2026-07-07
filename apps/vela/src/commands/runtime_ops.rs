@@ -12,15 +12,23 @@ fn scheduler_job_last_run_at(job: &vela_runtime::ScheduledJob) -> Option<i64> {
     .max()
 }
 
-fn scheduler_job_last_error_excerpt(job: &vela_runtime::ScheduledJob) -> Option<String> {
-    job.last_error.as_ref().map(|error| {
-        let single_line = error.replace('\n', " ");
+fn scheduler_single_line_excerpt(value: Option<&String>) -> Option<String> {
+    value.map(|text| {
+        let single_line = text.replace('\n', " ");
         if single_line.chars().count() > 80 {
             format!("{}…", single_line.chars().take(80).collect::<String>())
         } else {
             single_line
         }
     })
+}
+
+fn scheduler_job_last_error_excerpt(job: &vela_runtime::ScheduledJob) -> Option<String> {
+    scheduler_single_line_excerpt(job.last_error.as_ref())
+}
+
+fn scheduler_job_last_delivery_error_excerpt(job: &vela_runtime::ScheduledJob) -> Option<String> {
+    scheduler_single_line_excerpt(job.last_delivery_error.as_ref())
 }
 
 pub(crate) fn run_gateway(
@@ -593,12 +601,16 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
             .iter()
             .filter(|job| job.last_delivery_outcome.as_deref() == Some("failed"))
             .count();
+        let delivery_delivered_count = jobs
+            .iter()
+            .filter(|job| job.last_delivery_outcome.as_deref() == Some("delivered"))
+            .count();
         let total_runs: u64 = jobs.iter().map(|job| job.run_count).sum();
         let total_recoveries: u64 = jobs.iter().map(|job| job.recovery_count).sum();
         let next_due = jobs.iter().min_by_key(|job| job.next_run_at);
         match vela_runtime::current_command_session_summary(bootstrap, "cron")? {
             Some(session) => println!(
-                "scheduler report: config={} jobs={} pending={} completed={} failed={} delivery_pending={} delivery_failed={} total_runs={} total_recoveries={} next_due={:?} session={} title={} messages={} events={}",
+                "scheduler report: config={} jobs={} pending={} completed={} failed={} delivery_pending={} delivery_failed={} delivery_delivered={} total_runs={} total_recoveries={} next_due={:?} session={} title={} messages={} events={}",
                 report.config_path.display(),
                 jobs.len(),
                 pending_count,
@@ -606,6 +618,7 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
                 failed_count,
                 delivery_pending_count,
                 delivery_failed_count,
+                delivery_delivered_count,
                 total_runs,
                 total_recoveries,
                 next_due.map(|job| format!("{}@{}", job.id, job.next_run_at)),
@@ -615,7 +628,7 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
                 session.event_count,
             ),
             None => println!(
-                "scheduler report: config={} jobs={} pending={} completed={} failed={} delivery_pending={} delivery_failed={} total_runs={} total_recoveries={} next_due={:?} session=none",
+                "scheduler report: config={} jobs={} pending={} completed={} failed={} delivery_pending={} delivery_failed={} delivery_delivered={} total_runs={} total_recoveries={} next_due={:?} session=none",
                 report.config_path.display(),
                 jobs.len(),
                 pending_count,
@@ -623,6 +636,7 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
                 failed_count,
                 delivery_pending_count,
                 delivery_failed_count,
+                delivery_delivered_count,
                 total_runs,
                 total_recoveries,
                 next_due.map(|job| format!("{}@{}", job.id, job.next_run_at)),
@@ -631,7 +645,7 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
         println!("scheduler jobs [{}]:", jobs.len());
         for job in &jobs {
             println!(
-                "- {} :: status={} next_run_at={} last_run_at={:?} last_completed_at={:?} last_failed_at={:?} outcome={:?} progression={:?} run_count={} recovery_count={} delivery_outcome={:?} last_error_excerpt={:?} task={}",
+                "- {} :: status={} next_run_at={} last_run_at={:?} last_completed_at={:?} last_failed_at={:?} outcome={:?} progression={:?} run_count={} recovery_count={} delivery_at={:?} delivery_event_type={:?} delivery_outcome={:?} delivery_error_excerpt={:?} last_error_excerpt={:?} task={}",
                 job.id,
                 job.status,
                 job.next_run_at,
@@ -642,7 +656,10 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
                 job.last_progression,
                 job.run_count,
                 job.recovery_count,
+                job.last_delivery_at,
+                job.delivery_event_type,
                 job.last_delivery_outcome,
+                scheduler_job_last_delivery_error_excerpt(job),
                 scheduler_job_last_error_excerpt(job),
                 job.task
             );
