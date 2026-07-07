@@ -466,31 +466,48 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
             None => println!("backend eval: not found for {:?}", id),
         }
     } else if args.list_slots {
-        let slots = vela_runtime::list_backend_experiment_slots(bootstrap)?;
+        let slots = vela_runtime::inspect_backend_experiment_slots(bootstrap)?;
         println!("backend experiment slots [{}]:", slots.len());
-        for slot in slots {
+        for inspection in slots {
+            let slot = inspection.slot;
             println!(
-                "- {} :: status={} strategy={} backends={} prompt={:?} summary={:?}",
+                "- {} :: status={} strategy={} backends={} latest_eval_id={:?} latest_eval_at={:?} latest_results={} latest_parity_summary={:?} prompt={:?} summary={:?}",
                 slot.id,
                 slot.status,
                 slot.strategy,
                 slot.allowed_backends.join(","),
+                inspection.latest_eval_id,
+                inspection.latest_eval_created_at,
+                inspection.latest_eval_result_count,
+                inspection.latest_eval_parity_summary,
                 slot.default_prompt,
                 slot.summary,
             );
         }
     } else if let Some(id) = args.show_slot.as_deref() {
-        match vela_runtime::get_backend_experiment_slot(bootstrap, id)? {
-            Some(slot) => println!(
-                "backend experiment slot: id={} status={} strategy={} backends={} prompt={:?} summary={:?} hypothesis={:?}",
-                slot.id,
-                slot.status,
-                slot.strategy,
-                slot.allowed_backends.join(","),
-                slot.default_prompt,
-                slot.summary,
-                slot.hypothesis,
-            ),
+        match vela_runtime::get_backend_experiment_slot_inspection(bootstrap, id)? {
+            Some(inspection) => {
+                let slot = inspection.slot;
+                println!(
+                    "backend experiment slot: id={} status={} strategy={} backends={} latest_eval_id={:?} latest_eval_at={:?} latest_backends={} latest_results={} latest_parity_summary={:?} prompt={:?} summary={:?} hypothesis={:?}",
+                    slot.id,
+                    slot.status,
+                    slot.strategy,
+                    slot.allowed_backends.join(","),
+                    inspection.latest_eval_id,
+                    inspection.latest_eval_created_at,
+                    if inspection.latest_eval_backends.is_empty() {
+                        "none".to_string()
+                    } else {
+                        inspection.latest_eval_backends.join(",")
+                    },
+                    inspection.latest_eval_result_count,
+                    inspection.latest_eval_parity_summary,
+                    slot.default_prompt,
+                    slot.summary,
+                    slot.hypothesis,
+                )
+            }
             None => println!("backend experiment slot: not found for {:?}", id),
         }
     } else if args.show_policy {

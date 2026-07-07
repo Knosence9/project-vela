@@ -849,6 +849,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_stdout.contains("backend experiment slots [3]:"));
     assert!(list_slots_stdout
         .contains("ternary-preview :: status=bounded-preview strategy=shadow-routing"));
+    assert!(list_slots_stdout.contains("latest_eval_id=None"));
     assert!(list_slots_stdout
         .contains("local-first-replay :: status=bounded-preview strategy=offline-replay"));
     assert!(list_slots_stdout.contains(
@@ -859,6 +860,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(show_slot.status.success(), "{}", stderr_text(&show_slot));
     let show_slot_stdout = stdout_text(&show_slot);
     assert!(show_slot_stdout.contains("backend experiment slot: id=local-first-replay status=bounded-preview strategy=offline-replay"));
+    assert!(show_slot_stdout.contains("latest_eval_id=None"));
+    assert!(show_slot_stdout.contains("latest_backends=none"));
+    assert!(show_slot_stdout.contains("latest_results=0"));
     assert!(show_slot_stdout.contains("hypothesis=Some("));
 
     let run_slot = run_vela(
@@ -881,6 +885,58 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(run_slot_stdout.contains("passed=mock"));
     assert!(run_slot_stdout.contains("capability_groups="));
     assert!(run_slot_stdout.contains("backend=mock transport=in-process status=passed"));
+
+    let run_slot_second = run_vela(
+        &vela_home,
+        &[
+            "eval",
+            "--run-slot",
+            "capability-parity-scan",
+            "--backend",
+            "mock",
+            "--backend",
+            "llamacpp",
+            "--model",
+            "mock-2",
+        ],
+    );
+    assert!(
+        run_slot_second.status.success(),
+        "{}",
+        stderr_text(&run_slot_second)
+    );
+    let run_slot_second_stdout = stdout_text(&run_slot_second);
+    assert!(run_slot_second_stdout.contains("slot=Some(\"capability-parity-scan\")"));
+    assert!(run_slot_second_stdout.contains("parity=diverged"));
+    assert!(run_slot_second_stdout.contains("backend=mock transport=in-process status=passed"));
+    assert!(run_slot_second_stdout.contains("backend=llamacpp transport=http-json status=failed"));
+
+    let show_ran_slot = run_vela(
+        &vela_home,
+        &["eval", "--show-slot", "capability-parity-scan"],
+    );
+    assert!(
+        show_ran_slot.status.success(),
+        "{}",
+        stderr_text(&show_ran_slot)
+    );
+    let show_ran_slot_stdout = stdout_text(&show_ran_slot);
+    assert!(show_ran_slot_stdout.contains("latest_backends=mock,llamacpp"));
+    assert!(show_ran_slot_stdout.contains("latest_results=2"));
+    assert!(show_ran_slot_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
+
+    let list_slots_after = run_vela(&vela_home, &["eval", "--list-slots"]);
+    assert!(
+        list_slots_after.status.success(),
+        "{}",
+        stderr_text(&list_slots_after)
+    );
+    let list_slots_after_stdout = stdout_text(&list_slots_after);
+    assert!(list_slots_after_stdout.contains(
+        "capability-parity-scan :: status=bounded-preview strategy=bounded-backend-comparison"
+    ));
+    assert!(list_slots_after_stdout.contains("latest_results=2"));
+    assert!(list_slots_after_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
