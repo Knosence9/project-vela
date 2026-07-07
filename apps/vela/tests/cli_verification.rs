@@ -471,7 +471,13 @@ fn extensions_status_and_reload_are_visible_via_cli() {
         "restart required: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime"
     ));
     assert!(reload_stdout.contains(
-        "restart required [runtime.provider]: owner=kernel-runtime detail=provider backend changes remain restart-only during extension reload"
+        "restart required [runtime.provider]: owner=kernel-runtime detail=provider backend changes remain restart-only during extension reload previous=\"ollama\" reloaded=\"mock\" action=restart-required"
+    ));
+    assert!(reload_stdout.contains(
+        "restart required [runtime.model]: owner=kernel-runtime detail=runtime model changes remain restart-only during extension reload previous=\"gemma3:4b\" reloaded=\"changed\" action=restart-required"
+    ));
+    assert!(reload_stdout.contains(
+        "restart required [runtime.ollama_base_url]: owner=kernel-runtime detail=provider transport endpoint changes remain restart-only during extension reload previous=\"http://127.0.0.1:11434\" reloaded=\"http://127.0.0.1:22555\" action=restart-required"
     ));
     assert!(reload_stdout.contains("extension [activated]: id=Some(\"demo\")"));
     assert!(reload_stderr.contains(

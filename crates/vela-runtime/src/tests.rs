@@ -331,17 +331,23 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
         item.field == "runtime.provider"
             && item.owner == "kernel-runtime"
             && item.detail == "provider backend changes remain restart-only during extension reload"
+            && item.previous_value == "\"ollama\""
+            && item.reloaded_value == "\"mock\""
     }));
     assert!(drifted.restart_required_drifts.iter().any(|item| {
         item.field == "runtime.model"
             && item.owner == "kernel-runtime"
             && item.detail == "runtime model changes remain restart-only during extension reload"
+            && item.previous_value == "\"gemma3:4b\""
+            && item.reloaded_value == "\"changed\""
     }));
     assert!(drifted.restart_required_drifts.iter().any(|item| {
         item.field == "runtime.ollama_base_url"
             && item.owner == "kernel-runtime"
             && item.detail
                 == "provider transport endpoint changes remain restart-only during extension reload"
+            && item.previous_value == "\"http://127.0.0.1:11434\""
+            && item.reloaded_value == "\"http://127.0.0.1:22555\""
     }));
 
     let _ = std::fs::remove_dir_all(&vela_home);
