@@ -763,6 +763,9 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
     let run_stdout = stdout_text(&run);
     assert!(run_stdout.contains("backend eval run: id=eval-"));
     assert!(run_stdout.contains("slot=None"));
+    assert!(run_stdout.contains("parity_summary=Some(\""));
+    assert!(run_stdout.contains("passed=mock,llamacpp"));
+    assert!(run_stdout.contains("capability_groups="));
     assert!(run_stdout.contains("backend=mock transport=in-process status=passed"));
     assert!(run_stdout.contains("backend=llamacpp transport=http-json status=passed"));
     let eval_id = parse_field(&run_stdout, "id").expect("eval id").to_string();
@@ -774,12 +777,18 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
     assert!(list_stdout.contains(&eval_id));
     assert!(list_stdout.contains("slot=None"));
     assert!(list_stdout.contains("backends=mock,llamacpp"));
+    assert!(list_stdout.contains("parity_summary=Some(\""));
+    assert!(list_stdout.contains("passed=mock,llamacpp"));
+    assert!(list_stdout.contains("capability_groups="));
 
     let show = run_vela(&vela_home, &["eval", "--show", &eval_id]);
     assert!(show.status.success(), "{}", stderr_text(&show));
     let show_stdout = stdout_text(&show);
     assert!(show_stdout.contains(&format!("backend eval: id={}", eval_id)));
     assert!(show_stdout.contains("slot=None"));
+    assert!(show_stdout.contains("parity_summary=Some(\""));
+    assert!(show_stdout.contains("passed=mock,llamacpp"));
+    assert!(show_stdout.contains("capability_groups="));
     assert!(show_stdout.contains("backend=mock transport=in-process status=passed"));
     assert!(show_stdout.contains("backend=llamacpp transport=http-json status=passed"));
     llamacpp_server.join().unwrap();
@@ -853,6 +862,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(run_slot.status.success(), "{}", stderr_text(&run_slot));
     let run_slot_stdout = stdout_text(&run_slot);
     assert!(run_slot_stdout.contains("slot=Some(\"capability-parity-scan\")"));
+    assert!(run_slot_stdout.contains("parity_summary=Some(\""));
+    assert!(run_slot_stdout.contains("passed=mock"));
+    assert!(run_slot_stdout.contains("capability_groups="));
     assert!(run_slot_stdout.contains("backend=mock transport=in-process status=passed"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
