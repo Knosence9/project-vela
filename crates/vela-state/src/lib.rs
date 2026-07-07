@@ -389,7 +389,7 @@ fn latest_session_in_subtree(
     anchor_session_id: &str,
 ) -> Result<Option<StoredSession>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, parent_session_id, updated_at FROM sessions ORDER BY updated_at DESC, id DESC",
+        "SELECT id, title, parent_session_id, created_at FROM sessions ORDER BY created_at DESC, id DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -402,11 +402,11 @@ fn latest_session_in_subtree(
     let mut sessions = Vec::new();
     let mut parents_by_id = HashMap::new();
     for row in rows {
-        let (id, title, parent_session_id, updated_at) = row?;
+        let (id, title, parent_session_id, created_at) = row?;
         parents_by_id.insert(id.clone(), parent_session_id.clone());
-        sessions.push((id, title, parent_session_id, updated_at));
+        sessions.push((id, title, parent_session_id, created_at));
     }
-    for (id, title, _parent_session_id, _updated_at) in &sessions {
+    for (id, title, _parent_session_id, _created_at) in &sessions {
         let mut cursor = Some(id.as_str());
         while let Some(current) = cursor {
             if current == anchor_session_id {

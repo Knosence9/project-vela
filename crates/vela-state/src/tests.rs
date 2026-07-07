@@ -263,6 +263,36 @@ fn continue_target_prefers_latest_session_in_branch_subtree() {
         Some(branch_a.session_id.as_str())
     );
 
+    let compressed = compress_session(
+        &report.state_db_path,
+        &branch_a.session_id,
+        "branch-a compressed summary",
+    )
+    .unwrap();
+    assert_eq!(compressed.session_id, branch_a.session_id);
+
+    let continued_after_compress = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("continue root after compress".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: Some(root.title.clone()),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        continued_after_compress.session_id,
+        branch_a_child.session_id
+    );
+    assert_eq!(
+        continued_after_compress.continue_resolution.as_deref(),
+        Some("latest-in-subtree")
+    );
+
     let continued_exact = resolve_runtime_session(
         &report.state_db_path,
         &SessionRequest {
