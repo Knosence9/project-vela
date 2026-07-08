@@ -38,6 +38,14 @@ fn scheduler_job_last_delivery_error_excerpt(job: &vela_runtime::ScheduledJob) -
     scheduler_single_line_excerpt(job.last_delivery_error.as_ref())
 }
 
+fn joined_values_or_none(values: &[String], delimiter: &str) -> String {
+    if values.is_empty() {
+        "none".to_string()
+    } else {
+        values.join(delimiter)
+    }
+}
+
 fn scheduler_job_due_state(job: &vela_runtime::ScheduledJob, now: i64) -> &'static str {
     if job.status == "running" {
         match job.lease_expires_at {
@@ -508,21 +516,9 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
                 slot.allowed_backends.join(","),
                 inspection.latest_eval_id,
                 inspection.latest_eval_created_at,
-                if inspection.latest_eval_passed_backends.is_empty() {
-                    "none".to_string()
-                } else {
-                    inspection.latest_eval_passed_backends.join(",")
-                },
-                if inspection.latest_eval_failed_backends.is_empty() {
-                    "none".to_string()
-                } else {
-                    inspection.latest_eval_failed_backends.join(",")
-                },
-                if inspection.latest_eval_capability_groups.is_empty() {
-                    "none".to_string()
-                } else {
-                    inspection.latest_eval_capability_groups.join(" | ")
-                },
+                joined_values_or_none(&inspection.latest_eval_passed_backends, ","),
+                joined_values_or_none(&inspection.latest_eval_failed_backends, ","),
+                joined_values_or_none(&inspection.latest_eval_capability_groups, " | "),
                 inspection.latest_eval_result_count,
                 inspection.latest_eval_parity_summary,
                 slot.default_prompt,
@@ -541,26 +537,10 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
                     slot.allowed_backends.join(","),
                     inspection.latest_eval_id,
                     inspection.latest_eval_created_at,
-                    if inspection.latest_eval_backends.is_empty() {
-                        "none".to_string()
-                    } else {
-                        inspection.latest_eval_backends.join(",")
-                    },
-                    if inspection.latest_eval_passed_backends.is_empty() {
-                        "none".to_string()
-                    } else {
-                        inspection.latest_eval_passed_backends.join(",")
-                    },
-                    if inspection.latest_eval_failed_backends.is_empty() {
-                        "none".to_string()
-                    } else {
-                        inspection.latest_eval_failed_backends.join(",")
-                    },
-                    if inspection.latest_eval_capability_groups.is_empty() {
-                        "none".to_string()
-                    } else {
-                        inspection.latest_eval_capability_groups.join(" | ")
-                    },
+                    joined_values_or_none(&inspection.latest_eval_backends, ","),
+                    joined_values_or_none(&inspection.latest_eval_passed_backends, ","),
+                    joined_values_or_none(&inspection.latest_eval_failed_backends, ","),
+                    joined_values_or_none(&inspection.latest_eval_capability_groups, " | "),
                     inspection.latest_eval_result_count,
                     inspection.latest_eval_parity_summary,
                     slot.default_prompt,
