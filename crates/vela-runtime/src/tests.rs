@@ -60,7 +60,8 @@ fn supported_runtime_backend_contracts_are_explicit() {
             && contract.direct_response_source == "runtime-embedded"
             && contract.tool_loop_response_source == "runtime-embedded-tool-loop"
             && contract.capabilities.supports_text
-            && !contract.capabilities.supports_tool_loop
+            && contract.capabilities.supports_tool_loop
+            && contract.capabilities.supports_reflection_retry
             && !contract.capabilities.supports_images
     }));
 }
@@ -205,6 +206,15 @@ fn resolve_runtime_execution_wraps_embedded_provider_backend() {
     assert_eq!(
         provider.tool_loop_response_source(),
         "runtime-embedded-tool-loop"
+    );
+    assert_eq!(
+        execution.provider_capabilities,
+        Some(RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: true,
+            supports_reflection_retry: true,
+            supports_images: false,
+        })
     );
     provider.validate().unwrap();
 
@@ -1796,6 +1806,53 @@ fn execute_chat_turn_runs_first_runtime_tool_loop() {
 }
 
 #[test]
+/// Verifies that the embedded provider can execute the bounded local tool loop through the existing runtime path.
+fn execute_chat_turn_runs_embedded_provider_tool_loop() {
+    let mut bootstrap = test_bootstrap("embedded-tool-loop");
+    bootstrap.resolved_config.runtime_provider = Some("embedded".to_string());
+    let model_path = bootstrap.vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    bootstrap.resolved_config.runtime_embedded_model_path =
+        Some(model_path.to_string_lossy().into_owned());
+    std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
+    std::fs::write(
+        bootstrap
+            .vela_home
+            .join("skills")
+            .join("deploy-staging")
+            .join("SKILL.md"),
+        "# deploy-staging\n\nDeploys staging.",
+    )
+    .unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("need the tool loop".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.response.as_deref(),
+        Some("Embedded tool-informed final answer.")
+    );
+    assert_eq!(report.response_source, "runtime-embedded-tool-loop");
+    assert_eq!(report.lifecycle_phase_count, 8);
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that the mock provider can execute the bounded local tool loop.
 fn execute_chat_turn_runs_mock_provider_tool_loop() {
     let mut bootstrap = test_bootstrap("mock-tool-loop");
@@ -1946,6 +2003,63 @@ fn execute_chat_turn_reflects_and_recovers_from_invalid_tool_request() {
         ]
     );
     server.join().unwrap();
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that the embedded provider can recover from one invalid tool request through the existing bounded reflection path.
+fn execute_chat_turn_reflects_and_recovers_from_invalid_tool_request_with_embedded_provider() {
+    let mut bootstrap = test_bootstrap("embedded-reflect-recover");
+    bootstrap.resolved_config.runtime_provider = Some("embedded".to_string());
+    let model_path = bootstrap.vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    bootstrap.resolved_config.runtime_embedded_model_path =
+        Some(model_path.to_string_lossy().into_owned());
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("recover from invalid tool".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.response.as_deref(),
+        Some("Embedded recovered answer.")
+    );
+    assert_eq!(report.response_source, "runtime-embedded");
+    assert_eq!(report.lifecycle_phase_count, 6);
+    let inspection = inspect_latest_session(&bootstrap, 20)
+        .unwrap()
+        .expect("embedded reflection inspection");
+    let lifecycle: Vec<_> = inspection
+        .lifecycle
+        .iter()
+        .filter(|record| record.turn_id == report.turn_id)
+        .map(|record| (record.phase.as_str(), record.step))
+        .collect();
+    assert_eq!(
+        lifecycle,
+        vec![
+            ("receive", None),
+            ("deliberate", None),
+            ("reflect", Some(1)),
+            ("retry", Some(1)),
+            ("respond", None),
+            ("finish", None),
+        ]
+    );
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
 
