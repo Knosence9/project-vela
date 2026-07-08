@@ -1,7 +1,8 @@
 use super::*;
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub(crate) struct RenderedChatResponse {
     pub(crate) content: Option<String>,
@@ -207,6 +208,8 @@ struct EmbeddedRuntimeProvider {
 static EMBEDDED_BACKEND: OnceLock<
     std::result::Result<llama_cpp_2::llama_backend::LlamaBackend, String>,
 > = OnceLock::new();
+static EMBEDDED_MODEL_CACHE: OnceLock<Mutex<HashMap<String, Arc<llama_cpp_2::model::LlamaModel>>>> =
+    OnceLock::new();
 const EMBEDDED_MAX_GENERATION_TOKENS: usize = 128;
 const EMBEDDED_MIN_CONTEXT_TOKENS: u32 = 2048;
 
@@ -845,6 +848,43 @@ fn embedded_backend_handle() -> Result<&'static llama_cpp_2::llama_backend::Llam
     }
 }
 
+fn embedded_model_cache() -> &'static Mutex<HashMap<String, Arc<llama_cpp_2::model::LlamaModel>>> {
+    EMBEDDED_MODEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn embedded_model_handle(model_path: &str) -> Result<Arc<llama_cpp_2::model::LlamaModel>> {
+    let backend = embedded_backend_handle()?;
+    if let Some(model) = embedded_model_cache()
+        .lock()
+        .map_err(|err| anyhow::anyhow!("failed to lock embedded model cache: {err}"))?
+        .get(model_path)
+        .cloned()
+    {
+        return Ok(model);
+    }
+
+    let model_path_ref = Path::new(model_path);
+    let model = Arc::new(
+        llama_cpp_2::model::LlamaModel::load_from_file(
+            backend,
+            model_path_ref,
+            &llama_cpp_2::model::params::LlamaModelParams::default(),
+        )
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "failed to load embedded model from {}: {err}",
+                model_path_ref.display()
+            )
+        })?,
+    );
+
+    embedded_model_cache()
+        .lock()
+        .map_err(|err| anyhow::anyhow!("failed to lock embedded model cache: {err}"))?
+        .insert(model_path.to_string(), Arc::clone(&model));
+    Ok(model)
+}
+
 fn embedded_token_piece_to_string(
     model: &llama_cpp_2::model::LlamaModel,
     token: llama_cpp_2::token::LlamaToken,
@@ -862,25 +902,13 @@ fn embedded_token_piece_to_string(
 fn run_embedded_completion(model_path: &str, prompt: &str) -> Result<String> {
     use llama_cpp_2::context::params::LlamaContextParams;
     use llama_cpp_2::llama_batch::LlamaBatch;
-    use llama_cpp_2::model::params::LlamaModelParams;
     use llama_cpp_2::model::AddBos;
     use llama_cpp_2::sampling::LlamaSampler;
 
     let backend = embedded_backend_handle()?;
-    let model_path_ref = Path::new(model_path);
-    let model = llama_cpp_2::model::LlamaModel::load_from_file(
-        backend,
-        model_path_ref,
-        &LlamaModelParams::default(),
-    )
-    .map_err(|err| {
-        anyhow::anyhow!(
-            "failed to load embedded model from {}: {err}",
-            model_path_ref.display()
-        )
-    })?;
+    let model = embedded_model_handle(model_path)?;
 
-    let rendered_prompt =
+    let (rendered_prompt, add_bos) =
         match model.chat_template(None) {
             Ok(template) => {
                 let chat = [llama_cpp_2::model::LlamaChatMessage::new(
@@ -889,15 +917,15 @@ fn run_embedded_completion(model_path: &str, prompt: &str) -> Result<String> {
                 )
                 .map_err(|err| anyhow::anyhow!("failed to build embedded chat message: {err}"))?];
                 match model.apply_chat_template(&template, &chat, true) {
-                    Ok(rendered) => rendered,
-                    Err(_) => format!("User: {}\nAssistant:", prompt),
+                    Ok(rendered) => (rendered, AddBos::Never),
+                    Err(_) => (format!("User: {}\nAssistant:", prompt), AddBos::Always),
                 }
             }
-            Err(_) => format!("User: {}\nAssistant:", prompt),
+            Err(_) => (format!("User: {}\nAssistant:", prompt), AddBos::Always),
         };
 
     let prompt_tokens = model
-        .str_to_token(&rendered_prompt, AddBos::Always)
+        .str_to_token(&rendered_prompt, add_bos)
         .map_err(|err| anyhow::anyhow!("failed to tokenize embedded prompt: {err}"))?;
     let desired_ctx = u32::try_from(
         prompt_tokens
@@ -906,7 +934,8 @@ fn run_embedded_completion(model_path: &str, prompt: &str) -> Result<String> {
             .saturating_add(8),
     )
     .unwrap_or(EMBEDDED_MIN_CONTEXT_TOKENS)
-    .max(EMBEDDED_MIN_CONTEXT_TOKENS);
+    .max(EMBEDDED_MIN_CONTEXT_TOKENS)
+    .min(model.n_ctx_train());
     let context_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(desired_ctx));
     let mut context = model
         .new_context(backend, context_params)
