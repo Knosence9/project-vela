@@ -19,6 +19,45 @@ fn unique_temp_dir(label: &str) -> std::path::PathBuf {
     ))
 }
 
+struct TempDirGuard {
+    path: std::path::PathBuf,
+}
+
+impl TempDirGuard {
+    fn new(label: &str) -> Self {
+        let path = unique_temp_dir(label);
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Self { path }
+    }
+}
+
+impl std::ops::Deref for TempDirGuard {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.path.as_path()
+    }
+}
+
+impl AsRef<std::path::Path> for TempDirGuard {
+    fn as_ref(&self) -> &std::path::Path {
+        self.path.as_path()
+    }
+}
+
+impl AsRef<std::ffi::OsStr> for TempDirGuard {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.path.as_os_str()
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 struct EnvGuard {
     name: &'static str,
     previous: Option<OsString>,
@@ -67,9 +106,7 @@ impl Drop for CwdGuard {
 
 #[test]
 fn invalid_user_config_falls_back_to_project_config() {
-    let root = unique_temp_dir("invalid-user");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = TempDirGuard::new("invalid-user");
 
     let user = root.join("user.yaml");
     let project = root.join("project.yaml");
@@ -94,15 +131,11 @@ fn invalid_user_config_falls_back_to_project_config() {
     assert!(matches!(sources[0].kind, ConfigSourceKind::SkippedInvalid));
     assert!(sources[0].detail.is_some());
     assert!(matches!(sources[1].kind, ConfigSourceKind::ProjectFallback));
-
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn unreadable_user_config_falls_back_to_project_config() {
-    let root = unique_temp_dir("missing-user");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = TempDirGuard::new("missing-user");
 
     let missing_user = root.join("missing-user.yaml");
     let project = root.join("project.yaml");
@@ -129,19 +162,21 @@ fn unreadable_user_config_falls_back_to_project_config() {
     ));
     assert!(sources[0].detail.is_some());
     assert!(matches!(sources[1].kind, ConfigSourceKind::ProjectFallback));
-
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn ignore_user_config_env_promotes_project_fallback() {
     let _lock = test_lock().lock().unwrap();
-    let home_root = unique_temp_dir("ignore-user-config-home");
-    let project_root = unique_temp_dir("ignore-user-config-project");
+    let home_root = TempDirGuard::new("ignore-user-config-home");
+    let project_root = TempDirGuard::new("ignore-user-config-project");
     let vela_home = home_root.join(".vela");
     std::fs::create_dir_all(&vela_home).unwrap();
     std::fs::create_dir_all(&project_root).unwrap();
-    std::fs::write(vela_home.join("config.yaml"), "display:\n  interface: tui\n").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "display:\n  interface: tui\n",
+    )
+    .unwrap();
     std::fs::write(
         project_root.join("cli-config.yaml"),
         "display:\n  interface: text\n",
@@ -155,24 +190,34 @@ fn ignore_user_config_env_promotes_project_fallback() {
 
     let bootstrap = initialize_config(None, false).unwrap();
     assert!(bootstrap.ignored_user_config);
-    assert_eq!(bootstrap.resolved_config.display_interface.as_deref(), Some("text"));
-    assert!(matches!(bootstrap.config_sources[0].kind, ConfigSourceKind::SkippedIgnored));
-    assert!(matches!(bootstrap.config_sources[1].kind, ConfigSourceKind::ProjectFallback));
-
-    let _ = std::fs::remove_dir_all(&home_root);
-    let _ = std::fs::remove_dir_all(&project_root);
+    assert_eq!(
+        bootstrap.resolved_config.display_interface.as_deref(),
+        Some("text")
+    );
+    assert!(matches!(
+        bootstrap.config_sources[0].kind,
+        ConfigSourceKind::SkippedIgnored
+    ));
+    assert!(matches!(
+        bootstrap.config_sources[1].kind,
+        ConfigSourceKind::ProjectFallback
+    ));
 }
 
 #[test]
 fn initialize_config_prefers_vela_home_dotenv_over_project_fallback() {
     let _lock = test_lock().lock().unwrap();
-    let home_root = unique_temp_dir("dotenv-home");
-    let project_root = unique_temp_dir("dotenv-project");
+    let home_root = TempDirGuard::new("dotenv-home");
+    let project_root = TempDirGuard::new("dotenv-project");
     let vela_home = home_root.join(".vela");
     std::fs::create_dir_all(&vela_home).unwrap();
     std::fs::create_dir_all(&project_root).unwrap();
     std::fs::write(vela_home.join(".env"), "VELA_SESSION_SOURCE=home-env\n").unwrap();
-    std::fs::write(project_root.join(".env"), "VELA_SESSION_SOURCE=project-env\n").unwrap();
+    std::fs::write(
+        project_root.join(".env"),
+        "VELA_SESSION_SOURCE=project-env\n",
+    )
+    .unwrap();
 
     let _home = EnvGuard::set("HOME", &home_root);
     let _vela_home = EnvGuard::unset("VELA_HOME");
@@ -181,16 +226,16 @@ fn initialize_config_prefers_vela_home_dotenv_over_project_fallback() {
 
     let bootstrap = initialize_config(None, false).unwrap();
     assert_eq!(bootstrap.loaded_env_paths, vec![vela_home.join(".env")]);
-    assert_eq!(std::env::var("VELA_SESSION_SOURCE").ok().as_deref(), Some("home-env"));
-
-    let _ = std::fs::remove_dir_all(&home_root);
-    let _ = std::fs::remove_dir_all(&project_root);
+    assert_eq!(
+        std::env::var("VELA_SESSION_SOURCE").ok().as_deref(),
+        Some("home-env")
+    );
 }
 
 #[test]
 fn preparse_profile_override_uses_sticky_profile_and_sets_vela_home() {
     let _lock = test_lock().lock().unwrap();
-    let home_root = unique_temp_dir("sticky-profile-home");
+    let home_root = TempDirGuard::new("sticky-profile-home");
     let sticky_dir = home_root.join(".vela");
     std::fs::create_dir_all(&sticky_dir).unwrap();
     std::fs::write(sticky_dir.join("active_profile"), "work\n").unwrap();
@@ -203,17 +248,18 @@ fn preparse_profile_override_uses_sticky_profile_and_sets_vela_home() {
     assert_eq!(active.as_deref(), Some("work"));
     assert_eq!(
         std::env::var("VELA_HOME").ok().as_deref(),
-        Some(home_root.join(".vela/profiles/work").to_string_lossy().as_ref())
+        Some(
+            home_root
+                .join(".vela/profiles/work")
+                .to_string_lossy()
+                .as_ref()
+        )
     );
-
-    let _ = std::fs::remove_dir_all(&home_root);
 }
 
 #[test]
 fn runtime_provider_settings_are_loaded_from_config() {
-    let root = unique_temp_dir("runtime");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = TempDirGuard::new("runtime");
 
     let user = root.join("runtime.yaml");
     std::fs::write(
@@ -243,15 +289,11 @@ fn runtime_provider_settings_are_loaded_from_config() {
         resolved.runtime_embedded_model_path.as_deref(),
         Some("/models/gemma3.gguf")
     );
-
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn extension_settings_are_loaded_from_config() {
-    let root = unique_temp_dir("extensions");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = TempDirGuard::new("extensions");
 
     let user = root.join("extensions.yaml");
     std::fs::write(
@@ -284,6 +326,4 @@ fn extension_settings_are_loaded_from_config() {
             },
         ]
     );
-
-    let _ = std::fs::remove_dir_all(&root);
 }
