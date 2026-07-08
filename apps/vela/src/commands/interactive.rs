@@ -108,7 +108,7 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
         );
     }
     println!(
-        "resolved config: display.interface={:?} hooks_auto_accept={:?} security.redact_secrets={:?} network.force_ipv4={:?} runtime.provider={:?} runtime.model={:?} runtime.ollama_base_url={:?} runtime.llamacpp_base_url={:?}",
+        "resolved config: display.interface={:?} hooks_auto_accept={:?} security.redact_secrets={:?} network.force_ipv4={:?} runtime.provider={:?} runtime.model={:?} runtime.ollama_base_url={:?} runtime.llamacpp_base_url={:?} runtime.embedded_model_path={:?}",
         bootstrap.resolved_config.display_interface,
         bootstrap.resolved_config.hooks_auto_accept,
         bootstrap.resolved_config.security_redact_secrets,
@@ -117,6 +117,7 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
         bootstrap.resolved_config.runtime_model,
         bootstrap.resolved_config.runtime_ollama_base_url,
         bootstrap.resolved_config.runtime_llamacpp_base_url,
+        bootstrap.resolved_config.runtime_embedded_model_path,
     );
     let backend_contracts = vela_runtime::supported_runtime_backend_contracts();
     println!("backend api [{}]:", backend_contracts.len());
@@ -124,9 +125,25 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
         println!("- {}", contract.summary_line());
     }
     match vela_runtime::resolve_runtime_backend_contract(&bootstrap.resolved_config, None) {
-        Ok(Some(contract)) => println!("resolved backend: {}", contract.summary_line()),
-        Ok(None) => println!("resolved backend: none"),
-        Err(err) => println!("resolved backend: error ({err})"),
+        Ok(Some(contract)) => {
+            println!("resolved backend: {}", contract.summary_line());
+            match vela_runtime::validate_runtime_backend_config(
+                &bootstrap.resolved_config,
+                None,
+                None,
+            ) {
+                Ok(()) => println!("resolved backend readiness: ok"),
+                Err(err) => println!("resolved backend readiness: error ({err})"),
+            }
+        }
+        Ok(None) => {
+            println!("resolved backend: none");
+            println!("resolved backend readiness: none");
+        }
+        Err(err) => {
+            println!("resolved backend: error ({err})");
+            println!("resolved backend readiness: error ({err})");
+        }
     }
     println!(
         "persistence: state_db={} existed_before={} bootstrap_runs={} sessions_dir={} snapshot_pattern={}",

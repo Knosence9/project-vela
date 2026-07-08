@@ -79,7 +79,7 @@ fn runtime_provider_settings_are_loaded_from_config() {
     let user = root.join("runtime.yaml");
     std::fs::write(
         &user,
-        "runtime:\n  provider: llamacpp\n  model: gemma3:4b\n  ollama_base_url: http://127.0.0.1:11434\n  llamacpp_base_url: http://127.0.0.1:8080\n",
+        "runtime:\n  provider: llamacpp\n  model: gemma3:4b\n  ollama_base_url: http://127.0.0.1:11434\n  llamacpp_base_url: http://127.0.0.1:8080\n  embedded_model_path: /models/gemma3.gguf\n",
     )
     .unwrap();
 
@@ -99,6 +99,10 @@ fn runtime_provider_settings_are_loaded_from_config() {
     assert_eq!(
         resolved.runtime_llamacpp_base_url.as_deref(),
         Some("http://127.0.0.1:8080")
+    );
+    assert_eq!(
+        resolved.runtime_embedded_model_path.as_deref(),
+        Some("/models/gemma3.gguf")
     );
 
     let _ = std::fs::remove_dir_all(&root);

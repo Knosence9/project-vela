@@ -61,6 +61,7 @@ pub fn supported_runtime_backend_contracts() -> Vec<RuntimeBackendContract> {
         ollama_backend_contract(),
         mock_backend_contract(),
         llamacpp_backend_contract(),
+        embedded_backend_contract(),
     ]
 }
 
@@ -82,6 +83,7 @@ pub fn resolve_runtime_backend_contract(
         Some("ollama") => Ok(Some(ollama_backend_contract())),
         Some("mock") => Ok(Some(mock_backend_contract())),
         Some("llamacpp") | Some("llama.cpp") => Ok(Some(llamacpp_backend_contract())),
+        Some("embedded") => Ok(Some(embedded_backend_contract())),
         Some(other) => bail!("unsupported runtime provider {other:?}"),
         None => Ok(None),
     }
@@ -141,6 +143,24 @@ fn llamacpp_backend_contract() -> RuntimeBackendContract {
     }
 }
 
+fn embedded_backend_contract() -> RuntimeBackendContract {
+    RuntimeBackendContract {
+        api_version: 1,
+        id: "embedded",
+        transport: "in-process",
+        requires_model: false,
+        default_base_url: None,
+        direct_response_source: "runtime-embedded",
+        tool_loop_response_source: "runtime-embedded-tool-loop",
+        capabilities: RuntimeProviderCapabilities {
+            supports_text: true,
+            supports_tool_loop: false,
+            supports_reflection_retry: false,
+            supports_images: false,
+        },
+    }
+}
+
 pub(crate) trait RuntimeProviderBackend {
     fn label(&self) -> &str;
     fn model(&self) -> Option<&str>;
@@ -172,6 +192,13 @@ struct LlamaCppRuntimeProvider {
     label: String,
     model: Option<String>,
     base_url: String,
+}
+
+#[derive(Debug, Clone)]
+struct EmbeddedRuntimeProvider {
+    label: String,
+    model: Option<String>,
+    model_path: Option<String>,
 }
 
 impl RuntimeProviderBackend for OllamaRuntimeProvider {
@@ -240,6 +267,51 @@ impl RuntimeProviderBackend for LlamaCppRuntimeProvider {
 
     fn tool_loop_response_source(&self) -> &'static str {
         llamacpp_backend_contract().tool_loop_response_source
+    }
+}
+
+impl RuntimeProviderBackend for EmbeddedRuntimeProvider {
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    fn validate(&self) -> Result<()> {
+        let model_path = self
+            .model_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .context("runtime provider 'embedded' requires runtime.embedded_model_path")?;
+        let path = std::path::Path::new(model_path);
+        if !path.is_file() {
+            bail!(
+                "runtime provider 'embedded' requires runtime.embedded_model_path to point to an existing model file"
+            );
+        }
+        Ok(())
+    }
+
+    fn capabilities(&self) -> RuntimeProviderCapabilities {
+        embedded_backend_contract().capabilities
+    }
+
+    fn generate(&self, _prompt: &str, images: Option<Vec<String>>) -> Result<String> {
+        if images.is_some() {
+            bail!("runtime provider 'embedded' does not support images in this slice");
+        }
+        bail!("runtime provider 'embedded' is configured but generation is not implemented in this slice")
+    }
+
+    fn direct_response_source(&self) -> &'static str {
+        embedded_backend_contract().direct_response_source
+    }
+
+    fn tool_loop_response_source(&self) -> &'static str {
+        embedded_backend_contract().tool_loop_response_source
     }
 }
 
@@ -718,6 +790,11 @@ pub(crate) fn resolve_runtime_execution(
                         .to_string()
                 }),
         }) as Box<dyn RuntimeProviderBackend>),
+        Some("embedded") => Some(Box::new(EmbeddedRuntimeProvider {
+            label: "embedded".to_string(),
+            model: model.clone(),
+            model_path: resolved.runtime_embedded_model_path.clone(),
+        }) as Box<dyn RuntimeProviderBackend>),
         Some(other) => bail!("unsupported runtime provider {other:?}"),
         None => None,
     };
@@ -729,6 +806,18 @@ pub(crate) fn resolve_runtime_execution(
         provider_capabilities,
         model,
     })
+}
+
+pub fn validate_runtime_backend_config(
+    resolved: &ResolvedConfig,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+) -> Result<()> {
+    let execution = resolve_runtime_execution(resolved, provider_override, model_override)?;
+    if let Some(provider) = execution.provider {
+        provider.validate()?;
+    }
+    Ok(())
 }
 
 /// Records one reflection attempt and returns either a retry prompt or a deterministic fallback.

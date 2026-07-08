@@ -106,7 +106,11 @@ fn load_resolved_config(config_sources: &mut [ConfigSource]) -> Result<ResolvedC
             .runtime
             .as_ref()
             .and_then(|r| r.ollama_base_url.clone()),
-        runtime_llamacpp_base_url: decoded.runtime.and_then(|r| r.llamacpp_base_url),
+        runtime_llamacpp_base_url: decoded
+            .runtime
+            .as_ref()
+            .and_then(|r| r.llamacpp_base_url.clone()),
+        runtime_embedded_model_path: decoded.runtime.and_then(|r| r.embedded_model_path),
         extension_manifests_dir: decoded
             .extensions
             .and_then(|extensions| extensions.manifests_dir),
@@ -189,6 +193,7 @@ struct RuntimeConfig {
     model: Option<String>,
     ollama_base_url: Option<String>,
     llamacpp_base_url: Option<String>,
+    embedded_model_path: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

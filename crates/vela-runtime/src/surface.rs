@@ -294,6 +294,7 @@ struct RuntimeConfigOwnershipBaseline {
     runtime_model: Option<String>,
     runtime_ollama_base_url: Option<String>,
     runtime_llamacpp_base_url: Option<String>,
+    runtime_embedded_model_path: Option<String>,
 }
 
 impl RuntimeConfigOwnershipBaseline {
@@ -307,6 +308,7 @@ impl RuntimeConfigOwnershipBaseline {
             runtime_model: config.runtime_model.clone(),
             runtime_ollama_base_url: config.runtime_ollama_base_url.clone(),
             runtime_llamacpp_base_url: config.runtime_llamacpp_base_url.clone(),
+            runtime_embedded_model_path: config.runtime_embedded_model_path.clone(),
         }
     }
 
@@ -320,6 +322,7 @@ impl RuntimeConfigOwnershipBaseline {
             runtime_model: self.runtime_model,
             runtime_ollama_base_url: self.runtime_ollama_base_url,
             runtime_llamacpp_base_url: self.runtime_llamacpp_base_url,
+            runtime_embedded_model_path: self.runtime_embedded_model_path,
             extension_manifests_dir: None,
             extension_entries: vec![],
         }
@@ -668,6 +671,14 @@ fn restart_required_runtime_drifts(
             "provider transport endpoint changes remain restart-only during extension reload",
             previous.runtime_llamacpp_base_url,
             reloaded.runtime_llamacpp_base_url
+        ),
+        drift!(
+            previous.runtime_embedded_model_path != reloaded.runtime_embedded_model_path,
+            "runtime.embedded_model_path",
+            "kernel-runtime",
+            "embedded model asset changes remain restart-only during extension reload",
+            previous.runtime_embedded_model_path,
+            reloaded.runtime_embedded_model_path
         ),
     ]
     .into_iter()
