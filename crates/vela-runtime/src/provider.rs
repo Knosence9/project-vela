@@ -1,4 +1,7 @@
 use super::*;
+use std::num::NonZeroU32;
+use std::path::Path;
+use std::sync::OnceLock;
 
 pub(crate) struct RenderedChatResponse {
     pub(crate) content: Option<String>,
@@ -201,6 +204,12 @@ struct EmbeddedRuntimeProvider {
     model_path: Option<String>,
 }
 
+static EMBEDDED_BACKEND: OnceLock<
+    std::result::Result<llama_cpp_2::llama_backend::LlamaBackend, String>,
+> = OnceLock::new();
+const EMBEDDED_MAX_GENERATION_TOKENS: usize = 128;
+const EMBEDDED_MIN_CONTEXT_TOKENS: u32 = 2048;
+
 impl RuntimeProviderBackend for OllamaRuntimeProvider {
     fn label(&self) -> &str {
         &self.label
@@ -299,11 +308,17 @@ impl RuntimeProviderBackend for EmbeddedRuntimeProvider {
         embedded_backend_contract().capabilities
     }
 
-    fn generate(&self, _prompt: &str, images: Option<Vec<String>>) -> Result<String> {
+    fn generate(&self, prompt: &str, images: Option<Vec<String>>) -> Result<String> {
         if images.is_some() {
             bail!("runtime provider 'embedded' does not support images in this slice");
         }
-        bail!("runtime provider 'embedded' is configured but generation is not implemented in this slice")
+        let model_path = self
+            .model_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .context("runtime provider 'embedded' requires runtime.embedded_model_path")?;
+        run_embedded_completion(model_path, prompt)
     }
 
     fn direct_response_source(&self) -> &'static str {
@@ -818,6 +833,120 @@ pub fn validate_runtime_backend_config(
         provider.validate()?;
     }
     Ok(())
+}
+
+fn embedded_backend_handle() -> Result<&'static llama_cpp_2::llama_backend::LlamaBackend> {
+    let entry = EMBEDDED_BACKEND.get_or_init(|| {
+        llama_cpp_2::llama_backend::LlamaBackend::init().map_err(|err| err.to_string())
+    });
+    match entry {
+        Ok(backend) => Ok(backend),
+        Err(err) => bail!("failed to initialize embedded runtime backend: {err}"),
+    }
+}
+
+fn embedded_token_piece_to_string(
+    model: &llama_cpp_2::model::LlamaModel,
+    token: llama_cpp_2::token::LlamaToken,
+) -> Result<String> {
+    let bytes = match model.token_to_piece_bytes(token, 8, false, None) {
+        Err(llama_cpp_2::TokenToStringError::InsufficientBufferSpace(required)) => {
+            model.token_to_piece_bytes(token, usize::try_from(-required).unwrap_or(64), false, None)
+        }
+        result => result,
+    }
+    .map_err(|err| anyhow::anyhow!("failed to decode embedded token piece: {err}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn run_embedded_completion(model_path: &str, prompt: &str) -> Result<String> {
+    use llama_cpp_2::context::params::LlamaContextParams;
+    use llama_cpp_2::llama_batch::LlamaBatch;
+    use llama_cpp_2::model::params::LlamaModelParams;
+    use llama_cpp_2::model::AddBos;
+    use llama_cpp_2::sampling::LlamaSampler;
+
+    let backend = embedded_backend_handle()?;
+    let model_path_ref = Path::new(model_path);
+    let model = llama_cpp_2::model::LlamaModel::load_from_file(
+        backend,
+        model_path_ref,
+        &LlamaModelParams::default(),
+    )
+    .map_err(|err| {
+        anyhow::anyhow!(
+            "failed to load embedded model from {}: {err}",
+            model_path_ref.display()
+        )
+    })?;
+
+    let rendered_prompt =
+        match model.chat_template(None) {
+            Ok(template) => {
+                let chat = [llama_cpp_2::model::LlamaChatMessage::new(
+                    "user".to_string(),
+                    prompt.to_string(),
+                )
+                .map_err(|err| anyhow::anyhow!("failed to build embedded chat message: {err}"))?];
+                match model.apply_chat_template(&template, &chat, true) {
+                    Ok(rendered) => rendered,
+                    Err(_) => format!("User: {}\nAssistant:", prompt),
+                }
+            }
+            Err(_) => format!("User: {}\nAssistant:", prompt),
+        };
+
+    let prompt_tokens = model
+        .str_to_token(&rendered_prompt, AddBos::Always)
+        .map_err(|err| anyhow::anyhow!("failed to tokenize embedded prompt: {err}"))?;
+    let desired_ctx = u32::try_from(
+        prompt_tokens
+            .len()
+            .saturating_add(EMBEDDED_MAX_GENERATION_TOKENS)
+            .saturating_add(8),
+    )
+    .unwrap_or(EMBEDDED_MIN_CONTEXT_TOKENS)
+    .max(EMBEDDED_MIN_CONTEXT_TOKENS);
+    let context_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(desired_ctx));
+    let mut context = model
+        .new_context(backend, context_params)
+        .map_err(|err| anyhow::anyhow!("failed to initialize embedded runtime context: {err}"))?;
+    let mut batch = LlamaBatch::new(prompt_tokens.len().saturating_add(1), 1);
+    batch
+        .add_sequence(&prompt_tokens, 0, false)
+        .map_err(|err| anyhow::anyhow!("failed to stage embedded prompt tokens: {err}"))?;
+    context
+        .decode(&mut batch)
+        .map_err(|err| anyhow::anyhow!("failed to decode embedded prompt: {err}"))?;
+
+    let mut sampler = LlamaSampler::greedy();
+    let mut generated = String::new();
+    let mut next_position = i32::try_from(prompt_tokens.len()).unwrap_or(i32::MAX);
+    let mut sample_idx = i32::try_from(prompt_tokens.len().saturating_sub(1)).unwrap_or(0);
+
+    for _ in 0..EMBEDDED_MAX_GENERATION_TOKENS {
+        let token = sampler.sample(&context, sample_idx);
+        if model.is_eog_token(token) || token == model.token_eos() {
+            break;
+        }
+        generated.push_str(&embedded_token_piece_to_string(&model, token)?);
+        sampler.accept(token);
+        batch.clear();
+        batch
+            .add(token, next_position, &[0], true)
+            .map_err(|err| anyhow::anyhow!("failed to stage embedded sampled token: {err}"))?;
+        context
+            .decode(&mut batch)
+            .map_err(|err| anyhow::anyhow!("failed to decode embedded sampled token: {err}"))?;
+        next_position = next_position.saturating_add(1);
+        sample_idx = 0;
+    }
+
+    let output = generated.trim().to_string();
+    if output.is_empty() {
+        bail!("embedded runtime backend produced an empty response")
+    }
+    Ok(output)
 }
 
 /// Records one reflection attempt and returns either a retry prompt or a deterministic fallback.
