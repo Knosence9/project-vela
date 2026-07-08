@@ -98,8 +98,8 @@ pub fn emit_review_signals_from_latest_session(
 mod provider;
 pub(crate) use provider::*;
 pub use provider::{
-    resolve_runtime_backend_contract, supported_runtime_backend_contracts, RuntimeBackendContract,
-    RuntimeProviderCapabilities,
+    resolve_runtime_backend_contract, supported_runtime_backend_contracts,
+    validate_runtime_backend_config, RuntimeBackendContract, RuntimeProviderCapabilities,
 };
 
 fn append_review_event(

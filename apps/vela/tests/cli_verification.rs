@@ -372,11 +372,13 @@ fn default_runtime_session_surfaces_in_status() {
     let status = run_vela(&vela_home, &["status"]);
     assert!(status.status.success(), "{}", stderr_text(&status));
     let status_stdout = stdout_text(&status);
-    assert!(status_stdout.contains("backend api [3]:"));
+    assert!(status_stdout.contains("backend api [4]:"));
     assert!(status_stdout.contains("id=ollama transport=http-json"));
     assert!(status_stdout.contains("id=mock transport=in-process"));
     assert!(status_stdout.contains("id=llamacpp transport=http-json"));
+    assert!(status_stdout.contains("id=embedded transport=in-process"));
     assert!(status_stdout.contains("resolved backend: none"));
+    assert!(status_stdout.contains("resolved backend readiness: none"));
     assert!(status_stdout.contains("active session: id=session-"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
@@ -420,6 +422,34 @@ fn extension_status_surfaces_activation_boundaries() {
     assert!(status_stdout.contains(
         "detail=Some(\"service extensions cannot request on-boot activation in this slice\")"
     ));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that the embedded backend contract and config plumbing are visible through `vela status`.
+fn embedded_backend_contract_and_config_are_visible_via_status() {
+    let vela_home = temp_vela_home("embedded-status");
+    let model_path = vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let status = run_vela(&vela_home, &["status"]);
+    assert!(status.status.success(), "{}", stderr_text(&status));
+    let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("runtime.provider=Some(\"embedded\")"));
+    assert!(status_stdout.contains("runtime.embedded_model_path=Some("));
+    assert!(status_stdout.contains("id=embedded transport=in-process"));
+    assert!(status_stdout.contains("resolved backend: api=v1 id=embedded transport=in-process"));
+    assert!(status_stdout.contains("resolved backend readiness: ok"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

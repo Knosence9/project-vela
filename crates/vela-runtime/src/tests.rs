@@ -24,7 +24,7 @@ fn test_bootstrap(prefix: &str) -> BootstrapReport {
 /// Verifies that the supported backend API contracts stay explicit and stable for current bounded backends.
 fn supported_runtime_backend_contracts_are_explicit() {
     let contracts = supported_runtime_backend_contracts();
-    assert_eq!(contracts.len(), 3);
+    assert_eq!(contracts.len(), 4);
     assert!(contracts.iter().any(|contract| {
         contract.id == "ollama"
             && contract.transport == "http-json"
@@ -50,6 +50,17 @@ fn supported_runtime_backend_contracts_are_explicit() {
             && contract.default_base_url == Some("http://127.0.0.1:8080")
             && contract.direct_response_source == "runtime-llamacpp"
             && contract.tool_loop_response_source == "runtime-llamacpp-tool-loop"
+            && !contract.capabilities.supports_images
+    }));
+    assert!(contracts.iter().any(|contract| {
+        contract.id == "embedded"
+            && contract.transport == "in-process"
+            && !contract.requires_model
+            && contract.default_base_url.is_none()
+            && contract.direct_response_source == "runtime-embedded"
+            && contract.tool_loop_response_source == "runtime-embedded-tool-loop"
+            && contract.capabilities.supports_text
+            && !contract.capabilities.supports_tool_loop
             && !contract.capabilities.supports_images
     }));
 }
@@ -119,6 +130,12 @@ fn resolve_runtime_backend_contract_prefers_override_and_config() {
     assert_eq!(llamacpp.id, "llamacpp");
     assert_eq!(llamacpp.transport, "http-json");
 
+    let embedded = resolve_runtime_backend_contract(&resolved, Some("embedded"))
+        .unwrap()
+        .expect("embedded backend contract");
+    assert_eq!(embedded.id, "embedded");
+    assert_eq!(embedded.transport, "in-process");
+
     let err = resolve_runtime_backend_contract(&resolved, Some("unknown")).unwrap_err();
     assert!(err.to_string().contains("unsupported runtime provider"));
 }
@@ -159,6 +176,58 @@ fn resolve_runtime_execution_wraps_llamacpp_provider_backend() {
     );
     assert!(!provider.supports_images());
     provider.validate().unwrap();
+}
+
+#[test]
+/// Verifies that runtime execution resolves the embedded backend through the provider boundary and validates its model asset path.
+fn resolve_runtime_execution_wraps_embedded_provider_backend() {
+    let root =
+        std::env::temp_dir().join(format!("vela-runtime-embedded-{}", unix_timestamp_nanos()));
+    std::fs::create_dir_all(&root).unwrap();
+    let model_path = root.join("gemma3.gguf");
+    std::fs::write(&model_path, b"stub model").unwrap();
+
+    let resolved = ResolvedConfig {
+        runtime_provider: Some("embedded".to_string()),
+        runtime_embedded_model_path: Some(model_path.display().to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let execution = resolve_runtime_execution(&resolved, None, None).unwrap();
+    let provider = execution
+        .provider
+        .as_deref()
+        .expect("resolved embedded provider backend");
+
+    assert_eq!(execution.provider_label.as_deref(), Some("embedded"));
+    assert_eq!(provider.label(), "embedded");
+    assert_eq!(provider.direct_response_source(), "runtime-embedded");
+    assert_eq!(
+        provider.tool_loop_response_source(),
+        "runtime-embedded-tool-loop"
+    );
+    provider.validate().unwrap();
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+/// Verifies that embedded provider configuration fails clearly when the model path is missing.
+fn embedded_provider_rejects_missing_model_path() {
+    let resolved = ResolvedConfig {
+        runtime_provider: Some("embedded".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let execution = resolve_runtime_execution(&resolved, None, None).unwrap();
+    let provider = execution
+        .provider
+        .as_deref()
+        .expect("resolved embedded provider backend");
+    let err = provider.validate().unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("runtime provider 'embedded' requires runtime.embedded_model_path"));
 }
 
 #[test]

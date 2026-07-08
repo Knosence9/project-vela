@@ -137,7 +137,9 @@ README-visible shared slash commands:
 - `vela mcp --show <id>` shows one durable MCP bridge request by id
 
 ## Backend API status surface
-- `vela status` now prints the explicit backend API contract list plus the resolved backend contract from config, including bounded local backends such as Ollama, mock, and llama.cpp, so future adapters can target stable kernel-owned interfaces
+- `vela status` now prints the explicit backend API contract list plus the resolved backend contract from config, including bounded local backends such as Ollama, mock, llama.cpp, and the new embedded in-process contract, so future adapters can target stable kernel-owned interfaces
+
+- when `runtime.provider: embedded` is configured, `vela status` also surfaces `runtime.embedded_model_path` plus a resolved-backend readiness check so missing or invalid embedded model assets fail clearly before generation is implemented
 
 ## Backend eval surface
 - `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run and now emits a durable parity summary for that run
