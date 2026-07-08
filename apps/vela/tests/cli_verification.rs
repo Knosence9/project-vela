@@ -968,6 +968,58 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
 }
 
 #[test]
+/// Verifies that the backend eval harness can record embedded results alongside other backends through the durable eval surface.
+fn backend_eval_harness_records_embedded_results() {
+    let vela_home = temp_vela_home("eval-harness-embedded");
+    let model_path = vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let run = run_vela(
+        &vela_home,
+        &[
+            "eval",
+            "--run",
+            "compare embedded eval evidence",
+            "--backend",
+            "embedded",
+            "--backend",
+            "mock",
+        ],
+    );
+    assert!(run.status.success(), "{}", stderr_text(&run));
+    let run_stdout = stdout_text(&run);
+    assert!(run_stdout.contains("backend eval run: id=eval-"));
+    assert!(run_stdout.contains("slot=None"));
+    assert!(run_stdout.contains("backends=embedded,mock"));
+    assert!(run_stdout.contains("parity_summary=Some(\""));
+    assert!(run_stdout.contains("parity=diverged"));
+    assert!(run_stdout.contains("passed=embedded,mock"));
+    assert!(run_stdout.contains("backend=embedded transport=in-process status=passed"));
+    assert!(run_stdout.contains("source=Some(\"runtime-embedded\")"));
+    assert!(run_stdout.contains("backend=mock transport=in-process status=passed"));
+    let eval_id = parse_field(&run_stdout, "id").expect("eval id").to_string();
+
+    let show = run_vela(&vela_home, &["eval", "--show", &eval_id]);
+    assert!(show.status.success(), "{}", stderr_text(&show));
+    let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains(&format!("backend eval: id={}", eval_id)));
+    assert!(show_stdout.contains("backends=embedded,mock"));
+    assert!(show_stdout.contains("backend=embedded transport=in-process status=passed"));
+    assert!(show_stdout.contains("backend=mock transport=in-process status=passed"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that the model-lab policy is visible through the eval surface.
 fn model_lab_policy_is_visible_via_eval_surface() {
     let vela_home = temp_vela_home("model-lab-policy");
@@ -1017,6 +1069,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(show_slot.status.success(), "{}", stderr_text(&show_slot));
     let show_slot_stdout = stdout_text(&show_slot);
     assert!(show_slot_stdout.contains("backend experiment slot: id=local-first-replay status=bounded-preview strategy=offline-replay"));
+    assert!(show_slot_stdout.contains("backends=embedded,llamacpp,mock,ollama"));
     assert!(show_slot_stdout.contains("latest_eval_id=None"));
     assert!(show_slot_stdout.contains("latest_backends=none"));
     assert!(show_slot_stdout.contains("latest_results=0"));
@@ -1078,6 +1131,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
         stderr_text(&show_ran_slot)
     );
     let show_ran_slot_stdout = stdout_text(&show_ran_slot);
+    assert!(show_ran_slot_stdout.contains("backends=embedded,mock,llamacpp,ollama"));
     assert!(show_ran_slot_stdout.contains("latest_backends=mock,llamacpp"));
     assert!(show_ran_slot_stdout.contains("latest_results=2"));
     assert!(show_ran_slot_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
