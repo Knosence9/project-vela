@@ -1208,6 +1208,42 @@ fn chat_query_uses_configured_ollama_tool_loop() {
 }
 
 #[test]
+/// Verifies that a configured embedded provider can run the bounded tool loop through the CLI.
+fn chat_query_uses_embedded_provider_tool_loop() {
+    let vela_home = temp_vela_home("embedded-tool-loop");
+    std::fs::create_dir_all(vela_home.join("skills").join("deploy-staging")).unwrap();
+    std::fs::write(
+        vela_home
+            .join("skills")
+            .join("deploy-staging")
+            .join("SKILL.md"),
+        "# deploy-staging\n\nDeploys staging.",
+    )
+    .unwrap();
+    let model_path = vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(&vela_home, &["chat", "--query", "need the tool loop"]);
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Embedded tool-informed final answer."));
+    assert!(turn_stdout.contains("lifecycle: turn=turn-"));
+    assert!(turn_stdout.contains("phases=8"));
+    assert!(turn_stdout.contains("response route: source=runtime-embedded-tool-loop provider=embedded capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that a configured mock provider can run the bounded tool loop during mixed text+image turns.
 fn chat_query_and_image_use_mock_provider_tool_loop() {
     let vela_home = temp_vela_home("mock-image-tool-loop");
@@ -1310,6 +1346,61 @@ fn chat_query_recovers_from_invalid_tool_request() {
     );
     std::env::remove_var("VELA_HOME");
     server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured embedded provider can recover from one invalid tool request through the CLI reflection path.
+fn chat_query_recovers_from_invalid_tool_request_with_embedded_provider() {
+    let vela_home = temp_vela_home("embedded-reflect-recover");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let model_path = vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &["chat", "--query", "recover from invalid tool"],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Embedded recovered answer."));
+    assert!(turn_stdout.contains("lifecycle: turn=turn-"));
+    assert!(turn_stdout.contains("phases=6"));
+    assert!(turn_stdout.contains("last=finish"));
+    assert!(turn_stdout.contains("response route: source=runtime-embedded provider=embedded capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+
+    std::env::set_var("VELA_HOME", &vela_home);
+    let bootstrap = vela_runtime::initialize_bootstrap(None, false).unwrap();
+    let inspection = vela_runtime::inspect_latest_session(&bootstrap, 20)
+        .unwrap()
+        .expect("cli embedded reflection inspection");
+    let lifecycle: Vec<_> = inspection
+        .lifecycle
+        .iter()
+        .map(|record| record.phase.as_str())
+        .collect();
+    assert_eq!(
+        lifecycle,
+        vec![
+            "receive",
+            "deliberate",
+            "reflect",
+            "retry",
+            "respond",
+            "finish"
+        ]
+    );
+    std::env::remove_var("VELA_HOME");
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

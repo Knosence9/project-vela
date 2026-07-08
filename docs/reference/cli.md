@@ -140,7 +140,8 @@ README-visible shared slash commands:
 - `vela status` now prints the explicit backend API contract list plus the resolved backend contract from config, including bounded local backends such as Ollama, mock, llama.cpp, and the new embedded in-process contract, so future adapters can target stable kernel-owned interfaces
 
 - when `runtime.provider: embedded` is configured, `vela status` also surfaces `runtime.embedded_model_path` plus a resolved-backend readiness check so missing or invalid embedded model assets fail clearly before generation
-- the embedded backend now supports a first bounded text-only in-process path backed by a local GGUF model file at `runtime.embedded_model_path`; image support and tool-loop compatibility remain deferred to later slices
+- the embedded backend now supports a first bounded text-only in-process path backed by a local GGUF model file at `runtime.embedded_model_path`
+- the embedded backend now also participates in the bounded runtime tool-loop and reflection/retry path for text turns, while direct image attachments remain deferred to later slices
 
 ## Backend eval surface
 - `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run and now emits a durable parity summary for that run
