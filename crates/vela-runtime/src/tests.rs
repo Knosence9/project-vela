@@ -534,6 +534,47 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
 }
 
 #[test]
+/// Verifies that experiment slot inspection surfaces latest passed/failed backends and capability groups from durable eval evidence.
+fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
+    let mut bootstrap = test_bootstrap("eval-slot-inspection");
+    bootstrap.resolved_config = ResolvedConfig {
+        runtime_provider: Some("mock".to_string()),
+        runtime_model: Some("mock-1".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let run = run_backend_eval_slot(
+        &bootstrap,
+        "capability-parity-scan",
+        &["mock".to_string(), "llamacpp".to_string()],
+        Some("mock-2"),
+    )
+    .unwrap();
+    assert_eq!(run.record.results.len(), 2);
+
+    let inspection = get_backend_experiment_slot_inspection(&bootstrap, "capability-parity-scan")
+        .unwrap()
+        .expect("slot inspection");
+    assert_eq!(inspection.latest_eval_id, Some(run.record.id.clone()));
+    assert_eq!(inspection.latest_eval_backends, vec!["mock", "llamacpp"]);
+    assert_eq!(inspection.latest_eval_passed_backends, vec!["mock"]);
+    assert_eq!(inspection.latest_eval_failed_backends, vec!["llamacpp"]);
+    assert_eq!(inspection.latest_eval_result_count, 2);
+    assert!(inspection
+        .latest_eval_capability_groups
+        .iter()
+        .any(|group| group
+            .contains("mock=>text=true tool_loop=true reflection_retry=true images=true")));
+    assert!(inspection
+        .latest_eval_capability_groups
+        .iter()
+        .any(|group| group
+            .contains("llamacpp=>text=true tool_loop=true reflection_retry=true images=false")));
+
+    let _ = std::fs::remove_dir_all(&bootstrap.vela_home);
+}
+
+#[test]
 /// Verifies that runtime ownership status surfaces pending restart-required drift before an extension reload is attempted.
 fn runtime_ownership_status_surfaces_pending_restart_required_drift() {
     let vela_home = std::env::temp_dir().join(format!(

@@ -32,3 +32,4 @@ Keep deeper model-core experimentation bounded, reversible, and evidence-driven 
 - `vela eval --run-slot local-first-replay`
 - `vela eval --run-slot capability-parity-scan`
 - published local-first/parity slot backend sets now include `embedded` when recording bounded eval evidence
+- slot inspection surfaces now expose the latest passed backend set, failed backend set, and capability-group evidence for each published slot so provider differences stay operator-visible without changing the live route

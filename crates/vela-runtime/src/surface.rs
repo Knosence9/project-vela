@@ -172,6 +172,9 @@ pub struct BackendExperimentSlotInspection {
     pub latest_eval_created_at: Option<i64>,
     pub latest_eval_parity_summary: Option<String>,
     pub latest_eval_backends: Vec<String>,
+    pub latest_eval_passed_backends: Vec<String>,
+    pub latest_eval_failed_backends: Vec<String>,
+    pub latest_eval_capability_groups: Vec<String>,
     pub latest_eval_result_count: usize,
 }
 
@@ -1510,24 +1513,24 @@ pub fn run_backend_eval_slot(
     )
 }
 
-fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<String> {
-    if results.is_empty() {
-        return None;
-    }
-
-    let passed = results
+fn summarize_backend_eval_results(
+    run: &BackendEvalRunRecord,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let passed = run
+        .results
         .iter()
         .filter(|item| item.status == "passed")
         .map(|item| item.backend_id.clone())
         .collect::<Vec<_>>();
-    let failed = results
+    let failed = run
+        .results
         .iter()
         .filter(|item| item.status != "passed")
         .map(|item| item.backend_id.clone())
         .collect::<Vec<_>>();
 
     let mut capability_groups = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for result in results {
+    for result in &run.results {
         capability_groups
             .entry(
                 result
@@ -1538,6 +1541,31 @@ fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<
             .or_default()
             .push(result.backend_id.clone());
     }
+    let capability_groups = capability_groups
+        .into_iter()
+        .map(|(caps, backends)| format!("{}=>{}", backends.join("+"), caps))
+        .collect::<Vec<_>>();
+
+    (passed, failed, capability_groups)
+}
+
+fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<String> {
+    if results.is_empty() {
+        return None;
+    }
+
+    let synthetic_run = BackendEvalRunRecord {
+        id: String::new(),
+        prompt: String::new(),
+        backends: Vec::new(),
+        created_at: 0,
+        session_id: String::new(),
+        experiment_slot: None,
+        model_override: None,
+        parity_summary: None,
+        results: results.to_vec(),
+    };
+    let (passed, failed, capability_groups) = summarize_backend_eval_results(&synthetic_run);
 
     let capability_group_count = capability_groups.len();
     let parity = if results.len() < 2 {
@@ -1547,11 +1575,7 @@ fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<
     } else {
         "diverged"
     };
-    let capability_groups = capability_groups
-        .into_iter()
-        .map(|(caps, backends)| format!("{}=>{}", backends.join("+"), caps))
-        .collect::<Vec<_>>()
-        .join("; ");
+    let capability_groups = capability_groups.join("; ");
 
     Some(format!(
         "parity={} passed={} failed={} capability_groups={} {}",
@@ -1787,11 +1811,21 @@ pub fn inspect_backend_experiment_slots(
                 .iter()
                 .rev()
                 .find(|run| run.experiment_slot.as_deref() == Some(slot.id.as_str()));
+            let (
+                latest_eval_passed_backends,
+                latest_eval_failed_backends,
+                latest_eval_capability_groups,
+            ) = latest
+                .map(summarize_backend_eval_results)
+                .unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new()));
             BackendExperimentSlotInspection {
                 latest_eval_id: latest.map(|run| run.id.clone()),
                 latest_eval_created_at: latest.map(|run| run.created_at),
                 latest_eval_parity_summary: latest.and_then(|run| run.parity_summary.clone()),
                 latest_eval_backends: latest.map(|run| run.backends.clone()).unwrap_or_default(),
+                latest_eval_passed_backends,
+                latest_eval_failed_backends,
+                latest_eval_capability_groups,
                 latest_eval_result_count: latest.map(|run| run.results.len()).unwrap_or(0),
                 slot,
             }
@@ -1816,11 +1850,18 @@ pub fn get_backend_experiment_slot_inspection(
         .iter()
         .rev()
         .find(|run| run.experiment_slot.as_deref() == Some(normalized));
+    let (latest_eval_passed_backends, latest_eval_failed_backends, latest_eval_capability_groups) =
+        latest
+            .map(summarize_backend_eval_results)
+            .unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new()));
     Ok(Some(BackendExperimentSlotInspection {
         latest_eval_id: latest.map(|run| run.id.clone()),
         latest_eval_created_at: latest.map(|run| run.created_at),
         latest_eval_parity_summary: latest.and_then(|run| run.parity_summary.clone()),
         latest_eval_backends: latest.map(|run| run.backends.clone()).unwrap_or_default(),
+        latest_eval_passed_backends,
+        latest_eval_failed_backends,
+        latest_eval_capability_groups,
         latest_eval_result_count: latest.map(|run| run.results.len()).unwrap_or(0),
         slot,
     }))
