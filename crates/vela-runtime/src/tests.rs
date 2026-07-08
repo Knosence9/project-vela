@@ -2455,6 +2455,110 @@ fn execute_chat_turn_stops_at_max_runtime_tool_steps() {
 }
 
 #[test]
+/// Verifies that the runtime can recover when the post-tool-loop final provider continuation is invalid.
+fn execute_chat_turn_recovers_from_invalid_final_provider_continuation_after_max_tool_steps() {
+    let (base_url, server) = spawn_mock_ollama_sequence(vec![
+        MockOllamaExchange {
+            response_body: r#"{"tool":"memory_snapshot"}"#,
+            expected_model: "gemma3:4b",
+            prompt_fragment: "recover after max-step invalid continuation",
+            expected_image_base64: None,
+        },
+        MockOllamaExchange {
+            response_body: r#"{"tool":"list_skills"}"#,
+            expected_model: "gemma3:4b",
+            prompt_fragment: "Completed tool step 1 of 3.\nTool result for memory_snapshot:",
+            expected_image_base64: None,
+        },
+        MockOllamaExchange {
+            response_body: r#"{"tool":"memory_snapshot"}"#,
+            expected_model: "gemma3:4b",
+            prompt_fragment:
+                "Completed tool step 2 of 3.\nTool result for list_skills:\ndeploy-staging",
+            expected_image_base64: None,
+        },
+        MockOllamaExchange {
+            response_body: r#"{"tool":"shell_exec"}"#,
+            expected_model: "gemma3:4b",
+            prompt_fragment: "Completed tool step 3 of 3.\nTool result for memory_snapshot:",
+            expected_image_base64: None,
+        },
+        MockOllamaExchange {
+            response_body: "Recovered final answer after max-step reflection.",
+            expected_model: "gemma3:4b",
+            prompt_fragment: "You have already exhausted the maximum number of tool steps. Do not request another tool.",
+            expected_image_base64: None,
+        },
+    ]);
+    let mut bootstrap = test_bootstrap("ollama-final-invalid-recover");
+    bootstrap.resolved_config.runtime_provider = Some("ollama".to_string());
+    bootstrap.resolved_config.runtime_model = Some("gemma3:4b".to_string());
+    bootstrap.resolved_config.runtime_ollama_base_url = Some(base_url);
+    std::fs::create_dir_all(bootstrap.vela_home.join("skills").join("deploy-staging")).unwrap();
+    std::fs::write(
+        bootstrap
+            .vela_home
+            .join("skills")
+            .join("deploy-staging")
+            .join("SKILL.md"),
+        "# deploy-staging\n\nDeploys staging.",
+    )
+    .unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("recover after max-step invalid continuation".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.response.as_deref(),
+        Some("Recovered final answer after max-step reflection.")
+    );
+    assert_eq!(report.response_source, "runtime-ollama-tool-loop");
+    assert_eq!(report.lifecycle_phase_count, 12);
+    let inspection = inspect_latest_session(&bootstrap, 24)
+        .unwrap()
+        .expect("final invalid reflection inspection");
+    let lifecycle: Vec<_> = inspection
+        .lifecycle
+        .iter()
+        .filter(|record| record.turn_id == report.turn_id)
+        .map(|record| (record.phase.as_str(), record.step))
+        .collect();
+    assert_eq!(
+        lifecycle,
+        vec![
+            ("receive", None),
+            ("deliberate", None),
+            ("tool-request", Some(1)),
+            ("tool-result", Some(1)),
+            ("tool-request", Some(2)),
+            ("tool-result", Some(2)),
+            ("tool-request", Some(3)),
+            ("tool-result", Some(3)),
+            ("reflect", Some(1)),
+            ("retry", Some(1)),
+            ("respond", None),
+            ("finish", None),
+        ]
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that repeated invalid provider continuations fall back after the bounded reflection limit.
 fn execute_chat_turn_falls_back_after_exhausting_reflection_retries() {
     let (base_url, server) = spawn_mock_ollama_sequence(vec![
