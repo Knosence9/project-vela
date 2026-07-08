@@ -407,6 +407,9 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
         reloaded.ownership_baseline_path,
         runtime_config_ownership_baseline_path(&vela_home)
     );
+    assert!(reloaded
+        .ownership_baseline_snapshot
+        .contains("runtime.provider=null"));
 
     std::fs::write(
         vela_home.join("extensions").join("demo.yaml"),
@@ -437,6 +440,9 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
         drifted.ownership_baseline_path,
         runtime_config_ownership_baseline_path(&vela_home)
     );
+    assert!(drifted
+        .ownership_baseline_snapshot
+        .contains("runtime.provider=null"));
     assert!(drifted
         .summary_line()
         .contains("restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime ownership_blocked=true"));
@@ -630,6 +636,9 @@ fn runtime_ownership_status_surfaces_pending_restart_required_drift() {
         ownership.ownership_baseline_path,
         runtime_config_ownership_baseline_path(&vela_home)
     );
+    assert!(ownership
+        .ownership_baseline_snapshot
+        .contains("runtime.provider=\"ollama\""));
     assert_eq!(ownership.restart_required_drifts.len(), 3);
     assert!(ownership.summary_line().contains("status=restart-required"));
     assert!(ownership.summary_line().contains(
