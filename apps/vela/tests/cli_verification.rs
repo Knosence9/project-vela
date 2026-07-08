@@ -2007,11 +2007,16 @@ fn cron_report_summarizes_scheduler_state() {
     let mut jobs: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&jobs_path).unwrap()).unwrap();
     let job = jobs.as_array_mut().unwrap().first_mut().expect("first job");
+    job["updated_at"] = serde_json::Value::from(16);
     job["run_count"] = serde_json::Value::from(2);
     job["recovery_count"] = serde_json::Value::from(1);
     job["last_started_at"] = serde_json::Value::from(11);
     job["last_completed_at"] = serde_json::Value::from(12);
     job["last_failed_at"] = serde_json::Value::from(15);
+    job["last_recovered_at"] = serde_json::Value::from(13);
+    job["last_session_id"] = serde_json::Value::from("session-123");
+    job["execution_token"] = serde_json::Value::from("attempt-xyz");
+    job["lease_expires_at"] = serde_json::Value::from(now + 21);
     job["last_outcome"] = serde_json::Value::from("completed");
     job["last_progression"] = serde_json::Value::from("completed-rescheduled");
     job["last_error"] = serde_json::Value::from(
@@ -2043,17 +2048,41 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("total_recoveries=1"));
     assert!(report_stdout.contains(&format!("{}@{}", job_id, now + 42)));
     assert!(report_stdout.contains("scheduler jobs [1]:"));
-    assert!(report_stdout.contains(&format!("- {} :: status=pending", job_id)));
+    assert!(report_stdout.contains(&format!(
+        "- {} :: schedule=0 * * * * source=scheduler status=pending",
+        job_id
+    )));
+    assert!(report_stdout.contains("updated_at=16"));
     assert!(report_stdout.contains("due_state=scheduled"));
     assert!(report_stdout.contains("health_lag_seconds=None"));
+    assert!(report_stdout.contains(&format!("lease_expires_at=Some({})", now + 21)));
     assert!(report_stdout.contains("last_run_at=Some(15)"));
     assert!(report_stdout.contains("last_completed_at=Some(12)"));
     assert!(report_stdout.contains("last_failed_at=Some(15)"));
+    assert!(report_stdout.contains("last_recovered_at=Some(13)"));
+    assert!(report_stdout.contains("last_session_id=Some(\"session-123\")"));
+    assert!(report_stdout.contains("execution_token=Some(\"attempt-xyz\")"));
     assert!(report_stdout.contains("delivery_at=Some(14)"));
     assert!(report_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
     assert!(report_stdout.contains("delivery_outcome=Some(\"failed\")"));
     assert!(report_stdout.contains("delivery_error_excerpt=Some(\"webhook delivery failed after retry because downstream rejected the payload body\""));
     assert!(report_stdout.contains("last_error_excerpt=Some(\"temporary network failure while delivering scheduler webhook payload"));
+
+    let show = run_vela(&vela_home, &["cron", "--show", &job_id]);
+    assert!(show.status.success(), "{}", stderr_text(&show));
+    let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains(&format!(
+        "scheduled job: {} schedule=0 * * * * source=scheduler status=pending",
+        job_id
+    )));
+    assert!(show_stdout.contains("updated_at=16"));
+    assert!(show_stdout.contains("last_started_at=Some(11)"));
+    assert!(show_stdout.contains("last_completed_at=Some(12)"));
+    assert!(show_stdout.contains("last_failed_at=Some(15)"));
+    assert!(show_stdout.contains("last_recovered_at=Some(13)"));
+    assert!(show_stdout.contains(&format!("lease_expires_at=Some({})", now + 21)));
+    assert!(show_stdout.contains("last_session_id=Some(\"session-123\")"));
+    assert!(show_stdout.contains("execution_token=Some(\"attempt-xyz\")"));
 
     let mut delivered_jobs: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&jobs_path).unwrap()).unwrap();
@@ -2084,12 +2113,14 @@ fn cron_report_summarizes_scheduler_state() {
 
     let mut overdue_jobs: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&jobs_path).unwrap()).unwrap();
-    let overdue_job = overdue_jobs
-        .as_array_mut()
-        .unwrap()
-        .first_mut()
-        .expect("first job");
-    overdue_job["next_run_at"] = serde_json::Value::from(now - 30);
+    {
+        let overdue_job = overdue_jobs
+            .as_array_mut()
+            .unwrap()
+            .first_mut()
+            .expect("first job");
+        overdue_job["next_run_at"] = serde_json::Value::from(now - 30);
+    }
     std::fs::write(
         &jobs_path,
         serde_json::to_string_pretty(&overdue_jobs).unwrap(),
@@ -2106,6 +2137,32 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(overdue_stdout.contains("overdue=1"));
     assert!(overdue_stdout.contains("due_state=overdue"));
     assert!(overdue_stdout.contains("health_lag_seconds=Some("));
+
+    {
+        let overdue_job = overdue_jobs
+            .as_array_mut()
+            .unwrap()
+            .first_mut()
+            .expect("first job");
+        overdue_job["status"] = serde_json::Value::from("running");
+        overdue_job["lease_expires_at"] = serde_json::Value::from(now - 5);
+    }
+    std::fs::write(
+        &jobs_path,
+        serde_json::to_string_pretty(&overdue_jobs).unwrap(),
+    )
+    .unwrap();
+
+    let lease_expired_report = run_vela(&vela_home, &["cron", "--report"]);
+    assert!(
+        lease_expired_report.status.success(),
+        "{}",
+        stderr_text(&lease_expired_report)
+    );
+    let lease_expired_stdout = stdout_text(&lease_expired_report);
+    assert!(lease_expired_stdout.contains("lease_expired=1"));
+    assert!(lease_expired_stdout.contains("due_state=lease-expired"));
+    assert!(lease_expired_stdout.contains("health_lag_seconds=Some("));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
