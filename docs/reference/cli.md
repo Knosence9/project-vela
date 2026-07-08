@@ -151,8 +151,8 @@ README-visible shared slash commands:
 - `vela eval --run-slot <slot-id> [--backend <id>...] [--model <name>]` executes one of the published bounded provider experiment slots (`ternary-preview`, `local-first-replay`, `capability-parity-scan`) without changing the live kernel route, while surfacing bounded parity summaries; the published slot backends now include `embedded` for local-first and parity evidence lanes
 - `vela eval --list` shows durable backend eval runs plus stored parity summaries
 - `vela eval --show <id>` shows one durable backend eval run with per-backend results and its parity summary
-- `vela eval --list-slots` shows published bounded architecture experiment slots plus the latest durable eval id/time/result-count/parity summary, latest passed/failed backend sets, and latest capability-group evidence for each slot
-- `vela eval --show-slot <id>` shows one bounded architecture experiment slot by id plus the latest durable eval evidence currently attached to that slot, including passed/failed backend breakdowns and capability-group evidence
+- `vela eval --list-slots` shows published bounded architecture experiment slots plus the latest durable eval id/time/result-count/parity summary, latest passed/failed backend sets, latest capability-group evidence, and compact per-backend outcome/source/model evidence for each slot
+- `vela eval --show-slot <id>` shows one bounded architecture experiment slot by id plus the latest durable eval evidence currently attached to that slot, including passed/failed backend breakdowns, capability-group evidence, and per-backend status/transport/source/model details
 - `vela eval --show-policy` shows the durable model-lab criteria and boundaries that govern deeper model-core experimentation
 
 ## Still needed

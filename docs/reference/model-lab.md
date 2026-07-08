@@ -61,6 +61,7 @@ Pause model-core deepening and return to kernel/runtime hardening if any of thes
 - `vela eval --show-policy`
 - `~/.vela/evals/slots.json`
 - `vela eval --list-slots`
+- `vela eval --show-slot <id>`
 - `vela eval --run-slot ternary-preview`
 - `vela eval --run-slot local-first-replay`
 - `vela eval --run-slot capability-parity-scan`
