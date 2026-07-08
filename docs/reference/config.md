@@ -69,10 +69,27 @@
 - `API_SERVER_ENABLED`
 - `API_SERVER_PORT`
 
+## Current precedence and failure contract
+- `VELA_HOME` wins if explicitly set before config bootstrap.
+- Otherwise `--profile` / `-p` selects `{HOME}/.vela/profiles/<profile>` before command parsing continues.
+- Without an explicit profile flag, bootstrap falls back to the sticky profile file at `~/.vela/active_profile` when present.
+- Without either override, the default home is `~/.vela`.
+- `.env` loading prefers `{VELA_HOME}/.env` and only falls back to `./.env` when the home-scoped file is absent.
+- user config lives at `{VELA_HOME}/config.yaml`.
+- project fallback config lives at `./cli-config.yaml`.
+- `--ignore-user-config` and `VELA_IGNORE_USER_CONFIG=1` suppress the user config while still allowing project fallback config and `.env` loading.
+- when both configs exist and the user config is active, project config remains visible only as lower precedence and is not merged.
+- when the user config is unreadable or invalid, project config is promoted to `project-fallback` and becomes the resolved source of truth for supported keys.
+
+## Regression-protected behavior in Rust tests
+- invalid user YAML falls back to project config and marks the user source as `skipped-invalid`
+- unreadable user config falls back to project config and marks the user source as `skipped-unreadable`
+- `VELA_IGNORE_USER_CONFIG=1` forces project fallback even when `{VELA_HOME}/config.yaml` exists
+- `{VELA_HOME}/.env` beats project `.env` when both exist
+- sticky profile fallback updates `VELA_HOME` to the selected profile path before full bootstrap
+
 ## Still needed
-- exact config precedence order including legacy `gateway.json`
-- default values for key settings
-- profile/account behavior beyond path selection
-- invalid-config failure behavior
-- exact mapping from config keys to env vars beyond the currently bridged fields
-- broader YAML coverage beyond the first resolved field set
+- exact config precedence order for legacy `gateway.json` migration/compat behavior
+- default values for key settings beyond the currently surfaced resolved fields
+- exact mapping from all config keys to env vars beyond the currently bridged fields
+- broader YAML coverage beyond the current resolved field set
