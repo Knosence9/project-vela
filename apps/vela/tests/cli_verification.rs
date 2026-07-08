@@ -520,6 +520,33 @@ fn embedded_status_rejects_non_gguf_model_paths() {
 }
 
 #[test]
+/// Verifies that embedded status rejects empty GGUF model files before execution and surfaces the guardrail state.
+fn embedded_status_rejects_empty_gguf_model_paths() {
+    let vela_home = temp_vela_home("embedded-empty-gguf");
+    let model_path = vela_home.join("models").join("empty.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let status = run_vela(&vela_home, &["status"]);
+    assert!(status.status.success(), "{}", stderr_text(&status));
+    let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("resolved backend readiness: error (runtime provider 'embedded' requires runtime.embedded_model_path to point to a non-empty .gguf model file)"));
+    assert!(status_stdout.contains("embedded lifecycle: state=invalid-config"));
+    assert!(status_stdout.contains("file_size_bytes=0"));
+    assert!(status_stdout.contains("expected=non-empty"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that embedded load failures persist a visible lifecycle state for later status inspection.
 fn embedded_status_surfaces_last_load_failure() {
     let vela_home = temp_vela_home("embedded-load-failed");

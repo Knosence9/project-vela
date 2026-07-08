@@ -968,6 +968,14 @@ pub fn inspect_embedded_lifecycle_guardrails(
                 model_file.display()
             ),
         )
+    } else if file_size_bytes == 0 {
+        (
+            "invalid-config".to_string(),
+            format!(
+                "model_exists=true file_size_bytes=0 expected=non-empty local_only=true restart_on_model_change=true path={}",
+                model_file.display()
+            ),
+        )
     } else if let Some(record) = persisted {
         let last_error = record.last_error.unwrap_or_else(|| "none".to_string());
         (
