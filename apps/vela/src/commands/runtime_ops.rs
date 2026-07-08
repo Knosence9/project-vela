@@ -1,6 +1,13 @@
 use crate::cli::{AgentsArgs, CronArgs, EvalArgs, GatewayArgs, McpArgs, SessionsArgs};
 use anyhow::Result;
 
+fn scheduler_now_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 fn scheduler_job_last_run_at(job: &vela_runtime::ScheduledJob) -> Option<i64> {
     [
         job.last_started_at,
@@ -29,6 +36,29 @@ fn scheduler_job_last_error_excerpt(job: &vela_runtime::ScheduledJob) -> Option<
 
 fn scheduler_job_last_delivery_error_excerpt(job: &vela_runtime::ScheduledJob) -> Option<String> {
     scheduler_single_line_excerpt(job.last_delivery_error.as_ref())
+}
+
+fn scheduler_job_due_state(job: &vela_runtime::ScheduledJob, now: i64) -> &'static str {
+    if job.status == "running" {
+        match job.lease_expires_at {
+            Some(lease_expires_at) if lease_expires_at < now => "lease-expired",
+            _ => "running",
+        }
+    } else if matches!(job.status.as_str(), "pending" | "failed") && job.next_run_at <= now {
+        "overdue"
+    } else {
+        "scheduled"
+    }
+}
+
+fn scheduler_job_health_lag_seconds(job: &vela_runtime::ScheduledJob, now: i64) -> Option<i64> {
+    match scheduler_job_due_state(job, now) {
+        "overdue" => Some(now - job.next_run_at),
+        "lease-expired" => job
+            .lease_expires_at
+            .map(|lease_expires_at| now - lease_expires_at),
+        _ => None,
+    }
 }
 
 pub(crate) fn run_gateway(
@@ -601,7 +631,12 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
     } else if args.report {
         let report = vela_runtime::setup_scheduler(bootstrap)?;
         let jobs = vela_runtime::list_scheduled_jobs(bootstrap)?;
+        let now = scheduler_now_timestamp();
         let pending_count = jobs.iter().filter(|job| job.status == "pending").count();
+        let running_count = jobs
+            .iter()
+            .filter(|job| scheduler_job_due_state(job, now) == "running")
+            .count();
         let completed_count = jobs
             .iter()
             .filter(|job| job.last_outcome.as_deref() == Some("completed"))
@@ -609,6 +644,14 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
         let failed_count = jobs
             .iter()
             .filter(|job| job.last_outcome.as_deref() == Some("failed"))
+            .count();
+        let overdue_count = jobs
+            .iter()
+            .filter(|job| scheduler_job_due_state(job, now) == "overdue")
+            .count();
+        let lease_expired_count = jobs
+            .iter()
+            .filter(|job| scheduler_job_due_state(job, now) == "lease-expired")
             .count();
         let delivery_pending_count = jobs
             .iter()
@@ -627,12 +670,15 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
         let next_due = jobs.iter().min_by_key(|job| job.next_run_at);
         match vela_runtime::current_command_session_summary(bootstrap, "cron")? {
             Some(session) => println!(
-                "scheduler report: config={} jobs={} pending={} completed={} failed={} delivery_pending={} delivery_failed={} delivery_delivered={} total_runs={} total_recoveries={} next_due={:?} session={} title={} messages={} events={}",
+                "scheduler report: config={} jobs={} pending={} running={} completed={} failed={} overdue={} lease_expired={} delivery_pending={} delivery_failed={} delivery_delivered={} total_runs={} total_recoveries={} next_due={:?} session={} title={} messages={} events={}",
                 report.config_path.display(),
                 jobs.len(),
                 pending_count,
+                running_count,
                 completed_count,
                 failed_count,
+                overdue_count,
+                lease_expired_count,
                 delivery_pending_count,
                 delivery_failed_count,
                 delivery_delivered_count,
@@ -645,12 +691,15 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
                 session.event_count,
             ),
             None => println!(
-                "scheduler report: config={} jobs={} pending={} completed={} failed={} delivery_pending={} delivery_failed={} delivery_delivered={} total_runs={} total_recoveries={} next_due={:?} session=none",
+                "scheduler report: config={} jobs={} pending={} running={} completed={} failed={} overdue={} lease_expired={} delivery_pending={} delivery_failed={} delivery_delivered={} total_runs={} total_recoveries={} next_due={:?} session=none",
                 report.config_path.display(),
                 jobs.len(),
                 pending_count,
+                running_count,
                 completed_count,
                 failed_count,
+                overdue_count,
+                lease_expired_count,
                 delivery_pending_count,
                 delivery_failed_count,
                 delivery_delivered_count,
@@ -662,10 +711,12 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
         println!("scheduler jobs [{}]:", jobs.len());
         for job in &jobs {
             println!(
-                "- {} :: status={} next_run_at={} last_run_at={:?} last_completed_at={:?} last_failed_at={:?} outcome={:?} progression={:?} run_count={} recovery_count={} delivery_at={:?} delivery_event_type={:?} delivery_outcome={:?} delivery_error_excerpt={:?} last_error_excerpt={:?} task={}",
+                "- {} :: status={} next_run_at={} due_state={} health_lag_seconds={:?} last_run_at={:?} last_completed_at={:?} last_failed_at={:?} outcome={:?} progression={:?} run_count={} recovery_count={} delivery_at={:?} delivery_event_type={:?} delivery_outcome={:?} delivery_error_excerpt={:?} last_error_excerpt={:?} task={}",
                 job.id,
                 job.status,
                 job.next_run_at,
+                scheduler_job_due_state(job, now),
+                scheduler_job_health_lag_seconds(job, now),
                 scheduler_job_last_run_at(job),
                 job.last_completed_at,
                 job.last_failed_at,
