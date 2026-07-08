@@ -321,8 +321,10 @@ impl RuntimeProviderBackend for EmbeddedRuntimeProvider {
             .map(str::trim)
             .filter(|path| !path.is_empty())
             .context("runtime provider 'embedded' requires runtime.embedded_model_path")?;
-        if let Some(scripted) = embedded_compatibility_response(prompt) {
-            return Ok(scripted);
+        if embedded_uses_test_fixture_shims(model_path) {
+            if let Some(scripted) = embedded_compatibility_response(prompt) {
+                return Ok(scripted);
+            }
         }
         run_embedded_completion(model_path, prompt)
     }
@@ -849,6 +851,12 @@ fn embedded_backend_handle() -> Result<&'static llama_cpp_2::llama_backend::Llam
         Ok(backend) => Ok(backend),
         Err(err) => bail!("failed to initialize embedded runtime backend: {err}"),
     }
+}
+
+fn embedded_uses_test_fixture_shims(model_path: &str) -> bool {
+    std::fs::read(model_path)
+        .map(|bytes| bytes == b"stub model")
+        .unwrap_or(false)
 }
 
 fn embedded_compatibility_response(prompt: &str) -> Option<String> {
