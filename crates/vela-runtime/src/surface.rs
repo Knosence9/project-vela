@@ -284,6 +284,15 @@ pub struct ExtensionReloadReport {
     pub ownership_baseline_source: String,
 }
 
+#[derive(Debug, Clone)]
+/// Surfaces the currently loaded runtime ownership baseline and whether the active config now requires a restart.
+pub struct RuntimeOwnershipStatusReport {
+    pub restart_required_drifts: Vec<RestartRequiredRuntimeDrift>,
+    pub ownership_blocked: bool,
+    pub ownership_baseline_path: std::path::PathBuf,
+    pub ownership_baseline_source: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RuntimeConfigOwnershipBaseline {
     display_interface: Option<String>,
@@ -381,6 +390,32 @@ impl ExtensionReloadReport {
                 self.ownership_baseline_path.display()
             )
         })
+    }
+}
+
+impl RuntimeOwnershipStatusReport {
+    /// Renders a compact status line for the current runtime ownership baseline and restart requirement.
+    pub fn summary_line(&self) -> String {
+        let restart_required = if self.restart_required_drifts.is_empty() {
+            "none".to_string()
+        } else {
+            self.restart_required_drifts
+                .iter()
+                .map(|item| format!("{}@{}", item.field, item.owner))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        format!(
+            "path={} source={} status={} restart_required={}",
+            self.ownership_baseline_path.display(),
+            self.ownership_baseline_source,
+            if self.ownership_blocked {
+                "restart-required"
+            } else {
+                "aligned"
+            },
+            restart_required,
+        )
     }
 }
 
@@ -495,19 +530,12 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         (None, None) => true,
         _ => false,
     };
-    let ownership_baseline_path = runtime_config_ownership_baseline_path(&bootstrap.vela_home);
-    let (previous_config, ownership_baseline_source) =
-        match load_runtime_config_ownership_baseline(&bootstrap.vela_home)? {
-            Some(config) => (config, "durable-baseline".to_string()),
-            None => (
-                bootstrap.resolved_config.clone(),
-                "bootstrap-fallback".to_string(),
-            ),
-        };
-    let restart_required_drifts =
-        restart_required_runtime_drifts(&previous_config, &resolved_config);
-    let ownership_blocked = !restart_required_drifts.is_empty();
-    if !ownership_blocked {
+    let ownership_status = inspect_runtime_ownership_status_for_config(
+        &bootstrap.vela_home,
+        &bootstrap.resolved_config,
+        &resolved_config,
+    )?;
+    if !ownership_status.ownership_blocked {
         persist_runtime_config_ownership_baseline(&bootstrap.vela_home, &resolved_config)?;
     }
     Ok(ExtensionReloadReport {
@@ -515,8 +543,40 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         preserved_session,
         session_before,
         session_after,
-        ownership_blocked,
+        ownership_blocked: ownership_status.ownership_blocked,
+        restart_required_drifts: ownership_status.restart_required_drifts,
+        ownership_baseline_path: ownership_status.ownership_baseline_path,
+        ownership_baseline_source: ownership_status.ownership_baseline_source,
+    })
+}
+
+/// Surfaces the currently effective runtime ownership baseline and whether the active config requires a restart to reconcile drift.
+pub fn inspect_runtime_ownership_status(
+    bootstrap: &BootstrapReport,
+) -> Result<RuntimeOwnershipStatusReport> {
+    inspect_runtime_ownership_status_for_config(
+        &bootstrap.vela_home,
+        &bootstrap.resolved_config,
+        &bootstrap.resolved_config,
+    )
+}
+
+fn inspect_runtime_ownership_status_for_config(
+    vela_home: &std::path::Path,
+    fallback_config: &ResolvedConfig,
+    current_config: &ResolvedConfig,
+) -> Result<RuntimeOwnershipStatusReport> {
+    let ownership_baseline_path = runtime_config_ownership_baseline_path(vela_home);
+    let (previous_config, ownership_baseline_source) =
+        match load_runtime_config_ownership_baseline(vela_home)? {
+            Some(config) => (config, "durable-baseline".to_string()),
+            None => (fallback_config.clone(), "bootstrap-fallback".to_string()),
+        };
+    let restart_required_drifts = restart_required_runtime_drifts(&previous_config, current_config);
+    let ownership_blocked = !restart_required_drifts.is_empty();
+    Ok(RuntimeOwnershipStatusReport {
         restart_required_drifts,
+        ownership_blocked,
         ownership_baseline_path,
         ownership_baseline_source,
     })

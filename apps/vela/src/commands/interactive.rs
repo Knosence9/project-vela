@@ -152,6 +152,22 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
             println!("resolved backend readiness: error ({err})");
         }
     }
+    let ownership_status = vela_runtime::inspect_runtime_ownership_status(bootstrap)?;
+    println!("runtime ownership: {}", ownership_status.summary_line());
+    if ownership_status.restart_required_drifts.is_empty() {
+        println!("runtime ownership drifts: none");
+    } else {
+        for drift in &ownership_status.restart_required_drifts {
+            println!(
+                "runtime ownership [{}]: owner={} detail={} previous={} current={} action=restart-required",
+                drift.field,
+                drift.owner,
+                drift.detail,
+                drift.previous_value,
+                drift.reloaded_value,
+            );
+        }
+    }
     println!(
         "persistence: state_db={} existed_before={} bootstrap_runs={} sessions_dir={} snapshot_pattern={}",
         bootstrap.persistence.state_db_path.display(),

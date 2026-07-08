@@ -534,6 +534,76 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
 }
 
 #[test]
+/// Verifies that runtime ownership status surfaces pending restart-required drift before an extension reload is attempted.
+fn runtime_ownership_status_surfaces_pending_restart_required_drift() {
+    let vela_home = std::env::temp_dir().join(format!(
+        "vela-runtime-ownership-status-{}",
+        unix_timestamp_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&vela_home);
+    std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
+    std::fs::write(
+        vela_home.join("extensions").join("demo.yaml"),
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: ollama\n  model: gemma3:4b\n  ollama_base_url: http://127.0.0.1:11434\nextensions: {}\n",
+    )
+    .unwrap();
+
+    let (_, old_resolved_config) = vela_config::reload_config_snapshot(&vela_home, false).unwrap();
+    ensure_runtime_config_ownership_baseline(&vela_home, &old_resolved_config).unwrap();
+
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: changed\n  ollama_base_url: http://127.0.0.1:22555\nextensions: {}\n",
+    )
+    .unwrap();
+    let (_, new_resolved_config) = vela_config::reload_config_snapshot(&vela_home, false).unwrap();
+    let bootstrap = BootstrapReport {
+        vela_home: vela_home.clone(),
+        active_profile: None,
+        loaded_env_paths: vec![],
+        ignored_user_config: false,
+        config_sources: vec![],
+        resolved_config: new_resolved_config,
+        persistence: vela_state::initialize_persistence(&vela_home).unwrap(),
+        memory: vela_memory::initialize_memory(&vela_home).unwrap(),
+        skills: vela_skills::initialize_skills(&vela_home).unwrap(),
+        reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
+        extensions: vela_extensions::initialize_extensions(
+            &vela_home,
+            &vela_config::reload_config_snapshot(&vela_home, false)
+                .unwrap()
+                .1,
+        )
+        .unwrap(),
+    };
+
+    let ownership = inspect_runtime_ownership_status(&bootstrap).unwrap();
+    assert!(ownership.ownership_blocked);
+    assert_eq!(ownership.ownership_baseline_source, "durable-baseline");
+    assert_eq!(
+        ownership.ownership_baseline_path,
+        runtime_config_ownership_baseline_path(&vela_home)
+    );
+    assert_eq!(ownership.restart_required_drifts.len(), 3);
+    assert!(ownership.summary_line().contains("status=restart-required"));
+    assert!(ownership.summary_line().contains(
+        "restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime"
+    ));
+    assert!(ownership.restart_required_drifts.iter().any(|item| {
+        item.field == "runtime.provider"
+            && item.previous_value == "\"ollama\""
+            && item.reloaded_value == "\"mock\""
+    }));
+
+    let _ = std::fs::remove_dir_all(&vela_home);
+}
+
+#[test]
 /// Verifies that extension reload compares against a durable ownership baseline across fresh bootstraps.
 fn reload_extensions_uses_durable_ownership_baseline_across_bootstraps() {
     let vela_home = std::env::temp_dir().join(format!(

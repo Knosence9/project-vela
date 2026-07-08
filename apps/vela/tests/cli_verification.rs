@@ -604,6 +604,14 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     assert!(status_stdout.contains("disabled=1"));
     assert!(status_stdout.contains("activation=Some(\"on-boot\")"));
     assert!(status_stdout.contains("extension [disabled]: id=Some(\"demo\")"));
+    assert!(status_stdout.contains(&format!(
+        "runtime ownership: path={} source=durable-baseline status=aligned restart_required=none",
+        vela_home
+            .join("runtime")
+            .join("reload-ownership-baseline.json")
+            .display()
+    )));
+    assert!(status_stdout.contains("runtime ownership drifts: none"));
 
     let session_turn = run_vela(&vela_home, &[]);
     assert!(
@@ -617,6 +625,29 @@ fn extensions_status_and_reload_are_visible_via_cli() {
         "runtime:\n  provider: mock\n  model: changed\n  ollama_base_url: http://127.0.0.1:22555\nextensions: {}\n",
     )
     .unwrap();
+    let status_after_change = run_vela(&vela_home, &["status"]);
+    assert!(
+        status_after_change.status.success(),
+        "{}",
+        stderr_text(&status_after_change)
+    );
+    let status_after_change_stdout = stdout_text(&status_after_change);
+    assert!(status_after_change_stdout.contains(&format!(
+        "runtime ownership: path={} source=durable-baseline status=restart-required restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime",
+        vela_home
+            .join("runtime")
+            .join("reload-ownership-baseline.json")
+            .display()
+    )));
+    assert!(status_after_change_stdout.contains(
+        "runtime ownership [runtime.provider]: owner=kernel-runtime detail=provider backend changes remain restart-only during extension reload previous=\"ollama\" current=\"mock\" action=restart-required"
+    ));
+    assert!(status_after_change_stdout.contains(
+        "runtime ownership [runtime.model]: owner=kernel-runtime detail=runtime model changes remain restart-only during extension reload previous=\"gemma3:4b\" current=\"changed\" action=restart-required"
+    ));
+    assert!(status_after_change_stdout.contains(
+        "runtime ownership [runtime.ollama_base_url]: owner=kernel-runtime detail=provider transport endpoint changes remain restart-only during extension reload previous=\"http://127.0.0.1:11434\" current=\"http://127.0.0.1:22555\" action=restart-required"
+    ));
     let reload = run_vela(&vela_home, &["extensions", "--reload"]);
     assert!(!reload.status.success());
     let reload_stdout = stdout_text(&reload);
