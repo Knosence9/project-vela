@@ -304,6 +304,22 @@ impl RuntimeProviderBackend for EmbeddedRuntimeProvider {
                 "runtime provider 'embedded' requires runtime.embedded_model_path to point to an existing model file"
             );
         }
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| !ext.eq_ignore_ascii_case("gguf"))
+            .unwrap_or(true)
+        {
+            bail!(
+                "runtime provider 'embedded' requires runtime.embedded_model_path to point to a .gguf model file"
+            );
+        }
+        let metadata = std::fs::metadata(path)?;
+        if metadata.len() == 0 {
+            bail!(
+                "runtime provider 'embedded' requires runtime.embedded_model_path to point to a non-empty .gguf model file"
+            );
+        }
         Ok(())
     }
 
@@ -321,12 +337,28 @@ impl RuntimeProviderBackend for EmbeddedRuntimeProvider {
             .map(str::trim)
             .filter(|path| !path.is_empty())
             .context("runtime provider 'embedded' requires runtime.embedded_model_path")?;
-        if embedded_uses_test_fixture_shims(model_path) {
+        let fixture_shims = embedded_uses_test_fixture_shims(model_path);
+        if fixture_shims {
             if let Some(scripted) = embedded_compatibility_response(prompt) {
+                persist_embedded_lifecycle_state(model_path, "fixture-shim", None, true);
                 return Ok(scripted);
             }
         }
-        run_embedded_completion(model_path, prompt)
+        match run_embedded_completion(model_path, prompt) {
+            Ok(response) => {
+                persist_embedded_lifecycle_state(model_path, "loaded", None, fixture_shims);
+                Ok(response)
+            }
+            Err(err) => {
+                persist_embedded_lifecycle_state(
+                    model_path,
+                    "load-failed",
+                    Some(err.to_string()),
+                    fixture_shims,
+                );
+                Err(err)
+            }
+        }
     }
 
     fn direct_response_source(&self) -> &'static str {
@@ -843,6 +875,142 @@ pub fn validate_runtime_backend_config(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EmbeddedLifecycleStateRecord {
+    model_path: String,
+    load_state: String,
+    last_error: Option<String>,
+    file_size_bytes: Option<u64>,
+    fixture_shims: bool,
+    last_attempt_nanos: u128,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddedLifecycleGuardrailReport {
+    pub state: String,
+    pub detail: String,
+    pub state_file: std::path::PathBuf,
+}
+
+impl EmbeddedLifecycleGuardrailReport {
+    pub fn summary_line(&self) -> String {
+        format!(
+            "state={} detail={} state_file={}",
+            self.state,
+            self.detail,
+            self.state_file.display()
+        )
+    }
+}
+
+pub fn inspect_embedded_lifecycle_guardrails(
+    bootstrap: &BootstrapReport,
+) -> Result<Option<EmbeddedLifecycleGuardrailReport>> {
+    let provider_is_embedded = bootstrap
+        .resolved_config
+        .runtime_provider
+        .as_deref()
+        .map(str::trim)
+        .map(|value| value.eq_ignore_ascii_case("embedded"))
+        .unwrap_or(false);
+    let Some(model_path) = bootstrap
+        .resolved_config
+        .runtime_embedded_model_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        if provider_is_embedded {
+            let state_file = embedded_lifecycle_state_path(&bootstrap.vela_home);
+            return Ok(Some(EmbeddedLifecycleGuardrailReport {
+                state: "invalid-config".to_string(),
+                detail: "runtime.embedded_model_path is required for the embedded backend"
+                    .to_string(),
+                state_file,
+            }));
+        }
+        return Ok(None);
+    };
+
+    let model_file = Path::new(model_path);
+    let metadata = std::fs::metadata(model_file).ok();
+    let extension_ok = model_file
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("gguf"))
+        .unwrap_or(false);
+    let file_exists = metadata
+        .as_ref()
+        .map(|meta| meta.is_file())
+        .unwrap_or(false);
+    let file_size_bytes = metadata.as_ref().map(|meta| meta.len()).unwrap_or(0);
+    let fixture_shims = file_exists && embedded_uses_test_fixture_shims(model_path);
+    let state_file = embedded_lifecycle_state_path(&bootstrap.vela_home);
+    let persisted = read_embedded_lifecycle_state(&state_file)
+        .ok()
+        .flatten()
+        .filter(|record| record.model_path == model_path);
+
+    let (state, detail) = if !file_exists {
+        (
+            "invalid-config".to_string(),
+            format!(
+                "model_exists=false expected=.gguf local_only=true restart_on_model_change=true path={}",
+                model_file.display()
+            ),
+        )
+    } else if !extension_ok {
+        (
+            "invalid-config".to_string(),
+            format!(
+                "model_exists=true file_size_bytes={} expected=.gguf local_only=true restart_on_model_change=true path={}",
+                file_size_bytes,
+                model_file.display()
+            ),
+        )
+    } else if file_size_bytes == 0 {
+        (
+            "invalid-config".to_string(),
+            format!(
+                "model_exists=true file_size_bytes=0 expected=non-empty local_only=true restart_on_model_change=true path={}",
+                model_file.display()
+            ),
+        )
+    } else if let Some(record) = persisted {
+        let last_error = record.last_error.unwrap_or_else(|| "none".to_string());
+        (
+            record.load_state,
+            format!(
+                "model_exists=true file_size_bytes={} fixture_shims={} last_error={} local_only=true restart_on_model_change=true path={}",
+                file_size_bytes,
+                fixture_shims,
+                last_error,
+                model_file.display()
+            ),
+        )
+    } else {
+        (
+            if fixture_shims {
+                "fixture-ready".to_string()
+            } else {
+                "not-yet-loaded".to_string()
+            },
+            format!(
+                "model_exists=true file_size_bytes={} fixture_shims={} local_only=true restart_on_model_change=true direct_images_supported=false path={}",
+                file_size_bytes,
+                fixture_shims,
+                model_file.display()
+            ),
+        )
+    };
+
+    Ok(Some(EmbeddedLifecycleGuardrailReport {
+        state,
+        detail,
+        state_file,
+    }))
+}
+
 fn embedded_backend_handle() -> Result<&'static llama_cpp_2::llama_backend::LlamaBackend> {
     let entry = EMBEDDED_BACKEND.get_or_init(|| {
         llama_cpp_2::llama_backend::LlamaBackend::init().map_err(|err| err.to_string())
@@ -850,6 +1018,50 @@ fn embedded_backend_handle() -> Result<&'static llama_cpp_2::llama_backend::Llam
     match entry {
         Ok(backend) => Ok(backend),
         Err(err) => bail!("failed to initialize embedded runtime backend: {err}"),
+    }
+}
+
+fn embedded_lifecycle_state_path(vela_home: &Path) -> std::path::PathBuf {
+    vela_home
+        .join("runtime")
+        .join("embedded-backend-state.json")
+}
+
+fn read_embedded_lifecycle_state(path: &Path) -> Result<Option<EmbeddedLifecycleStateRecord>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_str(&content)?))
+}
+
+fn persist_embedded_lifecycle_state(
+    model_path: &str,
+    load_state: &str,
+    last_error: Option<String>,
+    fixture_shims: bool,
+) {
+    let Some(vela_home) = std::env::var_os("VELA_HOME") else {
+        return;
+    };
+    let state_path = embedded_lifecycle_state_path(Path::new(&vela_home));
+    if let Some(parent) = state_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file_size_bytes = std::fs::metadata(model_path).ok().map(|meta| meta.len());
+    let record = EmbeddedLifecycleStateRecord {
+        model_path: model_path.to_string(),
+        load_state: load_state.to_string(),
+        last_error,
+        file_size_bytes,
+        fixture_shims,
+        last_attempt_nanos: unix_timestamp_nanos(),
+    };
+    if let Ok(payload) = serde_json::to_string_pretty(&record) {
+        let _ = std::fs::write(state_path, payload);
     }
 }
 

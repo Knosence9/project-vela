@@ -241,6 +241,36 @@ fn embedded_provider_rejects_missing_model_path() {
 }
 
 #[test]
+/// Verifies that embedded provider configuration rejects non-GGUF model paths before execution.
+fn embedded_provider_rejects_non_gguf_model_path() {
+    let root = std::env::temp_dir().join(format!(
+        "vela-runtime-embedded-invalid-ext-{}",
+        unix_timestamp_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let model_path = root.join("gemma3.txt");
+    std::fs::write(&model_path, b"not a gguf").unwrap();
+
+    let resolved = ResolvedConfig {
+        runtime_provider: Some("embedded".to_string()),
+        runtime_embedded_model_path: Some(model_path.display().to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let execution = resolve_runtime_execution(&resolved, None, None).unwrap();
+    let provider = execution
+        .provider
+        .as_deref()
+        .expect("resolved embedded provider backend");
+    let err = provider.validate().unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("runtime provider 'embedded' requires runtime.embedded_model_path to point to a .gguf model file"));
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 /// Verifies that the llama.cpp provider keeps local-only endpoint policy by default.
 fn llamacpp_provider_rejects_remote_base_url_without_opt_in() {
     let resolved = ResolvedConfig {
