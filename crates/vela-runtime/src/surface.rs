@@ -947,7 +947,17 @@ fn merged_backend_experiment_slots(
     let defaults = default_backend_experiment_slots();
     let mut merged = existing;
     for slot in defaults {
-        if !merged.iter().any(|existing| existing.id == slot.id) {
+        if let Some(existing_slot) = merged.iter_mut().find(|existing| existing.id == slot.id) {
+            for backend in slot.allowed_backends {
+                if !existing_slot
+                    .allowed_backends
+                    .iter()
+                    .any(|item| item == &backend)
+                {
+                    existing_slot.allowed_backends.push(backend);
+                }
+            }
+        } else {
             merged.push(slot);
         }
     }
