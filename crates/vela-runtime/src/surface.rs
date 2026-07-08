@@ -285,6 +285,7 @@ pub struct ExtensionReloadReport {
     pub ownership_blocked: bool,
     pub ownership_baseline_path: std::path::PathBuf,
     pub ownership_baseline_source: String,
+    pub ownership_baseline_snapshot: String,
 }
 
 #[derive(Debug, Clone)]
@@ -294,6 +295,7 @@ pub struct RuntimeOwnershipStatusReport {
     pub ownership_blocked: bool,
     pub ownership_baseline_path: std::path::PathBuf,
     pub ownership_baseline_source: String,
+    pub ownership_baseline_snapshot: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,6 +341,60 @@ impl RuntimeConfigOwnershipBaseline {
             extension_entries: vec![],
         }
     }
+
+    fn summary_line(&self) -> String {
+        [
+            (
+                "display.interface",
+                serde_json::to_string(&self.display_interface)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "hooks.auto_accept",
+                serde_json::to_string(&self.hooks_auto_accept)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "security.redact_secrets",
+                serde_json::to_string(&self.security_redact_secrets)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "network.force_ipv4",
+                serde_json::to_string(&self.network_force_ipv4)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "runtime.provider",
+                serde_json::to_string(&self.runtime_provider)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "runtime.model",
+                serde_json::to_string(&self.runtime_model)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "runtime.ollama_base_url",
+                serde_json::to_string(&self.runtime_ollama_base_url)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "runtime.llamacpp_base_url",
+                serde_json::to_string(&self.runtime_llamacpp_base_url)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "runtime.embedded_model_path",
+                serde_json::to_string(&self.runtime_embedded_model_path)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+        ]
+        .into_iter()
+        .map(|(field, value)| format!("{field}={value}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+    }
 }
 
 impl RestartRequiredRuntimeDrift {
@@ -375,9 +431,10 @@ impl ExtensionReloadReport {
     /// Renders the baseline checkpoint used for restart-only ownership enforcement.
     pub fn ownership_baseline_line(&self) -> String {
         format!(
-            "path={} source={}",
+            "path={} source={} values={}",
             self.ownership_baseline_path.display(),
-            self.ownership_baseline_source
+            self.ownership_baseline_source,
+            self.ownership_baseline_snapshot,
         )
     }
 
@@ -418,6 +475,15 @@ impl RuntimeOwnershipStatusReport {
                 "aligned"
             },
             restart_required,
+        )
+    }
+
+    pub fn ownership_baseline_line(&self) -> String {
+        format!(
+            "path={} source={} values={}",
+            self.ownership_baseline_path.display(),
+            self.ownership_baseline_source,
+            self.ownership_baseline_snapshot,
         )
     }
 }
@@ -550,6 +616,7 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         restart_required_drifts: ownership_status.restart_required_drifts,
         ownership_baseline_path: ownership_status.ownership_baseline_path,
         ownership_baseline_source: ownership_status.ownership_baseline_source,
+        ownership_baseline_snapshot: ownership_status.ownership_baseline_snapshot,
     })
 }
 
@@ -575,6 +642,8 @@ fn inspect_runtime_ownership_status_for_config(
             Some(config) => (config, "durable-baseline".to_string()),
             None => (fallback_config.clone(), "bootstrap-fallback".to_string()),
         };
+    let ownership_baseline_snapshot =
+        RuntimeConfigOwnershipBaseline::from_resolved_config(&previous_config).summary_line();
     let restart_required_drifts = restart_required_runtime_drifts(&previous_config, current_config);
     let ownership_blocked = !restart_required_drifts.is_empty();
     Ok(RuntimeOwnershipStatusReport {
@@ -582,6 +651,7 @@ fn inspect_runtime_ownership_status_for_config(
         ownership_blocked,
         ownership_baseline_path,
         ownership_baseline_source,
+        ownership_baseline_snapshot,
     })
 }
 

@@ -611,6 +611,11 @@ fn extensions_status_and_reload_are_visible_via_cli() {
             .join("reload-ownership-baseline.json")
             .display()
     )));
+    assert!(status_stdout.contains("runtime ownership baseline: path="));
+    assert!(status_stdout.contains("values=display.interface=null"));
+    assert!(status_stdout.contains("runtime.provider=\"ollama\""));
+    assert!(status_stdout.contains("runtime.model=\"gemma3:4b\""));
+    assert!(status_stdout.contains("runtime.ollama_base_url=\"http://127.0.0.1:11434\""));
     assert!(status_stdout.contains("runtime ownership drifts: none"));
 
     let session_turn = run_vela(&vela_home, &[]);
@@ -639,6 +644,9 @@ fn extensions_status_and_reload_are_visible_via_cli() {
             .join("reload-ownership-baseline.json")
             .display()
     )));
+    assert!(status_after_change_stdout.contains("runtime ownership baseline: path="));
+    assert!(status_after_change_stdout.contains("runtime.provider=\"ollama\""));
+    assert!(status_after_change_stdout.contains("runtime.model=\"gemma3:4b\""));
     assert!(status_after_change_stdout.contains(
         "runtime ownership [runtime.provider]: owner=kernel-runtime detail=provider backend changes remain restart-only during extension reload previous=\"ollama\" current=\"mock\" action=restart-required"
     ));
@@ -662,6 +670,9 @@ fn extensions_status_and_reload_are_visible_via_cli() {
             .join("reload-ownership-baseline.json")
             .display()
     )));
+    assert!(reload_stdout.contains("values=display.interface=null"));
+    assert!(reload_stdout.contains("runtime.provider=\"ollama\""));
+    assert!(reload_stdout.contains("runtime.model=\"gemma3:4b\""));
     assert!(reload_stdout.contains(
         "restart required: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime"
     ));
