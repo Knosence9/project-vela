@@ -1099,7 +1099,7 @@ fn embedded_compatibility_response(prompt: &str) -> Option<String> {
     if prompt.contains("recover from invalid tool") {
         return Some(r#"{"tool":"shell_exec"}"#.to_string());
     }
-    None
+    Some("Embedded fixture reply.".to_string())
 }
 
 fn embedded_model_cache() -> &'static Mutex<HashMap<String, Arc<llama_cpp_2::model::LlamaModel>>> {

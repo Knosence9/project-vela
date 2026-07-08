@@ -31,3 +31,4 @@ Keep deeper model-core experimentation bounded, reversible, and evidence-driven 
 - `vela eval --run-slot ternary-preview`
 - `vela eval --run-slot local-first-replay`
 - `vela eval --run-slot capability-parity-scan`
+- published local-first/parity slot backend sets now include `embedded` when recording bounded eval evidence

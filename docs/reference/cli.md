@@ -146,8 +146,8 @@ README-visible shared slash commands:
 - model-path changes remain restart-only during extension reload, and embedded status output now makes the local-only / restart-on-model-change expectation explicit for operators
 
 ## Backend eval surface
-- `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run and now emits a durable parity summary for that run
-- `vela eval --run-slot <slot-id> [--backend <id>...] [--model <name>]` executes one of the published bounded provider experiment slots (`ternary-preview`, `local-first-replay`, `capability-parity-scan`) without changing the live kernel route, while surfacing bounded parity summaries
+- `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run and now emits a durable parity summary for that run; `embedded` can participate alongside the existing provider backends when `runtime.embedded_model_path` is configured
+- `vela eval --run-slot <slot-id> [--backend <id>...] [--model <name>]` executes one of the published bounded provider experiment slots (`ternary-preview`, `local-first-replay`, `capability-parity-scan`) without changing the live kernel route, while surfacing bounded parity summaries; the published slot backends now include `embedded` for local-first and parity evidence lanes
 - `vela eval --list` shows durable backend eval runs plus stored parity summaries
 - `vela eval --show <id>` shows one durable backend eval run with per-backend results and its parity summary
 - `vela eval --list-slots` shows published bounded architecture experiment slots plus the latest durable eval id/time/result-count/parity summary for each slot

@@ -903,7 +903,12 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             summary: Some("Compare candidate backends under one durable experiment slot without altering the live kernel route.".to_string()),
             hypothesis: Some("A future ternary or sparse router can be evaluated safely by replaying the same prompt across a bounded backend set before any runtime routing changes land.".to_string()),
             default_prompt: "Evaluate whether a ternary-style routing candidate would preserve concise, grounded backend behavior for this request.".to_string(),
-            allowed_backends: vec!["mock".to_string(), "llamacpp".to_string(), "ollama".to_string()],
+            allowed_backends: vec![
+                "embedded".to_string(),
+                "mock".to_string(),
+                "llamacpp".to_string(),
+                "ollama".to_string(),
+            ],
         },
         BackendExperimentSlotRecord {
             id: "local-first-replay".to_string(),
@@ -912,7 +917,12 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             summary: Some("Replay the same prompt through the published backends to compare local-first behavior without mutating the live route.".to_string()),
             hypothesis: Some("A durable offline replay lane can reveal whether local-first backends stay concise and comparable before any operator changes the runtime default.".to_string()),
             default_prompt: "Replay this request across the bounded backends and compare whether local-first execution stays concise and operator-visible.".to_string(),
-            allowed_backends: vec!["llamacpp".to_string(), "mock".to_string(), "ollama".to_string()],
+            allowed_backends: vec![
+                "embedded".to_string(),
+                "llamacpp".to_string(),
+                "mock".to_string(),
+                "ollama".to_string(),
+            ],
         },
         BackendExperimentSlotRecord {
             id: "capability-parity-scan".to_string(),
@@ -921,7 +931,12 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             summary: Some("Compare the published backend capability matrix under one bounded experiment slot so parity work stays explicit.".to_string()),
             hypothesis: Some("A bounded parity scan can highlight backend capability differences early enough to guide future provider work without broadening the live kernel contract.".to_string()),
             default_prompt: "Compare the bounded backend capability matrix for this request and highlight where behavior still differs across providers.".to_string(),
-            allowed_backends: vec!["mock".to_string(), "llamacpp".to_string(), "ollama".to_string()],
+            allowed_backends: vec![
+                "embedded".to_string(),
+                "mock".to_string(),
+                "llamacpp".to_string(),
+                "ollama".to_string(),
+            ],
         },
     ]
 }
@@ -932,7 +947,17 @@ fn merged_backend_experiment_slots(
     let defaults = default_backend_experiment_slots();
     let mut merged = existing;
     for slot in defaults {
-        if !merged.iter().any(|existing| existing.id == slot.id) {
+        if let Some(existing_slot) = merged.iter_mut().find(|existing| existing.id == slot.id) {
+            for backend in slot.allowed_backends {
+                if !existing_slot
+                    .allowed_backends
+                    .iter()
+                    .any(|item| item == &backend)
+                {
+                    existing_slot.allowed_backends.push(backend);
+                }
+            }
+        } else {
             merged.push(slot);
         }
     }
