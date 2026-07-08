@@ -486,6 +486,70 @@ fn embedded_backend_contract_and_config_are_visible_via_status() {
     assert!(status_stdout.contains("id=embedded transport=in-process"));
     assert!(status_stdout.contains("resolved backend: api=v1 id=embedded transport=in-process"));
     assert!(status_stdout.contains("resolved backend readiness: ok"));
+    assert!(status_stdout.contains("embedded lifecycle: state=fixture-ready"));
+    assert!(status_stdout.contains("fixture_shims=true"));
+    assert!(status_stdout.contains("restart_on_model_change=true"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that embedded status rejects non-GGUF model paths before execution and surfaces the guardrail state.
+fn embedded_status_rejects_non_gguf_model_paths() {
+    let vela_home = temp_vela_home("embedded-invalid-ext");
+    let model_path = vela_home.join("models").join("gemma3.txt");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"not a gguf").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let status = run_vela(&vela_home, &["status"]);
+    assert!(status.status.success(), "{}", stderr_text(&status));
+    let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("resolved backend readiness: error (runtime provider 'embedded' requires runtime.embedded_model_path to point to a .gguf model file)"));
+    assert!(status_stdout.contains("embedded lifecycle: state=invalid-config"));
+    assert!(status_stdout.contains("expected=.gguf"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that embedded load failures persist a visible lifecycle state for later status inspection.
+fn embedded_status_surfaces_last_load_failure() {
+    let vela_home = temp_vela_home("embedded-load-failed");
+    let model_path = vela_home.join("models").join("broken.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"not a real gguf").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &["chat", "--query", "hello from broken embedded"],
+    );
+    assert!(!turn.status.success());
+    let turn_stderr = stderr_text(&turn);
+    assert!(turn_stderr.contains("failed to load embedded model from"));
+
+    let status = run_vela(&vela_home, &["status"]);
+    assert!(status.status.success(), "{}", stderr_text(&status));
+    let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("resolved backend readiness: ok"));
+    assert!(status_stdout.contains("embedded lifecycle: state=load-failed"));
+    assert!(status_stdout.contains("last_error=failed to load embedded model from"));
+    assert!(status_stdout.contains("state_file="));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

@@ -135,6 +135,13 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
                 Ok(()) => println!("resolved backend readiness: ok"),
                 Err(err) => println!("resolved backend readiness: error ({err})"),
             }
+            if contract.id == "embedded" {
+                if let Some(report) =
+                    vela_runtime::inspect_embedded_lifecycle_guardrails(bootstrap)?
+                {
+                    println!("embedded lifecycle: {}", report.summary_line());
+                }
+            }
         }
         Ok(None) => {
             println!("resolved backend: none");
