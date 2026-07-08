@@ -720,26 +720,38 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
         }
         println!("scheduler jobs [{}]:", jobs.len());
         for job in &jobs {
+            let due_state = scheduler_job_due_state(job, now);
+            let health_lag_seconds = scheduler_job_health_lag_seconds(job, now);
+            let last_run_at = scheduler_job_last_run_at(job);
+            let delivery_error_excerpt = scheduler_job_last_delivery_error_excerpt(job);
+            let last_error_excerpt = scheduler_job_last_error_excerpt(job);
             println!(
-                "- {} :: status={} next_run_at={} due_state={} health_lag_seconds={:?} last_run_at={:?} last_completed_at={:?} last_failed_at={:?} outcome={:?} progression={:?} run_count={} recovery_count={} delivery_at={:?} delivery_event_type={:?} delivery_outcome={:?} delivery_error_excerpt={:?} last_error_excerpt={:?} task={}",
-                job.id,
-                job.status,
-                job.next_run_at,
-                scheduler_job_due_state(job, now),
-                scheduler_job_health_lag_seconds(job, now),
-                scheduler_job_last_run_at(job),
-                job.last_completed_at,
-                job.last_failed_at,
-                job.last_outcome,
-                job.last_progression,
-                job.run_count,
-                job.recovery_count,
-                job.last_delivery_at,
-                job.delivery_event_type,
-                job.last_delivery_outcome,
-                scheduler_job_last_delivery_error_excerpt(job),
-                scheduler_job_last_error_excerpt(job),
-                job.task
+                "- {id} :: schedule={schedule} source={source} status={status} updated_at={updated_at} next_run_at={next_run_at} due_state={due_state} health_lag_seconds={health_lag_seconds:?} lease_expires_at={lease_expires_at:?} last_run_at={last_run_at:?} last_completed_at={last_completed_at:?} last_failed_at={last_failed_at:?} last_recovered_at={last_recovered_at:?} last_session_id={last_session_id:?} execution_token={execution_token:?} outcome={outcome:?} progression={progression:?} run_count={run_count} recovery_count={recovery_count} delivery_at={delivery_at:?} delivery_event_type={delivery_event_type:?} delivery_outcome={delivery_outcome:?} delivery_error_excerpt={delivery_error_excerpt:?} last_error_excerpt={last_error_excerpt:?} task={task}",
+                id = job.id,
+                schedule = job.schedule,
+                source = job.source,
+                status = job.status,
+                updated_at = job.updated_at,
+                next_run_at = job.next_run_at,
+                due_state = due_state,
+                health_lag_seconds = health_lag_seconds,
+                lease_expires_at = job.lease_expires_at,
+                last_run_at = last_run_at,
+                last_completed_at = job.last_completed_at,
+                last_failed_at = job.last_failed_at,
+                last_recovered_at = job.last_recovered_at,
+                last_session_id = job.last_session_id,
+                execution_token = job.execution_token,
+                outcome = job.last_outcome,
+                progression = job.last_progression,
+                run_count = job.run_count,
+                recovery_count = job.recovery_count,
+                delivery_at = job.last_delivery_at,
+                delivery_event_type = job.delivery_event_type,
+                delivery_outcome = job.last_delivery_outcome,
+                delivery_error_excerpt = delivery_error_excerpt,
+                last_error_excerpt = last_error_excerpt,
+                task = job.task,
             );
         }
     } else if let Some(task) = args.add.as_deref() {
@@ -762,8 +774,8 @@ pub(crate) fn run_cron(bootstrap: &vela_runtime::BootstrapReport, args: &CronArg
     } else if let Some(id) = args.show.as_deref() {
         let job = vela_runtime::get_scheduled_job(bootstrap, id)?;
         println!(
-            "scheduled job: {} schedule={} source={} status={} created_at={} next_run_at={} run_count={} recovery_count={} outcome={:?} progression={:?} last_error={:?} delivery_webhook_url={:?} delivery_event_type={:?} delivery_at={:?} delivery_outcome={:?} delivery_error={:?} task={}",
-            job.id, job.schedule, job.source, job.status, job.created_at, job.next_run_at, job.run_count, job.recovery_count, job.last_outcome, job.last_progression, job.last_error, job.delivery_webhook_url, job.delivery_event_type, job.last_delivery_at, job.last_delivery_outcome, job.last_delivery_error, job.task
+            "scheduled job: {} schedule={} source={} status={} created_at={} updated_at={} next_run_at={} last_started_at={:?} last_completed_at={:?} last_failed_at={:?} last_recovered_at={:?} lease_expires_at={:?} last_session_id={:?} execution_token={:?} run_count={} recovery_count={} outcome={:?} progression={:?} last_error={:?} delivery_webhook_url={:?} delivery_event_type={:?} delivery_at={:?} delivery_outcome={:?} delivery_error={:?} task={}",
+            job.id, job.schedule, job.source, job.status, job.created_at, job.updated_at, job.next_run_at, job.last_started_at, job.last_completed_at, job.last_failed_at, job.last_recovered_at, job.lease_expires_at, job.last_session_id, job.execution_token, job.run_count, job.recovery_count, job.last_outcome, job.last_progression, job.last_error, job.delivery_webhook_url, job.delivery_event_type, job.last_delivery_at, job.last_delivery_outcome, job.last_delivery_error, job.task
         );
     } else {
         let report = vela_runtime::setup_scheduler(bootstrap)?;
