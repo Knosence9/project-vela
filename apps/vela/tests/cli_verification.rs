@@ -1103,6 +1103,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(show_slot_stdout.contains("backends=embedded,llamacpp,mock,ollama"));
     assert!(show_slot_stdout.contains("latest_eval_id=None"));
     assert!(show_slot_stdout.contains("latest_backends=none"));
+    assert!(show_slot_stdout.contains("latest_passed=none"));
+    assert!(show_slot_stdout.contains("latest_failed=none"));
+    assert!(show_slot_stdout.contains("latest_capability_groups=none"));
     assert!(show_slot_stdout.contains("latest_results=0"));
     assert!(show_slot_stdout.contains("hypothesis=Some("));
 
@@ -1164,6 +1167,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     let show_ran_slot_stdout = stdout_text(&show_ran_slot);
     assert!(show_ran_slot_stdout.contains("backends=embedded,mock,llamacpp,ollama"));
     assert!(show_ran_slot_stdout.contains("latest_backends=mock,llamacpp"));
+    assert!(show_ran_slot_stdout.contains("latest_passed=mock"));
+    assert!(show_ran_slot_stdout.contains("latest_failed=llamacpp"));
+    assert!(show_ran_slot_stdout.contains("latest_capability_groups=llamacpp=>text=true tool_loop=true reflection_retry=true images=false | mock=>text=true tool_loop=true reflection_retry=true images=true") || show_ran_slot_stdout.contains("latest_capability_groups=mock=>text=true tool_loop=true reflection_retry=true images=true | llamacpp=>text=true tool_loop=true reflection_retry=true images=false"));
     assert!(show_ran_slot_stdout.contains("latest_results=2"));
     assert!(show_ran_slot_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
 
@@ -1177,6 +1183,8 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_after_stdout.contains(
         "capability-parity-scan :: status=bounded-preview strategy=bounded-backend-comparison"
     ));
+    assert!(list_slots_after_stdout.contains("latest_passed=mock"));
+    assert!(list_slots_after_stdout.contains("latest_failed=llamacpp"));
     assert!(list_slots_after_stdout.contains("latest_results=2"));
     assert!(list_slots_after_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
 
