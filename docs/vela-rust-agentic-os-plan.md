@@ -301,7 +301,27 @@ Only after the OS/runtime is credible should Vela expand into deeper model exper
 - [ ] add local inference backend(s)
 - [ ] add backend benchmark/eval harness
 - [ ] add first architecture experiment slot (e.g. ternary)
-- [ ] document criteria for deeper model-core work
+- [x] document criteria for deeper model-core work
+
+### Deeper model-core work criteria
+Before Vela takes on deeper model-core work, the following must already be true:
+- the kernel/runtime path is stable enough that model-lab work is not compensating for scheduler, reload, ownership, or session regressions
+- at least one local-first backend path works end-to-end with durable verification
+- bounded eval slots can compare backends without mutating the default live route
+- operator-visible evidence exists for per-backend pass/fail outcomes
+- the next experiment can be expressed as one reversible vertical slice with explicit proof and rollback boundaries
+
+Allowed next slices:
+- adapter or fine-tune intake criteria for existing backend contracts
+- shadow-only ternary or sparse-routing experiment slots
+- richer eval policy/evidence surfaces that stay off the live route
+- backend capability comparisons that clarify promotion criteria
+
+Still deferred:
+- custom ternary training
+- custom sparse or MoE training loops
+- silent promotion of experimental routes into the default runtime path
+- speculative optimization without an operator-visible experiment question
 
 ### Exit gate
 - backend/model experimentation becomes a routine capability of Vela rather than a separate moonshot
