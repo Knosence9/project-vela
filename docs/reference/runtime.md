@@ -22,6 +22,7 @@
 - `cron` now bootstraps durable scheduler config/job state, can resume a scheduler-specific runtime session, can execute due jobs through the kernel scheduler path, and can deliver job outcomes through the gateway webhook path
 - `eval` now bootstraps a durable backend-comparison harness that can execute bounded prompt comparisons across selected backends — including `embedded` when a local GGUF path is configured — and persist per-backend results for later inspection
 - the eval harness now publishes multiple bounded provider experiment slots (`ternary-preview`, `local-first-replay`, and `capability-parity-scan`) so broader provider experimentation can happen through durable, named lanes without changing the live kernel route; those published slot definitions now include `embedded` in the bounded backend set
+- slot inspection surfaces now carry the latest attached per-backend outcome evidence (status, transport, response source, and resolved model) so operators can compare bounded experiments without replaying the live route
 - a durable model-lab policy now lives alongside eval state so deeper model-core work stays governed by explicit graduation gates, allowed strategies, prohibited behaviors, and required evidence
 
 ## Current runtime behavior

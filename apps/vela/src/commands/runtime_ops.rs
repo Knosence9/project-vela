@@ -507,9 +507,14 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
         let slots = vela_runtime::inspect_backend_experiment_slots(bootstrap)?;
         println!("backend experiment slots [{}]:", slots.len());
         for inspection in slots {
+            let latest_backend_evidence = if inspection.latest_backend_evidence.is_empty() {
+                "none".to_string()
+            } else {
+                inspection.latest_backend_evidence.join("; ")
+            };
             let slot = inspection.slot;
             println!(
-                "- {} :: status={} strategy={} backends={} latest_eval_id={:?} latest_eval_at={:?} latest_passed={} latest_failed={} latest_capability_groups={} latest_results={} latest_parity_summary={:?} prompt={:?} summary={:?}",
+                "- {} :: status={} strategy={} backends={} latest_eval_id={:?} latest_eval_at={:?} latest_passed={} latest_failed={} latest_capability_groups={} latest_results={} latest_parity_summary={:?} latest_backend_evidence={} prompt={:?} summary={:?}",
                 slot.id,
                 slot.status,
                 slot.strategy,
@@ -521,6 +526,7 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
                 joined_values_or_none(&inspection.latest_eval_capability_groups, " | "),
                 inspection.latest_eval_result_count,
                 inspection.latest_eval_parity_summary,
+                latest_backend_evidence,
                 slot.default_prompt,
                 slot.summary,
             );
@@ -528,9 +534,14 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
     } else if let Some(id) = args.show_slot.as_deref() {
         match vela_runtime::get_backend_experiment_slot_inspection(bootstrap, id)? {
             Some(inspection) => {
+                let latest_backend_evidence = if inspection.latest_backend_evidence.is_empty() {
+                    "none".to_string()
+                } else {
+                    inspection.latest_backend_evidence.join("; ")
+                };
                 let slot = inspection.slot;
                 println!(
-                    "backend experiment slot: id={} status={} strategy={} backends={} latest_eval_id={:?} latest_eval_at={:?} latest_backends={} latest_passed={} latest_failed={} latest_capability_groups={} latest_results={} latest_parity_summary={:?} prompt={:?} summary={:?} hypothesis={:?}",
+                    "backend experiment slot: id={} status={} strategy={} backends={} latest_eval_id={:?} latest_eval_at={:?} latest_backends={} latest_passed={} latest_failed={} latest_capability_groups={} latest_results={} latest_parity_summary={:?} latest_backend_evidence={} prompt={:?} summary={:?} hypothesis={:?}",
                     slot.id,
                     slot.status,
                     slot.strategy,
@@ -543,6 +554,7 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
                     joined_values_or_none(&inspection.latest_eval_capability_groups, " | "),
                     inspection.latest_eval_result_count,
                     inspection.latest_eval_parity_summary,
+                    latest_backend_evidence,
                     slot.default_prompt,
                     slot.summary,
                     slot.hypothesis,

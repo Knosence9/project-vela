@@ -540,7 +540,7 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
 }
 
 #[test]
-/// Verifies that experiment slot inspection surfaces latest passed/failed backends and capability groups from durable eval evidence.
+/// Verifies that experiment slot inspection surfaces latest durable slot evidence in both summary groups and per-backend detail.
 fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
     let mut bootstrap = test_bootstrap("eval-slot-inspection");
     bootstrap.resolved_config = ResolvedConfig {
@@ -557,6 +557,10 @@ fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
     )
     .unwrap();
     assert_eq!(run.record.results.len(), 2);
+    assert_eq!(
+        run.record.experiment_slot.as_deref(),
+        Some("capability-parity-scan")
+    );
 
     let inspection = get_backend_experiment_slot_inspection(&bootstrap, "capability-parity-scan")
         .unwrap()
@@ -576,6 +580,14 @@ fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
         .iter()
         .any(|group| group
             .contains("llamacpp=>text=true tool_loop=true reflection_retry=true images=false")));
+    assert!(inspection
+        .latest_backend_evidence
+        .iter()
+        .any(|item| item == "mock:passed@in-process source=runtime-mock model=mock-2"));
+    assert!(inspection
+        .latest_backend_evidence
+        .iter()
+        .any(|item| item == "llamacpp:failed@http-json source=none model=mock-2"));
 
     let _ = std::fs::remove_dir_all(&bootstrap.vela_home);
 }

@@ -1101,6 +1101,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_stdout
         .contains("ternary-preview :: status=bounded-preview strategy=shadow-routing"));
     assert!(list_slots_stdout.contains("latest_eval_id=None"));
+    assert!(list_slots_stdout.contains("latest_backend_evidence=none"));
     assert!(list_slots_stdout
         .contains("local-first-replay :: status=bounded-preview strategy=offline-replay"));
     assert!(list_slots_stdout.contains(
@@ -1118,6 +1119,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(show_slot_stdout.contains("latest_failed=none"));
     assert!(show_slot_stdout.contains("latest_capability_groups=none"));
     assert!(show_slot_stdout.contains("latest_results=0"));
+    assert!(show_slot_stdout.contains("latest_backend_evidence=none"));
     assert!(show_slot_stdout.contains("hypothesis=Some("));
 
     let run_slot = run_vela(
@@ -1183,6 +1185,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(show_ran_slot_stdout.contains("latest_capability_groups=llamacpp=>text=true tool_loop=true reflection_retry=true images=false | mock=>text=true tool_loop=true reflection_retry=true images=true") || show_ran_slot_stdout.contains("latest_capability_groups=mock=>text=true tool_loop=true reflection_retry=true images=true | llamacpp=>text=true tool_loop=true reflection_retry=true images=false"));
     assert!(show_ran_slot_stdout.contains("latest_results=2"));
     assert!(show_ran_slot_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
+    assert!(show_ran_slot_stdout.contains(
+        "latest_backend_evidence=mock:passed@in-process source=runtime-mock model=mock-2; llamacpp:failed@http-json source=none model=mock-2"
+    ));
 
     let list_slots_after = run_vela(&vela_home, &["eval", "--list-slots"]);
     assert!(
@@ -1198,6 +1203,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_after_stdout.contains("latest_failed=llamacpp"));
     assert!(list_slots_after_stdout.contains("latest_results=2"));
     assert!(list_slots_after_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
+    assert!(list_slots_after_stdout.contains(
+        "latest_backend_evidence=mock:passed@in-process source=runtime-mock model=mock-2; llamacpp:failed@http-json source=none model=mock-2"
+    ));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

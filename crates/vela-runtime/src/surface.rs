@@ -176,6 +176,7 @@ pub struct BackendExperimentSlotInspection {
     pub latest_eval_failed_backends: Vec<String>,
     pub latest_eval_capability_groups: Vec<String>,
     pub latest_eval_result_count: usize,
+    pub latest_backend_evidence: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1665,6 +1666,28 @@ fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<
     ))
 }
 
+fn summarize_latest_slot_backend_evidence(results: &[BackendEvalResultRecord]) -> Vec<String> {
+    results
+        .iter()
+        .map(|result| {
+            format!(
+                "{}:{}@{} source={} model={}",
+                result.backend_id,
+                result.status,
+                result.transport,
+                result
+                    .response_source
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string()),
+                result
+                    .response_model
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string())
+            )
+        })
+        .collect()
+}
+
 fn run_backend_eval_internal(
     bootstrap: &BootstrapReport,
     prompt: &str,
@@ -1897,6 +1920,9 @@ pub fn inspect_backend_experiment_slots(
                 latest_eval_failed_backends,
                 latest_eval_capability_groups,
                 latest_eval_result_count: latest.map(|run| run.results.len()).unwrap_or(0),
+                latest_backend_evidence: latest
+                    .map(|run| summarize_latest_slot_backend_evidence(&run.results))
+                    .unwrap_or_default(),
                 slot,
             }
         })
@@ -1933,6 +1959,9 @@ pub fn get_backend_experiment_slot_inspection(
         latest_eval_failed_backends,
         latest_eval_capability_groups,
         latest_eval_result_count: latest.map(|run| run.results.len()).unwrap_or(0),
+        latest_backend_evidence: latest
+            .map(|run| summarize_latest_slot_backend_evidence(&run.results))
+            .unwrap_or_default(),
         slot,
     }))
 }
