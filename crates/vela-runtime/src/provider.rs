@@ -1273,6 +1273,35 @@ fn handle_reflection_outcome(
     Ok(ReflectionOutcome::RetryPrompt(prompt_rewrite))
 }
 
+fn retry_or_fallback_on_bad_provider_continuation(
+    bootstrap: &BootstrapReport,
+    session: &SessionRuntimeReport,
+    lifecycle: &mut RuntimeTurnRecorder,
+    reflection_attempts: &mut usize,
+    current_prompt: &mut String,
+    reason: &str,
+    detail: serde_json::Value,
+    fallback_message: &str,
+    prompt_suffix: &str,
+) -> Result<Option<RenderedChatResponse>> {
+    match handle_reflection_outcome(
+        bootstrap,
+        session,
+        lifecycle,
+        reflection_attempts,
+        reason,
+        detail,
+        fallback_message,
+        format!("{}\n\n{}", current_prompt, prompt_suffix),
+    )? {
+        ReflectionOutcome::Fallback(outcome) => Ok(Some(outcome)),
+        ReflectionOutcome::RetryPrompt(prompt_rewrite) => {
+            *current_prompt = prompt_rewrite;
+            Ok(None)
+        }
+    }
+}
+
 /// Executes one provider-backed runtime turn and optionally completes a bounded local tool loop.
 fn execute_provider_turn(
     bootstrap: &BootstrapReport,
@@ -1375,74 +1404,90 @@ fn execute_provider_turn(
                 });
             }
             ProviderContinuation::InvalidToolRequest => {
-                match handle_reflection_outcome(
+                if let Some(outcome) = retry_or_fallback_on_bad_provider_continuation(
                     bootstrap,
                     session,
                     lifecycle,
                     &mut reflection_attempts,
+                    &mut current_prompt,
                     "invalid-tool-request",
                     json!({"response": response}),
                     "Vela received an invalid provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.",
-                    format!(
-                        "{}\n\nYour previous reply requested an unsupported or malformed tool envelope. Only these tools are allowed: memory_snapshot, list_skills, view_memory, search_session_history, view_skill. If you need one tool, respond with ONLY valid JSON for exactly one of those tool contracts. Otherwise answer the user directly.",
-                        current_prompt,
-                    ),
+                    "Your previous reply requested an unsupported or malformed tool envelope. Only these tools are allowed: memory_snapshot, list_skills, view_memory, search_session_history, view_skill. If you need one tool, respond with ONLY valid JSON for exactly one of those tool contracts. Otherwise answer the user directly.",
                 )? {
-                    ReflectionOutcome::Fallback(outcome) => return Ok(outcome),
-                    ReflectionOutcome::RetryPrompt(prompt_rewrite) => current_prompt = prompt_rewrite,
+                    return Ok(outcome);
                 }
             }
             ProviderContinuation::EmptyResponse => {
-                match handle_reflection_outcome(
+                if let Some(outcome) = retry_or_fallback_on_bad_provider_continuation(
                     bootstrap,
                     session,
                     lifecycle,
                     &mut reflection_attempts,
+                    &mut current_prompt,
                     "empty-provider-response",
                     json!({}),
                     "Vela received an empty provider continuation and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.",
-                    format!(
-                        "{}\n\nYour previous reply was empty and unusable. Either request one supported tool with ONLY valid JSON for memory_snapshot, list_skills, view_memory, search_session_history, or view_skill, or answer the user directly with non-empty text.",
-                        current_prompt,
-                    ),
+                    "Your previous reply was empty and unusable. Either request one supported tool with ONLY valid JSON for memory_snapshot, list_skills, view_memory, search_session_history, or view_skill, or answer the user directly with non-empty text.",
                 )? {
-                    ReflectionOutcome::Fallback(outcome) => return Ok(outcome),
-                    ReflectionOutcome::RetryPrompt(prompt_rewrite) => current_prompt = prompt_rewrite,
+                    return Ok(outcome);
                 }
             }
         }
     }
 
-    let final_response = provider.generate(&current_prompt, images)?;
-    match classify_provider_continuation(&final_response) {
-        ProviderContinuation::FinalAnswer => Ok(RenderedChatResponse {
-            content: Some(final_response),
-            source: provider.tool_loop_response_source(),
-            provider: Some(provider.label().to_string()),
-            model: provider.model().map(str::to_string),
-            provider_capability_summary: Some(provider.capabilities().summary_line()),
-        }),
-        ProviderContinuation::ToolRequest(_) => Ok(RenderedChatResponse {
-            content: Some("Vela reached the maximum bounded tool steps and fell back to a deterministic runtime response instead of continuing indefinitely.".to_string()),
-            source: "runtime-kernel",
-            provider: None,
-            model: None,
-            provider_capability_summary: Some(provider.capabilities().summary_line()),
-        }),
-        ProviderContinuation::InvalidToolRequest => Ok(RenderedChatResponse {
-            content: Some("Vela received an invalid provider continuation after the bounded tool loop and fell back to a deterministic runtime response.".to_string()),
-            source: "runtime-kernel",
-            provider: None,
-            model: None,
-            provider_capability_summary: Some(provider.capabilities().summary_line()),
-        }),
-        ProviderContinuation::EmptyResponse => Ok(RenderedChatResponse {
-            content: Some("Vela received an empty provider continuation after the bounded tool loop and fell back to a deterministic runtime response.".to_string()),
-            source: "runtime-kernel",
-            provider: None,
-            model: None,
-            provider_capability_summary: Some(provider.capabilities().summary_line()),
-        }),
+    loop {
+        let final_response = provider.generate(&current_prompt, images.clone())?;
+        match classify_provider_continuation(&final_response) {
+            ProviderContinuation::FinalAnswer => {
+                return Ok(RenderedChatResponse {
+                    content: Some(final_response),
+                    source: provider.tool_loop_response_source(),
+                    provider: Some(provider.label().to_string()),
+                    model: provider.model().map(str::to_string),
+                    provider_capability_summary: Some(provider.capabilities().summary_line()),
+                });
+            }
+            ProviderContinuation::ToolRequest(_) => {
+                return Ok(RenderedChatResponse {
+                    content: Some("Vela reached the maximum bounded tool steps and fell back to a deterministic runtime response instead of continuing indefinitely.".to_string()),
+                    source: "runtime-kernel",
+                    provider: None,
+                    model: None,
+                    provider_capability_summary: Some(provider.capabilities().summary_line()),
+                });
+            }
+            ProviderContinuation::InvalidToolRequest => {
+                if let Some(outcome) = retry_or_fallback_on_bad_provider_continuation(
+                    bootstrap,
+                    session,
+                    lifecycle,
+                    &mut reflection_attempts,
+                    &mut current_prompt,
+                    "invalid-final-provider-continuation",
+                    json!({"response": final_response, "tool_budget_exhausted": true}),
+                    "Vela received an invalid provider continuation after the bounded tool loop and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.",
+                    "You have already exhausted the maximum number of tool steps. Do not request another tool. Your previous reply was an unsupported or malformed tool envelope. Answer the user directly with non-empty text.",
+                )? {
+                    return Ok(outcome);
+                }
+            }
+            ProviderContinuation::EmptyResponse => {
+                if let Some(outcome) = retry_or_fallback_on_bad_provider_continuation(
+                    bootstrap,
+                    session,
+                    lifecycle,
+                    &mut reflection_attempts,
+                    &mut current_prompt,
+                    "empty-final-provider-continuation",
+                    json!({"tool_budget_exhausted": true}),
+                    "Vela received an empty provider continuation after the bounded tool loop and exhausted the bounded reflection limit, so it fell back to a deterministic runtime response.",
+                    "You have already exhausted the maximum number of tool steps. Do not request another tool. Your previous reply was empty and unusable. Answer the user directly with non-empty text.",
+                )? {
+                    return Ok(outcome);
+                }
+            }
+        }
     }
 }
 
