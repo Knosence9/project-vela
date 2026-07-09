@@ -394,6 +394,14 @@ fn parse_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
         .find_map(|part| part.strip_prefix(&format!("{key}=")))
 }
 
+fn parse_list_item_id<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.split_whitespace().next())
+    })
+}
+
 #[test]
 /// Verifies that a default runtime session becomes visible through `vela status`.
 fn default_runtime_session_surfaces_in_status() {
@@ -883,6 +891,165 @@ fn chat_query_executes_runtime_turn_and_generates_candidates() {
     assert!(review.status.success(), "{}", stderr_text(&review));
     let review_stdout = stdout_text(&review);
     assert!(review_stdout.contains("review candidates [1]:"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a transcript-derived review candidate can be promoted into pending memory and approved.
+fn review_candidate_can_be_promoted_and_approved_via_cli() {
+    let vela_home = temp_vela_home("review-promote-approve");
+
+    let turn = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--query",
+            "please always use terse answers",
+            "--checkpoints",
+        ],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+
+    let review = run_vela(&vela_home, &["review", "--list"]);
+    assert!(review.status.success(), "{}", stderr_text(&review));
+    let review_stdout = stdout_text(&review);
+    let candidate_id = parse_list_item_id(&review_stdout, "- ").expect("review candidate id");
+
+    let show_candidate = run_vela(&vela_home, &["review", "--show", candidate_id]);
+    assert!(
+        show_candidate.status.success(),
+        "{}",
+        stderr_text(&show_candidate)
+    );
+    let show_candidate_stdout = stdout_text(&show_candidate);
+    let show_candidate_json: serde_json::Value =
+        serde_json::from_str(&show_candidate_stdout).expect("review --show JSON");
+    assert_eq!(
+        show_candidate_json
+            .get("source")
+            .and_then(|value| value.as_str()),
+        Some("session-transcript")
+    );
+    assert_eq!(
+        show_candidate_json
+            .get("memory")
+            .and_then(|value| value.get("action"))
+            .and_then(|value| value.as_str()),
+        Some("add")
+    );
+    assert!(show_candidate_stdout.contains("please always use terse answers"));
+
+    let promote = run_vela(&vela_home, &["review", "--promote", candidate_id]);
+    assert!(promote.status.success(), "{}", stderr_text(&promote));
+    let promote_stdout = stdout_text(&promote);
+    assert!(promote_stdout.contains("review promoted: candidate="));
+    assert!(promote_stdout.contains("kind=memory"));
+    let pending_id = parse_field(&promote_stdout, "pending").expect("pending memory id");
+
+    let pending = run_vela(&vela_home, &["memory", "--pending"]);
+    assert!(pending.status.success(), "{}", stderr_text(&pending));
+    let pending_stdout = stdout_text(&pending);
+    assert!(pending_stdout.contains("pending memory writes [1]:"));
+    assert!(pending_stdout.contains(pending_id));
+
+    let show_pending = run_vela(&vela_home, &["memory", "--show", pending_id]);
+    assert!(
+        show_pending.status.success(),
+        "{}",
+        stderr_text(&show_pending)
+    );
+    let show_pending_stdout = stdout_text(&show_pending);
+    let show_pending_json: serde_json::Value =
+        serde_json::from_str(&show_pending_stdout).expect("memory --show JSON");
+    assert_eq!(
+        show_pending_json
+            .get("action")
+            .and_then(|value| value.as_str()),
+        Some("add")
+    );
+    assert_eq!(
+        show_pending_json
+            .get("target")
+            .and_then(|value| value.as_str()),
+        Some("User")
+    );
+    assert!(show_pending_json
+        .get("new_text")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| value.contains("please always use terse answers")));
+
+    let approve = run_vela(&vela_home, &["memory", "--approve", pending_id]);
+    assert!(approve.status.success(), "{}", stderr_text(&approve));
+    let approve_stdout = stdout_text(&approve);
+    assert!(approve_stdout.contains("memory approve: target=user entries=1"));
+
+    let memory_view = run_vela(&vela_home, &["memory", "--target", "user"]);
+    assert!(
+        memory_view.status.success(),
+        "{}",
+        stderr_text(&memory_view)
+    );
+    let memory_view_stdout = stdout_text(&memory_view);
+    assert!(memory_view_stdout.contains("user [1 entries,"));
+    assert!(memory_view_stdout.contains("please always use terse answers"));
+
+    let pending_after = run_vela(&vela_home, &["memory", "--pending"]);
+    assert!(
+        pending_after.status.success(),
+        "{}",
+        stderr_text(&pending_after)
+    );
+    assert!(stdout_text(&pending_after).contains("pending memory writes [0]:"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a transcript-derived review candidate can be promoted into pending memory and rejected.
+fn review_candidate_can_be_promoted_and_rejected_via_cli() {
+    let vela_home = temp_vela_home("review-promote-reject");
+
+    let turn = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--query",
+            "please always use terse answers",
+            "--checkpoints",
+        ],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+
+    let review = run_vela(&vela_home, &["review", "--list"]);
+    assert!(review.status.success(), "{}", stderr_text(&review));
+    let review_stdout = stdout_text(&review);
+    let candidate_id = parse_list_item_id(&review_stdout, "- ").expect("review candidate id");
+
+    let promote = run_vela(&vela_home, &["review", "--promote", candidate_id]);
+    assert!(promote.status.success(), "{}", stderr_text(&promote));
+    let promote_stdout = stdout_text(&promote);
+    let pending_id = parse_field(&promote_stdout, "pending").expect("pending memory id");
+
+    let reject = run_vela(&vela_home, &["memory", "--reject", pending_id]);
+    assert!(reject.status.success(), "{}", stderr_text(&reject));
+    assert!(stdout_text(&reject).contains(&format!("memory reject: {pending_id}")));
+
+    let pending_after = run_vela(&vela_home, &["memory", "--pending"]);
+    assert!(
+        pending_after.status.success(),
+        "{}",
+        stderr_text(&pending_after)
+    );
+    assert!(stdout_text(&pending_after).contains("pending memory writes [0]:"));
+
+    let memory_view = run_vela(&vela_home, &["memory", "--target", "user"]);
+    assert!(
+        memory_view.status.success(),
+        "{}",
+        stderr_text(&memory_view)
+    );
+    assert!(stdout_text(&memory_view).contains("user [0 entries,"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
