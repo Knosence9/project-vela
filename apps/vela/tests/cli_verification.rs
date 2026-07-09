@@ -923,8 +923,21 @@ fn review_candidate_can_be_promoted_and_approved_via_cli() {
         stderr_text(&show_candidate)
     );
     let show_candidate_stdout = stdout_text(&show_candidate);
-    assert!(show_candidate_stdout.contains("\"source\": \"session-transcript\""));
-    assert!(show_candidate_stdout.contains("\"action\": \"add\""));
+    let show_candidate_json: serde_json::Value =
+        serde_json::from_str(&show_candidate_stdout).expect("review --show JSON");
+    assert_eq!(
+        show_candidate_json
+            .get("source")
+            .and_then(|value| value.as_str()),
+        Some("session-transcript")
+    );
+    assert_eq!(
+        show_candidate_json
+            .get("memory")
+            .and_then(|value| value.get("action"))
+            .and_then(|value| value.as_str()),
+        Some("add")
+    );
     assert!(show_candidate_stdout.contains("please always use terse answers"));
 
     let promote = run_vela(&vela_home, &["review", "--promote", candidate_id]);
@@ -947,9 +960,24 @@ fn review_candidate_can_be_promoted_and_approved_via_cli() {
         stderr_text(&show_pending)
     );
     let show_pending_stdout = stdout_text(&show_pending);
-    assert!(show_pending_stdout.contains("\"action\": \"add\""));
-    assert!(show_pending_stdout.contains("\"target\": \"User\""));
-    assert!(show_pending_stdout.contains("please always use terse answers"));
+    let show_pending_json: serde_json::Value =
+        serde_json::from_str(&show_pending_stdout).expect("memory --show JSON");
+    assert_eq!(
+        show_pending_json
+            .get("action")
+            .and_then(|value| value.as_str()),
+        Some("add")
+    );
+    assert_eq!(
+        show_pending_json
+            .get("target")
+            .and_then(|value| value.as_str()),
+        Some("User")
+    );
+    assert!(show_pending_json
+        .get("new_text")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| value.contains("please always use terse answers")));
 
     let approve = run_vela(&vela_home, &["memory", "--approve", pending_id]);
     assert!(approve.status.success(), "{}", stderr_text(&approve));
