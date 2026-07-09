@@ -68,6 +68,23 @@
 - scheduled jobs now surface explicit progression states in CLI status (`registered`, `started-attempt`, `recovered-for-retry`, `completed-rescheduled`, `failed-rescheduled`) plus explicit delivery state (`delivery_webhook_url`, `delivery_event_type`, `last_delivery_outcome`, `last_delivery_error`) so recurring behavior is visible without reading raw timestamps alone
 - `vela cron --report` now aggregates durable scheduler visibility into one bounded summary (job counts, running/overdue/lease-expired health counts, outcomes, delivery failures, delivered deliveries, recoveries, and next due job) and prints per-job schedule/source plus lease/session ownership context (`updated_at`, `last_recovered_at`, `last_session_id`, `execution_token`, `lease_expires_at`), due state / health lag seconds, last-run / last-failure details, delivery timestamps, delivery event types, and bounded delivery/error excerpts so operators can inspect recurring health without scanning every job row or raw JSON
 
+## Current provider-selection and runtime-contract surface
+- `runtime.provider` currently accepts `ollama`, `mock`, `llamacpp` / `llama.cpp`, and `embedded`.
+- When no provider is configured, query/image turns stay on the deterministic kernel fallback path.
+- Provider defaults and guardrails currently exposed by the runtime boundary are:
+  - `ollama` -> default base URL `http://127.0.0.1:11434`, local-only unless `VELA_ALLOW_REMOTE_OLLAMA` is set
+  - `llamacpp` -> default base URL `http://127.0.0.1:8080`, local-only unless `VELA_ALLOW_REMOTE_LLAMACPP` is set
+  - `mock` -> in-process deterministic fixture backend with no network transport
+  - `embedded` -> in-process local backend that requires `runtime.embedded_model_path` to point at an existing non-empty `.gguf` file
+- Response routing is intentionally surfaced as part of the runtime contract:
+  - direct provider turns emit provider-specific sources such as `runtime-ollama`, `runtime-llamacpp`, or `runtime-embedded`
+  - bounded tool-loop completions emit the corresponding `*-tool-loop` source
+  - kernel fallbacks remain explicitly visible as `runtime-kernel`
+- Capability differences are part of the documented contract rather than hidden implementation details:
+  - Ollama and mock support text, bounded tool-loop, reflection/retry, and first-pass image handling
+  - llama.cpp supports text, bounded tool-loop, and reflection/retry, but not direct image attachments in this slice
+  - embedded supports text plus the bounded tool-loop / reflection path for text turns, but not direct image attachments in this slice
+
 ## Kernel vs provider boundary
 - keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel
 - keep provider-specific request transport, response decoding, and provider-local safety validation behind a provider backend boundary
@@ -84,7 +101,7 @@
 
 ## Still needed
 - richer runtime state transitions beyond created/resumed shell states at the session level
-- deeper provider capability parity beyond the current explicit matrix (shared text/tool-loop/reflection support, but intentionally different image and transport behavior), while preserving the bounded iterative tool loop, bounded reflection/retry rules, first-pass internal context retrieval tools, the persisted backend eval harness, the first bounded architecture experiment slot, and the explicit model-lab criteria/boundaries policy
+- deeper provider capability parity beyond the current explicit matrix, while preserving the documented bounded tool loop, reflection/retry, and explicit response-route contract
 - session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model

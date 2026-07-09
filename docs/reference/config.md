@@ -88,8 +88,23 @@
 - `{VELA_HOME}/.env` beats project `.env` when both exist
 - sticky profile fallback updates `VELA_HOME` to the selected profile path before full bootstrap
 
+## Current surfaced defaults and env bridges
+- All currently surfaced resolved config fields default to unset / `None` until a config file provides a value.
+- Runtime provider transport defaults come from the runtime contract layer rather than YAML defaults:
+  - `runtime.provider=ollama` defaults `runtime.ollama_base_url` to `http://127.0.0.1:11434` when unset.
+  - `runtime.provider=llamacpp` defaults `runtime.llamacpp_base_url` to `http://127.0.0.1:8080` when unset.
+  - `runtime.provider=embedded` has no default URL and instead requires `runtime.embedded_model_path`.
+- Config bootstrap currently bridges these resolved values back into env vars:
+  - `hooks_auto_accept -> VELA_ACCEPT_HOOKS` (`true => 1`, `false => 0`)
+  - `security.redact_secrets -> VELA_REDACT_SECRETS` (`true` / `false`)
+  - effective ignore-user-config state -> `VELA_IGNORE_USER_CONFIG=1`
+- `extensions.entries.<id>.enabled` defaults to `true` when the entry is present without an explicit `enabled:` value.
+
+## Legacy gateway compatibility boundary
+- The Python compatibility notes still matter here: `gateway/config.py` documents legacy fallback from `~/.vela/gateway.json` into `config.yaml` processing and says failed `config.yaml` processing can still fall back to `.env` / `gateway.json` values.
+- That legacy gateway precedence is not yet fully re-surfaced through the Rust compatibility layer, so operators should treat `config.yaml` + `.env` as the primary live contract and `gateway.json` as legacy compatibility behavior that still needs explicit closure.
+
 ## Still needed
-- exact config precedence order for legacy `gateway.json` migration/compat behavior
-- default values for key settings beyond the currently surfaced resolved fields
-- exact mapping from all config keys to env vars beyond the currently bridged fields
+- exact config precedence order for legacy `gateway.json` migration/compat behavior in the Rust path
+- exact mapping from the broader Python-era config/env surface beyond the currently bridged resolved fields
 - broader YAML coverage beyond the current resolved field set
