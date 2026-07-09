@@ -155,9 +155,69 @@ README-visible shared slash commands:
 - `vela eval --show-slot <id>` shows one bounded architecture experiment slot by id plus the latest durable eval evidence currently attached to that slot, including passed/failed backend breakdowns, capability-group evidence, and per-backend status/transport/source/model details
 - `vela eval --show-policy` shows the durable model-lab criteria and boundaries that govern deeper model-core experimentation
 
-## Still needed
-- exact subcommands under groups like `sessions`, `auth`, `cron`, and `dashboard`
-- help output shape and wording
-- exit code semantics
-- interactive vs non-interactive behavior
-- exact relaunch behavior across `vela`, `cli.py`, and `vela_cli.main`
+## Current grouped command contract
+Confirmed from the live Rust CLI surface in `apps/vela/src/cli.rs`:
+
+- `vela sessions`
+  - `--list`
+  - `--browse`
+  - `--search <text>`
+  - `--show <id-or-title>`
+  - `--branch <session>`
+  - `--title <title>`
+  - `--note <text>`
+  - `--compress <session>`
+  - `--summary <text>`
+- `vela cron`
+  - `--setup`
+  - `--start`
+  - `--list`
+  - `--report`
+  - `--add <task> --schedule <expr> [--source <name>] [--delivery-webhook-url <url>] [--delivery-event-type <name>]`
+  - `--show <job-id>`
+- `vela dashboard`
+  - `--status`
+  - `--stop`
+- `vela review`
+  - `--list`
+  - `--emit-signals`
+  - `--suggest`
+  - `--auto`
+  - `--show <candidate-id>`
+  - `--promote <candidate-id>`
+  - `--reject <candidate-id>`
+  - review-stage helpers for memory / skills (`--memory-add`, `--memory-replace`, `--memory-remove`, `--skill-create`, `--skill-write`, `--skill-delete`)
+- `vela memory`
+  - `--view`
+  - `--prompt-snapshot`
+  - `--add <text>` / `--replace <text> --match <substring>` / `--remove <substring>`
+  - `--stage`
+  - `--pending`
+  - `--show <pending-id>`
+  - `--approve <pending-id>`
+  - `--reject <pending-id>`
+- `vela skills`
+  - `--list`
+  - `--view <name>`
+  - `--create <name>` / `--write <name>` / `--delete <name>`
+  - `--description <text>`
+  - `--body <text>`
+  - `--stage`
+  - `--pending`
+  - `--show <pending-id>`
+  - `--approve <pending-id>`
+  - `--reject <pending-id>`
+- `vela auth`
+  - currently a top-level command surface, but no additional grouped Rust sub-arguments are defined in `apps/vela/src/cli.rs`
+
+## Help / exit / lifecycle contract
+- The Rust CLI uses Clap-derived grouped actions, so command help is generated from `apps/vela/src/cli.rs` rather than being hand-written.
+- Bare `vela` remains the interactive/default chat entrypoint.
+- Explicit subcommands such as `vela chat --query ...`, `vela cron ...`, and `vela review ...` are non-interactive command paths.
+- Invalid flag combinations fail at CLI parse time; the verification suite already relies on that behavior for `cron` argument rejection.
+- `--profile` / `-p` remains an entrypoint-level home-selection flag before command execution.
+
+## Relaunch behavior currently preserved
+- `vela` and `vela_cli.main` are still the canonical user-facing entry paths carried from the Python package scripts.
+- The Rust compatibility work preserves the visible CLI contract for command routing and session/bootstrap semantics, but does not currently claim byte-for-byte help-text parity with the legacy Python parser.
+- For readiness work, the source of truth is the live Rust CLI surface plus CLI verification coverage, not the legacy parser wording.
