@@ -1,4 +1,53 @@
 use super::*;
+
+const SESSION_TITLE_CHAR_LIMIT: usize = 80;
+
+fn normalize_session_title_fragment(value: &str) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() > SESSION_TITLE_CHAR_LIMIT {
+        format!(
+            "{}…",
+            collapsed
+                .chars()
+                .take(SESSION_TITLE_CHAR_LIMIT.saturating_sub(1))
+                .collect::<String>()
+        )
+    } else {
+        collapsed
+    }
+}
+
+fn derive_runtime_session_title(request: &SessionRequest) -> String {
+    let command = request.command_name.trim();
+    if let Some(query) = request.query_text.as_deref().map(str::trim) {
+        if !query.is_empty() {
+            return format!(
+                "{}: {}",
+                command,
+                normalize_session_title_fragment(query)
+            );
+        }
+    }
+
+    if request.image_present {
+        if let Some(path) = request.image_path.as_deref().map(str::trim) {
+            if !path.is_empty() {
+                let file_name = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or(path);
+                return format!(
+                    "{} image: {}",
+                    command,
+                    normalize_session_title_fragment(file_name)
+                );
+            }
+        }
+        return format!("{} image", command);
+    }
+
+    format!("{} interactive", command)
+}
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone)]
@@ -462,7 +511,7 @@ pub fn resolve_runtime_session(
     let now = unix_timestamp();
     let unique = unix_timestamp_nanos();
     let session_id = format!("session-{}", unique);
-    let title = format!("{}-{}", request.command_name, unique);
+    let title = derive_runtime_session_title(request);
     {
         let tx = conn.unchecked_transaction()?;
         tx.execute(
