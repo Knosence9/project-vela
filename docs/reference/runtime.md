@@ -99,7 +99,8 @@
 - keep service-style extensions metadata-only in this slice while tool/skill/workflow entries may activate when they provide valid entrypoints; explicit manifest `metadata-only` requests validate without activation, while unsupported service `on-boot` requests fail clearly
 - treat the current registry as metadata-first scaffolding with bounded activation semantics, not arbitrary third-party code execution
 
-## Still needed
+## Longer-horizon runtime roadmap notes
+These items are intentionally kept as roadmap themes rather than issue-ready residuals after the current milestone work:
 - richer runtime state transitions beyond created/resumed shell states at the session level
 - deeper provider capability parity beyond the current explicit matrix, while preserving the documented bounded tool loop, reflection/retry, and explicit response-route contract
 - session titles/naming behavior closer to upstream truth

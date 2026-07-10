@@ -109,7 +109,6 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
 ### Follow-up required
 - none inside milestone 12; remaining work shifts to tracker cleanup / translation-friendly normalization once open verification issues are exhausted
 
-## Remaining gaps
-- end-to-end live runtime loop behavior beyond the current local Ollama text/image-turn paths, bounded iterative tool loop, bounded reflection/retry, first-pass lifecycle persistence, internal context retrieval tools, and first-pass branching/compression semantics
-- broader review-pipeline integration from transcript -> candidate -> pending -> approval via CLI-only tests
-- model/tool execution verification once runtime behavior moves beyond the current shell scaffolding
+## Roadmap-only verification notes
+- end-to-end live runtime loop behavior beyond the current supported local/provider paths, bounded iterative tool loop, bounded reflection/retry, lifecycle persistence, internal context retrieval tools, and first-pass branching/compression semantics remains future verification work rather than an issue-ready residual today
+- model/tool execution verification should deepen only when runtime behavior grows beyond the current shell scaffolding and provider contract

@@ -47,7 +47,8 @@ Behavior-relevant state modules observed:
 - OpenClaw migration via `vela claw migrate`
 - imports can include settings, memories, skills, API keys, allowlists, messaging settings, TTS assets, and AGENTS.md workspace instructions
 
-## Still needed
+## Longer-horizon state roadmap notes
+These items remain useful roadmap prompts but are not yet translated into bounded issues from the current board-clean pass:
 - complete session persistence format and schema beyond `state_meta`
 - transcript/history query behavior
 - approval persistence behavior
