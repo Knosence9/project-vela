@@ -55,6 +55,144 @@ fn append_event_targets_requested_session() {
 }
 
 #[test]
+fn runtime_session_titles_follow_user_visible_inputs() {
+    let vela_home = std::env::temp_dir().join(format!(
+        "vela-state-title-test-{}",
+        unix_timestamp_nanos()
+    ));
+    let report = initialize_persistence(&vela_home).unwrap();
+
+    let interactive = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: false,
+            query_text: None,
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(interactive.title, "chat interactive");
+
+    let queried = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("please always use terse answers".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(queried.title, "chat: please always use terse answers");
+
+    let normalized_query = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("  please   keep\n   spacing\t tidy  ".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(normalized_query.title, "chat: please keep spacing tidy");
+
+    let repeated_query = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("please always use terse answers".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(repeated_query.title, queried.title);
+    assert_ne!(repeated_query.session_id, queried.session_id);
+
+    let long_query = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some(
+                "0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789"
+                    .to_string(),
+            ),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        long_query.title,
+        "chat: 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 01…"
+    );
+
+    let blank_query = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("   \n\t  ".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(blank_query.title, "chat interactive");
+
+    let image_only = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: false,
+            query_text: None,
+            image_present: true,
+            image_path: Some("/tmp/example-diagram.png".to_string()),
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(image_only.title, "chat image: example-diagram.png");
+
+    let blank_image_path = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: false,
+            query_text: None,
+            image_present: true,
+            image_path: Some("   ".to_string()),
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(blank_image_path.title, "chat image");
+
+    let _ = fs::remove_dir_all(&vela_home);
+}
+
+#[test]
 fn resolve_command_session_reuses_latest_matching_command() {
     let vela_home = std::env::temp_dir().join(format!(
         "vela-state-gateway-test-{}",

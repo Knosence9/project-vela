@@ -411,6 +411,7 @@ fn default_runtime_session_surfaces_in_status() {
     assert!(first.status.success(), "{}", stderr_text(&first));
     let first_stdout = stdout_text(&first);
     assert!(first_stdout.contains("runtime session: action=created"));
+    assert!(first_stdout.contains("title=chat interactive"));
     assert!(first_stdout.contains("Interactive Vela runtime ready."));
 
     let status = run_vela(&vela_home, &["status"]);
@@ -424,6 +425,7 @@ fn default_runtime_session_surfaces_in_status() {
     assert!(status_stdout.contains("resolved backend: none"));
     assert!(status_stdout.contains("resolved backend readiness: none"));
     assert!(status_stdout.contains("active session: id=session-"));
+    assert!(status_stdout.contains("title=chat interactive"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -881,11 +883,17 @@ fn chat_query_executes_runtime_turn_and_generates_candidates() {
     );
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("title=chat: please always use terse answers"));
     assert!(turn_stdout.contains("Vela executed a local kernel turn."));
     assert!(turn_stdout.contains("lifecycle: turn=turn-"));
     assert!(turn_stdout.contains("phases=4"));
     assert!(turn_stdout.contains("last=finish"));
     assert!(turn_stdout.contains("checkpoints: signals=1 candidates=1"));
+
+    let show = run_vela(&vela_home, &["sessions", "--show", "chat: please always use terse answers"]);
+    assert!(show.status.success(), "{}", stderr_text(&show));
+    let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains("title=chat: please always use terse answers"));
 
     let review = run_vela(&vela_home, &["review", "--list"]);
     assert!(review.status.success(), "{}", stderr_text(&review));

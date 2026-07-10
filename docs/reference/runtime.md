@@ -26,8 +26,10 @@
 - a durable model-lab policy now lives alongside eval state so deeper model-core work stays governed by explicit graduation gates, allowed strategies, prohibited behaviors, and required evidence
 
 ## Current runtime behavior
-- bare `vela` creates an interactive chat session and appends an interactive runtime-ready assistant message when no explicit resume target is given
-- `vela chat --query ...` creates a single-turn session and can call a configured runtime provider for text turns, with Ollama, a deterministic mock backend, a bounded llama.cpp backend, and the embedded in-process backend now serving as explicit provider implementations or targets behind that boundary
+- bare `vela` creates an interactive chat session titled `chat interactive` and appends an interactive runtime-ready assistant message when no explicit resume target is given
+- `vela chat --query ...` creates a single-turn session titled from the normalized query text (`chat: <trimmed query preview>`), collapsing repeated whitespace and truncating long fragments before persisting the durable title that `sessions --show` and title-based resume flows inspect
+- image-only chat starts title sessions as `chat image: <filename>` when a filename is available, otherwise `chat image`, and that normalized title is the one exposed through durable inspection and title-based resume flows
+- `vela chat --query ...` can call a configured runtime provider for text turns, with Ollama, a deterministic mock backend, a bounded llama.cpp backend, and the embedded in-process backend now serving as explicit provider implementations or targets behind that boundary
 - the backend API contract is now explicit: Vela exposes stable backend descriptors (API version, backend id, transport kind, model requirement, response-source mapping, and capability matrix) so future adapters and experiments can target a bounded kernel-owned interface instead of implicit provider wiring; the new `embedded` backend reserves the in-process local model path without making it the default yet
 - provider capabilities are now treated as an explicit matrix rather than implicit backend quirks: Ollama and mock advertise text, bounded tool-loop, reflection/retry support, and first-pass image support; the bounded llama.cpp backend advertises text/tool-loop/reflection support without direct image attachments; and the embedded backend now supports first-pass text-only in-process generation plus bounded tool-loop/reflection compatibility for text turns while keeping direct image support deferred to later slices
 - configured provider-backed turns, including image-backed turns for the supported providers, can run a bounded iterative local tool loop with approved read-only runtime tools before producing the final assistant reply
@@ -103,7 +105,6 @@
 These items are intentionally kept as roadmap themes rather than current execution slices after the current milestone work:
 - richer runtime state transitions beyond created/resumed shell states at the session level
 - deeper provider capability parity beyond the current explicit matrix, while preserving the documented bounded tool loop, reflection/retry, and explicit response-route contract
-- session titles/naming behavior closer to upstream truth
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
 - more advanced compression policies beyond the current bounded contract (trimmed non-empty summaries, duplicate-latest rejection, bounded summary length, touched-session updates, and explicit persisted operator summaries)
