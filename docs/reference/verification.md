@@ -54,6 +54,7 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - `vela cron` registration persists across `--show`/`--list`
   - `vela cron --report` surfaces last outcome, progression, and webhook delivery evidence for scheduler jobs
   - `vela eval --list-slots`, `vela eval --show-slot <id>`, and `vela eval --run-slot <id>` expose the published bounded experiment lanes plus their latest durable backend evidence
+  - review candidates can be promoted through CLI-only approval and rejection flows while preserving structured inspection output
   - invalid `vela cron --schedule ...` usage is rejected at CLI parse time
 
 ## Milestone 11 verification bundle (`#246`)
@@ -78,6 +79,35 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
 
 ### Follow-up required
 - none inside milestone 11; remaining reference/review verification work continues under `#250`
+
+## Milestone 12 verification bundle (`#250`)
+
+### Commands / scenarios run
+- prerequisite: install libclang and set `LIBCLANG_PATH` appropriately for your local environment before running the Rust verification commands below if your toolchain does not already discover libclang automatically
+- `cargo test -p vela review_candidate_can_be_promoted_and_approved_via_cli -- --nocapture`
+- `cargo test -p vela review_candidate_can_be_promoted_and_rejected_via_cli -- --nocapture`
+- `cargo build -p vela`
+- `./target/debug/vela --help`
+- `./target/debug/vela chat --help`
+- `./target/debug/vela sessions --help`
+- `./target/debug/vela review --help`
+- `TMP_VELA_HOME="$(mktemp -d /tmp/vela-verify-home.XXXXXX)"`
+- `trap 'rm -rf "$TMP_VELA_HOME"' EXIT`
+- `VELA_HOME="$TMP_VELA_HOME" ./target/debug/vela --ignore-user-config status`
+- `VELA_HOME="$TMP_VELA_HOME" ./target/debug/vela --ignore-user-config chat --provider mock --query "verification smoke" --yolo`
+- `VELA_HOME="$TMP_VELA_HOME" ./target/debug/vela --ignore-user-config review --list`
+
+### Evidence summary
+- End-to-end CLI verification proves the transcript -> review-candidate -> promote -> approve/reject pipeline works entirely through the CLI, with structured `review --show` and `memory --show` output preserved through both approval and rejection paths.
+- Reference/docs verification against live behavior confirms the grouped CLI surface advertised in `vela --help`, `vela chat --help`, `vela sessions --help`, and `vela review --help`, while `vela status` exposes the runtime ownership baseline, backend contract matrix, and zero-candidate review state described in the current reference corpus.
+- Failure-path verification confirms the documentation now carries a portable libclang prerequisite rather than a machine-specific path; in this environment, `cargo build -p vela` succeeded once `LIBCLANG_PATH` was configured appropriately for the local toolchain.
+- State continuity / restart verification was already covered where applicable by the milestone 11 bundle; this milestone focused on the remaining CLI review-pipeline proof and reference-surface checks after the docs slices landed.
+
+### Result
+- Pass
+
+### Follow-up required
+- none inside milestone 12; remaining work shifts to tracker cleanup / translation-friendly normalization once open verification issues are exhausted
 
 ## Remaining gaps
 - end-to-end live runtime loop behavior beyond the current local Ollama text/image-turn paths, bounded iterative tool loop, bounded reflection/retry, first-pass lifecycle persistence, internal context retrieval tools, and first-pass branching/compression semantics
