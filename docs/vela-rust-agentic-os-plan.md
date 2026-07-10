@@ -257,24 +257,27 @@ Add the services that move Vela from “agent runtime” to “agentic OS.”
 ### Scope
 Grow toward the broader capabilities the user wants from Hermes.
 
-### Candidate slices
-- gateway/daemon
-- attach/resume flows
-- messaging/platform surfaces
-- subagents/delegation
-- MCP integration
-- richer automation and delivery semantics
-
 ### Working rule
 Implement these as bounded vertical slices rather than “port the whole subsystem because Hermes has it.”
 
-### Checklist
-- [ ] pick first gateway path
-- [ ] implement attach/resume for that path
-- [ ] implement one real delivery surface
-- [ ] add subagent/delegation support
-- [ ] add MCP bridge/support
-- [ ] add automated job delivery path
+### Execution slice seeds
+Translate this phase into one execution issue per slice, not one giant “Hermes parity” milestone:
+- gateway/daemon bootstrap for one chosen surface
+- attach/resume flow for that same surface
+- one real delivery surface (for example one messaging/platform path)
+- one bounded subagent/delegation path
+- one bounded MCP bridge/support path
+- one automated job delivery path
+
+### Verification follow-ons
+After each execution slice lands, create a paired verification issue only when proof is not already covered by the execution slice itself:
+- end-to-end delivery proof for the chosen surface
+- attach/resume continuity proof
+- policy/safety proof for delegation or MCP exposure where applicable
+- delivery evidence / operator-visible reporting proof for automation paths
+
+### Tracking rule
+Use tracking issues only to group multiple execution/verification slices for the same surface family. Do not use a tracking issue as a substitute for a bounded execution issue.
 
 ### Exit gate
 - at least one real Hermes-class flow works end-to-end in Vela
@@ -295,13 +298,24 @@ Only after the OS/runtime is credible should Vela expand into deeper model exper
 - sparse routing experiments
 - future MoE experiments
 
-### Checklist
-- [ ] formalize backend API
-- [ ] support backend switching from config
-- [ ] add local inference backend(s)
-- [ ] add backend benchmark/eval harness
-- [ ] add first architecture experiment slot (e.g. ternary)
+### Execution slice seeds
+Translate this phase into reversible experiment-sized execution issues:
+- formalize backend API boundaries
+- support backend switching from config
+- add one local inference backend path
+- add one backend benchmark/eval harness slice
+- add one architecture experiment slot (for example ternary) behind the existing bounded eval surface
 - [x] document criteria for deeper model-core work
+
+### Verification follow-ons
+Create explicit verification issues only where the execution slice does not already prove the contract:
+- backend switching proof across at least two supported backends
+- local inference continuity and restart proof
+- eval evidence / promotion-boundary proof for experiment slots
+- benchmark/result reporting proof when backend comparison surfaces expand
+
+### Tracking rule
+Use a tracking issue to group a family of backend-lab slices only when several concrete execution issues already exist. Avoid leaving “backend lab” as a single open-ended execution placeholder.
 
 ### Deeper model-core work criteria
 Before Vela takes on deeper model-core work, the following must already be true:
