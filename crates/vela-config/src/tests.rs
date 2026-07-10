@@ -205,6 +205,72 @@ fn ignore_user_config_env_promotes_project_fallback() {
 }
 
 #[test]
+fn initialize_config_bridges_supported_values_into_env() {
+    let _lock = test_lock().lock().unwrap();
+    let home_root = TempDirGuard::new("env-bridges-home");
+    let project_root = TempDirGuard::new("env-bridges-project");
+    let vela_home = home_root.join(".vela");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "hooks_auto_accept: false\nsecurity:\n  redact_secrets: true\n",
+    )
+    .unwrap();
+
+    let _home = EnvGuard::set("HOME", &home_root);
+    let _vela_home = EnvGuard::unset("VELA_HOME");
+    let _ignore = EnvGuard::unset("VELA_IGNORE_USER_CONFIG");
+    let _accept_hooks = EnvGuard::unset("VELA_ACCEPT_HOOKS");
+    let _redact_secrets = EnvGuard::unset("VELA_REDACT_SECRETS");
+    let _cwd = CwdGuard::change_to(&project_root);
+
+    let bootstrap = initialize_config(None, false).unwrap();
+    assert_eq!(bootstrap.resolved_config.hooks_auto_accept, Some(false));
+    assert_eq!(bootstrap.resolved_config.security_redact_secrets, Some(true));
+    assert_eq!(std::env::var("VELA_ACCEPT_HOOKS").ok().as_deref(), Some("0"));
+    assert_eq!(
+        std::env::var("VELA_REDACT_SECRETS").ok().as_deref(),
+        Some("true")
+    );
+    assert!(std::env::var("VELA_IGNORE_USER_CONFIG").is_err());
+}
+
+#[test]
+fn gateway_json_is_not_consumed_by_rust_bootstrap_contract() {
+    let _lock = test_lock().lock().unwrap();
+    let home_root = TempDirGuard::new("gateway-json-home");
+    let project_root = TempDirGuard::new("gateway-json-project");
+    let vela_home = home_root.join(".vela");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::write(
+        vela_home.join("gateway.json"),
+        r#"{\"provider\": \"ollama\", \"model\": \"legacy\"}"#,
+    )
+    .unwrap();
+
+    let _home = EnvGuard::set("HOME", &home_root);
+    let _vela_home = EnvGuard::unset("VELA_HOME");
+    let _cwd = CwdGuard::change_to(&project_root);
+
+    let bootstrap = initialize_config(None, false).unwrap();
+    assert_eq!(bootstrap.loaded_env_paths, Vec::<std::path::PathBuf>::new());
+    assert!(bootstrap
+        .resolved_config
+        .runtime_provider
+        .as_deref()
+        .is_none());
+    assert!(bootstrap
+        .resolved_config
+        .runtime_model
+        .as_deref()
+        .is_none());
+    assert!(matches!(bootstrap.config_sources[0].kind, ConfigSourceKind::Missing));
+    assert!(matches!(bootstrap.config_sources[1].kind, ConfigSourceKind::Missing));
+}
+
+#[test]
 fn initialize_config_prefers_vela_home_dotenv_over_project_fallback() {
     let _lock = test_lock().lock().unwrap();
     let home_root = TempDirGuard::new("dotenv-home");
@@ -325,5 +391,32 @@ fn extension_settings_are_loaded_from_config() {
                 enabled: false,
             },
         ]
+    );
+}
+
+#[test]
+fn extension_entries_default_to_enabled_when_flag_is_omitted() {
+    let root = TempDirGuard::new("extensions-default-enabled");
+
+    let user = root.join("extensions-default-enabled.yaml");
+    std::fs::write(
+        &user,
+        "extensions:\n  entries:\n    demo-tool: {}\n",
+    )
+    .unwrap();
+
+    let mut sources = vec![ConfigSource {
+        path: user,
+        kind: ConfigSourceKind::User,
+        detail: None,
+    }];
+
+    let resolved = load_resolved_config(&mut sources).unwrap();
+    assert_eq!(
+        resolved.extension_entries,
+        vec![ResolvedExtensionConfigEntry {
+            id: "demo-tool".to_string(),
+            enabled: true,
+        }]
     );
 }

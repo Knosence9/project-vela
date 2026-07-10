@@ -32,11 +32,18 @@
 - project fallback config is discovered at `./cli-config.yaml`
 - `--ignore-user-config` and `VELA_IGNORE_USER_CONFIG=1` suppress the user config and allow project fallback to become active
 - when both configs exist and user config is not ignored, project config is marked lower precedence
-- YAML parsing and merge scaffolding now resolves these fields:
+- YAML parsing and merge scaffolding now resolves this supported field set:
   - `display.interface`
   - `hooks_auto_accept`
   - `security.redact_secrets`
   - `network.force_ipv4`
+  - `runtime.provider`
+  - `runtime.model`
+  - `runtime.ollama_base_url`
+  - `runtime.llamacpp_base_url`
+  - `runtime.embedded_model_path`
+  - `extensions.manifests_dir`
+  - `extensions.entries.<id>.enabled`
 - resolved `hooks_auto_accept` and `security.redact_secrets` are also bridged into env vars
 - `status` prints the resolved home path, loaded env files, config-source decisions, and resolved config fields for compatibility checking
 
@@ -87,6 +94,9 @@
 - `VELA_IGNORE_USER_CONFIG=1` forces project fallback even when `{VELA_HOME}/config.yaml` exists
 - `{VELA_HOME}/.env` beats project `.env` when both exist
 - sticky profile fallback updates `VELA_HOME` to the selected profile path before full bootstrap
+- `hooks_auto_accept` and `security.redact_secrets` bridge back into `VELA_ACCEPT_HOOKS` and `VELA_REDACT_SECRETS`
+- `gateway.json` alone does not participate in Rust bootstrap resolution
+- `extensions.entries.<id>.enabled` defaults to `true` when omitted
 
 ## Current surfaced defaults and env bridges
 - All currently surfaced resolved config fields default to unset / `None` until a config file provides a value.
@@ -101,11 +111,10 @@
 - `extensions.entries.<id>.enabled` defaults to `true` when the entry is present without an explicit `enabled:` value.
 
 ## Legacy gateway compatibility boundary
-- The Python compatibility notes still matter here: `gateway/config.py` documents legacy fallback from `~/.vela/gateway.json` into `config.yaml` processing and says failed `config.yaml` processing can still fall back to `.env` / `gateway.json` values.
-- That legacy gateway precedence is not yet fully re-surfaced through the Rust compatibility layer, so operators should treat `config.yaml` + `.env` as the primary live contract and `gateway.json` as legacy compatibility behavior that still needs explicit closure.
+- The Python compatibility notes still matter as inventory: `gateway/config.py` documents legacy fallback from `~/.vela/gateway.json` into `config.yaml` processing and says failed `config.yaml` processing can still fall back to `.env` / `gateway.json` values.
+- The current Rust bootstrap contract does **not** read `gateway.json`; live config resolution is bounded to `{VELA_HOME}/.env`, project `.env` fallback, `{VELA_HOME}/config.yaml`, and `./cli-config.yaml` under the precedence rules above.
+- Treat `gateway.json` as historical compatibility context only until a future issue deliberately reintroduces it into the Rust surface.
 
-## Bounded residuals now tracked separately
-These config-contract residuals are concrete enough to stay issue-ready and are now tracked under `#260` rather than left as unowned residue in this reference page:
-- exact config precedence order for legacy `gateway.json` migration/compat behavior in the Rust path
-- exact mapping from the broader Python-era config/env surface beyond the currently bridged resolved fields
-- broader YAML coverage beyond the current resolved field set
+## Explicit non-goals for the current Rust config surface
+- The broader Python-era platform env matrix listed above (`DISCORD_*`, `TELEGRAM_*`, `MATRIX_*`, email, API server toggles, etc.) is not currently mapped into `vela-config` and should not be inferred as part of the Rust bootstrap contract.
+- YAML keys outside the supported field set above are currently ignored by `vela-config` and need a dedicated future issue before they become part of the live Rust config surface.
