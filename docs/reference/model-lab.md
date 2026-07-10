@@ -63,7 +63,9 @@ Pause model-core deepening and return to kernel/runtime hardening if any of thes
 - `vela eval --list-slots`
 - `vela eval --show-slot <id>`
 - `vela eval --run-slot ternary-preview`
+- `vela eval --run-slot sparse-routing-preview`
 - `vela eval --run-slot local-first-replay`
+- `vela eval --run-slot adapter-intake-gate`
 - `vela eval --run-slot capability-parity-scan`
-- published local-first/parity slot backend sets now include `embedded` when recording bounded eval evidence
+- published shadow-routing, offline-replay, and parity slot backend sets now include `embedded` when recording bounded eval evidence
 - slot inspection surfaces now expose the latest passed backend set, failed backend set, and capability-group evidence for each published slot so provider differences stay operator-visible without changing the live route

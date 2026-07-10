@@ -503,10 +503,10 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
     .unwrap();
 
     let setup = setup_backend_evals(&bootstrap).unwrap();
-    assert_eq!(setup.slot_count, 3);
+    assert_eq!(setup.slot_count, 5);
 
     let slots = list_backend_experiment_slots(&bootstrap).unwrap();
-    assert_eq!(slots.len(), 3);
+    assert_eq!(slots.len(), 5);
     assert!(slots.iter().any(|slot| slot.id == "ternary-preview"));
     assert!(slots.iter().any(|slot| {
         slot.id == "ternary-preview"
@@ -515,10 +515,26 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
                 .iter()
                 .any(|backend| backend == "embedded")
     }));
+    assert!(slots.iter().any(|slot| slot.id == "sparse-routing-preview"));
     assert!(slots.iter().any(|slot| slot.id == "local-first-replay"));
+    assert!(slots.iter().any(|slot| slot.id == "adapter-intake-gate"));
     assert!(slots.iter().any(|slot| slot.id == "capability-parity-scan"));
     assert!(slots.iter().any(|slot| {
+        slot.id == "sparse-routing-preview"
+            && slot
+                .allowed_backends
+                .iter()
+                .any(|backend| backend == "embedded")
+    }));
+    assert!(slots.iter().any(|slot| {
         slot.id == "local-first-replay"
+            && slot
+                .allowed_backends
+                .iter()
+                .any(|backend| backend == "embedded")
+    }));
+    assert!(slots.iter().any(|slot| {
+        slot.id == "adapter-intake-gate"
             && slot
                 .allowed_backends
                 .iter()
@@ -533,7 +549,9 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
     }));
 
     let persisted = std::fs::read_to_string(&slots_path).unwrap();
+    assert!(persisted.contains("sparse-routing-preview"));
     assert!(persisted.contains("local-first-replay"));
+    assert!(persisted.contains("adapter-intake-gate"));
     assert!(persisted.contains("capability-parity-scan"));
 
     let _ = std::fs::remove_dir_all(&bootstrap.vela_home);
