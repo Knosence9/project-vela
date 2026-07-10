@@ -59,12 +59,13 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
 ## Milestone 11 verification bundle (`#246`)
 
 ### Commands / scenarios run
-- `LIBCLANG_PATH=/nix/store/hw7m1zkrmb6mcl8m37307b5x8w4rb39s-clang-18.1.8-lib/lib cargo test -p vela-runtime reload_extensions_uses_durable_ownership_baseline_across_bootstraps -- --nocapture`
-- `LIBCLANG_PATH=/nix/store/hw7m1zkrmb6mcl8m37307b5x8w4rb39s-clang-18.1.8-lib/lib cargo test -p vela-runtime execute_chat_turn_recovers_from_invalid_final_provider_continuation_after_max_tool_steps -- --nocapture`
-- `LIBCLANG_PATH=/nix/store/hw7m1zkrmb6mcl8m37307b5x8w4rb39s-clang-18.1.8-lib/lib cargo test -p vela-runtime execute_chat_turn_falls_back_after_exhausting_reflection_retries -- --nocapture`
-- `LIBCLANG_PATH=/nix/store/hw7m1zkrmb6mcl8m37307b5x8w4rb39s-clang-18.1.8-lib/lib cargo test -p vela cron_report_summarizes_scheduler_state -- --nocapture`
-- `LIBCLANG_PATH=/nix/store/hw7m1zkrmb6mcl8m37307b5x8w4rb39s-clang-18.1.8-lib/lib cargo test -p vela extensions_status_and_reload_are_visible_via_cli -- --nocapture`
-- `LIBCLANG_PATH=/nix/store/hw7m1zkrmb6mcl8m37307b5x8w4rb39s-clang-18.1.8-lib/lib cargo test -p vela backend_experiment_slot_is_visible_and_runnable -- --nocapture`
+- prerequisite: install libclang and set `LIBCLANG_PATH` appropriately for your local environment before running the Rust verification commands below if your toolchain does not already discover libclang automatically
+- `cargo test -p vela-runtime reload_extensions_uses_durable_ownership_baseline_across_bootstraps -- --nocapture`
+- `cargo test -p vela-runtime execute_chat_turn_recovers_from_invalid_final_provider_continuation_after_max_tool_steps -- --nocapture`
+- `cargo test -p vela-runtime execute_chat_turn_falls_back_after_exhausting_reflection_retries -- --nocapture`
+- `cargo test -p vela cron_report_summarizes_scheduler_state -- --nocapture`
+- `cargo test -p vela extensions_status_and_reload_are_visible_via_cli -- --nocapture`
+- `cargo test -p vela backend_experiment_slot_is_visible_and_runnable -- --nocapture`
 
 ### Evidence summary
 - End-to-end CLI verification proves scheduler reports surface last outcome, progression, and webhook delivery evidence while eval slots remain published, inspectable, and runnable through the durable `vela eval` surface.
