@@ -507,46 +507,22 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
 
     let slots = list_backend_experiment_slots(&bootstrap).unwrap();
     assert_eq!(slots.len(), 5);
-    assert!(slots.iter().any(|slot| slot.id == "ternary-preview"));
-    assert!(slots.iter().any(|slot| {
-        slot.id == "ternary-preview"
-            && slot
-                .allowed_backends
-                .iter()
-                .any(|backend| backend == "embedded")
-    }));
-    assert!(slots.iter().any(|slot| slot.id == "sparse-routing-preview"));
-    assert!(slots.iter().any(|slot| slot.id == "local-first-replay"));
-    assert!(slots.iter().any(|slot| slot.id == "adapter-intake-gate"));
-    assert!(slots.iter().any(|slot| slot.id == "capability-parity-scan"));
-    assert!(slots.iter().any(|slot| {
-        slot.id == "sparse-routing-preview"
-            && slot
-                .allowed_backends
-                .iter()
-                .any(|backend| backend == "embedded")
-    }));
-    assert!(slots.iter().any(|slot| {
-        slot.id == "local-first-replay"
-            && slot
-                .allowed_backends
-                .iter()
-                .any(|backend| backend == "embedded")
-    }));
-    assert!(slots.iter().any(|slot| {
-        slot.id == "adapter-intake-gate"
-            && slot
-                .allowed_backends
-                .iter()
-                .any(|backend| backend == "embedded")
-    }));
-    assert!(slots.iter().any(|slot| {
-        slot.id == "capability-parity-scan"
-            && slot
-                .allowed_backends
-                .iter()
-                .any(|backend| backend == "embedded")
-    }));
+    for id in [
+        "ternary-preview",
+        "sparse-routing-preview",
+        "local-first-replay",
+        "adapter-intake-gate",
+        "capability-parity-scan",
+    ] {
+        assert!(slots.iter().any(|slot| slot.id == id));
+        assert!(slots.iter().any(|slot| {
+            slot.id == id
+                && slot
+                    .allowed_backends
+                    .iter()
+                    .any(|backend| backend == "embedded")
+        }));
+    }
 
     let persisted = std::fs::read_to_string(&slots_path).unwrap();
     assert!(persisted.contains("sparse-routing-preview"));
