@@ -110,5 +110,5 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
 - none inside milestone 12; remaining work shifts to tracker cleanup / translation-friendly normalization once open verification issues are exhausted
 
 ## Roadmap-only verification notes
-- end-to-end live runtime loop behavior beyond the current supported local/provider paths, bounded iterative tool loop, bounded reflection/retry, lifecycle persistence, internal context retrieval tools, and first-pass branching/compression semantics remains future verification work rather than an issue-ready residual today
-- model/tool execution verification should deepen only when runtime behavior grows beyond the current shell scaffolding and provider contract
+- the currently documented local/provider paths, bounded tool loops, reflection/retry recovery, lifecycle persistence, internal context retrieval, and first-pass branching/compression semantics already have milestone-backed verification; future work here begins only when new runtime capabilities beyond those shipped paths are added
+- model/tool execution verification should deepen when Vela gains new provider classes, tool categories, or runtime behaviors beyond the currently documented and already-verified local/provider contract
