@@ -503,37 +503,31 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
     .unwrap();
 
     let setup = setup_backend_evals(&bootstrap).unwrap();
-    assert_eq!(setup.slot_count, 3);
+    assert_eq!(setup.slot_count, 5);
 
     let slots = list_backend_experiment_slots(&bootstrap).unwrap();
-    assert_eq!(slots.len(), 3);
-    assert!(slots.iter().any(|slot| slot.id == "ternary-preview"));
-    assert!(slots.iter().any(|slot| {
-        slot.id == "ternary-preview"
-            && slot
-                .allowed_backends
-                .iter()
-                .any(|backend| backend == "embedded")
-    }));
-    assert!(slots.iter().any(|slot| slot.id == "local-first-replay"));
-    assert!(slots.iter().any(|slot| slot.id == "capability-parity-scan"));
-    assert!(slots.iter().any(|slot| {
-        slot.id == "local-first-replay"
-            && slot
-                .allowed_backends
-                .iter()
-                .any(|backend| backend == "embedded")
-    }));
-    assert!(slots.iter().any(|slot| {
-        slot.id == "capability-parity-scan"
-            && slot
-                .allowed_backends
-                .iter()
-                .any(|backend| backend == "embedded")
-    }));
+    assert_eq!(slots.len(), 5);
+    for id in [
+        "ternary-preview",
+        "sparse-routing-preview",
+        "local-first-replay",
+        "adapter-intake-gate",
+        "capability-parity-scan",
+    ] {
+        assert!(slots.iter().any(|slot| slot.id == id));
+        assert!(slots.iter().any(|slot| {
+            slot.id == id
+                && slot
+                    .allowed_backends
+                    .iter()
+                    .any(|backend| backend == "embedded")
+        }));
+    }
 
     let persisted = std::fs::read_to_string(&slots_path).unwrap();
+    assert!(persisted.contains("sparse-routing-preview"));
     assert!(persisted.contains("local-first-replay"));
+    assert!(persisted.contains("adapter-intake-gate"));
     assert!(persisted.contains("capability-parity-scan"));
 
     let _ = std::fs::remove_dir_all(&bootstrap.vela_home);

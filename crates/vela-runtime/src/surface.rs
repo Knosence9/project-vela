@@ -1028,50 +1028,67 @@ fn default_model_lab_policy() -> ModelLabPolicyRecord {
     }
 }
 
+fn backend_experiment_slot(
+    id: &str,
+    strategy: &str,
+    summary: &str,
+    hypothesis: &str,
+    default_prompt: &str,
+    allowed_backends: &[&str],
+) -> BackendExperimentSlotRecord {
+    BackendExperimentSlotRecord {
+        id: id.to_string(),
+        status: "bounded-preview".to_string(),
+        strategy: strategy.to_string(),
+        summary: Some(summary.to_string()),
+        hypothesis: Some(hypothesis.to_string()),
+        default_prompt: default_prompt.to_string(),
+        allowed_backends: allowed_backends.iter().map(|backend| backend.to_string()).collect(),
+    }
+}
+
 fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
     vec![
-        BackendExperimentSlotRecord {
-            id: "ternary-preview".to_string(),
-            status: "bounded-preview".to_string(),
-            strategy: "shadow-routing".to_string(),
-            summary: Some("Compare candidate backends under one durable experiment slot without altering the live kernel route.".to_string()),
-            hypothesis: Some("A future ternary or sparse router can be evaluated safely by replaying the same prompt across a bounded backend set before any runtime routing changes land.".to_string()),
-            default_prompt: "Evaluate whether a ternary-style routing candidate would preserve concise, grounded backend behavior for this request.".to_string(),
-            allowed_backends: vec![
-                "embedded".to_string(),
-                "mock".to_string(),
-                "llamacpp".to_string(),
-                "ollama".to_string(),
-            ],
-        },
-        BackendExperimentSlotRecord {
-            id: "local-first-replay".to_string(),
-            status: "bounded-preview".to_string(),
-            strategy: "offline-replay".to_string(),
-            summary: Some("Replay the same prompt through the published backends to compare local-first behavior without mutating the live route.".to_string()),
-            hypothesis: Some("A durable offline replay lane can reveal whether local-first backends stay concise and comparable before any operator changes the runtime default.".to_string()),
-            default_prompt: "Replay this request across the bounded backends and compare whether local-first execution stays concise and operator-visible.".to_string(),
-            allowed_backends: vec![
-                "embedded".to_string(),
-                "llamacpp".to_string(),
-                "mock".to_string(),
-                "ollama".to_string(),
-            ],
-        },
-        BackendExperimentSlotRecord {
-            id: "capability-parity-scan".to_string(),
-            status: "bounded-preview".to_string(),
-            strategy: "bounded-backend-comparison".to_string(),
-            summary: Some("Compare the published backend capability matrix under one bounded experiment slot so parity work stays explicit.".to_string()),
-            hypothesis: Some("A bounded parity scan can highlight backend capability differences early enough to guide future provider work without broadening the live kernel contract.".to_string()),
-            default_prompt: "Compare the bounded backend capability matrix for this request and highlight where behavior still differs across providers.".to_string(),
-            allowed_backends: vec![
-                "embedded".to_string(),
-                "mock".to_string(),
-                "llamacpp".to_string(),
-                "ollama".to_string(),
-            ],
-        },
+        backend_experiment_slot(
+            "ternary-preview",
+            "shadow-routing",
+            "Compare candidate backends under one durable experiment slot without altering the live kernel route.",
+            "A future ternary or sparse router can be evaluated safely by replaying the same prompt across a bounded backend set before any runtime routing changes land.",
+            "Evaluate whether a ternary-style routing candidate would preserve concise, grounded backend behavior for this request.",
+            &["embedded", "mock", "llamacpp", "ollama"],
+        ),
+        backend_experiment_slot(
+            "sparse-routing-preview",
+            "shadow-routing",
+            "Shadow a sparse-routing candidate through the durable eval harness so future routing experiments stay operator-visible without mutating the live route.",
+            "A sparse-routing preview lane can reveal whether a narrower backend handoff still preserves concise grounded behavior before any routing policy changes land.",
+            "Evaluate whether a sparse-routing candidate would keep this request concise, grounded, and reversible across the bounded backend set.",
+            &["embedded", "mock", "llamacpp", "ollama"],
+        ),
+        backend_experiment_slot(
+            "local-first-replay",
+            "offline-replay",
+            "Replay the same prompt through the published backends to compare local-first behavior without mutating the live route.",
+            "A durable offline replay lane can reveal whether local-first backends stay concise and comparable before any operator changes the runtime default.",
+            "Replay this request across the bounded backends and compare whether local-first execution stays concise and operator-visible.",
+            &["embedded", "llamacpp", "mock", "ollama"],
+        ),
+        backend_experiment_slot(
+            "adapter-intake-gate",
+            "offline-replay",
+            "Replay one bounded request across the published backends to judge whether a future adapter or fine-tune intake path would stay inside the current contract.",
+            "An adapter-intake lane can keep future backend intake criteria durable and reversible by comparing the current contract surfaces before any new route is promoted.",
+            "Replay this request across the bounded backends and note whether the current provider contract looks stable enough for a future adapter or fine-tune intake review.",
+            &["embedded", "llamacpp", "mock", "ollama"],
+        ),
+        backend_experiment_slot(
+            "capability-parity-scan",
+            "bounded-backend-comparison",
+            "Compare the published backend capability matrix under one bounded experiment slot so parity work stays explicit.",
+            "A bounded parity scan can highlight backend capability differences early enough to guide future provider work without broadening the live kernel contract.",
+            "Compare the bounded backend capability matrix for this request and highlight where behavior still differs across providers.",
+            &["embedded", "mock", "llamacpp", "ollama"],
+        ),
     ]
 }
 
