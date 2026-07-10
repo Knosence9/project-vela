@@ -246,7 +246,7 @@ fn gateway_json_is_not_consumed_by_rust_bootstrap_contract() {
     std::fs::create_dir_all(&project_root).unwrap();
     std::fs::write(
         vela_home.join("gateway.json"),
-        r#"{\"provider\": \"ollama\", \"model\": \"legacy\"}"#,
+        r#"{"provider": "ollama", "model": "legacy"}"#,
     )
     .unwrap();
 
