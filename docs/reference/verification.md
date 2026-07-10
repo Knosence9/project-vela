@@ -91,9 +91,11 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
 - `./target/debug/vela chat --help`
 - `./target/debug/vela sessions --help`
 - `./target/debug/vela review --help`
-- `VELA_HOME=/tmp/vela-verify-home ./target/debug/vela --ignore-user-config status`
-- `VELA_HOME=/tmp/vela-verify-home ./target/debug/vela --ignore-user-config chat --provider mock --query "verification smoke" --yolo`
-- `VELA_HOME=/tmp/vela-verify-home ./target/debug/vela --ignore-user-config review --list`
+- `TMP_VELA_HOME="$(mktemp -d /tmp/vela-verify-home.XXXXXX)"`
+- `trap 'rm -rf "$TMP_VELA_HOME"' EXIT`
+- `VELA_HOME="$TMP_VELA_HOME" ./target/debug/vela --ignore-user-config status`
+- `VELA_HOME="$TMP_VELA_HOME" ./target/debug/vela --ignore-user-config chat --provider mock --query "verification smoke" --yolo`
+- `VELA_HOME="$TMP_VELA_HOME" ./target/debug/vela --ignore-user-config review --list`
 
 ### Evidence summary
 - End-to-end CLI verification proves the transcript -> review-candidate -> promote -> approve/reject pipeline works entirely through the CLI, with structured `review --show` and `memory --show` output preserved through both approval and rejection paths.
