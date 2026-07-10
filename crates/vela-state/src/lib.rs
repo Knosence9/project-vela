@@ -26,6 +26,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             title TEXT NOT NULL,
             command_name TEXT NOT NULL,
             interaction_mode TEXT NOT NULL,
+            runtime_state TEXT NOT NULL DEFAULT 'ready',
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             parent_session_id TEXT,
@@ -69,6 +70,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         ",
     )?;
     ensure_messages_metadata_column(conn)?;
+    ensure_sessions_runtime_state_column(conn)?;
     ensure_sessions_branch_columns(conn)?;
     conn.execute(
         "INSERT INTO message_fts(message_id, session_id, title, content)
@@ -92,6 +94,21 @@ fn ensure_messages_metadata_column(conn: &Connection) -> Result<()> {
         }
     }
     conn.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT", [])?;
+    Ok(())
+}
+
+fn ensure_sessions_runtime_state_column(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for column in columns {
+        if column? == "runtime_state" {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        "ALTER TABLE sessions ADD COLUMN runtime_state TEXT NOT NULL DEFAULT 'ready'",
+        [],
+    )?;
     Ok(())
 }
 
@@ -300,9 +317,12 @@ fn load_session_inspection(
     }
     compressions.reverse();
 
+    let runtime_state = load_session_runtime_state(conn, session_id)?;
+
     Ok(SessionInspection {
         session_id: session_id.to_string(),
         title: title.to_string(),
+        runtime_state,
         branch,
         child_sessions,
         messages,
@@ -331,13 +351,39 @@ fn load_summary(conn: &Connection, session_id: &str, title: &str) -> Result<Sess
         )
         .optional()?
         .flatten();
+    let runtime_state = load_session_runtime_state(conn, session_id)?;
     Ok(SessionSummary {
         id: session_id.to_string(),
         title: title.to_string(),
+        runtime_state,
         message_count,
         event_count,
         parent_session_id,
     })
+}
+
+fn load_session_runtime_state(conn: &Connection, session_id: &str) -> Result<String> {
+    Ok(conn
+        .query_row(
+            "SELECT runtime_state FROM sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten()
+        .unwrap_or_else(|| SessionRuntimeState::Ready.label().to_string()))
+}
+
+pub(crate) fn update_session_runtime_state(
+    conn: &Connection,
+    session_id: &str,
+    runtime_state: SessionRuntimeState,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE sessions SET runtime_state = ?2, updated_at = ?3 WHERE id = ?1",
+        params![session_id, runtime_state.label(), unix_timestamp()],
+    )?;
+    Ok(())
 }
 
 fn current_meta_u64(conn: &Connection, key: &str) -> Result<Option<u64>> {

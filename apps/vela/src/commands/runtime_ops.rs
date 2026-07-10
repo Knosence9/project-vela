@@ -170,9 +170,10 @@ pub(crate) fn run_sessions(
         match vela_runtime::inspect_session(bootstrap, target, 20)? {
             Some(inspection) => {
                 println!(
-                    "session inspect: id={} title={} parent_id={:?} parent_title={:?} branch_note={:?} messages={} events={}",
+                    "session inspect: id={} title={} state={} parent_id={:?} parent_title={:?} branch_note={:?} messages={} events={}",
                     inspection.session_id,
                     inspection.title,
+                    inspection.runtime_state,
                     inspection.branch.parent_session_id,
                     inspection.branch.parent_title,
                     inspection.branch.branch_note,
@@ -185,9 +186,10 @@ pub(crate) fn run_sessions(
                     println!("children [{}]:", inspection.child_sessions.len());
                     for child in inspection.child_sessions {
                         println!(
-                            "- session={} title={} messages={} events={} parent={:?}",
+                            "- session={} title={} state={} messages={} events={} parent={:?}",
                             child.id,
                             child.title,
+                            child.runtime_state,
                             child.message_count,
                             child.event_count,
                             child.parent_session_id,

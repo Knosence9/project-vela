@@ -124,7 +124,7 @@ pub fn execute_chat_turn(
     model_override: Option<&str>,
     checkpoints: bool,
 ) -> Result<ChatTurnReport> {
-    let session = resolve_runtime_session(bootstrap, request)?;
+    let mut session = resolve_runtime_session(bootstrap, request)?;
     let mut lifecycle = RuntimeTurnRecorder::new();
     lifecycle.record_phase(
         bootstrap,
@@ -235,6 +235,7 @@ pub fn execute_chat_turn(
             }),
         )?;
 
+        session.runtime_state = lifecycle.final_phase().to_string();
         Ok(ChatTurnReport {
             session: session.clone(),
             turn_id: lifecycle.turn_id.clone(),

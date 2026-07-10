@@ -56,10 +56,8 @@ fn append_event_targets_requested_session() {
 
 #[test]
 fn runtime_session_titles_follow_user_visible_inputs() {
-    let vela_home = std::env::temp_dir().join(format!(
-        "vela-state-title-test-{}",
-        unix_timestamp_nanos()
-    ));
+    let vela_home =
+        std::env::temp_dir().join(format!("vela-state-title-test-{}", unix_timestamp_nanos()));
     let report = initialize_persistence(&vela_home).unwrap();
 
     let interactive = resolve_runtime_session(
@@ -230,6 +228,7 @@ fn resolve_command_session_reuses_latest_matching_command() {
         .unwrap()
         .unwrap();
     assert_eq!(summary.id, first.session_id);
+    assert_eq!(summary.runtime_state, "ready");
     assert_eq!(summary.message_count, 1);
 
     let _ = fs::remove_dir_all(&vela_home);
@@ -305,6 +304,7 @@ fn branch_and_compression_preserve_lineage_and_inspection() {
         summary.parent_session_id.as_deref(),
         Some(parent.session_id.as_str())
     );
+    assert_eq!(summary.runtime_state, "ready");
 
     let _ = fs::remove_dir_all(&vela_home);
 }
@@ -469,6 +469,62 @@ fn continue_target_prefers_latest_session_in_branch_subtree() {
     );
     assert_eq!(continued_latest.continue_target.as_deref(), Some(""));
     assert!(continued_latest.continue_anchor_session_id.is_none());
+
+    let latest_summary = current_session_summary(&report.state_db_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest_summary.runtime_state, "ready");
+
+    let _ = fs::remove_dir_all(&vela_home);
+}
+
+#[test]
+fn session_runtime_state_tracks_bounded_phase_labels() {
+    let vela_home = std::env::temp_dir().join(format!(
+        "vela-state-runtime-state-test-{}",
+        unix_timestamp_nanos()
+    ));
+    let report = initialize_persistence(&vela_home).unwrap();
+    let session = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: false,
+            query_text: None,
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+
+    let summary = current_session_summary(&report.state_db_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(summary.runtime_state, "ready");
+
+    set_session_runtime_state(
+        &report.state_db_path,
+        &session.session_id,
+        SessionRuntimeState::Deliberate,
+    )
+    .unwrap();
+    let inspection = inspect_session(&report.state_db_path, &session.session_id, 20)
+        .unwrap()
+        .unwrap();
+    assert_eq!(inspection.runtime_state, "deliberate");
+
+    set_session_runtime_state(
+        &report.state_db_path,
+        &session.session_id,
+        SessionRuntimeState::Finish,
+    )
+    .unwrap();
+    let finished = current_session_summary(&report.state_db_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.runtime_state, "finish");
 
     let _ = fs::remove_dir_all(&vela_home);
 }
