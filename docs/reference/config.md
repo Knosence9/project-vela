@@ -104,7 +104,8 @@
 - The Python compatibility notes still matter here: `gateway/config.py` documents legacy fallback from `~/.vela/gateway.json` into `config.yaml` processing and says failed `config.yaml` processing can still fall back to `.env` / `gateway.json` values.
 - That legacy gateway precedence is not yet fully re-surfaced through the Rust compatibility layer, so operators should treat `config.yaml` + `.env` as the primary live contract and `gateway.json` as legacy compatibility behavior that still needs explicit closure.
 
-## Still needed
+## Bounded residuals now tracked separately
+These config-contract residuals are concrete enough to stay issue-ready and are now tracked under `#260` rather than left as unowned residue in this reference page:
 - exact config precedence order for legacy `gateway.json` migration/compat behavior in the Rust path
 - exact mapping from the broader Python-era config/env surface beyond the currently bridged resolved fields
 - broader YAML coverage beyond the current resolved field set
