@@ -682,21 +682,20 @@ pub(crate) fn render_chat_response(
             .as_deref()
             .unwrap_or("(unspecified image path)");
         if let Some(provider) = execution.provider.as_deref() {
-            if let Some(image_path) = request
-                .image_path
+            provider.validate()?;
+            let user_prompt = request
+                .query_text
                 .as_deref()
-                .filter(|_| provider.supports_images())
-            {
-                provider.validate()?;
-                let image_base64 = encode_image_as_base64(image_path)?;
-                let user_prompt = request
-                    .query_text
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| "Please analyze the attached image and respond concisely with the most relevant details for the runtime session.".to_string());
-                let prompt = format!(
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| "Please analyze the attached image and respond concisely with the most relevant details for the runtime session.".to_string());
+            let attached_image_name = std::path::Path::new(image_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("attachment");
+            let prompt = if provider.supports_images() {
+                format!(
                     "You are Vela, a Rust-first agentic OS kernel runtime.\n\nSession: {} ({})\nMemory snapshot:\n{}{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
                     session.title,
                     session.session_id,
@@ -705,19 +704,29 @@ pub(crate) fn render_chat_response(
                     skills.len(),
                     reviews.len(),
                     user_prompt,
-                    std::path::Path::new(image_path).file_name().and_then(|n| n.to_str()).unwrap_or("attachment"),
-                );
-                return execute_provider_turn(
-                    bootstrap,
-                    session,
-                    provider,
-                    &prompt,
-                    Some(vec![image_base64]),
-                    &memory,
-                    &skills,
-                    lifecycle,
-                );
-            }
+                    attached_image_name,
+                )
+            } else {
+                format!(
+                    "You are Vela, a Rust-first agentic OS kernel runtime using a text-only backend.\n\nSession: {} ({})\nMemory snapshot:\n{}{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\n\nThe active backend cannot accept direct image bytes in this bounded contract, so reason from the operator-visible image metadata above and answer directly unless you need one supported runtime tool first.\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
+                    session.title,
+                    session.session_id,
+                    memory,
+                    compression_block,
+                    skills.len(),
+                    reviews.len(),
+                    user_prompt,
+                    attached_image_name,
+                )
+            };
+            let images = if provider.supports_images() {
+                Some(vec![encode_image_as_base64(image_path)?])
+            } else {
+                None
+            };
+            return execute_provider_turn(
+                bootstrap, session, provider, &prompt, images, &memory, &skills, lifecycle,
+            );
         }
 
         return Ok(RenderedChatResponse {

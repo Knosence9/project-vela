@@ -1498,15 +1498,23 @@ fn chat_image_uses_configured_ollama_provider() {
 }
 
 #[test]
-/// Verifies that a configured llama.cpp provider falls back cleanly for image turns it does not directly support.
-fn chat_image_with_configured_llamacpp_provider_falls_back_to_local_kernel() {
-    let vela_home = temp_vela_home("llamacpp-image-fallback");
+/// Verifies that a configured llama.cpp provider can answer image turns through the text-only scaffold path.
+fn chat_image_with_configured_llamacpp_provider_uses_text_only_scaffold_path() {
+    let vela_home = temp_vela_home("llamacpp-image-scaffold");
     std::fs::create_dir_all(&vela_home).unwrap();
     let image_path = vela_home.join("diagram.png");
     std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    let (base_url, server) = spawn_mock_llamacpp(
+        "Phi scaffolded the image request.",
+        "phi-3-mini",
+        "The active backend cannot accept direct image bytes in this bounded contract",
+    );
     std::fs::write(
         vela_home.join("config.yaml"),
-        "runtime:\n  provider: llamacpp\n  model: phi-3-mini\n  llamacpp_base_url: http://127.0.0.1:8080\n",
+        format!(
+            "runtime:\n  provider: llamacpp\n  model: phi-3-mini\n  llamacpp_base_url: {}\n",
+            base_url
+        ),
     )
     .unwrap();
 
@@ -1516,10 +1524,40 @@ fn chat_image_with_configured_llamacpp_provider_falls_back_to_local_kernel() {
     );
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
-    assert!(turn_stdout.contains("Vela executed a local image turn."));
-    assert!(turn_stdout.contains(
-        "Provider capabilities: text=true tool_loop=true reflection_retry=true images=false"
-    ));
+    assert!(turn_stdout.contains("Phi scaffolded the image request."));
+    assert!(turn_stdout.contains("response route: source=runtime-llamacpp provider=llamacpp model=phi-3-mini capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    server.join().unwrap();
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that a configured embedded provider can answer image turns through the text-only scaffold path.
+fn chat_image_with_configured_embedded_provider_uses_text_only_scaffold_path() {
+    let vela_home = temp_vela_home("embedded-image-scaffold");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let image_path = vela_home.join("diagram.png");
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+    let model_path = vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &["chat", "--image", image_path.to_str().expect("image path")],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("Embedded fixture reply."));
+    assert!(turn_stdout.contains("response route: source=runtime-embedded provider=embedded capabilities=text=true tool_loop=true reflection_retry=true images=false"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
