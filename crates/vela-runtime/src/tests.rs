@@ -1280,6 +1280,11 @@ fn scheduler_executes_and_recovers_jobs() {
         first_job.last_progression.as_deref(),
         Some("completed-rescheduled")
     );
+    assert_eq!(
+        first_job.last_delivery_progression.as_deref(),
+        Some("delivery-skipped")
+    );
+    assert_eq!(first_job.delivery_attempt_count, 0);
     assert!(first_job.next_run_at > first_job.created_at);
 
     let setup = setup_scheduler(&bootstrap).unwrap();
@@ -1311,6 +1316,11 @@ fn scheduler_executes_and_recovers_jobs() {
         recovered_job.last_progression.as_deref(),
         Some("completed-rescheduled")
     );
+    assert_eq!(
+        recovered_job.last_delivery_progression.as_deref(),
+        Some("delivery-skipped")
+    );
+    assert_eq!(recovered_job.delivery_attempt_count, 0);
     assert!(recovered_job.last_recovered_at.is_some());
 
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
@@ -1419,6 +1429,12 @@ fn scheduler_job_delivery_uses_gateway_webhook() {
     assert_eq!(start.executed_job_count, 1);
     let job = get_scheduled_job(&bootstrap, &added.id).unwrap();
     assert_eq!(job.last_delivery_outcome.as_deref(), Some("delivered"));
+    assert_eq!(
+        job.last_delivery_progression.as_deref(),
+        Some("delivery-delivered")
+    );
+    assert_eq!(job.delivery_attempt_count, 1);
+    assert_eq!(job.last_delivery_status_code, Some(200));
     assert!(job.last_delivery_at.is_some());
     assert!(job.last_delivery_error.is_none());
 
@@ -1471,6 +1487,12 @@ fn scheduler_job_delivery_failures_are_recorded() {
     let job = get_scheduled_job(&bootstrap, &added.id).unwrap();
     assert_eq!(job.last_outcome.as_deref(), Some("completed"));
     assert_eq!(job.last_delivery_outcome.as_deref(), Some("failed"));
+    assert_eq!(
+        job.last_delivery_progression.as_deref(),
+        Some("delivery-failed")
+    );
+    assert_eq!(job.delivery_attempt_count, 1);
+    assert_eq!(job.last_delivery_status_code, None);
     assert!(!job
         .last_delivery_error
         .as_deref()

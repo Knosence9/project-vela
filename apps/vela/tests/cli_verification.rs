@@ -2354,6 +2354,8 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     assert!(show_stdout.contains("task=ping status"));
     assert!(show_stdout.contains("next_run_at="));
     assert!(show_stdout.contains("progression=Some(\"registered\")"));
+    assert!(show_stdout.contains("delivery_progression=Some(\"delivery-configured\")"));
+    assert!(show_stdout.contains("delivery_attempt_count=0"));
     assert!(show_stdout.contains("delivery_webhook_url=Some(\"https://example.test/hook\")"));
     assert!(show_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
 
@@ -2363,6 +2365,8 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     assert!(list_stdout.contains(job_id));
     assert!(list_stdout.contains("run_count=0"));
     assert!(list_stdout.contains("progression=Some(\"registered\")"));
+    assert!(list_stdout.contains("delivery_progression=Some(\"delivery-configured\")"));
+    assert!(list_stdout.contains("delivery_attempt_count=0"));
     assert!(list_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
 
     let invalid = run_vela(&vela_home, &["cron", "--schedule", "0 * * * *"]);
@@ -2423,6 +2427,9 @@ fn cron_report_summarizes_scheduler_state() {
     );
     job["last_delivery_at"] = serde_json::Value::from(14);
     job["last_delivery_outcome"] = serde_json::Value::from("failed");
+    job["last_delivery_progression"] = serde_json::Value::from("delivery-failed");
+    job["delivery_attempt_count"] = serde_json::Value::from(2);
+    job["last_delivery_status_code"] = serde_json::Value::Null;
     job["last_delivery_error"] = serde_json::Value::from(
         "webhook delivery failed after retry because downstream rejected the payload body",
     );
@@ -2443,8 +2450,10 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("delivery_pending=0"));
     assert!(report_stdout.contains("delivery_failed=1"));
     assert!(report_stdout.contains("delivery_delivered=0"));
+    assert!(report_stdout.contains("delivery_skipped=0"));
     assert!(report_stdout.contains("total_runs=2"));
     assert!(report_stdout.contains("total_recoveries=1"));
+    assert!(report_stdout.contains("total_delivery_attempts=2"));
     assert!(report_stdout.contains(&format!("{}@{}", job_id, now + 42)));
     assert!(report_stdout.contains("scheduler jobs [1]:"));
     assert!(report_stdout.contains(&format!(
@@ -2464,6 +2473,9 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("delivery_at=Some(14)"));
     assert!(report_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
     assert!(report_stdout.contains("delivery_outcome=Some(\"failed\")"));
+    assert!(report_stdout.contains("delivery_progression=Some(\"delivery-failed\")"));
+    assert!(report_stdout.contains("delivery_attempt_count=2"));
+    assert!(report_stdout.contains("delivery_status_code=None"));
     assert!(report_stdout.contains("delivery_error_excerpt=Some(\"webhook delivery failed after retry because downstream rejected the payload body\""));
     assert!(report_stdout.contains("last_error_excerpt=Some(\"temporary network failure while delivering scheduler webhook payload"));
 
@@ -2482,6 +2494,8 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(show_stdout.contains(&format!("lease_expires_at=Some({})", now + 21)));
     assert!(show_stdout.contains("last_session_id=Some(\"session-123\")"));
     assert!(show_stdout.contains("execution_token=Some(\"attempt-xyz\")"));
+    assert!(show_stdout.contains("delivery_progression=Some(\"delivery-failed\")"));
+    assert!(show_stdout.contains("delivery_attempt_count=2"));
 
     let mut delivered_jobs: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&jobs_path).unwrap()).unwrap();
@@ -2491,6 +2505,8 @@ fn cron_report_summarizes_scheduler_state() {
         .first_mut()
         .expect("first job");
     delivered_job["last_delivery_outcome"] = serde_json::Value::from("delivered");
+    delivered_job["last_delivery_progression"] = serde_json::Value::from("delivery-delivered");
+    delivered_job["last_delivery_status_code"] = serde_json::Value::from(200);
     delivered_job["last_delivery_error"] = serde_json::Value::Null;
     std::fs::write(
         &jobs_path,
@@ -2508,6 +2524,8 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(delivered_stdout.contains("delivery_failed=0"));
     assert!(delivered_stdout.contains("delivery_delivered=1"));
     assert!(delivered_stdout.contains("delivery_outcome=Some(\"delivered\")"));
+    assert!(delivered_stdout.contains("delivery_progression=Some(\"delivery-delivered\")"));
+    assert!(delivered_stdout.contains("delivery_status_code=Some(200)"));
     assert!(delivered_stdout.contains("delivery_error_excerpt=None"));
 
     let mut overdue_jobs: serde_json::Value =
@@ -2667,6 +2685,9 @@ fn cron_start_executes_due_jobs() {
     assert!(show_stdout.contains("outcome=Some(\"completed\")"));
     assert!(show_stdout.contains("progression=Some(\"completed-rescheduled\")"));
     assert!(show_stdout.contains("delivery_outcome=Some(\"delivered\")"));
+    assert!(show_stdout.contains("delivery_progression=Some(\"delivery-delivered\")"));
+    assert!(show_stdout.contains("delivery_attempt_count=1"));
+    assert!(show_stdout.contains("delivery_status_code=Some(200)"));
 
     server.join().unwrap();
     std::fs::remove_dir_all(&vela_home).unwrap();
