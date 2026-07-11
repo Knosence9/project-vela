@@ -2102,6 +2102,8 @@ fn sessions_branch_and_compress_are_inspectable() {
     assert!(compress.status.success(), "{}", stderr_text(&compress));
     let compress_stdout = stdout_text(&compress);
     assert!(compress_stdout.contains("session compressed:"));
+    assert!(compress_stdout.contains("delta_messages="));
+    assert!(compress_stdout.contains("delta_events="));
 
     let show = run_vela(&vela_home, &["sessions", "--show", branch_session]);
     assert!(show.status.success(), "{}", stderr_text(&show));
@@ -2119,7 +2121,68 @@ fn sessions_branch_and_compress_are_inspectable() {
         branch_child_session
     )));
     assert!(show_stdout.contains("compressions [1]:"));
+    assert!(show_stdout.contains("delta_messages="));
+    assert!(show_stdout.contains("delta_events="));
     assert!(show_stdout.contains("summary=branch compressed summary"));
+
+    let compress_without_changes = run_vela(
+        &vela_home,
+        &[
+            "sessions",
+            "--compress",
+            branch_session,
+            "--summary",
+            "branch follow-up summary",
+        ],
+    );
+    assert!(!compress_without_changes.status.success());
+    assert!(stderr_text(&compress_without_changes)
+        .contains("compression requires new durable messages"));
+
+    let branch_follow_up = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--resume",
+            branch_session,
+            "--query",
+            "branch follow-up",
+        ],
+    );
+    assert!(
+        branch_follow_up.status.success(),
+        "{}",
+        stderr_text(&branch_follow_up)
+    );
+
+    let compress_follow_up = run_vela(
+        &vela_home,
+        &[
+            "sessions",
+            "--compress",
+            branch_session,
+            "--summary",
+            "branch follow-up summary",
+        ],
+    );
+    assert!(
+        compress_follow_up.status.success(),
+        "{}",
+        stderr_text(&compress_follow_up)
+    );
+    let compress_follow_up_stdout = stdout_text(&compress_follow_up);
+    assert!(compress_follow_up_stdout.contains("delta_messages="));
+
+    let branch_show_after_follow_up = run_vela(&vela_home, &["sessions", "--show", branch_session]);
+    assert!(
+        branch_show_after_follow_up.status.success(),
+        "{}",
+        stderr_text(&branch_show_after_follow_up)
+    );
+    let branch_show_after_follow_up_stdout = stdout_text(&branch_show_after_follow_up);
+    assert!(branch_show_after_follow_up_stdout.contains("compressions [2]:"));
+    assert!(branch_show_after_follow_up_stdout.contains("summary=branch follow-up summary"));
+    assert!(branch_show_after_follow_up_stdout.contains("delta_messages="));
 
     let parent_show = run_vela(&vela_home, &["sessions", "--show", parent_session]);
     assert!(

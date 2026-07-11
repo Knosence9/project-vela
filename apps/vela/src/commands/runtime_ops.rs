@@ -159,11 +159,13 @@ pub(crate) fn run_sessions(
             .ok_or_else(|| anyhow::anyhow!("--summary is required with --compress"))?;
         let compression = vela_runtime::compress_session(bootstrap, target, summary)?;
         println!(
-            "session compressed: session={} compression={} messages={} events={} summary={}",
+            "session compressed: session={} compression={} messages={} events={} delta_messages={} delta_events={} summary={}",
             compression.session_id,
             compression.id,
             compression.source_message_count,
             compression.source_event_count,
+            compression.delta_message_count,
+            compression.delta_event_count,
             compression.summary,
         );
     } else if let Some(target) = args.show.as_deref() {
@@ -236,10 +238,12 @@ pub(crate) fn run_sessions(
                     println!("compressions [{}]:", inspection.compressions.len());
                     for compression in inspection.compressions {
                         println!(
-                            "- {} :: messages={} events={} summary={}",
+                            "- {} :: messages={} events={} delta_messages={} delta_events={} summary={}",
                             compression.id,
                             compression.source_message_count,
                             compression.source_event_count,
+                            compression.delta_message_count,
+                            compression.delta_event_count,
                             compression.summary,
                         );
                     }
