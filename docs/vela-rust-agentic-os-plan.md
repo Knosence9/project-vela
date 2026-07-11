@@ -182,14 +182,14 @@ Build the smallest believable Vela core:
 - basic reload command or reload trigger
 
 ### Checklist
-- [ ] define kernel crate boundaries
-- [ ] boot the `vela` binary end-to-end
-- [ ] load config and state paths
-- [ ] implement one session lifecycle path
-- [ ] implement one provider/backend adapter
-- [ ] implement one tool invocation path
-- [ ] persist sessions/events
-- [ ] implement first reload mechanism
+- [x] define kernel crate boundaries
+- [x] boot the `vela` binary end-to-end
+- [x] load config and state paths
+- [x] implement one session lifecycle path
+- [x] implement one provider/backend adapter
+- [x] implement one tool invocation path
+- [x] persist sessions/events
+- [x] implement first reload mechanism
 
 ### Exit gate
 - Vela can run a real session in Rust
@@ -213,13 +213,13 @@ This is where Vela starts to feel configurable rather than hardcoded.
 - reload without rebuilding the full world where possible
 
 ### Checklist
-- [ ] define plugin manifest format
-- [ ] define extension lifecycle hooks
-- [ ] load tool extensions from config
-- [ ] load skill/workflow extensions from config
-- [ ] implement enable/disable flags
-- [ ] implement safe reload path
-- [ ] document plugin boundaries vs kernel boundaries
+- [x] define plugin manifest format
+- [x] define extension lifecycle hooks
+- [x] load tool extensions from config
+- [x] load skill/workflow extensions from config
+- [x] implement enable/disable flags
+- [x] implement safe reload path
+- [x] document plugin boundaries vs kernel boundaries
 
 ### Exit gate
 - Vela can add/remove selected capabilities through config and reload
@@ -240,13 +240,13 @@ Add the services that move Vela from “agent runtime” to “agentic OS.”
 - durable identity/profile layer
 
 ### Checklist
-- [ ] add scheduler core
-- [ ] add memory write/read pipeline
-- [ ] add retrieval/search interface
-- [ ] add approval and policy engine
-- [ ] add planner hooks
-- [ ] add reflection/verifier hooks
-- [ ] add profile/identity persistence
+- [x] add scheduler core
+- [x] add memory write/read pipeline
+- [x] add retrieval/search interface
+- [x] add approval and policy engine
+- [x] add planner hooks
+- [x] add reflection/verifier hooks
+- [x] add profile/identity persistence
 
 ### Exit gate
 - Vela behaves like a persistent agent system, not just a CLI wrapper
