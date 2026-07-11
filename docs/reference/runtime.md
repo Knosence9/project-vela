@@ -53,7 +53,7 @@
 - embedded compatibility shims used by deterministic tests are gated to explicit stub-model fixtures only; real embedded sessions continue through model-backed completions for tool-loop/reflection continuations
 - extension reload ownership checks now compare against a durable last-applied kernel-runtime baseline (`~/.vela/runtime/reload-ownership-baseline.json`) so restart-only drift remains enforceable across fresh CLI processes instead of only within one in-memory bootstrap, and blocked reloads now direct the operator to restart Vela with the updated config to refresh that baseline intentionally
 - `vela status` now surfaces that same ownership baseline ahead of reload, including whether the currently loaded runtime config is already restart-required relative to the durable baseline and bounded per-setting current drift lines for operator diagnostics
-- `vela chat --image ...` and mixed `vela chat --query ... --image ...` turns can call a configured runtime provider for first-pass image execution, with Ollama and the deterministic mock backend serving that path directly while llama.cpp falls back to the deterministic kernel image scaffold because its bounded contract is text-only
+- `vela chat --image ...` and mixed `vela chat --query ... --image ...` turns can call a configured runtime provider for first-pass image execution: Ollama and the deterministic mock backend serve that path directly with attached image bytes, while text-only backends such as llama.cpp and embedded now answer through a provider-backed image scaffold path that passes operator-visible image metadata without direct attachments
 - runtime turn CLI output now prints the resolved response route (`source`, optional `provider`, optional `model`, and advertised provider capabilities) so backend differences stay visible even when execution falls back to the kernel path
 - `vela eval --run <prompt> --backend <id>...` now records one durable eval run in `~/.vela/evals/runs.json`, capturing per-backend status, duration, response routing, provider capabilities, bounded previews/errors, and a bounded parity summary so backend comparisons are repeatable without reading raw logs
 - `vela eval --run-slot ternary-preview ...` now drives one of the published bounded architecture experiment slots from `~/.vela/evals/slots.json`, recording which slot was used so future routing experiments stay inspectable and reversible; slot inspection surfaces now also show the latest durable eval id/time/result-count/parity summary plus the latest passed backends, failed backends, and capability-group evidence for each slot, and the current published slots carry `embedded` alongside the existing bounded providers so sparse-routing previews, adapter-intake replays, and local-first/parity evidence remain visible without mutating the live route
@@ -84,9 +84,9 @@
   - bounded tool-loop completions emit the corresponding `*-tool-loop` source
   - kernel fallbacks remain explicitly visible as `runtime-kernel`
 - Capability differences are part of the documented contract rather than hidden implementation details:
-  - Ollama and mock support text, bounded tool-loop, reflection/retry, and first-pass image handling
-  - llama.cpp supports text, bounded tool-loop, and reflection/retry, but not direct image attachments in this slice
-  - embedded supports text plus the bounded tool-loop / reflection path for text turns, but not direct image attachments in this slice
+  - Ollama and mock support text, bounded tool-loop, reflection/retry, and direct first-pass image handling
+  - llama.cpp supports text, bounded tool-loop, reflection/retry, and provider-backed text-only image scaffolds, but not direct image attachments in this slice
+  - embedded supports text plus the bounded tool-loop / reflection path for text turns and provider-backed text-only image scaffolds, but not direct image attachments in this slice
 
 ## Kernel vs provider boundary
 - keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel

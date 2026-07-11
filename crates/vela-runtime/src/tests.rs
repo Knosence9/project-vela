@@ -1477,6 +1477,47 @@ fn execute_chat_turn_handles_image_only_requests() {
 }
 
 #[test]
+/// Verifies that the embedded provider can answer image turns through the text-only scaffold path.
+fn execute_chat_turn_uses_embedded_provider_for_text_only_image_scaffold() {
+    let mut bootstrap = test_bootstrap("embedded-image-scaffold");
+    bootstrap.resolved_config.runtime_provider = Some("embedded".to_string());
+    let model_path = bootstrap.vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    bootstrap.resolved_config.runtime_embedded_model_path =
+        Some(model_path.to_string_lossy().into_owned());
+    let image_path = bootstrap.vela_home.join("diagram.png");
+    std::fs::create_dir_all(&bootstrap.vela_home).unwrap();
+    std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+
+    let report = execute_chat_turn(
+        &bootstrap,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: false,
+            query_text: None,
+            image_present: true,
+            image_path: Some(image_path.to_string_lossy().into_owned()),
+            resume: None,
+            continue_last: None,
+        },
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.response.as_deref(), Some("Embedded fixture reply."));
+    assert_eq!(report.response_source, "runtime-embedded");
+    assert_eq!(
+        report.response_provider_capabilities.as_deref(),
+        Some("text=true tool_loop=true reflection_retry=true images=false")
+    );
+
+    std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that configured Ollama execution is used for image chat turns.
 fn execute_chat_turn_uses_ollama_provider_for_image_requests() {
     let (base_url, server) = spawn_mock_ollama(
