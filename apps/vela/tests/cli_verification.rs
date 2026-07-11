@@ -1343,6 +1343,52 @@ fn backend_experiment_slot_uses_configured_backend_when_no_backend_flag_is_suppl
 }
 
 #[test]
+/// Verifies that backend experiment slots fall back to their published backend set when the configured runtime provider is not allowed.
+fn backend_experiment_slot_falls_back_to_slot_defaults_when_configured_backend_is_disallowed() {
+    let vela_home = temp_vela_home("eval-slot-disallowed-configured-backend");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: ollama\n  model: gemma3:4b\n",
+    )
+    .unwrap();
+
+    let list_slots = run_vela(&vela_home, &["eval", "--list-slots"]);
+    assert!(list_slots.status.success(), "{}", stderr_text(&list_slots));
+
+    let slots_path = vela_home.join("evals").join("slots.json");
+    let mut slots: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(&slots_path).unwrap()).unwrap();
+    slots.push(serde_json::json!({
+        "id": "mock-only-fallback",
+        "status": "bounded-preview",
+        "strategy": "offline-replay",
+        "summary": "Mock-only fallback",
+        "hypothesis": "Disallowed configured backends fall back to slot defaults",
+        "default_prompt": "Replay this request through the mock slot fallback.",
+        "allowed_backends": ["mock"]
+    }));
+    std::fs::write(&slots_path, serde_json::to_string_pretty(&slots).unwrap()).unwrap();
+
+    let run_slot = run_vela(&vela_home, &["eval", "--run-slot", "mock-only-fallback"]);
+    assert!(run_slot.status.success(), "{}", stderr_text(&run_slot));
+    let run_slot_stdout = stdout_text(&run_slot);
+    assert!(run_slot_stdout.contains("slot=Some(\"mock-only-fallback\")"));
+    assert!(run_slot_stdout.contains("backends=mock"));
+    assert!(run_slot_stdout.contains("backend=mock transport=in-process status=passed"));
+
+    let show_slot = run_vela(&vela_home, &["eval", "--show-slot", "mock-only-fallback"]);
+    assert!(show_slot.status.success(), "{}", stderr_text(&show_slot));
+    let show_slot_stdout = stdout_text(&show_slot);
+    assert!(show_slot_stdout.contains("id=mock-only-fallback"));
+    assert!(show_slot_stdout.contains("latest_backends=mock"));
+    assert!(show_slot_stdout.contains("latest_passed=mock"));
+    assert!(show_slot_stdout.contains("latest_failed=none"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that the bounded provider experiment slots are published and can drive persisted eval runs.
 fn backend_experiment_slot_is_visible_and_runnable() {
     let vela_home = temp_vela_home("eval-slot");

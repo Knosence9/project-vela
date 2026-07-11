@@ -1351,7 +1351,7 @@ fn resolve_backend_eval_backends(
     bootstrap: &BootstrapReport,
     backends: &[String],
     allowed_backends: Option<&[String]>,
-    context: Option<&str>,
+    _context: Option<&str>,
 ) -> Result<Vec<String>> {
     let normalized_backends = normalize_eval_backends(backends);
     if !normalized_backends.is_empty() {
@@ -1361,17 +1361,13 @@ fn resolve_backend_eval_backends(
     if let Some(contract) = resolve_runtime_backend_contract(&bootstrap.resolved_config, None)? {
         let configured_backend = contract.id.to_string();
         if let Some(allowed_backends) = allowed_backends {
-            if !allowed_backends
+            if allowed_backends
                 .iter()
                 .any(|backend| backend == &configured_backend)
             {
-                let context = context.unwrap_or("backend eval");
-                bail!(
-                    "{context} does not allow configured runtime provider {:?}; allowed backends: {}",
-                    configured_backend,
-                    allowed_backends.join(",")
-                );
+                return Ok(vec![configured_backend]);
             }
+            return Ok(allowed_backends.to_vec());
         }
         return Ok(vec![configured_backend]);
     }
