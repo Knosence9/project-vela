@@ -308,6 +308,39 @@ fn branch_and_compression_preserve_lineage_and_inspection() {
     );
     assert_eq!(inspection.descendants[0].depth, 1);
     assert_eq!(inspection.compressions[0].id, compression.id);
+    assert_eq!(
+        inspection.compressions[0].delta_message_count,
+        compression.source_message_count
+    );
+    assert_eq!(
+        inspection.compressions[0].delta_event_count,
+        compression.source_event_count
+    );
+    let duplicate = compress_session(
+        &report.state_db_path,
+        &branch.session_id,
+        "branch follow-up summary",
+    )
+    .unwrap_err();
+    assert!(duplicate
+        .to_string()
+        .contains("compression requires new durable messages"));
+    assert!(append_message_to_session(
+        &report.state_db_path,
+        &branch.session_id,
+        "assistant",
+        "branch follow-up reply",
+        None
+    )
+    .unwrap());
+    let compression_follow_up = compress_session(
+        &report.state_db_path,
+        &branch.session_id,
+        "branch follow-up summary",
+    )
+    .unwrap();
+    assert_eq!(compression_follow_up.delta_message_count, 1);
+    assert!(compression_follow_up.delta_event_count >= 1);
     let parent_inspection = inspect_session(&report.state_db_path, &parent.session_id, 20)
         .unwrap()
         .expect("parent inspection");
@@ -325,6 +358,20 @@ fn branch_and_compression_preserve_lineage_and_inspection() {
         Some(parent.session_id.as_str())
     );
     assert_eq!(summary.runtime_state, "ready");
+
+    let branch_after_follow_up = inspect_session(&report.state_db_path, &branch.session_id, 20)
+        .unwrap()
+        .expect("branch after follow-up");
+    assert_eq!(branch_after_follow_up.compressions.len(), 2);
+    assert_eq!(
+        branch_after_follow_up.compressions[1].id,
+        compression_follow_up.id
+    );
+    assert_eq!(
+        branch_after_follow_up.compressions[1].delta_message_count,
+        1
+    );
+    assert!(branch_after_follow_up.compressions[1].delta_event_count >= 1);
 
     let _ = fs::remove_dir_all(&vela_home);
 }

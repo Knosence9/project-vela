@@ -172,6 +172,8 @@ pub struct SessionCompressionRecord {
     pub summary: String,
     pub source_message_count: u64,
     pub source_event_count: u64,
+    pub delta_message_count: u64,
+    pub delta_event_count: u64,
     pub created_at: i64,
 }
 
@@ -769,9 +771,9 @@ pub fn branch_session(
         )?;
     }
 
-    let compressions: Vec<(String, i64, i64, i64)> = {
+    let compressions: Vec<(String, i64, i64, i64, i64, i64)> = {
         let mut compression_stmt = tx.prepare(
-            "SELECT summary, source_message_count, source_event_count, created_at FROM session_compressions WHERE session_id = ?1 ORDER BY created_at ASC, id ASC"
+            "SELECT summary, source_message_count, source_event_count, delta_message_count, delta_event_count, created_at FROM session_compressions WHERE session_id = ?1 ORDER BY created_at ASC, id ASC"
         )?;
         let rows = compression_stmt.query_map(params![source_session.id], |row| {
             Ok((
@@ -779,6 +781,8 @@ pub fn branch_session(
                 row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
                 row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })?;
         let mut values = Vec::new();
@@ -787,12 +791,20 @@ pub fn branch_session(
         }
         values
     };
-    for (summary, source_message_count, source_event_count, created_at) in compressions {
+    for (
+        summary,
+        source_message_count,
+        source_event_count,
+        delta_message_count,
+        delta_event_count,
+        created_at,
+    ) in compressions
+    {
         let id = format!("cmp-{}-{}", session_id, unix_timestamp_nanos());
         tx.execute(
-            "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, created_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, session_id, summary, source_message_count, source_event_count, created_at],
+            "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, delta_message_count, delta_event_count, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, session_id, summary, source_message_count, source_event_count, delta_message_count, delta_event_count, created_at],
         )?;
     }
 
@@ -848,19 +860,35 @@ pub fn compress_session(
         params![session.id],
         |row| row.get(0),
     )?;
+    let latest_compression = latest_compression_record_for_connection(&conn, &session.id)?;
     let created_at = unix_timestamp();
     let id = format!("cmp-{}", unix_timestamp_nanos());
     let tx = conn.unchecked_transaction()?;
-    if latest_compression_summary_for_connection(&tx, &session.id)?
-        .as_deref()
-        .is_some_and(|existing| existing.trim() == summary)
+    if latest_compression
+        .as_ref()
+        .is_some_and(|existing| existing.summary.trim() == summary)
     {
         anyhow::bail!("compression summary matches the latest persisted summary");
     }
+    let previous_message_count = latest_compression
+        .as_ref()
+        .map(|existing| existing.source_message_count)
+        .unwrap_or(0);
+    let previous_event_count = latest_compression
+        .as_ref()
+        .map(|existing| existing.source_event_count)
+        .unwrap_or(0);
+    let delta_message_count = source_message_count.saturating_sub(previous_message_count);
+    let delta_event_count = source_event_count.saturating_sub(previous_event_count);
+    if delta_message_count == 0 {
+        anyhow::bail!(
+            "compression requires new durable messages since the latest persisted summary"
+        );
+    }
     tx.execute(
-        "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, created_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, session.id, summary, source_message_count as i64, source_event_count as i64, created_at],
+        "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, delta_message_count, delta_event_count, created_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![id, session.id, summary, source_message_count as i64, source_event_count as i64, delta_message_count as i64, delta_event_count as i64, created_at],
     )?;
     append_event(
         &tx,
@@ -871,6 +899,8 @@ pub fn compress_session(
             "summary": summary,
             "source_message_count": source_message_count,
             "source_event_count": source_event_count,
+            "delta_message_count": delta_message_count,
+            "delta_event_count": delta_event_count,
         })
         .to_string(),
     )?;
@@ -882,8 +912,17 @@ pub fn compress_session(
         summary: summary.to_string(),
         source_message_count,
         source_event_count,
+        delta_message_count,
+        delta_event_count,
         created_at,
     })
+}
+
+#[derive(Debug, Clone)]
+struct LatestCompressionRecord {
+    summary: String,
+    source_message_count: u64,
+    source_event_count: u64,
 }
 
 /// Returns the latest persisted compression summary for one session when present.
@@ -900,11 +939,24 @@ fn latest_compression_summary_for_connection(
     conn: &Connection,
     session_id: &str,
 ) -> Result<Option<String>> {
+    Ok(latest_compression_record_for_connection(conn, session_id)?.map(|record| record.summary))
+}
+
+fn latest_compression_record_for_connection(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<LatestCompressionRecord>> {
     Ok(conn
         .query_row(
-            "SELECT summary FROM session_compressions WHERE session_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
+            "SELECT summary, source_message_count, source_event_count FROM session_compressions WHERE session_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
             params![session_id],
-            |row| row.get(0),
+            |row| {
+                Ok(LatestCompressionRecord {
+                    summary: row.get(0)?,
+                    source_message_count: row.get::<_, i64>(1)? as u64,
+                    source_event_count: row.get::<_, i64>(2)? as u64,
+                })
+            },
         )
         .optional()?)
 }

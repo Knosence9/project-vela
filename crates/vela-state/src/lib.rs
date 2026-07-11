@@ -55,6 +55,8 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             summary TEXT NOT NULL,
             source_message_count INTEGER NOT NULL,
             source_event_count INTEGER NOT NULL,
+            delta_message_count INTEGER NOT NULL DEFAULT 0,
+            delta_event_count INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             FOREIGN KEY(session_id) REFERENCES sessions(id)
         );
@@ -72,6 +74,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
     ensure_messages_metadata_column(conn)?;
     ensure_sessions_runtime_state_column(conn)?;
     ensure_sessions_branch_columns(conn)?;
+    ensure_session_compression_delta_columns(conn)?;
     conn.execute(
         "INSERT INTO message_fts(message_id, session_id, title, content)
          SELECT m.id, m.session_id, s.title, m.content
@@ -129,6 +132,41 @@ fn ensure_sessions_branch_columns(conn: &Connection) -> Result<()> {
     }
     if !has_note {
         conn.execute("ALTER TABLE sessions ADD COLUMN branch_note TEXT", [])?;
+    }
+    Ok(())
+}
+
+fn ensure_session_compression_delta_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(session_compressions)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut has_delta_messages = false;
+    let mut has_delta_events = false;
+    for column in columns {
+        match column?.as_str() {
+            "delta_message_count" => has_delta_messages = true,
+            "delta_event_count" => has_delta_events = true,
+            _ => {}
+        }
+    }
+    if !has_delta_messages {
+        conn.execute(
+            "ALTER TABLE session_compressions ADD COLUMN delta_message_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE session_compressions SET delta_message_count = source_message_count WHERE delta_message_count = 0",
+            [],
+        )?;
+    }
+    if !has_delta_events {
+        conn.execute(
+            "ALTER TABLE session_compressions ADD COLUMN delta_event_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE session_compressions SET delta_event_count = source_event_count WHERE delta_event_count = 0",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -296,7 +334,7 @@ fn load_session_inspection(
     }
 
     let mut compression_stmt = conn.prepare(
-        "SELECT id, summary, source_message_count, source_event_count, created_at
+        "SELECT id, summary, source_message_count, source_event_count, delta_message_count, delta_event_count, created_at
          FROM session_compressions
          WHERE session_id = ?1
          ORDER BY created_at DESC, id DESC
@@ -310,7 +348,9 @@ fn load_session_inspection(
                 summary: row.get(1)?,
                 source_message_count: row.get::<_, i64>(2)? as u64,
                 source_event_count: row.get::<_, i64>(3)? as u64,
-                created_at: row.get(4)?,
+                delta_message_count: row.get::<_, i64>(4)? as u64,
+                delta_event_count: row.get::<_, i64>(5)? as u64,
+                created_at: row.get(6)?,
             })
         })?;
     let mut compressions = Vec::new();
