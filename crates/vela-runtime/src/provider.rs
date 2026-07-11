@@ -564,6 +564,13 @@ impl RuntimeTurnRecorder {
             "runtime_turn_phase",
             payload,
         )?;
+        if let Some(runtime_state) = vela_state::SessionRuntimeState::from_runtime_phase(phase) {
+            let _ = vela_state::set_session_runtime_state(
+                &bootstrap.persistence.state_db_path,
+                session_id,
+                runtime_state,
+            )?;
+        }
         if !logged {
             bail!(
                 "failed to persist runtime turn lifecycle phase {:?} for session {:?}",

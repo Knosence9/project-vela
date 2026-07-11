@@ -21,11 +21,7 @@ fn derive_runtime_session_title(request: &SessionRequest) -> String {
     let command = request.command_name.trim();
     if let Some(query) = request.query_text.as_deref().map(str::trim) {
         if !query.is_empty() {
-            return format!(
-                "{}: {}",
-                command,
-                normalize_session_title_fragment(query)
-            );
+            return format!("{}: {}", command, normalize_session_title_fragment(query));
         }
     }
 
@@ -79,6 +75,7 @@ pub struct SessionRuntimeReport {
     pub action: SessionAction,
     pub interaction_mode: InteractionMode,
     pub title: String,
+    pub runtime_state: String,
     pub continue_target: Option<String>,
     pub continue_resolution: Option<String>,
     pub continue_anchor_session_id: Option<String>,
@@ -90,6 +87,7 @@ pub struct SessionRuntimeReport {
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
+    pub runtime_state: String,
     pub message_count: u64,
     pub event_count: u64,
     pub parent_session_id: Option<String>,
@@ -163,6 +161,7 @@ pub struct SessionCompressionRecord {
 pub struct SessionInspection {
     pub session_id: String,
     pub title: String,
+    pub runtime_state: String,
     pub branch: SessionBranchRecord,
     pub child_sessions: Vec<SessionSummary>,
     pub messages: Vec<SessionMessageRecord>,
@@ -188,6 +187,55 @@ impl SessionAction {
             Self::ResumedById => "resumed-by-id",
             Self::ResumedByTitle => "resumed-by-title",
             Self::ResumedLatest => "resumed-latest",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+/// Enumerates supported `SessionRuntimeState` variants.
+pub enum SessionRuntimeState {
+    Ready,
+    Receive,
+    Deliberate,
+    ToolRequest,
+    ToolResult,
+    Reflect,
+    Retry,
+    Respond,
+    Finish,
+    Failed,
+}
+
+impl SessionRuntimeState {
+    /// Returns the stable string label used for persistence and display.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Receive => "receive",
+            Self::Deliberate => "deliberate",
+            Self::ToolRequest => "tool-request",
+            Self::ToolResult => "tool-result",
+            Self::Reflect => "reflect",
+            Self::Retry => "retry",
+            Self::Respond => "respond",
+            Self::Finish => "finish",
+            Self::Failed => "failed",
+        }
+    }
+
+    /// Maps one persisted runtime phase into the bounded session runtime state surface.
+    pub fn from_runtime_phase(phase: &str) -> Option<Self> {
+        match phase {
+            "receive" => Some(Self::Receive),
+            "deliberate" => Some(Self::Deliberate),
+            "tool-request" => Some(Self::ToolRequest),
+            "tool-result" => Some(Self::ToolResult),
+            "reflect" => Some(Self::Reflect),
+            "retry" => Some(Self::Retry),
+            "respond" => Some(Self::Respond),
+            "finish" => Some(Self::Finish),
+            "failed" => Some(Self::Failed),
+            _ => None,
         }
     }
 }
@@ -396,6 +444,21 @@ pub fn append_event_to_latest_session(
     Ok(true)
 }
 
+/// Persists one bounded runtime state label on a durable session when present.
+pub fn set_session_runtime_state(
+    state_db_path: &Path,
+    session_id: &str,
+    runtime_state: SessionRuntimeState,
+) -> Result<bool> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    if session_title(&conn, session_id)?.is_none() {
+        return Ok(false);
+    }
+    update_session_runtime_state(&conn, session_id, runtime_state)?;
+    Ok(true)
+}
+
 /// Resolves runtime session from persisted state and runtime inputs.
 pub fn resolve_runtime_session(
     state_db_path: &Path,
@@ -421,6 +484,7 @@ pub fn resolve_runtime_session(
         let report = {
             let tx = conn.unchecked_transaction()?;
             touch_session(&tx, &session.id)?;
+            update_session_runtime_state(&tx, &session.id, SessionRuntimeState::Ready)?;
             append_event(
                 &tx,
                 &session.id,
@@ -438,6 +502,7 @@ pub fn resolve_runtime_session(
                 action,
                 interaction_mode,
                 title: session.title,
+                runtime_state: SessionRuntimeState::Ready.label().to_string(),
                 continue_target: None,
                 continue_resolution: None,
                 continue_anchor_session_id: None,
@@ -477,6 +542,7 @@ pub fn resolve_runtime_session(
         let report = {
             let tx = conn.unchecked_transaction()?;
             touch_session(&tx, &session.id)?;
+            update_session_runtime_state(&tx, &session.id, SessionRuntimeState::Ready)?;
             append_event(
                 &tx,
                 &session.id,
@@ -498,6 +564,7 @@ pub fn resolve_runtime_session(
                 action,
                 interaction_mode,
                 title: session.title,
+                runtime_state: SessionRuntimeState::Ready.label().to_string(),
                 continue_target: Some(target.to_string()),
                 continue_resolution: Some(continue_resolution.to_string()),
                 continue_anchor_session_id: anchor_id,
@@ -515,13 +582,14 @@ pub fn resolve_runtime_session(
     {
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
+            "INSERT INTO sessions(id, title, command_name, interaction_mode, runtime_state, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6)",
             params![
                 session_id,
                 title,
                 request.command_name,
                 interaction_mode.label(),
+                SessionRuntimeState::Ready.label(),
                 now
             ],
         )?;
@@ -546,6 +614,7 @@ pub fn resolve_runtime_session(
         action: SessionAction::Created,
         interaction_mode,
         title,
+        runtime_state: SessionRuntimeState::Ready.label().to_string(),
         continue_target: None,
         continue_resolution: None,
         continue_anchor_session_id: None,
@@ -586,9 +655,9 @@ pub fn branch_session(
 
     let tx = conn.unchecked_transaction()?;
     tx.execute(
-        "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at, parent_session_id, branch_note)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
-        params![session_id, title, command_name, interaction_mode, now, source_session.id, note],
+        "INSERT INTO sessions(id, title, command_name, interaction_mode, runtime_state, created_at, updated_at, parent_session_id, branch_note)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8)",
+        params![session_id, title, command_name, interaction_mode, SessionRuntimeState::Ready.label(), now, source_session.id, note],
     )?;
 
     let messages: Vec<(String, String, Option<String>, i64)> = {
@@ -800,6 +869,7 @@ pub fn resolve_command_session(
     if let Some(session) = latest_session_for_command(&conn, command_name)? {
         let tx = conn.unchecked_transaction()?;
         touch_session(&tx, &session.id)?;
+        update_session_runtime_state(&tx, &session.id, SessionRuntimeState::Ready)?;
         append_event(
             &tx,
             &session.id,
@@ -818,6 +888,7 @@ pub fn resolve_command_session(
             action: SessionAction::ResumedLatest,
             interaction_mode,
             title: session.title,
+            runtime_state: SessionRuntimeState::Ready.label().to_string(),
             continue_target: None,
             continue_resolution: None,
             continue_anchor_session_id: None,
@@ -831,13 +902,14 @@ pub fn resolve_command_session(
     let session_id = format!("session-{}", unique);
     let title = format!("{}-{}", command_name, unique);
     tx.execute(
-        "INSERT INTO sessions(id, title, command_name, interaction_mode, created_at, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
+        "INSERT INTO sessions(id, title, command_name, interaction_mode, runtime_state, created_at, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         params![
             session_id,
             title,
             command_name,
             interaction_mode.label(),
+            SessionRuntimeState::Ready.label(),
             now
         ],
     )?;
@@ -861,6 +933,7 @@ pub fn resolve_command_session(
         action: SessionAction::Created,
         interaction_mode,
         title,
+        runtime_state: SessionRuntimeState::Ready.label().to_string(),
         continue_target: None,
         continue_resolution: None,
         continue_anchor_session_id: None,

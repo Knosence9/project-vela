@@ -49,8 +49,9 @@ pub(crate) fn run_default_chat(bootstrap: &vela_runtime::BootstrapReport, cli: &
 
 fn print_chat_report(report: &vela_runtime::ChatTurnReport) {
     println!(
-        "runtime session: action={} id={} title={} mode={}",
+        "runtime session: action={} state={} id={} title={} mode={}",
         report.session.action.label(),
+        report.session.runtime_state,
         report.session.session_id,
         report.session.title,
         report.session.interaction_mode.label(),
@@ -210,8 +211,12 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
     }
     match vela_runtime::current_session_summary(bootstrap)? {
         Some(summary) => println!(
-            "active session: id={} title={} messages={} events={}",
-            summary.id, summary.title, summary.message_count, summary.event_count
+            "active session: id={} title={} state={} messages={} events={}",
+            summary.id,
+            summary.title,
+            summary.runtime_state,
+            summary.message_count,
+            summary.event_count
         ),
         None => println!("active session: none"),
     }

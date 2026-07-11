@@ -26,7 +26,7 @@
 - a durable model-lab policy now lives alongside eval state so deeper model-core work stays governed by explicit graduation gates, allowed strategies, prohibited behaviors, and required evidence
 
 ## Current runtime behavior
-- bare `vela` creates an interactive chat session titled `chat interactive` and appends an interactive runtime-ready assistant message when no explicit resume target is given
+- bare `vela` creates an interactive chat session titled `chat interactive`, persists the bounded session runtime state progression (`receive` → `deliberate` → `respond` → `finish` for the startup turn), and appends an interactive runtime-ready assistant message when no explicit resume target is given
 - `vela chat --query ...` creates a single-turn session titled from the normalized query text (`chat: <trimmed query preview>`), collapsing repeated whitespace and truncating long fragments before persisting the durable title that `sessions --show` and title-based resume flows inspect
 - image-only chat starts title sessions as `chat image: <filename>` when a filename is available, otherwise `chat image`, and that normalized title is the one exposed through durable inspection and title-based resume flows
 - `vela chat --query ...` can call a configured runtime provider for text turns, with Ollama, a deterministic mock backend, a bounded llama.cpp backend, and the embedded in-process backend now serving as explicit provider implementations or targets behind that boundary
@@ -37,8 +37,8 @@
 - provider-backed turns, including supported image-backed turns, now perform bounded reflection/retry when they see invalid tool continuations, empty provider replies, or unusable intermediate tool results
 - retrieved tool context is injected back into the provider continuation path as durable tool-result artifacts, keeping context-aware reasoning auditable without allowing live mutation
 - each live runtime turn now persists ordered lifecycle phases (`receive`, `deliberate`, `tool-request`, `tool-result`, `reflect`, `retry`, `respond`, `finish`, plus `failed` on error paths)
-- session inspection now surfaces parsed runtime lifecycle records, explicit branch lineage, and persisted compression summaries alongside raw messages and events
-- runtime CLI turn output now reports the durable `turn_id`, lifecycle phase count, and final phase
+- session inspection now surfaces the current bounded session runtime state (`ready`, `receive`, `deliberate`, `tool-request`, `tool-result`, `reflect`, `retry`, `respond`, `finish`, or `failed`) alongside parsed runtime lifecycle records, explicit branch lineage, and persisted compression summaries, so operators do not need raw event inspection to see the latest durable session state
+- runtime CLI turn output now reports the durable `turn_id`, lifecycle phase count, and final phase, while `vela status` and `vela sessions --show ...` expose the persisted session runtime state for the active or inspected session
 - `vela sessions --branch <session> --title <new-title> [--note ...]` can fork a durable child session with explicit parent lineage and copied continuity
 - `vela sessions --compress <session> --summary ...` can persist compressed continuity summaries without mutating durable memory directly; summaries are trimmed, must be non-empty, must differ from the latest persisted summary for that session, and are capped to a bounded length
 - `vela sessions --show <session>` exposes branch parentage, immediate child sessions, and compression counts through the session inspection surface
@@ -103,7 +103,6 @@
 
 ## Longer-horizon runtime roadmap notes
 These items are intentionally kept as roadmap themes rather than current execution slices after the current milestone work:
-- richer runtime state transitions beyond created/resumed shell states at the session level
 - deeper provider capability parity beyond the current explicit matrix, while preserving the documented bounded tool loop, reflection/retry, and explicit response-route contract
 - explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
