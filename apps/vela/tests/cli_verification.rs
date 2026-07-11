@@ -595,6 +595,47 @@ fn embedded_status_surfaces_last_load_failure() {
 }
 
 #[test]
+/// Verifies that an embedded-provider turn remains visible through fresh status inspection with lifecycle guardrails intact.
+fn embedded_provider_turn_surfaces_continuity_and_restart_state_via_status() {
+    let vela_home = temp_vela_home("embedded-continuity-status");
+    let model_path = vela_home.join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        &vela_home,
+        &["chat", "--query", "hello embedded continuity"],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("runtime session: action=created state=finish"));
+    assert!(turn_stdout.contains("title=chat: hello embedded continuity"));
+    assert!(turn_stdout.contains("Embedded fixture reply."));
+    assert!(turn_stdout.contains("response route: source=runtime-embedded provider=embedded"));
+
+    let status = run_vela(&vela_home, &["status"]);
+    assert!(status.status.success(), "{}", stderr_text(&status));
+    let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("runtime.provider=Some(\"embedded\")"));
+    assert!(status_stdout.contains("embedded lifecycle: state=fixture-shim"));
+    assert!(status_stdout.contains("fixture_shims=true"));
+    assert!(status_stdout.contains("state_file="));
+    assert!(status_stdout.contains("active session: id=session-"));
+    assert!(status_stdout.contains("title=chat: hello embedded continuity"));
+    assert!(status_stdout.contains("state=finish"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that extension status surfaces config-disabled entries and reload preserves the active session while surfacing restart-only runtime drift.
 fn extensions_status_and_reload_are_visible_via_cli() {
     let vela_home = temp_vela_home("extensions");
