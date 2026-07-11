@@ -295,7 +295,8 @@ pub fn add_scheduled_job(
     let task = normalize_scheduler_task(task)?;
     let source = normalize_scheduler_source(source);
     let delivery_webhook_url = normalize_scheduler_delivery_webhook_url(delivery_webhook_url)?;
-    let delivery_event_type = if delivery_webhook_url.is_some() {
+    let delivery_configured = delivery_webhook_url.is_some();
+    let delivery_event_type = if delivery_configured {
         Some(
             normalize_scheduler_delivery_event_type(delivery_event_type)
                 .unwrap_or_else(|| "scheduler.job.outcome".to_string()),
@@ -342,6 +343,13 @@ pub fn add_scheduled_job(
         delivery_event_type,
         last_delivery_at: None,
         last_delivery_outcome: None,
+        last_delivery_progression: Some(if delivery_configured {
+            "delivery-configured".to_string()
+        } else {
+            "delivery-unconfigured".to_string()
+        }),
+        delivery_attempt_count: 0,
+        last_delivery_status_code: None,
         last_delivery_error: None,
     };
     jobs.push(job.clone());
@@ -515,6 +523,17 @@ fn execute_scheduled_job(
                 job.next_run_at = next_scheduler_run_at(&job.schedule, completed_at);
                 job.execution_token = None;
                 job.lease_expires_at = None;
+                if job.delivery_webhook_url.is_some() {
+                    job.last_delivery_progression = Some("delivery-pending".to_string());
+                    job.last_delivery_outcome = None;
+                    job.last_delivery_status_code = None;
+                    job.last_delivery_error = None;
+                } else {
+                    job.last_delivery_progression = Some("delivery-skipped".to_string());
+                    job.last_delivery_outcome = None;
+                    job.last_delivery_status_code = None;
+                    job.last_delivery_error = None;
+                }
             }
             save_scheduler_jobs(jobs_path, &jobs)?;
             drop(lock);
@@ -577,6 +596,17 @@ fn execute_scheduled_job(
                 job.next_run_at = next_scheduler_run_at(&job.schedule, failed_at);
                 job.execution_token = None;
                 job.lease_expires_at = None;
+                if job.delivery_webhook_url.is_some() {
+                    job.last_delivery_progression = Some("delivery-pending".to_string());
+                    job.last_delivery_outcome = None;
+                    job.last_delivery_status_code = None;
+                    job.last_delivery_error = None;
+                } else {
+                    job.last_delivery_progression = Some("delivery-skipped".to_string());
+                    job.last_delivery_outcome = None;
+                    job.last_delivery_status_code = None;
+                    job.last_delivery_error = None;
+                }
             }
             save_scheduler_jobs(jobs_path, &jobs)?;
             drop(lock);
@@ -643,6 +673,9 @@ fn maybe_deliver_scheduler_job_outcome(
                     job.updated_at = attempted_at;
                     job.last_delivery_at = Some(attempted_at);
                     job.last_delivery_outcome = Some("delivered".to_string());
+                    job.last_delivery_progression = Some("delivery-delivered".to_string());
+                    job.delivery_attempt_count += 1;
+                    job.last_delivery_status_code = Some(report.status_code as u16);
                     job.last_delivery_error = None;
                 }
                 save_scheduler_jobs(jobs_path, &jobs)?;
@@ -676,6 +709,9 @@ fn maybe_deliver_scheduler_job_outcome(
                     job.updated_at = attempted_at;
                     job.last_delivery_at = Some(attempted_at);
                     job.last_delivery_outcome = Some("failed".to_string());
+                    job.last_delivery_progression = Some("delivery-failed".to_string());
+                    job.delivery_attempt_count += 1;
+                    job.last_delivery_status_code = None;
                     job.last_delivery_error = Some(error_text.clone());
                 }
                 save_scheduler_jobs(jobs_path, &jobs)?;
@@ -714,6 +750,26 @@ fn backfill_scheduler_job(job: &mut ScheduledJob, now: i64) {
     }
     if job.next_run_at == 0 {
         job.next_run_at = next_scheduler_run_at(&job.schedule, job.created_at.max(now));
+    }
+    if job.last_delivery_progression.is_none() {
+        job.last_delivery_progression = Some(
+            match (
+                job.delivery_webhook_url.is_some(),
+                job.last_delivery_outcome.as_deref(),
+                job.last_outcome.as_deref(),
+            ) {
+                (false, _, Some(_)) => "delivery-skipped".to_string(),
+                (false, _, None) => "delivery-unconfigured".to_string(),
+                (true, Some("delivered"), _) => "delivery-delivered".to_string(),
+                (true, Some("failed"), _) => "delivery-failed".to_string(),
+                (true, None, Some(_)) => "delivery-pending".to_string(),
+                (true, None, None) => "delivery-configured".to_string(),
+                (true, Some(other), _) => format!("delivery-{other}"),
+            },
+        );
+    }
+    if job.delivery_attempt_count == 0 && job.last_delivery_at.is_some() {
+        job.delivery_attempt_count = 1;
     }
 }
 

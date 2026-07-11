@@ -262,6 +262,12 @@ pub struct ScheduledJob {
     #[serde(default)]
     pub last_delivery_outcome: Option<String>,
     #[serde(default)]
+    pub last_delivery_progression: Option<String>,
+    #[serde(default)]
+    pub delivery_attempt_count: u64,
+    #[serde(default)]
+    pub last_delivery_status_code: Option<u16>,
+    #[serde(default)]
     pub last_delivery_error: Option<String>,
 }
 
