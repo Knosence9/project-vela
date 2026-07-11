@@ -160,12 +160,24 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
         "runtime ownership baseline: {}",
         ownership_status.ownership_baseline_line()
     );
-    if ownership_status.restart_required_drifts.is_empty() {
+    if ownership_status.restart_required_drifts.is_empty()
+        && ownership_status.reload_owned_drifts.is_empty()
+    {
         println!("runtime ownership drifts: none");
     } else {
         for drift in &ownership_status.restart_required_drifts {
             println!(
                 "runtime ownership [{}]: owner={} detail={} previous={} current={} action=restart-required",
+                drift.field,
+                drift.owner,
+                drift.detail,
+                drift.previous_value,
+                drift.reloaded_value,
+            );
+        }
+        for drift in &ownership_status.reload_owned_drifts {
+            println!(
+                "runtime ownership [{}]: owner={} detail={} previous={} current={} action=reload-available",
                 drift.field,
                 drift.owner,
                 drift.detail,
@@ -257,6 +269,32 @@ pub(crate) fn run_extensions(
                     drift.owner,
                     drift.detail,
                     drift.owned_setting_diff()
+                );
+            }
+        }
+        if report.reload_owned_drifts.is_empty() {
+            println!("reload owned: none");
+        } else {
+            println!(
+                "reload owned: {}",
+                report
+                    .reload_owned_drifts
+                    .iter()
+                    .map(|item| format!("{}@{}", item.field, item.owner))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            for drift in &report.reload_owned_drifts {
+                println!(
+                    "reload owned [{}]: owner={} detail={} {}",
+                    drift.field,
+                    drift.owner,
+                    drift.detail,
+                    drift.owned_setting_diff(if report.ownership_blocked {
+                        "reload-detected"
+                    } else {
+                        "reload-applied"
+                    })
                 );
             }
         }

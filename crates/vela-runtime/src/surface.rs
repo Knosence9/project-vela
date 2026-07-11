@@ -275,6 +275,16 @@ pub struct RestartRequiredRuntimeDrift {
     pub reloaded_value: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Describes one extension-owned config drift detected during extension reload or status inspection.
+pub struct ReloadOwnedExtensionDrift {
+    pub field: String,
+    pub owner: String,
+    pub detail: String,
+    pub previous_value: String,
+    pub reloaded_value: String,
+}
+
 #[derive(Debug, Clone)]
 /// Captures extension reload results plus restart-only runtime drift.
 pub struct ExtensionReloadReport {
@@ -283,6 +293,7 @@ pub struct ExtensionReloadReport {
     pub session_before: Option<SessionSummary>,
     pub session_after: Option<SessionSummary>,
     pub restart_required_drifts: Vec<RestartRequiredRuntimeDrift>,
+    pub reload_owned_drifts: Vec<ReloadOwnedExtensionDrift>,
     pub ownership_blocked: bool,
     pub ownership_baseline_path: std::path::PathBuf,
     pub ownership_baseline_source: String,
@@ -293,6 +304,7 @@ pub struct ExtensionReloadReport {
 /// Surfaces the currently loaded runtime ownership baseline and whether the active config now requires a restart.
 pub struct RuntimeOwnershipStatusReport {
     pub restart_required_drifts: Vec<RestartRequiredRuntimeDrift>,
+    pub reload_owned_drifts: Vec<ReloadOwnedExtensionDrift>,
     pub ownership_blocked: bool,
     pub ownership_baseline_path: std::path::PathBuf,
     pub ownership_baseline_source: String,
@@ -310,6 +322,8 @@ struct RuntimeConfigOwnershipBaseline {
     runtime_ollama_base_url: Option<String>,
     runtime_llamacpp_base_url: Option<String>,
     runtime_embedded_model_path: Option<String>,
+    extension_manifests_dir: Option<String>,
+    extension_entries: Vec<vela_config::ResolvedExtensionConfigEntry>,
 }
 
 impl RuntimeConfigOwnershipBaseline {
@@ -324,6 +338,8 @@ impl RuntimeConfigOwnershipBaseline {
             runtime_ollama_base_url: config.runtime_ollama_base_url.clone(),
             runtime_llamacpp_base_url: config.runtime_llamacpp_base_url.clone(),
             runtime_embedded_model_path: config.runtime_embedded_model_path.clone(),
+            extension_manifests_dir: config.extension_manifests_dir.clone(),
+            extension_entries: sorted_extension_entries(&config.extension_entries),
         }
     }
 
@@ -338,8 +354,8 @@ impl RuntimeConfigOwnershipBaseline {
             runtime_ollama_base_url: self.runtime_ollama_base_url,
             runtime_llamacpp_base_url: self.runtime_llamacpp_base_url,
             runtime_embedded_model_path: self.runtime_embedded_model_path,
-            extension_manifests_dir: None,
-            extension_entries: vec![],
+            extension_manifests_dir: self.extension_manifests_dir,
+            extension_entries: self.extension_entries,
         }
     }
 
@@ -390,6 +406,16 @@ impl RuntimeConfigOwnershipBaseline {
                 serde_json::to_string(&self.runtime_embedded_model_path)
                     .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
             ),
+            (
+                "extensions.manifests_dir",
+                serde_json::to_string(&self.extension_manifests_dir)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
+            (
+                "extensions.entries",
+                serde_json::to_string(&self.extension_entries)
+                    .unwrap_or_else(|_| "\"<unserializable>\"".to_string()),
+            ),
         ]
         .into_iter()
         .map(|(field, value)| format!("{field}={value}"))
@@ -398,12 +424,30 @@ impl RuntimeConfigOwnershipBaseline {
     }
 }
 
+fn sorted_extension_entries(
+    entries: &[vela_config::ResolvedExtensionConfigEntry],
+) -> Vec<vela_config::ResolvedExtensionConfigEntry> {
+    let mut entries = entries.to_vec();
+    entries.sort_by(|left, right| left.id.cmp(&right.id));
+    entries
+}
+
 impl RestartRequiredRuntimeDrift {
     /// Renders a bounded old/new diff for one restart-only runtime setting.
     pub fn owned_setting_diff(&self) -> String {
         format!(
             "previous={} reloaded={} action=restart-required",
             self.previous_value, self.reloaded_value
+        )
+    }
+}
+
+impl ReloadOwnedExtensionDrift {
+    /// Renders a bounded old/new diff for one reload-owned extension setting.
+    pub fn owned_setting_diff(&self, action: &str) -> String {
+        format!(
+            "previous={} reloaded={} action={}",
+            self.previous_value, self.reloaded_value, action
         )
     }
 }
@@ -420,11 +464,21 @@ impl ExtensionReloadReport {
                 .collect::<Vec<_>>()
                 .join(",")
         };
+        let reload_owned = if self.reload_owned_drifts.is_empty() {
+            "none".to_string()
+        } else {
+            self.reload_owned_drifts
+                .iter()
+                .map(|item| format!("{}@{}", item.field, item.owner))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
         format!(
-            "{} session_preserved={} restart_required={} ownership_blocked={}",
+            "{} session_preserved={} restart_required={} reload_owned={} ownership_blocked={}",
             self.extensions.summary_line(),
             self.preserved_session,
             restart_required,
+            reload_owned,
             self.ownership_blocked,
         )
     }
@@ -466,16 +520,29 @@ impl RuntimeOwnershipStatusReport {
                 .collect::<Vec<_>>()
                 .join(",")
         };
+        let reload_owned = if self.reload_owned_drifts.is_empty() {
+            "none".to_string()
+        } else {
+            self.reload_owned_drifts
+                .iter()
+                .map(|item| format!("{}@{}", item.field, item.owner))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let status = if self.ownership_blocked {
+            "restart-required"
+        } else if self.reload_owned_drifts.is_empty() {
+            "aligned"
+        } else {
+            "reload-available"
+        };
         format!(
-            "path={} source={} status={} restart_required={}",
+            "path={} source={} status={} restart_required={} reload_owned={}",
             self.ownership_baseline_path.display(),
             self.ownership_baseline_source,
-            if self.ownership_blocked {
-                "restart-required"
-            } else {
-                "aligned"
-            },
+            status,
             restart_required,
+            reload_owned,
         )
     }
 
@@ -615,6 +682,7 @@ pub fn reload_extensions(bootstrap: &BootstrapReport) -> Result<ExtensionReloadR
         session_after,
         ownership_blocked: ownership_status.ownership_blocked,
         restart_required_drifts: ownership_status.restart_required_drifts,
+        reload_owned_drifts: ownership_status.reload_owned_drifts,
         ownership_baseline_path: ownership_status.ownership_baseline_path,
         ownership_baseline_source: ownership_status.ownership_baseline_source,
         ownership_baseline_snapshot: ownership_status.ownership_baseline_snapshot,
@@ -646,9 +714,11 @@ fn inspect_runtime_ownership_status_for_config(
     let ownership_baseline_snapshot =
         RuntimeConfigOwnershipBaseline::from_resolved_config(&previous_config).summary_line();
     let restart_required_drifts = restart_required_runtime_drifts(&previous_config, current_config);
+    let reload_owned_drifts = reload_owned_extension_drifts(&previous_config, current_config);
     let ownership_blocked = !restart_required_drifts.is_empty();
     Ok(RuntimeOwnershipStatusReport {
         restart_required_drifts,
+        reload_owned_drifts,
         ownership_blocked,
         ownership_baseline_path,
         ownership_baseline_source,
@@ -717,14 +787,14 @@ pub(crate) fn persist_runtime_config_ownership_baseline(
     Ok(())
 }
 
+fn render_runtime_config_value<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"<unserializable>\"".to_string())
+}
+
 fn restart_required_runtime_drifts(
     previous: &ResolvedConfig,
     reloaded: &ResolvedConfig,
 ) -> Vec<RestartRequiredRuntimeDrift> {
-    fn render_runtime_config_value<T: serde::Serialize>(value: &T) -> String {
-        serde_json::to_string(value).unwrap_or_else(|_| "\"<unserializable>\"".to_string())
-    }
-
     macro_rules! drift {
         ($condition:expr, $field:expr, $owner:expr, $detail:expr, $previous:expr, $reloaded:expr) => {
             if $condition {
@@ -818,6 +888,57 @@ fn restart_required_runtime_drifts(
     .into_iter()
     .flatten()
     .collect()
+}
+
+fn reload_owned_extension_drifts(
+    previous: &ResolvedConfig,
+    reloaded: &ResolvedConfig,
+) -> Vec<ReloadOwnedExtensionDrift> {
+    let mut drifts = Vec::new();
+    if previous.extension_manifests_dir != reloaded.extension_manifests_dir {
+        drifts.push(ReloadOwnedExtensionDrift {
+            field: "extensions.manifests_dir".to_string(),
+            owner: "extensions".to_string(),
+            detail:
+                "extension manifest directory changes reload immediately during extension reload"
+                    .to_string(),
+            previous_value: render_runtime_config_value(&previous.extension_manifests_dir),
+            reloaded_value: render_runtime_config_value(&reloaded.extension_manifests_dir),
+        });
+    }
+
+    let previous_entries: std::collections::BTreeMap<_, _> = previous
+        .extension_entries
+        .iter()
+        .map(|entry| (entry.id.clone(), entry.enabled))
+        .collect();
+    let reloaded_entries: std::collections::BTreeMap<_, _> = reloaded
+        .extension_entries
+        .iter()
+        .map(|entry| (entry.id.clone(), entry.enabled))
+        .collect();
+    let ids: std::collections::BTreeSet<_> = previous_entries
+        .keys()
+        .chain(reloaded_entries.keys())
+        .cloned()
+        .collect();
+    for id in ids {
+        let previous_enabled = previous_entries.get(&id).copied();
+        let reloaded_enabled = reloaded_entries.get(&id).copied();
+        if previous_enabled != reloaded_enabled {
+            drifts.push(ReloadOwnedExtensionDrift {
+                field: format!("extensions.entries.{id}.enabled"),
+                owner: "extensions".to_string(),
+                detail:
+                    "extension enable/disable overrides reload immediately during extension reload"
+                        .to_string(),
+                previous_value: render_runtime_config_value(&previous_enabled),
+                reloaded_value: render_runtime_config_value(&reloaded_enabled),
+            });
+        }
+    }
+
+    drifts
 }
 
 /// Resolves or creates a runtime session for an interactive request.
@@ -1043,7 +1164,10 @@ fn backend_experiment_slot(
         summary: Some(summary.to_string()),
         hypothesis: Some(hypothesis.to_string()),
         default_prompt: default_prompt.to_string(),
-        allowed_backends: allowed_backends.iter().map(|backend| backend.to_string()).collect(),
+        allowed_backends: allowed_backends
+            .iter()
+            .map(|backend| backend.to_string())
+            .collect(),
     }
 }
 

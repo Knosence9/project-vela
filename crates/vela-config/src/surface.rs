@@ -1,4 +1,5 @@
 use super::*;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 /// Represents `BootstrapConfig` data exposed by this crate.
@@ -27,7 +28,7 @@ pub struct ResolvedConfig {
     pub extension_entries: Vec<ResolvedExtensionConfigEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Describes one config-driven extension enable/disable override resolved from YAML.
 pub struct ResolvedExtensionConfigEntry {
     pub id: String,

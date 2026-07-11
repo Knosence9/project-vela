@@ -397,6 +397,15 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
 
     assert_eq!(reloaded.extensions.activated_count, 1);
     assert_eq!(reloaded.extensions.disabled_count, 0);
+    assert_eq!(reloaded.reload_owned_drifts.len(), 1);
+    assert!(reloaded.reload_owned_drifts.iter().any(|item| {
+        item.field == "extensions.entries.demo.enabled"
+            && item.owner == "extensions"
+            && item.detail
+                == "extension enable/disable overrides reload immediately during extension reload"
+            && item.previous_value == "false"
+            && item.reloaded_value == "null"
+    }));
     assert!(reloaded.extensions.entries.iter().any(|entry| {
         entry.id.as_deref() == Some("demo")
             && entry.hooks
@@ -410,6 +419,9 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     assert_eq!(before.title, after.title);
     assert!(!reloaded.ownership_blocked);
     assert_eq!(reloaded.restart_required_drifts.len(), 0);
+    assert!(reloaded.summary_line().contains(
+        "reload_owned=extensions.entries.demo.enabled@extensions ownership_blocked=false"
+    ));
     assert_eq!(reloaded.ownership_baseline_source, "bootstrap-fallback");
     assert_eq!(
         reloaded.ownership_baseline_path,
@@ -435,6 +447,7 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
             && entry.detail.as_deref()
                 == Some("metadata-only extensions cannot declare the on-activate hook")
     }));
+    assert!(failed.reload_owned_drifts.is_empty());
     assert!(failed.preserved_session);
     assert_eq!(before.id, after_failed.id);
     assert_eq!(before.title, after_failed.title);
@@ -456,9 +469,9 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     assert!(drifted
         .ownership_baseline_snapshot
         .contains("runtime.provider=null"));
-    assert!(drifted
-        .summary_line()
-        .contains("restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime ownership_blocked=true"));
+    assert!(drifted.summary_line().contains(
+        "restart_required=runtime.provider@kernel-runtime,runtime.model@kernel-runtime,runtime.ollama_base_url@kernel-runtime reload_owned=none ownership_blocked=true"
+    ));
     let expected_block_reason = format!(
         "extension reload blocked by kernel-owned runtime drift: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime (restart vela with the updated config to refresh the ownership baseline at {})",
         runtime_config_ownership_baseline_path(&vela_home).display()
@@ -667,6 +680,71 @@ fn runtime_ownership_status_surfaces_pending_restart_required_drift() {
         item.field == "runtime.provider"
             && item.previous_value == "\"ollama\""
             && item.reloaded_value == "\"mock\""
+    }));
+
+    let _ = std::fs::remove_dir_all(&vela_home);
+}
+
+#[test]
+/// Verifies that runtime ownership status surfaces reload-owned extension drift before a reload is attempted.
+fn runtime_ownership_status_surfaces_reload_owned_extension_drift() {
+    let vela_home = std::env::temp_dir().join(format!(
+        "vela-runtime-ownership-extension-drift-{}",
+        unix_timestamp_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&vela_home);
+    std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
+    std::fs::write(
+        vela_home.join("extensions").join("demo.yaml"),
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "extensions:\n  entries:\n    demo:\n      enabled: false\n",
+    )
+    .unwrap();
+
+    let (_, old_resolved_config) = vela_config::reload_config_snapshot(&vela_home, false).unwrap();
+    ensure_runtime_config_ownership_baseline(&vela_home, &old_resolved_config).unwrap();
+
+    std::fs::write(vela_home.join("config.yaml"), "extensions: {}\n").unwrap();
+    let (_, new_resolved_config) = vela_config::reload_config_snapshot(&vela_home, false).unwrap();
+    let bootstrap = BootstrapReport {
+        vela_home: vela_home.clone(),
+        active_profile: None,
+        loaded_env_paths: vec![],
+        ignored_user_config: false,
+        config_sources: vec![],
+        resolved_config: new_resolved_config,
+        persistence: vela_state::initialize_persistence(&vela_home).unwrap(),
+        memory: vela_memory::initialize_memory(&vela_home).unwrap(),
+        skills: vela_skills::initialize_skills(&vela_home).unwrap(),
+        reviews: vela_review::initialize_reviews(&vela_home).unwrap(),
+        extensions: vela_extensions::initialize_extensions(
+            &vela_home,
+            &vela_config::reload_config_snapshot(&vela_home, false)
+                .unwrap()
+                .1,
+        )
+        .unwrap(),
+    };
+
+    let ownership = inspect_runtime_ownership_status(&bootstrap).unwrap();
+    assert!(!ownership.ownership_blocked);
+    assert!(ownership.summary_line().contains("status=reload-available"));
+    assert!(ownership
+        .summary_line()
+        .contains("reload_owned=extensions.entries.demo.enabled@extensions"));
+    assert_eq!(ownership.restart_required_drifts.len(), 0);
+    assert_eq!(ownership.reload_owned_drifts.len(), 1);
+    assert!(ownership.reload_owned_drifts.iter().any(|item| {
+        item.field == "extensions.entries.demo.enabled"
+            && item.owner == "extensions"
+            && item.detail
+                == "extension enable/disable overrides reload immediately during extension reload"
+            && item.previous_value == "false"
+            && item.reloaded_value == "null"
     }));
 
     let _ = std::fs::remove_dir_all(&vela_home);
