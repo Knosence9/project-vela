@@ -300,11 +300,11 @@ Only after the OS/runtime is credible should Vela expand into deeper model exper
 
 ### Execution slice seeds
 Translate this phase into reversible experiment-sized execution issues:
-- formalize backend API boundaries
-- support backend switching from config
-- add one local inference backend path
-- add one backend benchmark/eval harness slice
-- add one architecture experiment slot (for example ternary) behind the existing bounded eval surface
+- [x] formalize backend API boundaries
+- [x] support backend switching from config
+- [x] add one local inference backend path
+- [x] add one backend benchmark/eval harness slice
+- [x] add one architecture experiment slot (for example ternary) behind the existing bounded eval surface
 - [x] document criteria for deeper model-core work
 
 ### Verification follow-ons
