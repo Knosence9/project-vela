@@ -16,7 +16,7 @@ use vela_state::{PersistenceReport, SessionRuntimeReport};
 
 pub use vela_config::preparse_profile_override;
 pub use vela_extensions::{
-    ExtensionActivation, ExtensionKind, ExtensionLifecycle, ExtensionRecord,
+    ExtensionActivation, ExtensionKind, ExtensionLifecycle, ExtensionLifecycleHook, ExtensionRecord,
 };
 pub use vela_state::{
     InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchNode,

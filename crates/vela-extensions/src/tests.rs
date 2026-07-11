@@ -18,12 +18,12 @@ fn initialize_extensions_applies_activation_boundaries() {
     std::fs::create_dir_all(&manifests_dir).unwrap();
     std::fs::write(
         manifests_dir.join("demo.yaml"),
-        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\nhooks:\n  - on-activate\n  - on-reload\ncapabilities:\n  - chat\n",
     )
     .unwrap();
     std::fs::write(
         manifests_dir.join("service.yaml"),
-        "manifest_version: 1\nid: service\ntitle: Service\nkind: service\n",
+        "manifest_version: 1\nid: service\ntitle: Service\nkind: service\nhooks:\n  - on-reload\n",
     )
     .unwrap();
     std::fs::write(
@@ -55,11 +55,20 @@ fn initialize_extensions_applies_activation_boundaries() {
     assert!(report.entries.iter().any(|entry| {
         entry.id.as_deref() == Some("demo")
             && matches!(entry.lifecycle, ExtensionLifecycle::Activated)
-            && entry.detail.as_deref() == Some("tool extension activated during bootstrap")
+            && entry.hooks
+                == vec![
+                    ExtensionLifecycleHook::OnActivate,
+                    ExtensionLifecycleHook::OnReload,
+                ]
+            && entry.detail.as_deref()
+                == Some(
+                    "tool extension activated during bootstrap with hooks on-activate,on-reload",
+                )
     }));
     assert!(report.entries.iter().any(|entry| {
         entry.id.as_deref() == Some("service")
             && matches!(entry.lifecycle, ExtensionLifecycle::Validated)
+            && entry.hooks == vec![ExtensionLifecycleHook::OnReload]
             && entry.detail.as_deref()
                 == Some("service extensions remain metadata-only in this slice")
     }));
@@ -109,12 +118,27 @@ fn initialize_extensions_marks_failed_entries() {
         "manifest_version: 1\nid: service-on-boot\ntitle: Service On Boot\nkind: service\nactivation: on-boot\n",
     )
     .unwrap();
+    std::fs::write(
+        manifests_dir.join("tool-meta-on-activate.yaml"),
+        "manifest_version: 1\nid: tool-meta-on-activate\ntitle: Tool Meta On Activate\nkind: tool\nactivation: metadata-only\nhooks:\n  - on-activate\nentry: extensions/tool-meta.wasm\n",
+    )
+    .unwrap();
+    std::fs::write(
+        manifests_dir.join("service-activate-hook.yaml"),
+        "manifest_version: 1\nid: service-activate-hook\ntitle: Service Activate Hook\nkind: service\nhooks:\n  - on-activate\n",
+    )
+    .unwrap();
+    std::fs::write(
+        manifests_dir.join("duplicate-hooks.yaml"),
+        "manifest_version: 1\nid: duplicate-hooks\ntitle: Duplicate Hooks\nkind: workflow\nentry: extensions/dup.flow\nhooks:\n  - on-reload\n  - on-reload\n",
+    )
+    .unwrap();
 
     let report = initialize_extensions(&vela_home, &resolved_with(vec![])).unwrap();
-    assert_eq!(report.discovered_manifest_count, 5);
-    assert_eq!(report.discovered_count, 4);
+    assert_eq!(report.discovered_manifest_count, 8);
+    assert_eq!(report.discovered_count, 7);
     assert_eq!(report.activated_count, 0);
-    assert_eq!(report.failed_count, 5);
+    assert_eq!(report.failed_count, 8);
     let duplicate_failed = report
         .entries
         .iter()
@@ -139,6 +163,23 @@ fn initialize_extensions_marks_failed_entries() {
             && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
             && entry.detail.as_deref()
                 == Some("service extensions cannot request on-boot activation in this slice")
+    }));
+    assert!(report.entries.iter().any(|entry| {
+        entry.id.as_deref() == Some("tool-meta-on-activate")
+            && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
+            && entry.detail.as_deref()
+                == Some("metadata-only extensions cannot declare the on-activate hook")
+    }));
+    assert!(report.entries.iter().any(|entry| {
+        entry.id.as_deref() == Some("service-activate-hook")
+            && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
+            && entry.detail.as_deref()
+                == Some("service extensions cannot declare the on-activate hook in this slice")
+    }));
+    assert!(report.entries.iter().any(|entry| {
+        entry.id.as_deref() == Some("duplicate-hooks")
+            && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
+            && entry.detail.as_deref() == Some("duplicate lifecycle hook declared: on-reload")
     }));
 
     let _ = std::fs::remove_dir_all(&vela_home);

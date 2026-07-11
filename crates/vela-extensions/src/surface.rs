@@ -40,6 +40,24 @@ impl ExtensionActivation {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// Enumerates the bounded lifecycle hooks an extension may declare in this slice.
+pub enum ExtensionLifecycleHook {
+    OnActivate,
+    OnReload,
+}
+
+impl ExtensionLifecycleHook {
+    /// Returns the stable string label used for persistence and display.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::OnActivate => "on-activate",
+            Self::OnReload => "on-reload",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Enumerates the lifecycle states surfaced for discovered extension entries.
 pub enum ExtensionLifecycle {
@@ -81,6 +99,8 @@ pub struct ExtensionManifest {
     pub entry: Option<String>,
     #[serde(default)]
     pub activation: Option<ExtensionActivation>,
+    #[serde(default)]
+    pub hooks: Vec<ExtensionLifecycleHook>,
 }
 
 impl ExtensionManifest {
@@ -107,6 +127,7 @@ pub struct ExtensionRecord {
     pub description: Option<String>,
     pub capabilities: Vec<String>,
     pub entry: Option<String>,
+    pub hooks: Vec<ExtensionLifecycleHook>,
     pub detail: Option<String>,
 }
 

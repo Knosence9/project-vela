@@ -22,6 +22,7 @@ enum ParsedExtension {
         description: Option<String>,
         capabilities: Vec<String>,
         entry: Option<String>,
+        hooks: Vec<ExtensionLifecycleHook>,
     },
     Invalid(ExtensionRecord),
 }
@@ -43,6 +44,7 @@ fn parse_manifest(path: &Path) -> Result<ParsedExtension> {
                 description: None,
                 capabilities: vec![],
                 entry: None,
+                hooks: vec![],
                 detail: Some(error.to_string()),
             }));
         }
@@ -61,6 +63,7 @@ fn parse_manifest(path: &Path) -> Result<ParsedExtension> {
             description: parsed.description,
             capabilities: parsed.capabilities,
             entry: parsed.entry,
+            hooks: parsed.hooks,
             detail: Some("manifest id cannot be empty".to_string()),
         }));
     }
@@ -76,6 +79,7 @@ fn parse_manifest(path: &Path) -> Result<ParsedExtension> {
             description: parsed.description,
             capabilities: parsed.capabilities,
             entry: parsed.entry,
+            hooks: parsed.hooks,
             detail: Some(format!(
                 "unsupported manifest_version {}; expected 1",
                 parsed.manifest_version
@@ -94,6 +98,7 @@ fn parse_manifest(path: &Path) -> Result<ParsedExtension> {
         description: parsed.description,
         capabilities: parsed.capabilities,
         entry: parsed.entry,
+        hooks: parsed.hooks,
     })
 }
 
@@ -114,6 +119,7 @@ fn finalize_record(
             description,
             capabilities,
             entry,
+            hooks,
         } => {
             if id_counts.get(&id).copied().unwrap_or_default() > 1 {
                 return ExtensionRecord {
@@ -127,6 +133,7 @@ fn finalize_record(
                     description,
                     capabilities,
                     entry,
+                    hooks,
                     detail: Some("duplicate extension id discovered".to_string()),
                 };
             }
@@ -142,6 +149,7 @@ fn finalize_record(
                 description,
                 capabilities,
                 entry,
+                hooks,
                 detail: None,
             };
 
@@ -154,13 +162,27 @@ fn finalize_record(
             }
 
             match activation {
-                ExtensionActivation::MetadataOnly => ExtensionRecord {
-                    lifecycle: ExtensionLifecycle::Validated,
-                    detail: Some(metadata_only_detail(base.kind.as_ref())),
-                    ..base
-                },
+                ExtensionActivation::MetadataOnly => {
+                    match hook_validation_failure(base.kind.as_ref(), &base.hooks, &activation) {
+                        Some(detail) => ExtensionRecord {
+                            lifecycle: ExtensionLifecycle::Failed,
+                            detail: Some(detail),
+                            ..base
+                        },
+                        None => ExtensionRecord {
+                            lifecycle: ExtensionLifecycle::Validated,
+                            detail: Some(metadata_only_detail(base.kind.as_ref())),
+                            ..base
+                        },
+                    }
+                }
                 ExtensionActivation::OnBoot => {
-                    match activation_failure(base.kind.as_ref(), base.entry.as_deref()) {
+                    match activation_failure(
+                        base.kind.as_ref(),
+                        base.entry.as_deref(),
+                        &base.hooks,
+                        &activation,
+                    ) {
                         Some(detail) => ExtensionRecord {
                             lifecycle: ExtensionLifecycle::Failed,
                             detail: Some(detail),
@@ -168,7 +190,10 @@ fn finalize_record(
                         },
                         None => ExtensionRecord {
                             lifecycle: ExtensionLifecycle::Activated,
-                            detail: Some(activation_success_detail(base.kind.as_ref())),
+                            detail: Some(activation_success_detail(
+                                base.kind.as_ref(),
+                                &base.hooks,
+                            )),
                             ..base
                         },
                     }
@@ -178,7 +203,16 @@ fn finalize_record(
     }
 }
 
-fn activation_failure(kind: Option<&ExtensionKind>, entry: Option<&str>) -> Option<String> {
+fn activation_failure(
+    kind: Option<&ExtensionKind>,
+    entry: Option<&str>,
+    hooks: &[ExtensionLifecycleHook],
+    activation: &ExtensionActivation,
+) -> Option<String> {
+    if let Some(detail) = hook_validation_failure(kind, hooks, activation) {
+        return Some(detail);
+    }
+
     match kind {
         Some(ExtensionKind::Service) => {
             Some("service extensions cannot request on-boot activation in this slice".to_string())
@@ -191,6 +225,49 @@ fn activation_failure(kind: Option<&ExtensionKind>, entry: Option<&str>) -> Opti
         }
         None => Some("activation requires a known extension kind".to_string()),
     }
+}
+
+fn hook_validation_failure(
+    kind: Option<&ExtensionKind>,
+    hooks: &[ExtensionLifecycleHook],
+    activation: &ExtensionActivation,
+) -> Option<String> {
+    let mut seen = BTreeMap::<&'static str, usize>::new();
+    for hook in hooks {
+        *seen.entry(hook.label()).or_default() += 1;
+        if seen[hook.label()] > 1 {
+            return Some(format!(
+                "duplicate lifecycle hook declared: {}",
+                hook.label()
+            ));
+        }
+
+        match hook {
+            ExtensionLifecycleHook::OnActivate => match (kind, activation) {
+                (Some(ExtensionKind::Service), _) => {
+                    return Some(
+                        "service extensions cannot declare the on-activate hook in this slice"
+                            .to_string(),
+                    )
+                }
+                (_, ExtensionActivation::MetadataOnly) => {
+                    return Some(
+                        "metadata-only extensions cannot declare the on-activate hook".to_string(),
+                    )
+                }
+                (None, _) => {
+                    return Some("lifecycle hooks require a known extension kind".to_string())
+                }
+                _ => {}
+            },
+            ExtensionLifecycleHook::OnReload => {
+                if kind.is_none() {
+                    return Some("lifecycle hooks require a known extension kind".to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn metadata_only_detail(kind: Option<&ExtensionKind>) -> String {
@@ -211,8 +288,11 @@ fn metadata_only_detail(kind: Option<&ExtensionKind>) -> String {
     }
 }
 
-fn activation_success_detail(kind: Option<&ExtensionKind>) -> String {
-    match kind {
+fn activation_success_detail(
+    kind: Option<&ExtensionKind>,
+    hooks: &[ExtensionLifecycleHook],
+) -> String {
+    let mut detail = match kind {
         Some(ExtensionKind::Tool) => "tool extension activated during bootstrap".to_string(),
         Some(ExtensionKind::Skill) => "skill extension activated during bootstrap".to_string(),
         Some(ExtensionKind::Workflow) => {
@@ -222,5 +302,18 @@ fn activation_success_detail(kind: Option<&ExtensionKind>) -> String {
             "service extensions cannot activate during bootstrap in this slice".to_string()
         }
         None => "extension activated during bootstrap".to_string(),
+    };
+    if !hooks.is_empty() {
+        detail.push_str(" with hooks ");
+        detail.push_str(&hook_labels(hooks));
     }
+    detail
+}
+
+fn hook_labels(hooks: &[ExtensionLifecycleHook]) -> String {
+    hooks
+        .iter()
+        .map(ExtensionLifecycleHook::label)
+        .collect::<Vec<_>>()
+        .join(",")
 }
