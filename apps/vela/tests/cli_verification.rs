@@ -335,6 +335,26 @@ fn temp_vela_home(prefix: &str) -> std::path::PathBuf {
     ))
 }
 
+struct TempVelaHomeGuard {
+    path: std::path::PathBuf,
+}
+
+impl TempVelaHomeGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempVelaHomeGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 /// Runs the compiled `vela` binary against a temporary home with the given args.
 fn run_vela(vela_home: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_vela"))
@@ -592,6 +612,45 @@ fn embedded_status_surfaces_last_load_failure() {
     assert!(status_stdout.contains("state_file="));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that an embedded-provider turn remains visible through fresh status inspection with lifecycle guardrails intact.
+fn embedded_provider_turn_surfaces_continuity_and_restart_state_via_status() {
+    let vela_home = TempVelaHomeGuard::new(temp_vela_home("embedded-continuity-status"));
+    let model_path = vela_home.path().join("models").join("gemma3.gguf");
+    std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+    std::fs::write(&model_path, b"stub model").unwrap();
+    std::fs::write(
+        vela_home.path().join("config.yaml"),
+        format!(
+            "runtime:\n  provider: embedded\n  embedded_model_path: {}\n",
+            model_path.display()
+        ),
+    )
+    .unwrap();
+
+    let turn = run_vela(
+        vela_home.path(),
+        &["chat", "--query", "hello embedded continuity"],
+    );
+    assert!(turn.status.success(), "{}", stderr_text(&turn));
+    let turn_stdout = stdout_text(&turn);
+    assert!(turn_stdout.contains("runtime session: action=created state=finish"));
+    assert!(turn_stdout.contains("title=chat: hello embedded continuity"));
+    assert!(turn_stdout.contains("Embedded fixture reply."));
+    assert!(turn_stdout.contains("response route: source=runtime-embedded provider=embedded"));
+
+    let status = run_vela(vela_home.path(), &["status"]);
+    assert!(status.status.success(), "{}", stderr_text(&status));
+    let status_stdout = stdout_text(&status);
+    assert!(status_stdout.contains("runtime.provider=Some(\"embedded\")"));
+    assert!(status_stdout.contains("embedded lifecycle: state=fixture-shim"));
+    assert!(status_stdout.contains("fixture_shims=true"));
+    assert!(status_stdout.contains("state_file="));
+    assert!(status_stdout.contains("active session: id=session-"));
+    assert!(status_stdout.contains("title=chat: hello embedded continuity"));
+    assert!(status_stdout.contains("state=finish"));
 }
 
 #[test]
