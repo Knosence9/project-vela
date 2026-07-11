@@ -613,6 +613,91 @@ fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
 }
 
 #[test]
+/// Verifies that backend eval falls back to the configured runtime provider when no explicit backend list is supplied.
+fn backend_eval_uses_configured_backend_when_none_is_requested() {
+    let mut bootstrap = test_bootstrap("eval-default-configured-backend");
+    bootstrap.resolved_config = ResolvedConfig {
+        runtime_provider: Some("mock".to_string()),
+        runtime_model: Some("mock-1".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let run = run_backend_eval(&bootstrap, "compare configured backend", &[], None).unwrap();
+    assert_eq!(run.record.backends, vec!["mock"]);
+    assert_eq!(run.record.results.len(), 1);
+    assert_eq!(run.record.results[0].backend_id, "mock");
+    assert_eq!(run.record.results[0].status, "passed");
+
+    let _ = std::fs::remove_dir_all(&bootstrap.vela_home);
+}
+
+#[test]
+/// Verifies that backend experiment slots prefer the configured runtime provider when no explicit backend list is supplied.
+fn backend_eval_slot_prefers_configured_backend_when_none_is_requested() {
+    let mut bootstrap = test_bootstrap("eval-slot-default-configured-backend");
+    bootstrap.resolved_config = ResolvedConfig {
+        runtime_provider: Some("mock".to_string()),
+        runtime_model: Some("mock-1".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let run = run_backend_eval_slot(&bootstrap, "capability-parity-scan", &[], None).unwrap();
+    assert_eq!(run.record.backends, vec!["mock"]);
+    assert_eq!(run.record.results.len(), 1);
+    assert_eq!(run.record.results[0].backend_id, "mock");
+    assert_eq!(run.record.results[0].status, "passed");
+
+    let inspection = get_backend_experiment_slot_inspection(&bootstrap, "capability-parity-scan")
+        .unwrap()
+        .expect("slot inspection");
+    assert_eq!(inspection.latest_eval_backends, vec!["mock"]);
+
+    let _ = std::fs::remove_dir_all(&bootstrap.vela_home);
+}
+
+#[test]
+/// Verifies that backend experiment slots fall back to the slot defaults when the configured runtime provider is not allowed.
+fn backend_eval_slot_falls_back_to_slot_defaults_when_configured_backend_is_disallowed() {
+    let mut bootstrap = test_bootstrap("eval-slot-disallowed-configured-backend");
+    bootstrap.resolved_config = ResolvedConfig {
+        runtime_provider: Some("ollama".to_string()),
+        runtime_model: Some("gemma3:4b".to_string()),
+        ..ResolvedConfig::default()
+    };
+
+    let setup = setup_backend_evals(&bootstrap).unwrap();
+    let mut slots: Vec<BackendExperimentSlotRecord> =
+        serde_json::from_str(&std::fs::read_to_string(&setup.slots_path).unwrap()).unwrap();
+    slots.push(BackendExperimentSlotRecord {
+        id: "mock-only-fallback".to_string(),
+        status: "bounded-preview".to_string(),
+        strategy: "offline-replay".to_string(),
+        summary: Some("Mock-only fallback".to_string()),
+        hypothesis: Some("Disallowed configured backends fall back to slot defaults".to_string()),
+        default_prompt: "Replay this request through the mock slot fallback.".to_string(),
+        allowed_backends: vec!["mock".to_string()],
+    });
+    std::fs::write(
+        &setup.slots_path,
+        serde_json::to_string_pretty(&slots).unwrap(),
+    )
+    .unwrap();
+
+    let run = run_backend_eval_slot(&bootstrap, "mock-only-fallback", &[], None).unwrap();
+    assert_eq!(run.record.backends, vec!["mock"]);
+    assert_eq!(run.record.results.len(), 1);
+    assert_eq!(run.record.results[0].backend_id, "mock");
+    assert_eq!(run.record.results[0].status, "passed");
+
+    let inspection = get_backend_experiment_slot_inspection(&bootstrap, "mock-only-fallback")
+        .unwrap()
+        .expect("slot inspection");
+    assert_eq!(inspection.latest_eval_backends, vec!["mock"]);
+
+    let _ = std::fs::remove_dir_all(&bootstrap.vela_home);
+}
+
+#[test]
 /// Verifies that runtime ownership status surfaces pending restart-required drift before an extension reload is attempted.
 fn runtime_ownership_status_surfaces_pending_restart_required_drift() {
     let vela_home = std::env::temp_dir().join(format!(

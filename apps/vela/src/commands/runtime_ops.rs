@@ -672,23 +672,29 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
         }
     } else {
         let setup = vela_runtime::setup_backend_evals(bootstrap)?;
+        let default_backend =
+            vela_runtime::resolve_runtime_backend_contract(&bootstrap.resolved_config, None)?
+                .map(|contract| contract.id.to_string())
+                .unwrap_or_else(|| "none".to_string());
         match vela_runtime::current_command_session_summary(bootstrap, "eval")? {
             Some(session) => println!(
-                "eval ready: dir={} runs={} slots={} policy={} session={} title={} messages={} events={}",
+                "eval ready: dir={} runs={} slots={} policy={} default_backend={} session={} title={} messages={} events={}",
                 setup.evals_dir.display(),
                 setup.run_count,
                 setup.slot_count,
                 setup.policy_path.display(),
+                default_backend,
                 session.id,
                 session.title,
                 session.message_count,
                 session.event_count,
             ),
             None => println!(
-                "eval ready: dir={} runs={} slots={} session=none file={} slots_file={} policy_file={}",
+                "eval ready: dir={} runs={} slots={} default_backend={} session=none file={} slots_file={} policy_file={}",
                 setup.evals_dir.display(),
                 setup.run_count,
                 setup.slot_count,
+                default_backend,
                 setup.runs_path.display(),
                 setup.slots_path.display(),
                 setup.policy_path.display(),

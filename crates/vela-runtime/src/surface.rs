@@ -1347,6 +1347,38 @@ fn normalize_eval_backends(backends: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn resolve_backend_eval_backends(
+    bootstrap: &BootstrapReport,
+    backends: &[String],
+    allowed_backends: Option<&[String]>,
+    _context: Option<&str>,
+) -> Result<Vec<String>> {
+    let normalized_backends = normalize_eval_backends(backends);
+    if !normalized_backends.is_empty() {
+        return Ok(normalized_backends);
+    }
+
+    if let Some(contract) = resolve_runtime_backend_contract(&bootstrap.resolved_config, None)? {
+        let configured_backend = contract.id.to_string();
+        if let Some(allowed_backends) = allowed_backends {
+            if allowed_backends
+                .iter()
+                .any(|backend| backend == &configured_backend)
+            {
+                return Ok(vec![configured_backend]);
+            }
+            return Ok(allowed_backends.to_vec());
+        }
+        return Ok(vec![configured_backend]);
+    }
+
+    if let Some(allowed_backends) = allowed_backends {
+        return Ok(allowed_backends.to_vec());
+    }
+
+    bail!("backend eval requires at least one --backend <id> or runtime.provider in config")
+}
+
 /// Ensures the durable subagent delegation registry exists.
 pub fn setup_subagent_delegations(
     bootstrap: &BootstrapReport,
@@ -1717,11 +1749,12 @@ pub fn run_backend_eval_slot(
 ) -> Result<BackendEvalRunReport> {
     let slot = get_backend_experiment_slot(bootstrap, slot_id)?
         .ok_or_else(|| anyhow::anyhow!("backend experiment slot {:?} not found", slot_id))?;
-    let effective_backends: Vec<String> = if backends.is_empty() {
-        slot.allowed_backends.clone()
-    } else {
-        normalize_eval_backends(backends)
-    };
+    let effective_backends = resolve_backend_eval_backends(
+        bootstrap,
+        backends,
+        Some(&slot.allowed_backends),
+        Some("backend experiment slot"),
+    )?;
     run_backend_eval_internal(
         bootstrap,
         &slot.default_prompt,
@@ -1846,10 +1879,7 @@ fn run_backend_eval_internal(
     if prompt.is_empty() {
         bail!("backend eval prompt cannot be empty");
     }
-    let normalized_backends = normalize_eval_backends(backends);
-    if normalized_backends.is_empty() {
-        bail!("backend eval requires at least one --backend <id>");
-    }
+    let normalized_backends = resolve_backend_eval_backends(bootstrap, backends, None, None)?;
 
     let setup = setup_backend_evals(bootstrap)?;
     let session = vela_state::resolve_command_session(

@@ -154,13 +154,14 @@ README-visible shared slash commands:
 - model-path changes remain restart-only during extension reload, and embedded status output now makes the local-only / restart-on-model-change expectation explicit for operators
 
 ## Backend eval surface
-- `vela eval --run <prompt> --backend <id>... [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run and now emits a durable parity summary for that run; `embedded` can participate alongside the existing provider backends when `runtime.embedded_model_path` is configured
-- `vela eval --run-slot <slot-id> [--backend <id>...] [--model <name>]` executes one of the published bounded provider experiment slots (`ternary-preview`, `sparse-routing-preview`, `local-first-replay`, `adapter-intake-gate`, `capability-parity-scan`) without changing the live kernel route, while surfacing bounded parity summaries; the published slot backends now include `embedded` for the broader shadow-routing, offline-replay, and parity evidence lanes
+- `vela eval --run <prompt> [--backend <id>...] [--model <name>]` compares bounded backend behavior through one repeatable persisted evaluation run and now emits a durable parity summary for that run; when no `--backend` is supplied, the eval path falls back to `runtime.provider` from config, and `embedded` can participate alongside the existing provider backends when `runtime.embedded_model_path` is configured
+- `vela eval --run-slot <slot-id> [--backend <id>...] [--model <name>]` executes one of the published bounded provider experiment slots (`ternary-preview`, `sparse-routing-preview`, `local-first-replay`, `adapter-intake-gate`, `capability-parity-scan`) without changing the live kernel route, while surfacing bounded parity summaries; when no `--backend` is supplied, the slot now prefers the configured `runtime.provider` when that backend is allowed by the slot, otherwise it falls back to the slot's published backend set
 - `vela eval --list` shows durable backend eval runs plus stored parity summaries
 - `vela eval --show <id>` shows one durable backend eval run with per-backend results and its parity summary
 - `vela eval --list-slots` shows published bounded architecture experiment slots plus the latest durable eval id/time/result-count/parity summary, latest passed/failed backend sets, latest capability-group evidence, and compact per-backend outcome/source/model evidence for each slot
 - `vela eval --show-slot <id>` shows one bounded architecture experiment slot by id plus the latest durable eval evidence currently attached to that slot, including passed/failed backend breakdowns, capability-group evidence, and per-backend status/transport/source/model details
 - `vela eval --show-policy` shows the durable model-lab criteria and boundaries that govern deeper model-core experimentation
+- bare `vela eval` now reports `default_backend=<id|none>` so operators can inspect which backend the config-driven eval/model-lab path will use before running a slice
 
 ## Current grouped command contract
 Confirmed from the live Rust CLI surface in `apps/vela/src/cli.rs`:
