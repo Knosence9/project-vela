@@ -850,72 +850,84 @@ pub fn compress_session(
             SESSION_COMPRESSION_CHAR_LIMIT
         );
     }
-    let source_message_count: u64 = conn.query_row(
-        "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
-        params![session.id],
-        |row| row.get(0),
-    )?;
-    let source_event_count: u64 = conn.query_row(
-        "SELECT COUNT(*) FROM session_events WHERE session_id = ?1",
-        params![session.id],
-        |row| row.get(0),
-    )?;
-    let latest_compression = latest_compression_record_for_connection(&conn, &session.id)?;
-    let created_at = unix_timestamp();
-    let id = format!("cmp-{}", unix_timestamp_nanos());
-    let tx = conn.unchecked_transaction()?;
-    if latest_compression
-        .as_ref()
-        .is_some_and(|existing| existing.summary.trim() == summary)
-    {
-        anyhow::bail!("compression summary matches the latest persisted summary");
-    }
-    let previous_message_count = latest_compression
-        .as_ref()
-        .map(|existing| existing.source_message_count)
-        .unwrap_or(0);
-    let previous_event_count = latest_compression
-        .as_ref()
-        .map(|existing| existing.source_event_count)
-        .unwrap_or(0);
-    let delta_message_count = source_message_count.saturating_sub(previous_message_count);
-    let delta_event_count = source_event_count.saturating_sub(previous_event_count);
-    if delta_message_count == 0 {
-        anyhow::bail!(
-            "compression requires new durable messages since the latest persisted summary"
-        );
-    }
-    tx.execute(
-        "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, delta_message_count, delta_event_count, created_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, session.id, summary, source_message_count as i64, source_event_count as i64, delta_message_count as i64, delta_event_count as i64, created_at],
-    )?;
-    append_event(
-        &tx,
-        &session.id,
-        "session_compressed",
-        json!({
-            "compression_id": id,
-            "summary": summary,
-            "source_message_count": source_message_count,
-            "source_event_count": source_event_count,
-            "delta_message_count": delta_message_count,
-            "delta_event_count": delta_event_count,
+    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+    let result = (|| -> Result<SessionCompressionRecord> {
+        let source_message_count: u64 = conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+            params![session.id],
+            |row| row.get(0),
+        )?;
+        let source_event_count: u64 = conn.query_row(
+            "SELECT COUNT(*) FROM session_events WHERE session_id = ?1",
+            params![session.id],
+            |row| row.get(0),
+        )?;
+        let latest_compression = latest_compression_record_for_connection(&conn, &session.id)?;
+        if latest_compression
+            .as_ref()
+            .is_some_and(|existing| existing.summary.trim() == summary)
+        {
+            anyhow::bail!("compression summary matches the latest persisted summary");
+        }
+        let previous_message_count = latest_compression
+            .as_ref()
+            .map(|existing| existing.source_message_count)
+            .unwrap_or(0);
+        let previous_event_count = latest_compression
+            .as_ref()
+            .map(|existing| existing.source_event_count)
+            .unwrap_or(0);
+        let delta_message_count = source_message_count.saturating_sub(previous_message_count);
+        let delta_event_count = source_event_count.saturating_sub(previous_event_count);
+        if delta_message_count == 0 {
+            anyhow::bail!(
+                "compression requires new durable messages since the latest persisted summary"
+            );
+        }
+        let created_at = unix_timestamp();
+        let id = format!("cmp-{}", unix_timestamp_nanos());
+        conn.execute(
+            "INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, delta_message_count, delta_event_count, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, session.id, summary, source_message_count as i64, source_event_count as i64, delta_message_count as i64, delta_event_count as i64, created_at],
+        )?;
+        append_event(
+            &conn,
+            &session.id,
+            "session_compressed",
+            json!({
+                "compression_id": id,
+                "summary": summary,
+                "source_message_count": source_message_count,
+                "source_event_count": source_event_count,
+                "delta_message_count": delta_message_count,
+                "delta_event_count": delta_event_count,
+            })
+            .to_string(),
+        )?;
+        touch_session_at(&conn, &session.id, created_at)?;
+        Ok(SessionCompressionRecord {
+            id,
+            session_id: session.id.clone(),
+            summary: summary.to_string(),
+            source_message_count,
+            source_event_count,
+            delta_message_count,
+            delta_event_count,
+            created_at,
         })
-        .to_string(),
-    )?;
-    touch_session_at(&tx, &session.id, created_at)?;
-    tx.commit()?;
-    Ok(SessionCompressionRecord {
-        id,
-        session_id: session.id,
-        summary: summary.to_string(),
-        source_message_count,
-        source_event_count,
-        delta_message_count,
-        delta_event_count,
-        created_at,
-    })
+    })();
+
+    match result {
+        Ok(record) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(record)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

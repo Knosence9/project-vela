@@ -148,27 +148,69 @@ fn ensure_session_compression_delta_columns(conn: &Connection) -> Result<()> {
             _ => {}
         }
     }
-    if !has_delta_messages {
-        conn.execute(
-            "ALTER TABLE session_compressions ADD COLUMN delta_message_count INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
-        conn.execute(
-            "UPDATE session_compressions SET delta_message_count = source_message_count WHERE delta_message_count = 0",
-            [],
-        )?;
+    if has_delta_messages && has_delta_events {
+        return Ok(());
     }
-    if !has_delta_events {
-        conn.execute(
-            "ALTER TABLE session_compressions ADD COLUMN delta_event_count INTEGER NOT NULL DEFAULT 0",
-            [],
+
+    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+    let result = (|| -> Result<()> {
+        if !has_delta_messages {
+            conn.execute(
+                "ALTER TABLE session_compressions ADD COLUMN delta_message_count INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !has_delta_events {
+            conn.execute(
+                "ALTER TABLE session_compressions ADD COLUMN delta_event_count INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
+        let mut backfill_stmt = conn.prepare(
+            "SELECT id, source_message_count, source_event_count FROM session_compressions ORDER BY created_at ASC, id ASC",
         )?;
-        conn.execute(
-            "UPDATE session_compressions SET delta_event_count = source_event_count WHERE delta_event_count = 0",
-            [],
-        )?;
+        let rows = backfill_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)? as u64,
+                row.get::<_, i64>(2)? as u64,
+            ))
+        })?;
+        let mut previous_message_count = 0_u64;
+        let mut previous_event_count = 0_u64;
+        let mut first = true;
+        for row in rows {
+            let (id, source_message_count, source_event_count) = row?;
+            let (delta_message_count, delta_event_count) = if first {
+                first = false;
+                (source_message_count, source_event_count)
+            } else {
+                (
+                    source_message_count.saturating_sub(previous_message_count),
+                    source_event_count.saturating_sub(previous_event_count),
+                )
+            };
+            conn.execute(
+                "UPDATE session_compressions SET delta_message_count = ?2, delta_event_count = ?3 WHERE id = ?1",
+                params![id, delta_message_count as i64, delta_event_count as i64],
+            )?;
+            previous_message_count = source_message_count;
+            previous_event_count = source_event_count;
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
     }
-    Ok(())
 }
 
 fn append_request_message_if_present(

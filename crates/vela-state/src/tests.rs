@@ -235,6 +235,64 @@ fn resolve_command_session_reuses_latest_matching_command() {
 }
 
 #[test]
+fn compression_delta_migration_backfills_ordered_existing_rows() {
+    let vela_home = std::env::temp_dir().join(format!(
+        "vela-state-compression-migration-test-{}",
+        unix_timestamp_nanos()
+    ));
+    std::fs::create_dir_all(&vela_home).unwrap();
+    let state_db_path = vela_home.join("state.db");
+    let conn = Connection::open(&state_db_path).unwrap();
+    conn.execute_batch(
+        "
+        CREATE TABLE session_compressions (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            source_message_count INTEGER NOT NULL,
+            source_event_count INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        INSERT INTO session_compressions(id, session_id, summary, source_message_count, source_event_count, created_at)
+        VALUES
+            ('cmp-1', 'session-1', 'first', 2, 3, 10),
+            ('cmp-2', 'session-1', 'second', 5, 8, 20),
+            ('cmp-3', 'session-1', 'third', 9, 12, 30);
+        ",
+    )
+    .unwrap();
+    initialize_schema(&conn).unwrap();
+
+    let rows: Vec<(String, u64, u64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, delta_message_count, delta_event_count FROM session_compressions ORDER BY created_at ASC, id ASC",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, i64>(2)? as u64,
+                ))
+            })
+            .unwrap();
+        rows.map(|row| row.unwrap()).collect()
+    };
+    assert_eq!(
+        rows,
+        vec![
+            ("cmp-1".to_string(), 2, 3),
+            ("cmp-2".to_string(), 3, 5),
+            ("cmp-3".to_string(), 4, 4),
+        ]
+    );
+
+    let _ = fs::remove_dir_all(&vela_home);
+}
+
+#[test]
 fn branch_and_compression_preserve_lineage_and_inspection() {
     let vela_home =
         std::env::temp_dir().join(format!("vela-state-branch-test-{}", unix_timestamp_nanos()));
