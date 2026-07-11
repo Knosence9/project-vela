@@ -45,7 +45,33 @@
   - `extensions.manifests_dir`
   - `extensions.entries.<id>.enabled`
 - resolved `hooks_auto_accept` and `security.redact_secrets` are also bridged into env vars
-- `status` prints the resolved home path, loaded env files, config-source decisions, and resolved config fields for compatibility checking
+- `status` prints the resolved home path, loaded env files, config-source decisions, resolved config fields, backend readiness, and first-start readiness guidance for compatibility checking
+
+## Starter config examples
+Use these examples when turning a fresh first-start home into a configured startup path:
+
+- `examples/config/first-start-mock.yaml` — safe in-process provider for local smoke tests without external services
+- `examples/config/first-start-embedded.yaml` — local embedded-provider shape that requires replacing `runtime.embedded_model_path` with a real non-empty `.gguf` model file
+
+Copy the mock starter config into a temporary or real Vela home:
+
+```bash
+export VELA_HOME="$(mktemp -d /tmp/vela-first-start.XXXXXX)"
+mkdir -p "$VELA_HOME"
+cp examples/config/first-start-mock.yaml "$VELA_HOME/config.yaml"
+target/debug/vela status
+```
+
+Expected status shape after copying the mock starter:
+
+```text
+config source [user]: $VELA_HOME/config.yaml
+resolved config: ... runtime.provider=Some("mock") ...
+resolved backend: api=v1 id=mock transport=in-process ...
+resolved backend readiness: ok
+```
+
+A fresh home with no config is also valid for kernel-only startup; it reports `resolved backend: none`. Provider-backed chat requires either a CLI `--provider` override or a supported `runtime.provider` in config.
 
 ## Confirmed env vars and config knobs worth preserving first
 - `VELA_IGNORE_USER_CONFIG`

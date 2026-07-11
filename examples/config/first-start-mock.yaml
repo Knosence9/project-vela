@@ -1,0 +1,4 @@
+# First-start safe local config.
+# Copy to $VELA_HOME/config.yaml, then run `vela status`.
+runtime:
+  provider: mock
