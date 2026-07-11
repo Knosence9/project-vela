@@ -32,6 +32,7 @@ Use a **progressive replacement strategy**:
 - **agentic OS first, model lab second**
 
 ## Contents
+- `docs/first-start.md` — first-start quickstart from clean checkout to status, bare runtime, mock chat, and gateway smoke
 - `docs/vela-rust-agentic-os-plan.md` — updated Vela Rust architecture and phased roadmap
 - `docs/vela-crate-layout.md` — concrete crate/file ownership layout for the Rust kernel and memory system
 - `docs/vela-schema.md` — durable schema for sessions, memory, skills, approvals, and future Honcho integration
@@ -75,9 +76,20 @@ What it does:
 
 Use `--dry-run` first if you want to preview the body before editing GitHub.
 
+## First start
+For a clean local smoke test, follow [`docs/first-start.md`](docs/first-start.md). It covers:
+- native build prerequisites such as `LIBCLANG_PATH` when needed
+- `cargo build -p vela`
+- isolated `VELA_HOME` startup
+- `vela status`
+- bare kernel launch
+- mock chat
+- gateway bootstrap
+
 ## Suggested next steps
-1. define the Rust kernel boundary
-2. define plugin/runtime reload semantics
-3. implement one end-to-end session loop with persistence and tools
-4. add one Hermes-class vertical slice at a time
-5. create a backend abstraction so future model experiments can plug in cleanly
+1. run the first-start quickstart in `docs/first-start.md`
+2. define the Rust kernel boundary
+3. define plugin/runtime reload semantics
+4. implement one end-to-end session loop with persistence and tools
+5. add one Hermes-class vertical slice at a time
+6. create a backend abstraction so future model experiments can plug in cleanly
