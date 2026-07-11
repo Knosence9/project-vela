@@ -119,6 +119,8 @@ The Rust scaffold currently recognizes these backend IDs in `vela status`:
 - `llamacpp`
 - `embedded`
 
+For the supported config field set, see [`docs/reference/config.md`](reference/config.md). For the current backend/provider contract, capability matrix, and local-provider safety notes, see [`docs/reference/runtime.md`](reference/runtime.md).
+
 A minimal user config lives at:
 
 ```text
