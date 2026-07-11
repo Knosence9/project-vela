@@ -771,6 +771,18 @@ fn agents_delegation_is_visible_via_cli() {
     assert!(listing_stdout.contains("delegations [1]:"));
     assert!(listing_stdout.contains("role=researcher"));
     assert!(listing_stdout.contains("Investigate provider routing"));
+    assert!(listing_stdout.contains("status=pending"));
+    assert!(listing_stdout.contains("note=Some(\"bounded follow-up\")"));
+    let delegation_id = parse_field(&delegate_stdout, "id")
+        .expect("delegation id")
+        .to_string();
+
+    let show = run_vela(&vela_home, &["agents", "--show", &delegation_id]);
+    assert!(show.status.success(), "{}", stderr_text(&show));
+    let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains(&format!("delegation: id={}", delegation_id)));
+    assert!(show_stdout.contains("status=pending"));
+    assert!(show_stdout.contains("note=Some(\"bounded follow-up\")"));
 
     let duplicate = run_vela(
         &vela_home,
@@ -784,6 +796,15 @@ fn agents_delegation_is_visible_via_cli() {
     );
     assert!(!duplicate.status.success());
     assert!(stderr_text(&duplicate).contains("already pending"));
+
+    let duplicate_listing = run_vela(&vela_home, &["agents", "--list"]);
+    assert!(
+        duplicate_listing.status.success(),
+        "{}",
+        stderr_text(&duplicate_listing)
+    );
+    let duplicate_listing_stdout = stdout_text(&duplicate_listing);
+    assert!(duplicate_listing_stdout.contains("delegations [1]:"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -820,6 +841,20 @@ fn mcp_bridge_requests_are_visible_via_cli() {
     assert!(listing_stdout.contains("mcp bridge requests [1]:"));
     assert!(listing_stdout.contains("server=memory"));
     assert!(listing_stdout.contains("tool=list_tools"));
+    assert!(listing_stdout.contains("status=pending"));
+    assert!(listing_stdout.contains("payload={}"));
+    assert!(listing_stdout.contains("note=Some(\"bounded bridge request\")"));
+    let request_id = parse_field(&bridge_stdout, "id")
+        .expect("mcp bridge id")
+        .to_string();
+
+    let show = run_vela(&vela_home, &["mcp", "--show", &request_id]);
+    assert!(show.status.success(), "{}", stderr_text(&show));
+    let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains(&format!("mcp bridge request: id={}", request_id)));
+    assert!(show_stdout.contains("status=pending"));
+    assert!(show_stdout.contains("payload={}"));
+    assert!(show_stdout.contains("note=Some(\"bounded bridge request\")"));
 
     let invalid = run_vela(
         &vela_home,
@@ -850,6 +885,15 @@ fn mcp_bridge_requests_are_visible_via_cli() {
     );
     assert!(!duplicate.status.success());
     assert!(stderr_text(&duplicate).contains("already pending"));
+
+    let duplicate_listing = run_vela(&vela_home, &["mcp", "--list"]);
+    assert!(
+        duplicate_listing.status.success(),
+        "{}",
+        stderr_text(&duplicate_listing)
+    );
+    let duplicate_listing_stdout = stdout_text(&duplicate_listing);
+    assert!(duplicate_listing_stdout.contains("mcp bridge requests [1]:"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

@@ -50,6 +50,8 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
   - `vela chat --image ...` uses a configured Ollama provider when present
   - `vela chat --image ...` falls back to a deterministic local-kernel scaffold response when no provider is configured
   - `vela gateway --start` resumes the same gateway session
+  - `vela agents --delegate` / `--list` / `--show` preserve bounded pending delegation requests, operator-visible note/status evidence, and duplicate-pending rejection instead of silently widening delegation scope
+  - `vela mcp --bridge` / `--list` / `--show` preserve bounded pending bridge requests, operator-visible payload/note evidence, invalid-JSON rejection, and duplicate-pending rejection instead of silently widening MCP exposure
   - `vela extensions --reload` surfaces the durable ownership baseline, restart-required kernel-runtime drift, and session preservation
   - `vela cron` registration persists across `--show`/`--list`
   - `vela cron --report` surfaces last outcome, progression, and webhook delivery evidence for scheduler jobs
@@ -112,3 +114,4 @@ Provide executable proof for Vela kernel behaviors so PRs do not rely mainly on 
 ## Roadmap-only verification notes
 - the currently documented local/provider paths, bounded tool loops, reflection/retry recovery, lifecycle persistence, internal context retrieval, and first-pass branching/compression semantics already have milestone-backed verification; future work here begins only when new runtime capabilities beyond those shipped paths are added
 - model/tool execution verification should deepen when Vela gains new provider classes, tool categories, or runtime behaviors beyond the currently documented and already-verified local/provider contract
+- delegation and MCP safety verification should stay focused on bounded pending-request policy, explicit operator-visible audit outputs, and input validation unless a future slice intentionally broadens those surfaces
