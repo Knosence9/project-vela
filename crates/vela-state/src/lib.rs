@@ -177,11 +177,16 @@ fn ensure_session_compression_delta_columns(conn: &Connection) -> Result<()> {
                 row.get::<_, i64>(2)? as u64,
             ))
         })?;
+        let mut ordered_rows = Vec::new();
+        for row in rows {
+            ordered_rows.push(row?);
+        }
+        drop(backfill_stmt);
+
         let mut previous_message_count = 0_u64;
         let mut previous_event_count = 0_u64;
         let mut first = true;
-        for row in rows {
-            let (id, source_message_count, source_event_count) = row?;
+        for (id, source_message_count, source_event_count) in ordered_rows {
             let (delta_message_count, delta_event_count) = if first {
                 first = false;
                 (source_message_count, source_event_count)
