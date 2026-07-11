@@ -504,27 +504,29 @@ fn session_runtime_state_tracks_bounded_phase_labels() {
         .unwrap();
     assert_eq!(summary.runtime_state, "ready");
 
-    set_session_runtime_state(
-        &report.state_db_path,
-        &session.session_id,
-        SessionRuntimeState::Deliberate,
-    )
-    .unwrap();
-    let inspection = inspect_session(&report.state_db_path, &session.session_id, 20)
-        .unwrap()
-        .unwrap();
-    assert_eq!(inspection.runtime_state, "deliberate");
+    for (runtime_state, expected_label) in [
+        (SessionRuntimeState::Receive, "receive"),
+        (SessionRuntimeState::Deliberate, "deliberate"),
+        (SessionRuntimeState::ToolRequest, "tool-request"),
+        (SessionRuntimeState::ToolResult, "tool-result"),
+        (SessionRuntimeState::Reflect, "reflect"),
+        (SessionRuntimeState::Retry, "retry"),
+        (SessionRuntimeState::Respond, "respond"),
+        (SessionRuntimeState::Finish, "finish"),
+        (SessionRuntimeState::Failed, "failed"),
+    ] {
+        set_session_runtime_state(&report.state_db_path, &session.session_id, runtime_state)
+            .unwrap();
+        let inspection = inspect_session(&report.state_db_path, &session.session_id, 20)
+            .unwrap()
+            .unwrap();
+        assert_eq!(inspection.runtime_state, expected_label);
+    }
 
-    set_session_runtime_state(
-        &report.state_db_path,
-        &session.session_id,
-        SessionRuntimeState::Finish,
-    )
-    .unwrap();
     let finished = current_session_summary(&report.state_db_path)
         .unwrap()
         .unwrap();
-    assert_eq!(finished.runtime_state, "finish");
+    assert_eq!(finished.runtime_state, "failed");
 
     let _ = fs::remove_dir_all(&vela_home);
 }
