@@ -708,7 +708,7 @@ pub(crate) fn render_chat_response(
                 )
             } else {
                 format!(
-                    "You are Vela, a Rust-first agentic OS kernel runtime using a text-only backend.\n\nSession: {} ({})\nMemory snapshot:\n{}{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\nAttached image path: {}\n\nThe active backend cannot accept direct image bytes in this bounded contract, so reason from the operator-visible image metadata above and answer directly unless you need one supported runtime tool first.\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
+                    "You are Vela, a Rust-first agentic OS kernel runtime using a text-only backend.\n\nSession: {} ({})\nMemory snapshot:\n{}{}\n\nLoaded skills: {}\nPending review candidates: {}\n\nUser image request:\n{}\n\nAttached image name: {}\n\nThe active backend cannot accept direct image bytes in this bounded contract, so reason from the operator-visible image metadata above and answer directly unless you need one supported runtime tool first.\n\nSupported runtime tools:\n- memory_snapshot\n- list_skills\n- view_memory (JSON: {{\"tool\":\"view_memory\",\"target\":\"memory\"}} or {{\"tool\":\"view_memory\",\"target\":\"user\"}})\n- search_session_history (JSON: {{\"tool\":\"search_session_history\",\"query\":\"keyword\",\"limit\":3}})\n- view_skill (JSON: {{\"tool\":\"view_skill\",\"name\":\"skill-name\"}})\nIf you need one tool before answering, respond with ONLY valid JSON for exactly one supported tool. Otherwise answer directly.",
                     session.title,
                     session.session_id,
                     memory,
@@ -717,7 +717,6 @@ pub(crate) fn render_chat_response(
                     reviews.len(),
                     user_prompt,
                     attached_image_name,
-                    image_path,
                 )
             };
             let images = if provider.supports_images() {
