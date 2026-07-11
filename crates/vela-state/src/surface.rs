@@ -94,6 +94,25 @@ pub struct SessionSummary {
 }
 
 #[derive(Debug, Clone)]
+/// Represents one branch-aware session navigation entry.
+pub struct SessionBranchNode {
+    pub session_id: String,
+    pub title: String,
+    pub runtime_state: String,
+    pub parent_session_id: Option<String>,
+    pub depth: u64,
+    pub message_count: u64,
+    pub event_count: u64,
+}
+
+#[derive(Debug, Clone)]
+/// Represents one root session plus its visible descendant navigation entries.
+pub struct SessionBrowseTree {
+    pub root: SessionBranchNode,
+    pub descendants: Vec<SessionBranchNode>,
+}
+
+#[derive(Debug, Clone)]
 /// Represents `SessionSearchHit` data exposed by this crate.
 pub struct SessionSearchHit {
     pub session_id: String,
@@ -163,7 +182,9 @@ pub struct SessionInspection {
     pub title: String,
     pub runtime_state: String,
     pub branch: SessionBranchRecord,
+    pub lineage: Vec<SessionBranchNode>,
     pub child_sessions: Vec<SessionSummary>,
+    pub descendants: Vec<SessionBranchNode>,
     pub messages: Vec<SessionMessageRecord>,
     pub events: Vec<SessionEventRecord>,
     pub lifecycle: Vec<RuntimeTurnLifecycleRecord>,
@@ -327,6 +348,24 @@ pub fn current_command_session_summary(
         return Ok(None);
     };
     Ok(Some(load_summary(&conn, &session.id, &session.title)?))
+}
+
+/// Lists recent durable sessions with branch-aware depth and parent context.
+pub fn list_sessions(state_db_path: &Path, limit: usize) -> Result<Vec<SessionBranchNode>> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    load_recent_session_nodes(&conn, limit)
+}
+
+/// Browses durable session trees grouped by root session.
+pub fn browse_session_branches(
+    state_db_path: &Path,
+    root_limit: usize,
+    descendant_limit: usize,
+) -> Result<Vec<SessionBrowseTree>> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    load_session_browse_trees(&conn, root_limit, descendant_limit)
 }
 
 /// Searches session history and returns matching results.

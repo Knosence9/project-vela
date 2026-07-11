@@ -26,6 +26,24 @@ pub fn inspect_session(
     vela_state::inspect_session(&bootstrap.persistence.state_db_path, target, limit)
 }
 
+/// Lists recent persisted sessions with branch-aware depth.
+pub fn list_sessions(bootstrap: &BootstrapReport, limit: usize) -> Result<Vec<SessionBranchNode>> {
+    vela_state::list_sessions(&bootstrap.persistence.state_db_path, limit)
+}
+
+/// Browses session trees grouped by root session.
+pub fn browse_session_branches(
+    bootstrap: &BootstrapReport,
+    root_limit: usize,
+    descendant_limit: usize,
+) -> Result<Vec<SessionBrowseTree>> {
+    vela_state::browse_session_branches(
+        &bootstrap.persistence.state_db_path,
+        root_limit,
+        descendant_limit,
+    )
+}
+
 /// Creates a durable branch session with copied continuity and explicit lineage.
 pub fn branch_session(
     bootstrap: &BootstrapReport,

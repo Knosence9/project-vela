@@ -226,7 +226,9 @@ fn load_session_inspection(
     limit: usize,
 ) -> Result<SessionInspection> {
     let branch = load_branch_record(conn, session_id, title)?;
+    let lineage = load_lineage_nodes(conn, session_id)?;
     let child_sessions = load_child_summaries(conn, session_id, limit)?;
+    let descendants = load_descendant_nodes(conn, session_id, limit)?;
     let mut message_stmt = conn.prepare(
         "SELECT id, role, content, created_at, metadata_json
          FROM messages
@@ -324,7 +326,9 @@ fn load_session_inspection(
         title: title.to_string(),
         runtime_state,
         branch,
+        lineage,
         child_sessions,
+        descendants,
         messages,
         events,
         lifecycle,
@@ -404,6 +408,160 @@ fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
         params![key, value],
     )?;
     Ok(())
+}
+
+fn load_recent_session_nodes(conn: &Connection, limit: usize) -> Result<Vec<SessionBranchNode>> {
+    let rows = load_session_rows(conn)?;
+    let mut nodes = Vec::new();
+    for row in rows.into_iter().take(limit) {
+        let depth = session_depth(conn, row.parent_session_id.as_deref())?;
+        nodes.push(load_branch_node(conn, &row, depth)?);
+    }
+    Ok(nodes)
+}
+
+fn load_session_browse_trees(
+    conn: &Connection,
+    root_limit: usize,
+    descendant_limit: usize,
+) -> Result<Vec<SessionBrowseTree>> {
+    let rows = load_session_rows(conn)?;
+    let mut trees = Vec::new();
+    for row in rows
+        .iter()
+        .filter(|row| row.parent_session_id.is_none())
+        .take(root_limit)
+    {
+        trees.push(SessionBrowseTree {
+            root: load_branch_node(conn, row, 0)?,
+            descendants: load_descendant_nodes(conn, &row.id, descendant_limit)?,
+        });
+    }
+    Ok(trees)
+}
+
+fn load_lineage_nodes(conn: &Connection, session_id: &str) -> Result<Vec<SessionBranchNode>> {
+    let rows = load_session_rows(conn)?;
+    let rows_by_id: HashMap<String, StoredSessionRow> =
+        rows.into_iter().map(|row| (row.id.clone(), row)).collect();
+    let mut lineage_ids = Vec::new();
+    let mut cursor = Some(session_id.to_string());
+    while let Some(current) = cursor {
+        let Some(row) = rows_by_id.get(&current) else {
+            break;
+        };
+        lineage_ids.push(current.clone());
+        cursor = row.parent_session_id.clone();
+    }
+    lineage_ids.reverse();
+
+    let mut lineage = Vec::new();
+    for (depth, id) in lineage_ids.iter().enumerate() {
+        let row = rows_by_id
+            .get(id)
+            .with_context(|| format!("session row missing for lineage id {id}"))?;
+        lineage.push(load_branch_node(conn, row, depth as u64)?);
+    }
+    Ok(lineage)
+}
+
+fn load_descendant_nodes(
+    conn: &Connection,
+    anchor_session_id: &str,
+    limit: usize,
+) -> Result<Vec<SessionBranchNode>> {
+    let rows = load_session_rows(conn)?;
+    let rows_by_id: HashMap<String, StoredSessionRow> = rows
+        .iter()
+        .cloned()
+        .map(|row| (row.id.clone(), row))
+        .collect();
+    let mut descendants = Vec::new();
+    for row in rows {
+        if row.id == anchor_session_id {
+            continue;
+        }
+        let mut cursor = row.parent_session_id.clone();
+        let mut depth_from_anchor = 1_u64;
+        let mut matched = false;
+        while let Some(current) = cursor {
+            if current == anchor_session_id {
+                matched = true;
+                break;
+            }
+            let Some(parent_row) = rows_by_id.get(&current) else {
+                break;
+            };
+            cursor = parent_row.parent_session_id.clone();
+            depth_from_anchor += 1;
+        }
+        if matched {
+            descendants.push(load_branch_node(conn, &row, depth_from_anchor)?);
+            if descendants.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(descendants)
+}
+
+#[derive(Debug, Clone)]
+struct StoredSessionRow {
+    id: String,
+    title: String,
+    parent_session_id: Option<String>,
+}
+
+fn load_session_rows(conn: &Connection) -> Result<Vec<StoredSessionRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, parent_session_id FROM sessions ORDER BY updated_at DESC, id DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(StoredSessionRow {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            parent_session_id: row.get(2)?,
+        })
+    })?;
+    let mut sessions = Vec::new();
+    for row in rows {
+        sessions.push(row?);
+    }
+    Ok(sessions)
+}
+
+fn load_branch_node(
+    conn: &Connection,
+    row: &StoredSessionRow,
+    depth: u64,
+) -> Result<SessionBranchNode> {
+    let summary = load_summary(conn, &row.id, &row.title)?;
+    Ok(SessionBranchNode {
+        session_id: summary.id,
+        title: summary.title,
+        runtime_state: summary.runtime_state,
+        parent_session_id: summary.parent_session_id,
+        depth,
+        message_count: summary.message_count,
+        event_count: summary.event_count,
+    })
+}
+
+fn session_depth(conn: &Connection, parent_session_id: Option<&str>) -> Result<u64> {
+    let mut depth = 0_u64;
+    let mut cursor = parent_session_id.map(str::to_string);
+    while let Some(current) = cursor {
+        depth += 1;
+        cursor = conn
+            .query_row(
+                "SELECT parent_session_id FROM sessions WHERE id = ?1",
+                params![current],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+    }
+    Ok(depth)
 }
 
 fn load_branch_record(
