@@ -449,25 +449,38 @@ pub fn resolve_runtime_session(
     }
 
     if let Some(target) = request.continue_last.as_deref() {
-        let action = if target.trim().is_empty() {
-            SessionAction::ResumedLatest
-        } else {
-            SessionAction::ResumedByTitle
-        };
-        let (session, anchor_id, anchor_title, continue_resolution) = if target.trim().is_empty() {
+        let trimmed_target = target.trim();
+        let (action, session, anchor_id, anchor_title, continue_resolution) = if trimmed_target
+            .is_empty()
+        {
             let session = latest_session(&conn)?
                 .with_context(|| format!("session not found for continue target {target}"))?;
-            (session, None, None, "latest-global")
+            (
+                SessionAction::ResumedLatest,
+                session,
+                None,
+                None,
+                "latest-global",
+            )
+        } else if let Some(anchor) = find_session_by_id(&conn, trimmed_target)? {
+            (
+                SessionAction::ResumedById,
+                anchor.clone(),
+                Some(anchor.id),
+                Some(anchor.title),
+                "exact-session-id",
+            )
         } else {
-            let anchor = find_session_by_id_or_title(&conn, target)?
+            let anchor = find_session_by_title(&conn, trimmed_target)?
                 .with_context(|| format!("session not found for continue target {target}"))?;
             let session = latest_session_in_subtree(&conn, &anchor.id)?.unwrap_or(anchor.clone());
             let continue_resolution = if session.id == anchor.id {
-                "exact-anchor"
+                "exact-anchor-title"
             } else {
-                "latest-in-subtree"
+                "latest-descendant-of-anchor-title"
             };
             (
+                SessionAction::ResumedByTitle,
                 session,
                 Some(anchor.id),
                 Some(anchor.title),
