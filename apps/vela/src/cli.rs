@@ -347,13 +347,24 @@ pub(crate) fn print_extension_record(entry: &vela_runtime::ExtensionRecord) {
     } else {
         entry.capabilities.join(",")
     };
+    let hooks = if entry.hooks.is_empty() {
+        "none".to_string()
+    } else {
+        entry
+            .hooks
+            .iter()
+            .map(|hook| hook.label())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
     println!(
-        "extension [{}]: id={:?} title={:?} kind={:?} activation={:?} version={:?} entry={:?} capabilities={} path={} detail={:?}",
+        "extension [{}]: id={:?} title={:?} kind={:?} activation={:?} hooks={} version={:?} entry={:?} capabilities={} path={} detail={:?}",
         entry.lifecycle.label(),
         entry.id,
         entry.title,
         entry.kind.as_ref().map(|kind| kind.label()),
         entry.activation.as_ref().map(|activation| activation.label()),
+        hooks,
         entry.version,
         entry.entry,
         capabilities,

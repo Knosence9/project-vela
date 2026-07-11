@@ -438,12 +438,12 @@ fn extension_status_surfaces_activation_boundaries() {
     std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
     std::fs::write(
         vela_home.join("extensions").join("tool-meta.yaml"),
-        "manifest_version: 1\nid: tool-meta\ntitle: Tool Meta\nkind: tool\nactivation: metadata-only\nentry: extensions/tool-meta.wasm\n",
+        "manifest_version: 1\nid: tool-meta\ntitle: Tool Meta\nkind: tool\nactivation: metadata-only\nhooks:\n  - on-reload\nentry: extensions/tool-meta.wasm\n",
     )
     .unwrap();
     std::fs::write(
         vela_home.join("extensions").join("workflow.yaml"),
-        "manifest_version: 1\nid: workflow\ntitle: Workflow\nkind: workflow\nentry: extensions/workflow.flow\n",
+        "manifest_version: 1\nid: workflow\ntitle: Workflow\nkind: workflow\nentry: extensions/workflow.flow\nhooks:\n  - on-activate\n  - on-reload\n",
     )
     .unwrap();
     std::fs::write(
@@ -459,12 +459,14 @@ fn extension_status_surfaces_activation_boundaries() {
     assert!(status_stdout.contains("activated=1"));
     assert!(status_stdout.contains("failed=1"));
     assert!(status_stdout.contains("extension [validated]: id=Some(\"tool-meta\")"));
+    assert!(status_stdout.contains("hooks=on-reload"));
     assert!(status_stdout
         .contains("detail=Some(\"tool extension validated as metadata-only by manifest policy\")"));
     assert!(status_stdout.contains("extension [activated]: id=Some(\"workflow\")"));
-    assert!(
-        status_stdout.contains("detail=Some(\"workflow extension activated during bootstrap\")")
-    );
+    assert!(status_stdout.contains("hooks=on-activate,on-reload"));
+    assert!(status_stdout.contains(
+        "detail=Some(\"workflow extension activated during bootstrap with hooks on-activate,on-reload\")"
+    ));
     assert!(status_stdout.contains("extension [failed]: id=Some(\"service-on-boot\")"));
     assert!(status_stdout.contains(
         "detail=Some(\"service extensions cannot request on-boot activation in this slice\")"
@@ -599,7 +601,7 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
     std::fs::write(
         vela_home.join("extensions").join("demo.yaml"),
-        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\nhooks:\n  - on-activate\n  - on-reload\ncapabilities:\n  - chat\n",
     )
     .unwrap();
     std::fs::write(
@@ -614,6 +616,7 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     assert!(status_stdout.contains("extensions: dir="));
     assert!(status_stdout.contains("disabled=1"));
     assert!(status_stdout.contains("activation=Some(\"on-boot\")"));
+    assert!(status_stdout.contains("hooks=on-activate,on-reload"));
     assert!(status_stdout.contains("extension [disabled]: id=Some(\"demo\")"));
     assert!(status_stdout.contains(&format!(
         "runtime ownership: path={} source=durable-baseline status=aligned restart_required=none",
@@ -697,6 +700,10 @@ fn extensions_status_and_reload_are_visible_via_cli() {
         "restart required [runtime.ollama_base_url]: owner=kernel-runtime detail=provider transport endpoint changes remain restart-only during extension reload previous=\"http://127.0.0.1:11434\" reloaded=\"http://127.0.0.1:22555\" action=restart-required"
     ));
     assert!(reload_stdout.contains("extension [activated]: id=Some(\"demo\")"));
+    assert!(reload_stdout.contains("hooks=on-activate,on-reload"));
+    assert!(reload_stdout.contains(
+        "detail=Some(\"tool extension activated during bootstrap with hooks on-activate,on-reload\")"
+    ));
     assert!(reload_stderr.contains(&format!(
         "extension reload blocked by kernel-owned runtime drift: runtime.provider@kernel-runtime, runtime.model@kernel-runtime, runtime.ollama_base_url@kernel-runtime (restart vela with the updated config to refresh the ownership baseline at {})",
         vela_home

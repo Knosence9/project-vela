@@ -339,7 +339,7 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
     std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
     std::fs::write(
         vela_home.join("extensions").join("demo.yaml"),
-        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\ncapabilities:\n  - chat\n",
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\nhooks:\n  - on-activate\n  - on-reload\ncapabilities:\n  - chat\n",
     )
     .unwrap();
     std::fs::write(
@@ -397,6 +397,14 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
 
     assert_eq!(reloaded.extensions.activated_count, 1);
     assert_eq!(reloaded.extensions.disabled_count, 0);
+    assert!(reloaded.extensions.entries.iter().any(|entry| {
+        entry.id.as_deref() == Some("demo")
+            && entry.hooks
+                == vec![
+                    ExtensionLifecycleHook::OnActivate,
+                    ExtensionLifecycleHook::OnReload,
+                ]
+    }));
     assert!(reloaded.preserved_session);
     assert_eq!(before.id, after.id);
     assert_eq!(before.title, after.title);
@@ -413,7 +421,7 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
 
     std::fs::write(
         vela_home.join("extensions").join("demo.yaml"),
-        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\ncapabilities:\n  - chat\n",
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nactivation: metadata-only\nhooks:\n  - on-activate\ncapabilities:\n  - chat\n",
     )
     .unwrap();
     let failed = reload_extensions(&bootstrap).unwrap();
@@ -422,6 +430,11 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
         .expect("session after failed reload");
     assert_eq!(failed.extensions.failed_count, 1);
     assert_eq!(failed.extensions.activated_count, 0);
+    assert!(failed.extensions.entries.iter().any(|entry| {
+        entry.id.as_deref() == Some("demo")
+            && entry.detail.as_deref()
+                == Some("metadata-only extensions cannot declare the on-activate hook")
+    }));
     assert!(failed.preserved_session);
     assert_eq!(before.id, after_failed.id);
     assert_eq!(before.title, after_failed.title);
