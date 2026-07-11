@@ -444,6 +444,9 @@ fn default_runtime_session_surfaces_in_status() {
     assert!(status_stdout.contains("id=embedded transport=in-process"));
     assert!(status_stdout.contains("resolved backend: none"));
     assert!(status_stdout.contains("resolved backend readiness: none"));
+    assert!(status_stdout.contains("first-start readiness: home=ready state_db=ready config=no-provider-config backend=not-configured"));
+    assert!(status_stdout
+        .contains("next=\"run bare vela, run mock chat, or create $VELA_HOME/config.yaml\""));
     assert!(status_stdout.contains("active session: id=session-"));
     assert!(status_stdout.contains("title=chat interactive"));
     assert!(status_stdout.contains("state=finish"));
@@ -519,6 +522,10 @@ fn embedded_backend_contract_and_config_are_visible_via_status() {
     assert!(status_stdout.contains("id=embedded transport=in-process"));
     assert!(status_stdout.contains("resolved backend: api=v1 id=embedded transport=in-process"));
     assert!(status_stdout.contains("resolved backend readiness: ok"));
+    assert!(status_stdout.contains("first-start readiness: home=ready state_db=ready config=provider-configured backend=configured-ok:embedded"));
+    assert!(status_stdout.contains(
+        "next=\"run chat with the configured provider or inspect gateway/startup surfaces\""
+    ));
     assert!(status_stdout.contains("embedded lifecycle: state=fixture-ready"));
     assert!(status_stdout.contains("fixture_shims=true"));
     assert!(status_stdout.contains("restart_on_model_change=true"));
