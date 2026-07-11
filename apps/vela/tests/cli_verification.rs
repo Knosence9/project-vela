@@ -1998,7 +1998,7 @@ fn sessions_branch_and_compress_are_inspectable() {
     assert!(first.status.success(), "{}", stderr_text(&first));
     let first_stdout = stdout_text(&first);
     let parent_session = parse_field(&first_stdout, "id").expect("parent session id");
-    let parent_title = parse_field(&first_stdout, "title").expect("parent session title");
+    let parent_title = "chat: branch me";
 
     let branch = run_vela(
         &vela_home,
@@ -2098,7 +2098,8 @@ fn sessions_branch_and_compress_are_inspectable() {
     let continue_root_stdout = stdout_text(&continue_root);
     assert!(continue_root_stdout.contains(&format!("id={}", branch_child_session)));
     assert!(continue_root_stdout.contains("Session: branch-a-child"));
-    assert!(continue_root_stdout.contains("continue resolution: mode=latest-in-subtree"));
+    assert!(continue_root_stdout
+        .contains("continue resolution: mode=latest-descendant-of-anchor-title"));
     assert!(continue_root_stdout.contains(&format!("anchor_id=Some(\"{}\")", parent_session)));
 
     let continue_branch = run_vela(
@@ -2113,7 +2114,8 @@ fn sessions_branch_and_compress_are_inspectable() {
     let continue_branch_stdout = stdout_text(&continue_branch);
     assert!(continue_branch_stdout.contains(&format!("id={}", branch_child_session)));
     assert!(continue_branch_stdout.contains("Session: branch-a-child"));
-    assert!(continue_branch_stdout.contains("continue resolution: mode=latest-in-subtree"));
+    assert!(continue_branch_stdout
+        .contains("continue resolution: mode=latest-descendant-of-anchor-title"));
     assert!(continue_branch_stdout.contains(&format!("anchor_id=Some(\"{}\")", branch_session)));
 
     let continue_exact = run_vela(
@@ -2127,7 +2129,27 @@ fn sessions_branch_and_compress_are_inspectable() {
     );
     let continue_exact_stdout = stdout_text(&continue_exact);
     assert!(continue_exact_stdout.contains(&format!("id={}", branch_b_session)));
-    assert!(continue_exact_stdout.contains("continue resolution: mode=exact-anchor"));
+    assert!(continue_exact_stdout.contains("continue resolution: mode=exact-anchor-title"));
+
+    let continue_by_id = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--continue",
+            branch_session,
+            "--query",
+            "follow exact id",
+        ],
+    );
+    assert!(
+        continue_by_id.status.success(),
+        "{}",
+        stderr_text(&continue_by_id)
+    );
+    let continue_by_id_stdout = stdout_text(&continue_by_id);
+    assert!(continue_by_id_stdout.contains(&format!("id={}", branch_session)));
+    assert!(continue_by_id_stdout.contains("continue resolution: mode=exact-session-id"));
+    assert!(continue_by_id_stdout.contains("resolved_title=branch-a"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

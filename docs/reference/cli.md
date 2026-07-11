@@ -104,6 +104,12 @@ README-visible shared slash commands:
 - `--yolo`
 - `--pass-session-id`
 
+## Continue semantics surfaced in the Rust CLI
+- bare `--continue` resumes the latest durable session globally
+- `--continue <session-id>` resumes that exact session id directly
+- `--continue <title>` resumes either the exact anchor title or the freshest descendant in that title's branch subtree
+- CLI output prints the continue resolution mode plus the resolved id/title so lineage-aware selection stays operator-visible
+
 ## Bootstrap behavior visible in source
 - `cli.py` uses `fire.Fire(main)` in its direct `__main__` path.
 - `cli.py` sets `VELA_QUIET=1` for a clean CLI startup path.

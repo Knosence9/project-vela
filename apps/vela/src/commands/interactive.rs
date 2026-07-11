@@ -58,12 +58,13 @@ fn print_chat_report(report: &vela_runtime::ChatTurnReport) {
     );
     if let Some(mode) = report.session.continue_resolution.as_deref() {
         println!(
-            "continue resolution: mode={} target={:?} anchor_id={:?} anchor_title={:?} resolved_id={}",
+            "continue resolution: mode={} target={:?} anchor_id={:?} anchor_title={:?} resolved_id={} resolved_title={}",
             mode,
             report.session.continue_target,
             report.session.continue_anchor_session_id,
             report.session.continue_anchor_title,
             report.session.session_id,
+            report.session.title,
         );
     }
     if let Some(response) = report.response.as_deref() {

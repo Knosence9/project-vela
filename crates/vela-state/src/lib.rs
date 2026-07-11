@@ -521,6 +521,21 @@ fn latest_session_for_command(
         .optional()?)
 }
 
+fn find_session_by_id(conn: &Connection, session_id: &str) -> Result<Option<StoredSession>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, title FROM sessions WHERE id = ?1 LIMIT 1",
+            params![session_id],
+            |row| {
+                Ok(StoredSession {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 fn find_session_by_title(conn: &Connection, title: &str) -> Result<Option<StoredSession>> {
     Ok(conn
         .query_row(
@@ -537,19 +552,7 @@ fn find_session_by_title(conn: &Connection, title: &str) -> Result<Option<Stored
 }
 
 fn find_session_by_id_or_title(conn: &Connection, value: &str) -> Result<Option<StoredSession>> {
-    if let Some(session) = conn
-        .query_row(
-            "SELECT id, title FROM sessions WHERE id = ?1 LIMIT 1",
-            params![value],
-            |row| {
-                Ok(StoredSession {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                })
-            },
-        )
-        .optional()?
-    {
+    if let Some(session) = find_session_by_id(conn, value)? {
         return Ok(Some(session));
     }
     find_session_by_title(conn, value)

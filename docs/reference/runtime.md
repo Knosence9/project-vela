@@ -42,7 +42,7 @@
 - `vela sessions --branch <session> --title <new-title> [--note ...]` can fork a durable child session with explicit parent lineage and copied continuity
 - `vela sessions --compress <session> --summary ...` can persist compressed continuity summaries without mutating durable memory directly; summaries are trimmed, must be non-empty, must differ from the latest persisted summary for that session, and are capped to a bounded length
 - `vela sessions --show <session>` exposes branch parentage, immediate child sessions, and compression counts through the session inspection surface
-- title-based `--continue <title>` now resolves to either the exact anchor session or the latest descendant in that anchor's branch subtree, and CLI output reports whether resolution was `exact-anchor`, `latest-in-subtree`, or `latest-global`
+- `--continue <session-id>` now resumes that exact durable session directly, while title-based `--continue <title>` resolves either to the exact anchor title or the latest descendant in that anchor's branch subtree; CLI output reports whether resolution was `exact-session-id`, `exact-anchor-title`, `latest-descendant-of-anchor-title`, or `latest-global`, alongside the resolved id/title
 - Vela now discovers extension manifests from `~/.vela/extensions/` (or `extensions.manifests_dir` in config), applies config-driven enable/disable overrides, and surfaces lifecycle-aware extension entries through `vela status`
 - extension lifecycle now distinguishes `discovered`, `validated`, `activated`, `disabled`, and `failed` states, with metadata-only vs on-boot activation boundaries surfaced per entry
 - tool, skill, and workflow extensions may activate on boot when they provide a non-empty entry path; service extensions remain metadata-only in this slice, and unsupported service `on-boot` requests fail explicitly in status/reload output
@@ -104,7 +104,6 @@
 ## Longer-horizon runtime roadmap notes
 These items are intentionally kept as roadmap themes rather than current execution slices after the current milestone work:
 - deeper provider capability parity beyond the current explicit matrix, while preserving the documented bounded tool loop, reflection/retry, and explicit response-route contract
-- explicit continue semantics matching upstream lineage behavior
 - richer branch-selection behavior and multi-branch navigation beyond the first durable branch/fork model
 - more advanced compression policies beyond the current bounded contract (trimmed non-empty summaries, duplicate-latest rejection, bounded summary length, touched-session updates, and explicit persisted operator summaries)
 - deeper extension lifecycle hooks and capability activation beyond the current explicit activation matrix (tool/skill/workflow on-boot with entry path, service metadata-only, unsupported service on-boot failure)
