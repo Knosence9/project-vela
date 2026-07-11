@@ -180,6 +180,23 @@ pub(crate) fn run_sessions(
                     inspection.messages.len(),
                     inspection.events.len(),
                 );
+                if inspection.lineage.is_empty() {
+                    println!("lineage: none");
+                } else {
+                    println!("lineage [{}]:", inspection.lineage.len());
+                    for node in inspection.lineage {
+                        println!(
+                            "- depth={} session={} title={} state={} parent={:?} messages={} events={}",
+                            node.depth,
+                            node.session_id,
+                            node.title,
+                            node.runtime_state,
+                            node.parent_session_id,
+                            node.message_count,
+                            node.event_count,
+                        );
+                    }
+                }
                 if inspection.child_sessions.is_empty() {
                     println!("children: none");
                 } else {
@@ -193,6 +210,23 @@ pub(crate) fn run_sessions(
                             child.message_count,
                             child.event_count,
                             child.parent_session_id,
+                        );
+                    }
+                }
+                if inspection.descendants.is_empty() {
+                    println!("descendants: none");
+                } else {
+                    println!("descendants [{}]:", inspection.descendants.len());
+                    for node in inspection.descendants {
+                        println!(
+                            "- depth={} session={} title={} state={} parent={:?} messages={} events={}",
+                            node.depth,
+                            node.session_id,
+                            node.title,
+                            node.runtime_state,
+                            node.parent_session_id,
+                            node.message_count,
+                            node.event_count,
                         );
                     }
                 }
@@ -226,11 +260,53 @@ pub(crate) fn run_sessions(
                 );
             }
         }
+    } else if args.list {
+        let sessions = vela_runtime::list_sessions(bootstrap, 50)?;
+        println!("sessions [{}]:", sessions.len());
+        for session in sessions {
+            println!(
+                "- depth={} session={} title={} state={} parent={:?} messages={} events={}",
+                session.depth,
+                session.session_id,
+                session.title,
+                session.runtime_state,
+                session.parent_session_id,
+                session.message_count,
+                session.event_count,
+            );
+        }
+    } else if args.browse {
+        let trees = vela_runtime::browse_session_branches(bootstrap, 20, 20)?;
+        println!("session roots [{}]:", trees.len());
+        for tree in trees {
+            println!(
+                "- root session={} title={} state={} messages={} events={}",
+                tree.root.session_id,
+                tree.root.title,
+                tree.root.runtime_state,
+                tree.root.message_count,
+                tree.root.event_count,
+            );
+            if tree.descendants.is_empty() {
+                println!("  descendants: none");
+            } else {
+                println!("  descendants [{}]:", tree.descendants.len());
+                for node in tree.descendants {
+                    println!(
+                        "  - depth={} session={} title={} state={} parent={:?} messages={} events={}",
+                        node.depth,
+                        node.session_id,
+                        node.title,
+                        node.runtime_state,
+                        node.parent_session_id,
+                        node.message_count,
+                        node.event_count,
+                    );
+                }
+            }
+        }
     } else {
-        println!(
-            "sessions placeholder: list={} browse={}",
-            args.list, args.browse
-        );
+        println!("sessions ready: use --list, --browse, --show, --search, --branch, or --compress");
     }
     Ok(())
 }

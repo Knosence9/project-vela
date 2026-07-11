@@ -268,6 +268,13 @@ fn branch_and_compression_preserve_lineage_and_inspection() {
         Some("explore alternative"),
     )
     .unwrap();
+    let branch_child = branch_session(
+        &report.state_db_path,
+        &branch.session_id,
+        Some("branch-a-child"),
+        None,
+    )
+    .unwrap();
     let compression = compress_session(
         &report.state_db_path,
         &branch.session_id,
@@ -286,14 +293,27 @@ fn branch_and_compression_preserve_lineage_and_inspection() {
         Some("explore alternative")
     );
     assert_eq!(inspection.messages.len(), 2);
+    assert_eq!(inspection.lineage.len(), 2);
+    assert_eq!(inspection.lineage[0].session_id, parent.session_id);
+    assert_eq!(inspection.lineage[0].depth, 0);
+    assert_eq!(inspection.lineage[1].session_id, branch.session_id);
+    assert_eq!(inspection.lineage[1].depth, 1);
     assert_eq!(inspection.compressions.len(), 1);
-    assert!(inspection.child_sessions.is_empty());
+    assert_eq!(inspection.child_sessions.len(), 1);
+    assert_eq!(inspection.child_sessions[0].id, branch_child.session_id);
+    assert_eq!(inspection.descendants.len(), 1);
+    assert_eq!(
+        inspection.descendants[0].session_id,
+        branch_child.session_id
+    );
+    assert_eq!(inspection.descendants[0].depth, 1);
     assert_eq!(inspection.compressions[0].id, compression.id);
     let parent_inspection = inspect_session(&report.state_db_path, &parent.session_id, 20)
         .unwrap()
         .expect("parent inspection");
     assert_eq!(parent_inspection.child_sessions.len(), 1);
     assert_eq!(parent_inspection.child_sessions[0].id, branch.session_id);
+    assert_eq!(parent_inspection.descendants.len(), 2);
     let summary = load_summary(
         &Connection::open(&report.state_db_path).unwrap(),
         &branch.session_id,
@@ -305,6 +325,74 @@ fn branch_and_compression_preserve_lineage_and_inspection() {
         Some(parent.session_id.as_str())
     );
     assert_eq!(summary.runtime_state, "ready");
+
+    let _ = fs::remove_dir_all(&vela_home);
+}
+
+#[test]
+fn list_and_browse_sessions_surface_multi_branch_navigation() {
+    let vela_home =
+        std::env::temp_dir().join(format!("vela-state-browse-test-{}", unix_timestamp_nanos()));
+    let report = initialize_persistence(&vela_home).unwrap();
+    let root = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("root browse turn".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    let branch_a = branch_session(
+        &report.state_db_path,
+        &root.session_id,
+        Some("branch-a"),
+        None,
+    )
+    .unwrap();
+    let branch_b = branch_session(
+        &report.state_db_path,
+        &root.session_id,
+        Some("branch-b"),
+        None,
+    )
+    .unwrap();
+    let branch_a_child = branch_session(
+        &report.state_db_path,
+        &branch_a.session_id,
+        Some("branch-a-child"),
+        None,
+    )
+    .unwrap();
+
+    let sessions = list_sessions(&report.state_db_path, 10).unwrap();
+    assert_eq!(sessions.len(), 4);
+    assert_eq!(sessions[0].session_id, branch_a_child.session_id);
+    assert_eq!(sessions[0].depth, 2);
+    assert_eq!(sessions[1].session_id, branch_b.session_id);
+    assert_eq!(sessions[1].depth, 1);
+    assert_eq!(sessions[2].session_id, branch_a.session_id);
+    assert_eq!(sessions[2].depth, 1);
+    assert_eq!(sessions[3].session_id, root.session_id);
+    assert_eq!(sessions[3].depth, 0);
+
+    let trees = browse_session_branches(&report.state_db_path, 10, 10).unwrap();
+    assert_eq!(trees.len(), 1);
+    assert_eq!(trees[0].root.session_id, root.session_id);
+    assert_eq!(trees[0].descendants.len(), 3);
+    assert_eq!(
+        trees[0].descendants[0].session_id,
+        branch_a_child.session_id
+    );
+    assert_eq!(trees[0].descendants[0].depth, 2);
+    assert_eq!(trees[0].descendants[1].session_id, branch_b.session_id);
+    assert_eq!(trees[0].descendants[1].depth, 1);
+    assert_eq!(trees[0].descendants[2].session_id, branch_a.session_id);
+    assert_eq!(trees[0].descendants[2].depth, 1);
 
     let _ = fs::remove_dir_all(&vela_home);
 }

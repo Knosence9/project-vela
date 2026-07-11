@@ -19,9 +19,9 @@ pub use vela_extensions::{
     ExtensionActivation, ExtensionKind, ExtensionLifecycle, ExtensionRecord,
 };
 pub use vela_state::{
-    InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchRecord,
-    SessionCompressionRecord, SessionEventRecord, SessionInspection, SessionMessageRecord,
-    SessionSearchHit, SessionSummary,
+    InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchNode,
+    SessionBranchRecord, SessionBrowseTree, SessionCompressionRecord, SessionEventRecord,
+    SessionInspection, SessionMessageRecord, SessionSearchHit, SessionSummary,
 };
 
 mod ops;

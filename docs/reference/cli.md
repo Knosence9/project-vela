@@ -174,6 +174,9 @@ Confirmed from the live Rust CLI surface in `apps/vela/src/cli.rs`:
   - `--note <text>`
   - `--compress <session>`
   - `--summary <text>`
+    - `--list` prints recent durable sessions with branch depth, parent context, and bounded message/event counts
+    - `--browse` groups durable sessions by root session and shows descendant branch navigation entries for multi-branch inspection
+    - `--show` surfaces branch parentage plus lineage and descendant navigation for the selected durable session
 - `vela cron`
   - `--setup`
   - `--start`

@@ -2070,8 +2070,16 @@ fn sessions_branch_and_compress_are_inspectable() {
     let show_stdout = stdout_text(&show);
     assert!(show_stdout.contains("parent_id=Some"));
     assert!(show_stdout.contains("parent_title=Some"));
+    assert!(show_stdout.contains("lineage [2]:"));
+    assert!(show_stdout.contains(&format!("session={} title=chat: branch me", parent_session)));
+    assert!(show_stdout.contains(&format!("session={} title=branch-a", branch_session)));
     assert!(show_stdout.contains("children [1]:"));
     assert!(show_stdout.contains("title=branch-a-child"));
+    assert!(show_stdout.contains("descendants [1]:"));
+    assert!(show_stdout.contains(&format!(
+        "session={} title=branch-a-child",
+        branch_child_session
+    )));
     assert!(show_stdout.contains("compressions [1]:"));
     assert!(show_stdout.contains("summary=branch compressed summary"));
 
@@ -2083,8 +2091,53 @@ fn sessions_branch_and_compress_are_inspectable() {
     );
     let parent_show_stdout = stdout_text(&parent_show);
     assert!(parent_show_stdout.contains("children [2]:"));
+    assert!(parent_show_stdout.contains("descendants [3]:"));
     assert!(parent_show_stdout.contains("title=branch-a"));
     assert!(parent_show_stdout.contains("title=branch-b"));
+    assert!(parent_show_stdout.contains("title=branch-a-child"));
+
+    let list = run_vela(&vela_home, &["sessions", "--list"]);
+    assert!(list.status.success(), "{}", stderr_text(&list));
+    let list_stdout = stdout_text(&list);
+    assert!(list_stdout.contains("sessions [4]:"));
+    assert!(list_stdout.contains(&format!(
+        "depth=2 session={} title=branch-a-child",
+        branch_child_session
+    )));
+    assert!(list_stdout.contains(&format!(
+        "depth=1 session={} title=branch-a",
+        branch_session
+    )));
+    assert!(list_stdout.contains(&format!(
+        "depth=1 session={} title=branch-b",
+        branch_b_session
+    )));
+    assert!(list_stdout.contains(&format!(
+        "depth=0 session={} title=chat: branch me",
+        parent_session
+    )));
+
+    let browse = run_vela(&vela_home, &["sessions", "--browse"]);
+    assert!(browse.status.success(), "{}", stderr_text(&browse));
+    let browse_stdout = stdout_text(&browse);
+    assert!(browse_stdout.contains("session roots [1]:"));
+    assert!(browse_stdout.contains(&format!(
+        "root session={} title=chat: branch me",
+        parent_session
+    )));
+    assert!(browse_stdout.contains("descendants [3]:"));
+    assert!(browse_stdout.contains(&format!(
+        "depth=2 session={} title=branch-a-child",
+        branch_child_session
+    )));
+    assert!(browse_stdout.contains(&format!(
+        "depth=1 session={} title=branch-a",
+        branch_session
+    )));
+    assert!(browse_stdout.contains(&format!(
+        "depth=1 session={} title=branch-b",
+        branch_b_session
+    )));
 
     let continue_root = run_vela(
         &vela_home,
