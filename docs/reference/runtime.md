@@ -75,6 +75,7 @@
 ## Current provider-selection and runtime-contract surface
 - `runtime.provider` currently accepts `ollama`, `mock`, `llamacpp` / `llama.cpp`, and `embedded`.
 - When no provider is configured, query/image turns stay on the deterministic kernel fallback path.
+- The same configured `runtime.provider` now also acts as the default backend selector for bounded eval/model-lab execution when `vela eval --run ...` or `vela eval --run-slot ...` omits explicit `--backend` flags.
 - Provider defaults and guardrails currently exposed by the runtime boundary are:
   - `ollama` -> default base URL `http://127.0.0.1:11434`, local-only unless `VELA_ALLOW_REMOTE_OLLAMA` is set
   - `llamacpp` -> default base URL `http://127.0.0.1:8080`, local-only unless `VELA_ALLOW_REMOTE_LLAMACPP` is set

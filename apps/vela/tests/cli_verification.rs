@@ -1262,6 +1262,31 @@ fn backend_eval_harness_records_embedded_results() {
 }
 
 #[test]
+/// Verifies that backend eval falls back to the configured runtime provider when no explicit backend list is supplied.
+fn backend_eval_uses_configured_backend_when_no_backend_flag_is_supplied() {
+    let vela_home = temp_vela_home("eval-default-configured-backend");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
+    )
+    .unwrap();
+
+    let ready = run_vela(&vela_home, &["eval"]);
+    assert!(ready.status.success(), "{}", stderr_text(&ready));
+    let ready_stdout = stdout_text(&ready);
+    assert!(ready_stdout.contains("default_backend=mock"));
+
+    let run = run_vela(&vela_home, &["eval", "--run", "compare configured backend"]);
+    assert!(run.status.success(), "{}", stderr_text(&run));
+    let run_stdout = stdout_text(&run);
+    assert!(run_stdout.contains("backends=mock"));
+    assert!(run_stdout.contains("backend=mock transport=in-process status=passed"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
 /// Verifies that the model-lab policy is visible through the eval surface.
 fn model_lab_policy_is_visible_via_eval_surface() {
     let vela_home = temp_vela_home("model-lab-policy");
@@ -1279,6 +1304,40 @@ fn model_lab_policy_is_visible_via_eval_surface() {
     ));
     assert!(policy_stdout.contains("graduation gates [3]:"));
     assert!(policy_stdout.contains("required evidence [3]:"));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies that backend experiment slots prefer the configured runtime provider when no explicit backend list is supplied.
+fn backend_experiment_slot_uses_configured_backend_when_no_backend_flag_is_supplied() {
+    let vela_home = temp_vela_home("eval-slot-default-configured-backend");
+    std::fs::create_dir_all(&vela_home).unwrap();
+    std::fs::write(
+        vela_home.join("config.yaml"),
+        "runtime:\n  provider: mock\n  model: mock-1\n",
+    )
+    .unwrap();
+
+    let run_slot = run_vela(
+        &vela_home,
+        &["eval", "--run-slot", "capability-parity-scan"],
+    );
+    assert!(run_slot.status.success(), "{}", stderr_text(&run_slot));
+    let run_slot_stdout = stdout_text(&run_slot);
+    assert!(run_slot_stdout.contains("slot=Some(\"capability-parity-scan\")"));
+    assert!(run_slot_stdout.contains("backends=mock"));
+    assert!(run_slot_stdout.contains("backend=mock transport=in-process status=passed"));
+
+    let show_slot = run_vela(
+        &vela_home,
+        &["eval", "--show-slot", "capability-parity-scan"],
+    );
+    assert!(show_slot.status.success(), "{}", stderr_text(&show_slot));
+    let show_slot_stdout = stdout_text(&show_slot);
+    assert!(show_slot_stdout.contains("latest_backends=mock"));
+    assert!(show_slot_stdout.contains("latest_passed=mock"));
+    assert!(show_slot_stdout.contains("latest_failed=none"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
