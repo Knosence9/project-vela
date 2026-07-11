@@ -22,13 +22,13 @@ This milestone focuses on two things together:
 - [x] implement session persistence
 - [x] implement transcript/history persistence
 - [x] implement minimal continuity/restart recovery path
-- [ ] define plugin manifest format
-- [ ] define extension lifecycle hooks
-- [ ] load tool extensions from config
-- [ ] load skill/workflow extensions from config
-- [ ] implement enable/disable flags
-- [ ] implement safe reload path
-- [ ] verify continuity plus reload work together in one end-to-end slice
+- [x] define plugin manifest format
+- [x] define extension lifecycle hooks
+- [x] load tool extensions from config
+- [x] load skill/workflow extensions from config
+- [x] implement enable/disable flags
+- [x] implement safe reload path
+- [x] verify continuity plus reload work together in one end-to-end slice
 - [x] add pending approval and review-candidate continuity surfaces for memory/skills
 
 ## Exit gate
