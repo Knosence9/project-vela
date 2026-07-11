@@ -126,34 +126,58 @@ pub(crate) fn run_status(bootstrap: &vela_runtime::BootstrapReport) -> Result<()
     for contract in backend_contracts {
         println!("- {}", contract.summary_line());
     }
-    match vela_runtime::resolve_runtime_backend_contract(&bootstrap.resolved_config, None) {
-        Ok(Some(contract)) => {
-            println!("resolved backend: {}", contract.summary_line());
-            match vela_runtime::validate_runtime_backend_config(
-                &bootstrap.resolved_config,
-                None,
-                None,
-            ) {
-                Ok(()) => println!("resolved backend readiness: ok"),
-                Err(err) => println!("resolved backend readiness: error ({err})"),
-            }
-            if contract.id == "embedded" {
-                if let Some(report) =
-                    vela_runtime::inspect_embedded_lifecycle_guardrails(bootstrap)?
-                {
-                    println!("embedded lifecycle: {}", report.summary_line());
+    let first_start_backend_state =
+        match vela_runtime::resolve_runtime_backend_contract(&bootstrap.resolved_config, None) {
+            Ok(Some(contract)) => {
+                println!("resolved backend: {}", contract.summary_line());
+                let readiness = vela_runtime::validate_runtime_backend_config(
+                    &bootstrap.resolved_config,
+                    None,
+                    None,
+                );
+                match readiness {
+                    Ok(()) => println!("resolved backend readiness: ok"),
+                    Err(ref err) => println!("resolved backend readiness: error ({err})"),
+                }
+                if contract.id == "embedded" {
+                    if let Some(report) =
+                        vela_runtime::inspect_embedded_lifecycle_guardrails(bootstrap)?
+                    {
+                        println!("embedded lifecycle: {}", report.summary_line());
+                    }
+                }
+                match readiness {
+                    Ok(()) => format!("configured-ok:{}", contract.id),
+                    Err(_) => format!("configured-error:{}", contract.id),
                 }
             }
-        }
-        Ok(None) => {
-            println!("resolved backend: none");
-            println!("resolved backend readiness: none");
-        }
-        Err(err) => {
-            println!("resolved backend: error ({err})");
-            println!("resolved backend readiness: error ({err})");
-        }
-    }
+            Ok(None) => {
+                println!("resolved backend: none");
+                println!("resolved backend readiness: none");
+                "not-configured".to_string()
+            }
+            Err(err) => {
+                println!("resolved backend: error ({err})");
+                println!("resolved backend readiness: error ({err})");
+                "config-error".to_string()
+            }
+        };
+    let first_start_config_state = if bootstrap.resolved_config.runtime_provider.is_some() {
+        "provider-configured"
+    } else {
+        "no-provider-config"
+    };
+    let first_start_next = if first_start_backend_state == "not-configured" {
+        "run bare vela, run mock chat, or create $VELA_HOME/config.yaml"
+    } else if first_start_backend_state.starts_with("configured-ok:") {
+        "run chat with the configured provider or inspect gateway/startup surfaces"
+    } else {
+        "fix runtime provider config before provider-backed chat"
+    };
+    println!(
+        "first-start readiness: home=ready state_db=ready config={} backend={} next=\"{}\"",
+        first_start_config_state, first_start_backend_state, first_start_next
+    );
     let ownership_status = vela_runtime::inspect_runtime_ownership_status(bootstrap)?;
     println!("runtime ownership: {}", ownership_status.summary_line());
     println!(
