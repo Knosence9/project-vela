@@ -18,7 +18,7 @@ fn initialize_extensions_applies_activation_boundaries() {
     std::fs::create_dir_all(&manifests_dir).unwrap();
     std::fs::write(
         manifests_dir.join("demo.yaml"),
-        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\nhooks:\n  - on-activate\n  - on-reload\ncapabilities:\n  - chat\n",
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\nhooks:\n  - on-activate\n  - on-reload\ncapabilities:\n  - chat\n  - activate\n",
     )
     .unwrap();
     std::fs::write(
@@ -133,12 +133,17 @@ fn initialize_extensions_marks_failed_entries() {
         "manifest_version: 1\nid: duplicate-hooks\ntitle: Duplicate Hooks\nkind: workflow\nentry: extensions/dup.flow\nhooks:\n  - on-reload\n  - on-reload\n",
     )
     .unwrap();
+    std::fs::write(
+        manifests_dir.join("activate-without-capability.yaml"),
+        "manifest_version: 1\nid: activate-without-capability\ntitle: Activate Without Capability\nkind: tool\nentry: extensions/activate.wasm\nhooks:\n  - on-activate\ncapabilities:\n  - chat\n",
+    )
+    .unwrap();
 
     let report = initialize_extensions(&vela_home, &resolved_with(vec![])).unwrap();
-    assert_eq!(report.discovered_manifest_count, 8);
-    assert_eq!(report.discovered_count, 7);
+    assert_eq!(report.discovered_manifest_count, 9);
+    assert_eq!(report.discovered_count, 8);
     assert_eq!(report.activated_count, 0);
-    assert_eq!(report.failed_count, 8);
+    assert_eq!(report.failed_count, 9);
     let duplicate_failed = report
         .entries
         .iter()
@@ -180,6 +185,12 @@ fn initialize_extensions_marks_failed_entries() {
         entry.id.as_deref() == Some("duplicate-hooks")
             && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
             && entry.detail.as_deref() == Some("duplicate lifecycle hook declared: on-reload")
+    }));
+    assert!(report.entries.iter().any(|entry| {
+        entry.id.as_deref() == Some("activate-without-capability")
+            && matches!(entry.lifecycle, ExtensionLifecycle::Failed)
+            && entry.detail.as_deref()
+                == Some("on-activate hook requires the activate capability in this slice")
     }));
 
     let _ = std::fs::remove_dir_all(&vela_home);

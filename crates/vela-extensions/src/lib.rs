@@ -11,6 +11,8 @@ mod tests;
 
 pub use surface::*;
 
+const ACTIVATE_CAPABILITY: &str = "activate";
+
 enum ParsedExtension {
     Valid {
         manifest_path: PathBuf,
@@ -163,7 +165,12 @@ fn finalize_record(
 
             match activation {
                 ExtensionActivation::MetadataOnly => {
-                    match hook_validation_failure(base.kind.as_ref(), &base.hooks, &activation) {
+                    match hook_validation_failure(
+                        base.kind.as_ref(),
+                        &base.hooks,
+                        &activation,
+                        &base.capabilities,
+                    ) {
                         Some(detail) => ExtensionRecord {
                             lifecycle: ExtensionLifecycle::Failed,
                             detail: Some(detail),
@@ -182,6 +189,7 @@ fn finalize_record(
                         base.entry.as_deref(),
                         &base.hooks,
                         &activation,
+                        &base.capabilities,
                     ) {
                         Some(detail) => ExtensionRecord {
                             lifecycle: ExtensionLifecycle::Failed,
@@ -208,8 +216,9 @@ fn activation_failure(
     entry: Option<&str>,
     hooks: &[ExtensionLifecycleHook],
     activation: &ExtensionActivation,
+    capabilities: &[String],
 ) -> Option<String> {
-    if let Some(detail) = hook_validation_failure(kind, hooks, activation) {
+    if let Some(detail) = hook_validation_failure(kind, hooks, activation, capabilities) {
         return Some(detail);
     }
 
@@ -231,6 +240,7 @@ fn hook_validation_failure(
     kind: Option<&ExtensionKind>,
     hooks: &[ExtensionLifecycleHook],
     activation: &ExtensionActivation,
+    capabilities: &[String],
 ) -> Option<String> {
     let mut seen = BTreeMap::<&'static str, usize>::new();
     for hook in hooks {
@@ -258,6 +268,12 @@ fn hook_validation_failure(
                 (None, _) => {
                     return Some("lifecycle hooks require a known extension kind".to_string())
                 }
+                _ if !has_capability(capabilities, ACTIVATE_CAPABILITY) => {
+                    return Some(
+                        "on-activate hook requires the activate capability in this slice"
+                            .to_string(),
+                    )
+                }
                 _ => {}
             },
             ExtensionLifecycleHook::OnReload => {
@@ -268,6 +284,12 @@ fn hook_validation_failure(
         }
     }
     None
+}
+
+fn has_capability(capabilities: &[String], expected: &str) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability.trim().eq_ignore_ascii_case(expected))
 }
 
 fn metadata_only_detail(kind: Option<&ExtensionKind>) -> String {

@@ -466,7 +466,14 @@ fn extension_status_surfaces_activation_boundaries() {
     .unwrap();
     std::fs::write(
         vela_home.join("extensions").join("workflow.yaml"),
-        "manifest_version: 1\nid: workflow\ntitle: Workflow\nkind: workflow\nentry: extensions/workflow.flow\nhooks:\n  - on-activate\n  - on-reload\n",
+        "manifest_version: 1\nid: workflow\ntitle: Workflow\nkind: workflow\nentry: extensions/workflow.flow\nhooks:\n  - on-activate\n  - on-reload\ncapabilities:\n  - activate\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vela_home
+            .join("extensions")
+            .join("activate-without-capability.yaml"),
+        "manifest_version: 1\nid: activate-without-capability\ntitle: Activate Without Capability\nkind: tool\nentry: extensions/activate.wasm\nhooks:\n  - on-activate\ncapabilities:\n  - chat\n",
     )
     .unwrap();
     std::fs::write(
@@ -480,7 +487,7 @@ fn extension_status_surfaces_activation_boundaries() {
     let status_stdout = stdout_text(&status);
     assert!(status_stdout.contains("validated=1"));
     assert!(status_stdout.contains("activated=1"));
-    assert!(status_stdout.contains("failed=1"));
+    assert!(status_stdout.contains("failed=2"));
     assert!(status_stdout.contains("extension [validated]: id=Some(\"tool-meta\")"));
     assert!(status_stdout.contains("hooks=on-reload"));
     assert!(status_stdout
@@ -493,6 +500,10 @@ fn extension_status_surfaces_activation_boundaries() {
     assert!(status_stdout.contains("extension [failed]: id=Some(\"service-on-boot\")"));
     assert!(status_stdout.contains(
         "detail=Some(\"service extensions cannot request on-boot activation in this slice\")"
+    ));
+    assert!(status_stdout.contains("extension [failed]: id=Some(\"activate-without-capability\")"));
+    assert!(status_stdout.contains(
+        "detail=Some(\"on-activate hook requires the activate capability in this slice\")"
     ));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
@@ -667,7 +678,7 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     std::fs::create_dir_all(vela_home.join("extensions")).unwrap();
     std::fs::write(
         vela_home.join("extensions").join("demo.yaml"),
-        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\nhooks:\n  - on-activate\n  - on-reload\ncapabilities:\n  - chat\n",
+        "manifest_version: 1\nid: demo\ntitle: Demo\nkind: tool\nentry: extensions/demo-tool.wasm\nhooks:\n  - on-activate\n  - on-reload\ncapabilities:\n  - chat\n  - activate\n",
     )
     .unwrap();
     std::fs::write(
