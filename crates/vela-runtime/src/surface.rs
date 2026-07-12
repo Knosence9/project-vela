@@ -112,6 +112,10 @@ pub struct BackendExperimentSlotRecord {
     pub hypothesis: Option<String>,
     pub default_prompt: String,
     pub allowed_backends: Vec<String>,
+    #[serde(default)]
+    pub unchanged_surfaces: Vec<String>,
+    #[serde(default)]
+    pub rollback_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1193,6 +1197,8 @@ fn backend_experiment_slot(
     hypothesis: &str,
     default_prompt: &str,
     allowed_backends: &[&str],
+    unchanged_surfaces: &[&str],
+    rollback_note: &str,
 ) -> BackendExperimentSlotRecord {
     BackendExperimentSlotRecord {
         id: id.to_string(),
@@ -1205,6 +1211,11 @@ fn backend_experiment_slot(
             .iter()
             .map(|backend| backend.to_string())
             .collect(),
+        unchanged_surfaces: unchanged_surfaces
+            .iter()
+            .map(|surface| surface.to_string())
+            .collect(),
+        rollback_note: Some(rollback_note.to_string()),
     }
 }
 
@@ -1217,6 +1228,8 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             "A future ternary or sparse router can be evaluated safely by replaying the same prompt across a bounded backend set before any runtime routing changes land.",
             "Evaluate whether a ternary-style routing candidate would preserve concise, grounded backend behavior for this request.",
             &["embedded", "mock", "llamacpp", "ollama"],
+            &["runtime route", "runtime config", "persistent policy"],
+            "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
         ),
         backend_experiment_slot(
             "sparse-routing-preview",
@@ -1225,6 +1238,8 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             "A sparse-routing preview lane can reveal whether a narrower backend handoff still preserves concise grounded behavior before any routing policy changes land.",
             "Evaluate whether a sparse-routing candidate would keep this request concise, grounded, and reversible across the bounded backend set.",
             &["embedded", "mock", "llamacpp", "ollama"],
+            &["runtime route", "runtime config", "persistent policy"],
+            "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
         ),
         backend_experiment_slot(
             "local-first-replay",
@@ -1233,6 +1248,8 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             "A durable offline replay lane can reveal whether local-first backends stay concise and comparable before any operator changes the runtime default.",
             "Replay this request across the bounded backends and compare whether local-first execution stays concise and operator-visible.",
             &["embedded", "llamacpp", "mock", "ollama"],
+            &["runtime route", "runtime config", "persistent policy"],
+            "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
         ),
         backend_experiment_slot(
             "adapter-intake-gate",
@@ -1241,6 +1258,8 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             "An adapter-intake lane can keep future backend intake criteria durable and reversible by comparing the current contract surfaces before any new route is promoted.",
             "Replay this request across the bounded backends and note whether the current provider contract looks stable enough for a future adapter or fine-tune intake review.",
             &["embedded", "llamacpp", "mock", "ollama"],
+            &["runtime route", "runtime config", "persistent policy"],
+            "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
         ),
         backend_experiment_slot(
             "capability-parity-scan",
@@ -1249,6 +1268,8 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             "A bounded parity scan can highlight backend capability differences early enough to guide future provider work without broadening the live kernel contract.",
             "Compare the bounded backend capability matrix for this request and highlight where behavior still differs across providers.",
             &["embedded", "mock", "llamacpp", "ollama"],
+            &["runtime route", "runtime config", "persistent policy"],
+            "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
         ),
     ]
 }
@@ -1268,6 +1289,12 @@ fn merged_backend_experiment_slots(
                 {
                     existing_slot.allowed_backends.push(backend);
                 }
+            }
+            if existing_slot.unchanged_surfaces.is_empty() {
+                existing_slot.unchanged_surfaces = slot.unchanged_surfaces;
+            }
+            if existing_slot.rollback_note.is_none() {
+                existing_slot.rollback_note = slot.rollback_note;
             }
         } else {
             merged.push(slot);

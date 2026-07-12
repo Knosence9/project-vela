@@ -531,6 +531,8 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
             hypothesis: Some("legacy hypothesis".to_string()),
             default_prompt: "legacy prompt".to_string(),
             allowed_backends: vec!["mock".to_string()],
+            unchanged_surfaces: Vec::new(),
+            rollback_note: None,
         }])
         .unwrap(),
     )
@@ -558,7 +560,22 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
         }));
     }
 
+    let ternary = slots
+        .iter()
+        .find(|slot| slot.id == "ternary-preview")
+        .expect("ternary slot");
+    assert_eq!(
+        ternary.unchanged_surfaces,
+        vec!["runtime route", "runtime config", "persistent policy"]
+    );
+    assert_eq!(
+        ternary.rollback_note.as_deref(),
+        Some("Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.")
+    );
+
     let persisted = std::fs::read_to_string(&slots_path).unwrap();
+    assert!(persisted.contains("unchanged_surfaces"));
+    assert!(persisted.contains("rollback_note"));
     assert!(persisted.contains("sparse-routing-preview"));
     assert!(persisted.contains("local-first-replay"));
     assert!(persisted.contains("adapter-intake-gate"));
@@ -598,6 +615,14 @@ fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
         .unwrap()
         .expect("slot inspection");
     assert_eq!(inspection.latest_eval_id, Some(run.record.id.clone()));
+    assert_eq!(
+        inspection.slot.unchanged_surfaces,
+        vec!["runtime route", "runtime config", "persistent policy"]
+    );
+    assert_eq!(
+        inspection.slot.rollback_note.as_deref(),
+        Some("Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.")
+    );
     assert_eq!(inspection.latest_eval_backends, vec!["mock", "llamacpp"]);
     assert_eq!(inspection.latest_eval_passed_backends, vec!["mock"]);
     assert_eq!(inspection.latest_eval_failed_backends, vec!["llamacpp"]);
@@ -696,6 +721,8 @@ fn backend_eval_slot_falls_back_to_slot_defaults_when_configured_backend_is_disa
         hypothesis: Some("Disallowed configured backends fall back to slot defaults".to_string()),
         default_prompt: "Replay this request through the mock slot fallback.".to_string(),
         allowed_backends: vec!["mock".to_string()],
+        unchanged_surfaces: vec!["runtime route".to_string()],
+        rollback_note: Some("Delete the custom fallback slot.".to_string()),
     });
     std::fs::write(
         &setup.slots_path,

@@ -76,4 +76,4 @@ Pause model-core deepening and return to kernel/runtime hardening if any of thes
 - `vela eval --run-slot capability-parity-scan`
 - published shadow-routing, offline-replay, and parity slot backend sets now include `embedded` when recording bounded eval evidence
 - eval runs now persist `score_summary` evidence (`passed`, `failed`, `total`, and `pass_rate`) and surface it through `vela eval --run`, `--run-slot`, `--list`, `--show`, `--list-slots`, and `--show-slot`
-- slot inspection surfaces now expose the latest passed backend set, failed backend set, score summary, and capability-group evidence for each published slot so provider differences stay operator-visible without changing the live route
+- slot inspection surfaces now expose the latest passed backend set, failed backend set, score summary, capability-group evidence, unchanged live surfaces, and rollback notes for each published slot so provider differences stay operator-visible without changing the live route
