@@ -23,6 +23,13 @@ The next layer of work may deepen only along these bounded classes:
 - architecture experiment slots for ternary or sparse-routing comparisons that remain shadow-only
 - backend capability comparisons that clarify when a new backend contract is worth promoting
 
+## Adapter and fine-tune intake criteria
+Adapter or fine-tune work can enter the model-lab only as criteria/evidence work until a later reviewed promotion slice changes routing. The durable policy exposed by `vela eval --show-policy` requires:
+- candidate work must target an existing provider backend contract
+- eval evidence must compare at least two allowed backends or explain the single-backend constraint
+- provider capabilities and pass/fail outcomes must be visible before runtime influence
+- live runtime routing, config policy, and persistence defaults remain unchanged until a separate reviewed promotion slice
+
 ## Explicitly deferred model-core directions
 The following remain out of scope until the entry criteria are met again at a higher bar:
 - custom ternary model training
@@ -58,7 +65,7 @@ Pause model-core deepening and return to kernel/runtime hardening if any of thes
 
 ## Current durable surface
 - `~/.vela/evals/policy.json`
-- `vela eval --show-policy`
+- `vela eval --show-policy` surfaces graduation gates, required evidence, prohibited behaviors, and adapter/fine-tune intake criteria
 - `~/.vela/evals/slots.json`
 - `vela eval --list-slots`
 - `vela eval --show-slot <id>`
