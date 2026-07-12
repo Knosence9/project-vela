@@ -430,6 +430,23 @@ fn branch_and_compression_preserve_lineage_and_inspection() {
         1
     );
     assert!(branch_after_follow_up.compressions[1].delta_event_count >= 1);
+    assert!(append_message_to_session(
+        &report.state_db_path,
+        &branch.session_id,
+        "assistant",
+        "another branch reply",
+        None
+    )
+    .unwrap());
+    let reused_prior_summary = compress_session(
+        &report.state_db_path,
+        &branch.session_id,
+        "branch compressed summary",
+    )
+    .unwrap_err();
+    assert!(reused_prior_summary
+        .to_string()
+        .contains("compression summary reuses a previously persisted summary"));
 
     let _ = fs::remove_dir_all(&vela_home);
 }

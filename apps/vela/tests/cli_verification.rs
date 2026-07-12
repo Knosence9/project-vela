@@ -2445,6 +2445,35 @@ fn sessions_branch_and_compress_are_inspectable() {
     assert!(branch_show_after_follow_up_stdout.contains("summary=branch follow-up summary"));
     assert!(branch_show_after_follow_up_stdout.contains("delta_messages="));
 
+    let branch_another_follow_up = run_vela(
+        &vela_home,
+        &[
+            "chat",
+            "--resume",
+            branch_session,
+            "--query",
+            "branch another follow-up",
+        ],
+    );
+    assert!(
+        branch_another_follow_up.status.success(),
+        "{}",
+        stderr_text(&branch_another_follow_up)
+    );
+    let reuse_prior_summary = run_vela(
+        &vela_home,
+        &[
+            "sessions",
+            "--compress",
+            branch_session,
+            "--summary",
+            "branch compressed summary",
+        ],
+    );
+    assert!(!reuse_prior_summary.status.success());
+    assert!(stderr_text(&reuse_prior_summary)
+        .contains("compression summary reuses a previously persisted summary"));
+
     let parent_show = run_vela(&vela_home, &["sessions", "--show", parent_session]);
     assert!(
         parent_show.status.success(),
