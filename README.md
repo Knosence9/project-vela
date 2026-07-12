@@ -74,6 +74,23 @@ nix develop --command <command>
 
 The committed `flake.lock` keeps local development and CI reproducible across x86-64 Linux, ARM64 Linux, and Apple Silicon macOS.
 
+Run the complete local quality gate with:
+
+```bash
+nix develop --command just verify
+```
+
+## Developer CLI
+
+The initial Rust workspace provides `vela-dev`, the command-line home for corpus and development-evidence tooling:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- --help
+nix develop --command cargo run --locked -p vela-dev -- record --help
+```
+
+Only the CLI foundation exists today. Development-record validation and storage arrive in the next milestone.
+
 ## Development status
 
 The first milestone is the **evidence loop**:

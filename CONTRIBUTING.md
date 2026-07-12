@@ -52,9 +52,9 @@ Before pushing non-documentation changes, run these commands inside `nix develop
 
 ```bash
 cargo fmt --all --check
-cargo check --workspace --all-targets
-cargo test --workspace
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo check --workspace --all-targets --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 git diff --check
 ```
 
