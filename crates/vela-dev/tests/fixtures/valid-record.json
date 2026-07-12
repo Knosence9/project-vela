@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "task": {"title":"Validate records","objective":"Reject bad evidence","acceptance_criteria":["valid records pass"]},
+  "attempts": [{"summary":"Implemented validation","outcome":"success","diagnostic":null,"patch":"crates/vela-dev/src/record.rs"}],
+  "outcome": {"summary":"Validation works","verified":true,"verification":[{"command":"just verify","status":"passed"}]},
+  "lessons": ["Keep validation deterministic"],
+  "provenance": {"repository_path":"crates/vela-dev/src/record.rs","url":"https://github.com/Knosence9/project-vela"},
+  "sanitation": {"passed":true,"blockers":[]},
+  "trust":"curated",
+  "example":{"type":"positive","rejection_rationale":null}
+}
