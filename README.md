@@ -89,7 +89,13 @@ nix develop --command cargo run --locked -p vela-dev -- --help
 nix develop --command cargo run --locked -p vela-dev -- record --help
 ```
 
-Only the CLI foundation exists today. Development-record validation and storage arrive in the next milestone.
+The workspace includes schema-versioned development-record validation:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- record validate path/to/record.json
+```
+
+See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
 

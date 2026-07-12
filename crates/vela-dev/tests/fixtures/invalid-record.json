@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "task": {"title":"","objective":"","acceptance_criteria":[]},
+  "attempts": [{"summary":"bad","outcome":"failure","diagnostic":null,"patch":"api_key = sk-super-secret-value"}],
+  "outcome": {"summary":"claimed success","verified":true,"verification":[{"command":"test","status":"failed"}]},
+  "lessons": ["read /home/alice/private.txt"],
+  "provenance": {"repository_path":"/tmp/project/file.rs","url":"http://example.com/source"},
+  "sanitation": {"passed":true,"blockers":["secret remains"]},
+  "trust":"curated",
+  "example":{"type":"negative","rejection_rationale":null}
+}

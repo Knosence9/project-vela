@@ -1,6 +1,6 @@
 use clap::Parser;
 use vela_dev::Cli;
 
-fn main() {
-    Cli::parse();
+fn main() -> std::process::ExitCode {
+    Cli::parse().run()
 }

@@ -28,3 +28,55 @@ fn record_help_describes_development_records() {
         ))
         .stdout(predicate::str::contains("Usage: vela-dev record"));
 }
+
+#[test]
+fn validates_development_record_files_with_stable_diagnostics() {
+    let fixtures = format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "record",
+            "validate",
+            &format!("{fixtures}/valid-record.json"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("valid development record"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "record",
+            "validate",
+            &format!("{fixtures}/invalid-record.json"),
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("task.title: required"))
+        .stderr(predicate::str::contains(
+            "outcome.verification: verified_without_pass",
+        ));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "record",
+            "validate",
+            &format!("{fixtures}/malformed-record.json"),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("$: malformed_record"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "record",
+            "validate",
+            &format!("{fixtures}/missing-record.json"),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("$: unreadable_record"));
+}
