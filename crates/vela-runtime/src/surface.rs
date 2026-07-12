@@ -248,6 +248,10 @@ pub struct ScheduledJob {
     #[serde(default)]
     pub recovery_count: u64,
     #[serde(default)]
+    pub missed_run_count: u64,
+    #[serde(default)]
+    pub last_missed_run_count: u64,
+    #[serde(default)]
     pub last_session_id: Option<String>,
     #[serde(default)]
     pub execution_token: Option<String>,

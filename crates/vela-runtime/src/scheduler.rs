@@ -336,6 +336,8 @@ pub fn add_scheduled_job(
         last_error: None,
         run_count: 0,
         recovery_count: 0,
+        missed_run_count: 0,
+        last_missed_run_count: 0,
         last_session_id: None,
         execution_token: None,
         lease_expires_at: None,
@@ -460,6 +462,7 @@ fn execute_scheduled_job(
         drop(lock);
         return Ok(false);
     }
+    let missed_runs_for_attempt = scheduler_missed_run_count(&job.schedule, job.next_run_at, now);
     let execution_token = format!("attempt-{}", unix_timestamp_nanos());
     job.status = "running".to_string();
     job.updated_at = now;
@@ -467,6 +470,7 @@ fn execute_scheduled_job(
     job.last_outcome = Some("running".to_string());
     job.last_progression = Some("started-attempt".to_string());
     job.last_error = None;
+    job.last_missed_run_count = missed_runs_for_attempt;
     job.execution_token = Some(execution_token.clone());
     job.lease_expires_at = Some(now + SCHEDULER_RECOVERY_LEASE_SECONDS);
     let task = job.task.clone();
@@ -480,7 +484,7 @@ fn execute_scheduled_job(
         &bootstrap.persistence.state_db_path,
         scheduler_session_id,
         "scheduler_job_started",
-        json!({"job_id": job_id, "task": task, "schedule": schedule, "started_at": now, "execution_token": execution_token})
+        json!({"job_id": job_id, "task": task, "schedule": schedule, "started_at": now, "execution_token": execution_token, "missed_run_count": missed_runs_for_attempt})
             .to_string(),
     )?;
     if !event_logged {
@@ -519,6 +523,8 @@ fn execute_scheduled_job(
                 job.last_progression = Some("completed-rescheduled".to_string());
                 job.last_error = None;
                 job.run_count += 1;
+                job.missed_run_count += missed_runs_for_attempt;
+                job.last_missed_run_count = missed_runs_for_attempt;
                 job.last_session_id = Some(report.session.session_id.clone());
                 job.next_run_at = next_scheduler_run_at(&job.schedule, completed_at);
                 job.execution_token = None;
@@ -548,6 +554,7 @@ fn execute_scheduled_job(
                     "response_source": report.response_source,
                     "session_id": report.session.session_id,
                     "execution_token": execution_token,
+                    "missed_run_count": missed_runs_for_attempt,
                 })
                 .to_string(),
             )?;
@@ -573,6 +580,7 @@ fn execute_scheduled_job(
                     "response_provider": report.response_provider,
                     "response_model": report.response_model,
                     "session_id": report.session.session_id,
+                    "missed_run_count": missed_runs_for_attempt,
                 }),
             );
             Ok(true)
@@ -593,6 +601,8 @@ fn execute_scheduled_job(
                 job.last_outcome = Some("failed".to_string());
                 job.last_progression = Some("failed-rescheduled".to_string());
                 job.last_error = Some(error.to_string());
+                job.missed_run_count += missed_runs_for_attempt;
+                job.last_missed_run_count = missed_runs_for_attempt;
                 job.next_run_at = next_scheduler_run_at(&job.schedule, failed_at);
                 job.execution_token = None;
                 job.lease_expires_at = None;
@@ -615,7 +625,7 @@ fn execute_scheduled_job(
                 &bootstrap.persistence.state_db_path,
                 scheduler_session_id,
                 "scheduler_job_failed",
-                json!({"job_id": job_id, "failed_at": failed_at, "error": error.to_string(), "execution_token": execution_token})
+                json!({"job_id": job_id, "failed_at": failed_at, "error": error.to_string(), "execution_token": execution_token, "missed_run_count": missed_runs_for_attempt})
                     .to_string(),
             )?;
             if !event_logged {
@@ -636,6 +646,7 @@ fn execute_scheduled_job(
                     "outcome": "failed",
                     "failed_at": failed_at,
                     "error": error.to_string(),
+                    "missed_run_count": missed_runs_for_attempt,
                 }),
             );
             Err(error)
@@ -773,19 +784,32 @@ fn backfill_scheduler_job(job: &mut ScheduledJob, now: i64) {
     }
 }
 
-fn next_scheduler_run_at(schedule: &str, now: i64) -> i64 {
+fn scheduler_missed_run_count(schedule: &str, next_run_at: i64, now: i64) -> u64 {
+    if next_run_at <= 0 || next_run_at >= now {
+        return 0;
+    }
+    let interval = scheduler_interval_seconds(schedule).unwrap_or(60).max(1);
+    ((now - next_run_at) / interval) as u64
+}
+
+fn scheduler_interval_seconds(schedule: &str) -> Option<i64> {
     let fields = schedule.split_whitespace().collect::<Vec<_>>();
     match fields.as_slice() {
-        ["*", "*", "*", "*", "*"] => now - (now % 60) + 60,
+        ["*", "*", "*", "*", "*"] => Some(60),
         [minute, "*", "*", "*", "*"] if minute.starts_with("*/") => minute
             .trim_start_matches("*/")
             .parse::<i64>()
             .ok()
             .filter(|value| *value > 0)
-            .map(|value| now - (now % (value * 60)) + (value * 60))
-            .unwrap_or(now + 60),
-        ["0", "*", "*", "*", "*"] => now - (now % 3600) + 3600,
-        ["0", "0", "*", "*", "*"] => now - (now % 86_400) + 86_400,
-        _ => now + 60,
+            .map(|value| value * 60),
+        ["0", "*", "*", "*", "*"] => Some(3600),
+        ["0", "0", "*", "*", "*"] => Some(86_400),
+        _ => None,
     }
+}
+
+fn next_scheduler_run_at(schedule: &str, now: i64) -> i64 {
+    scheduler_interval_seconds(schedule)
+        .map(|interval| now - (now % interval) + interval)
+        .unwrap_or(now + 60)
 }
