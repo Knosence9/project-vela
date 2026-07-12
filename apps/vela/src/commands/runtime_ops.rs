@@ -169,7 +169,17 @@ pub(crate) fn run_sessions(
             compression.summary,
         );
     } else if let Some(target) = args.show.as_deref() {
-        match vela_runtime::inspect_session(bootstrap, target, 20)? {
+        let selection = vela_runtime::inspect_session_selection(bootstrap, target, 20)?;
+        println!(
+            "session selection: target={:?} resolution={} anchor_id={:?} anchor_title={:?} resolved_id={:?} resolved_title={:?}",
+            selection.target,
+            selection.resolution,
+            selection.anchor_session_id,
+            selection.anchor_title,
+            selection.resolved_session_id,
+            selection.resolved_title,
+        );
+        match selection.inspection {
             Some(inspection) => {
                 println!(
                     "session inspect: id={} title={} state={} parent_id={:?} parent_title={:?} branch_note={:?} messages={} events={}",

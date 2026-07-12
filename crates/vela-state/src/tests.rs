@@ -435,6 +435,70 @@ fn branch_and_compression_preserve_lineage_and_inspection() {
 }
 
 #[test]
+fn inspect_session_selection_resolves_title_to_latest_descendant() {
+    let vela_home = std::env::temp_dir().join(format!(
+        "vela-state-selection-test-{}",
+        unix_timestamp_nanos()
+    ));
+    let report = initialize_persistence(&vela_home).unwrap();
+    let parent = resolve_runtime_session(
+        &report.state_db_path,
+        &SessionRequest {
+            command_name: "chat".to_string(),
+            query_present: true,
+            query_text: Some("parent turn".to_string()),
+            image_present: false,
+            image_path: None,
+            resume: None,
+            continue_last: None,
+        },
+    )
+    .unwrap();
+    let branch = branch_session(
+        &report.state_db_path,
+        &parent.session_id,
+        Some("selection-anchor"),
+        Some("operator branch"),
+    )
+    .unwrap();
+    let branch_child = branch_session(
+        &report.state_db_path,
+        &branch.session_id,
+        Some("selection-child"),
+        None,
+    )
+    .unwrap();
+
+    let selection =
+        inspect_session_selection(&report.state_db_path, "selection-anchor", 20).unwrap();
+    assert_eq!(selection.resolution, "latest-descendant-of-anchor-title");
+    assert_eq!(
+        selection.anchor_session_id.as_deref(),
+        Some(branch.session_id.as_str())
+    );
+    assert_eq!(selection.anchor_title.as_deref(), Some("selection-anchor"));
+    assert_eq!(
+        selection.resolved_session_id.as_deref(),
+        Some(branch_child.session_id.as_str())
+    );
+    assert_eq!(
+        selection
+            .inspection
+            .as_ref()
+            .map(|inspection| inspection.session_id.as_str()),
+        Some(branch_child.session_id.as_str())
+    );
+
+    let missing =
+        inspect_session_selection(&report.state_db_path, "missing-selection", 20).unwrap();
+    assert_eq!(missing.resolution, "not-found");
+    assert!(missing.inspection.is_none());
+    assert!(missing.resolved_session_id.is_none());
+
+    let _ = fs::remove_dir_all(&vela_home);
+}
+
+#[test]
 fn list_and_browse_sessions_surface_multi_branch_navigation() {
     let vela_home =
         std::env::temp_dir().join(format!("vela-state-browse-test-{}", unix_timestamp_nanos()));

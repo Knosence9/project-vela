@@ -193,6 +193,18 @@ pub struct SessionInspection {
     pub compressions: Vec<SessionCompressionRecord>,
 }
 
+#[derive(Debug, Clone)]
+/// Represents the branch-selection decision used by session inspection.
+pub struct SessionInspectionSelection {
+    pub target: String,
+    pub resolution: String,
+    pub anchor_session_id: Option<String>,
+    pub anchor_title: Option<String>,
+    pub resolved_session_id: Option<String>,
+    pub resolved_title: Option<String>,
+    pub inspection: Option<SessionInspection>,
+}
+
 #[derive(Debug, Clone, Copy)]
 /// Enumerates supported `SessionAction` variants.
 pub enum SessionAction {
@@ -435,6 +447,59 @@ pub fn inspect_session(
         &session.title,
         limit,
     )?))
+}
+
+/// Inspects one session using branch-aware selection semantics that mirror `--continue <title>`.
+pub fn inspect_session_selection(
+    state_db_path: &Path,
+    target: &str,
+    limit: usize,
+) -> Result<SessionInspectionSelection> {
+    let conn = Connection::open(state_db_path)
+        .with_context(|| format!("failed to open {}", state_db_path.display()))?;
+    let trimmed_target = target.trim();
+
+    let Some((session, anchor_session_id, anchor_title, resolution)) =
+        (if let Some(session) = find_session_by_id(&conn, trimmed_target)? {
+            Some((
+                session.clone(),
+                Some(session.id),
+                Some(session.title),
+                "exact-session-id",
+            ))
+        } else if let Some(anchor) = find_session_by_title(&conn, trimmed_target)? {
+            let session = latest_session_in_subtree(&conn, &anchor.id)?.unwrap_or(anchor.clone());
+            let resolution = if session.id == anchor.id {
+                "exact-anchor-title"
+            } else {
+                "latest-descendant-of-anchor-title"
+            };
+            Some((session, Some(anchor.id), Some(anchor.title), resolution))
+        } else {
+            None
+        })
+    else {
+        return Ok(SessionInspectionSelection {
+            target: target.to_string(),
+            resolution: "not-found".to_string(),
+            anchor_session_id: None,
+            anchor_title: None,
+            resolved_session_id: None,
+            resolved_title: None,
+            inspection: None,
+        });
+    };
+
+    let inspection = load_session_inspection(&conn, &session.id, &session.title, limit)?;
+    Ok(SessionInspectionSelection {
+        target: target.to_string(),
+        resolution: resolution.to_string(),
+        anchor_session_id,
+        anchor_title,
+        resolved_session_id: Some(session.id),
+        resolved_title: Some(session.title),
+        inspection: Some(inspection),
+    })
 }
 
 /// Appends event to session to persisted session state.

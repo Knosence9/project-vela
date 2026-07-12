@@ -2337,6 +2337,9 @@ fn sessions_branch_and_compress_are_inspectable() {
     let show = run_vela(&vela_home, &["sessions", "--show", branch_session]);
     assert!(show.status.success(), "{}", stderr_text(&show));
     let show_stdout = stdout_text(&show);
+    assert!(show_stdout.contains("session selection:"));
+    assert!(show_stdout.contains("resolution=exact-session-id"));
+    assert!(show_stdout.contains(&format!("resolved_id=Some(\"{}\")", branch_session)));
     assert!(show_stdout.contains("parent_id=Some"));
     assert!(show_stdout.contains("parent_title=Some"));
     assert!(show_stdout.contains("lineage [2]:"));
@@ -2353,6 +2356,35 @@ fn sessions_branch_and_compress_are_inspectable() {
     assert!(show_stdout.contains("delta_messages="));
     assert!(show_stdout.contains("delta_events="));
     assert!(show_stdout.contains("summary=branch compressed summary"));
+
+    let show_by_title = run_vela(&vela_home, &["sessions", "--show", "branch-a"]);
+    assert!(
+        show_by_title.status.success(),
+        "{}",
+        stderr_text(&show_by_title)
+    );
+    let show_by_title_stdout = stdout_text(&show_by_title);
+    assert!(show_by_title_stdout.contains("session selection:"));
+    assert!(show_by_title_stdout.contains("resolution=latest-descendant-of-anchor-title"));
+    assert!(show_by_title_stdout.contains(&format!("anchor_id=Some(\"{}\")", branch_session)));
+    assert!(show_by_title_stdout.contains("anchor_title=Some(\"branch-a\")"));
+    assert!(
+        show_by_title_stdout.contains(&format!("resolved_id=Some(\"{}\")", branch_child_session))
+    );
+    assert!(show_by_title_stdout.contains(&format!(
+        "session inspect: id={} title=branch-a-child",
+        branch_child_session
+    )));
+
+    let show_missing = run_vela(&vela_home, &["sessions", "--show", "missing-branch"]);
+    assert!(
+        show_missing.status.success(),
+        "{}",
+        stderr_text(&show_missing)
+    );
+    let show_missing_stdout = stdout_text(&show_missing);
+    assert!(show_missing_stdout.contains("resolution=not-found"));
+    assert!(show_missing_stdout.contains("session inspect: not found for \"missing-branch\""));
 
     let compress_without_changes = run_vela(
         &vela_home,
