@@ -14,11 +14,33 @@ fn valid_record_round_trips() {
 
 #[test]
 fn unsupported_version_and_invalid_enums_are_rejected() {
-    let unsupported = VALID.replace("\"schema_version\": 1", "\"schema_version\": 2");
-    assert!(serde_json::from_str::<DevelopmentRecord>(&unsupported).is_err());
+    let mut unsupported: serde_json::Value = serde_json::from_str(VALID).expect("JSON fixture");
+    unsupported["schema_version"] = 2.into();
+    assert!(serde_json::from_value::<DevelopmentRecord>(unsupported).is_err());
 
-    let invalid_enum = VALID.replace("\"trust\":\"curated\"", "\"trust\":\"perfect\"");
-    assert!(serde_json::from_str::<DevelopmentRecord>(&invalid_enum).is_err());
+    let mut invalid_enum: serde_json::Value = serde_json::from_str(VALID).expect("JSON fixture");
+    invalid_enum["trust"] = "perfect".into();
+    assert!(serde_json::from_value::<DevelopmentRecord>(invalid_enum).is_err());
+}
+
+#[test]
+fn rejects_repository_traversal_and_windows_home_paths() {
+    let mut value: serde_json::Value = serde_json::from_str(VALID).expect("JSON fixture");
+    value["provenance"]["repository_path"] = "src/../private.txt".into();
+    value["lessons"][0] = r"Read C:\Users\alice\private.txt".into();
+    let record: DevelopmentRecord = serde_json::from_value(value).expect("record shape");
+    let issues = record.validate();
+
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.code == "repository_path_traversal")
+    );
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.code == "home_path_detected")
+    );
 }
 
 #[test]

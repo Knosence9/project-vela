@@ -1,6 +1,10 @@
 pub mod record;
 
-use std::{fs, path::PathBuf, process::ExitCode};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use clap::{Parser, Subcommand};
 use record::DevelopmentRecord;
@@ -42,7 +46,7 @@ impl Cli {
     }
 }
 
-fn validate_record(path: &PathBuf) -> ExitCode {
+fn validate_record(path: &Path) -> ExitCode {
     let input = match fs::read_to_string(path) {
         Ok(input) => input,
         Err(error) => {

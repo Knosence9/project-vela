@@ -68,4 +68,15 @@ fn validates_development_record_files_with_stable_diagnostics() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("$: malformed_record"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "record",
+            "validate",
+            &format!("{fixtures}/missing-record.json"),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("$: unreadable_record"));
 }

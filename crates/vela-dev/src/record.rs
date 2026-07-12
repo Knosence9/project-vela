@@ -202,6 +202,13 @@ impl DevelopmentRecord {
                 "repository paths must be relative",
             ));
         }
+        if has_parent_component(&self.provenance.repository_path) {
+            issues.push(ValidationIssue::new(
+                "repository_path_traversal",
+                "provenance.repository_path",
+                "repository paths must not contain parent traversal",
+            ));
+        }
         if !is_https_url(&self.provenance.url) {
             issues.push(ValidationIssue::new(
                 "insecure_provenance_url",
@@ -284,6 +291,10 @@ fn is_absolute(path: &str) -> bool {
         || path.as_bytes().get(1).is_some_and(|byte| *byte == b':')
 }
 
+fn has_parent_component(path: &str) -> bool {
+    path.split(['/', '\\']).any(|component| component == "..")
+}
+
 fn is_https_url(url: &str) -> bool {
     url.strip_prefix("https://").is_some_and(|remainder| {
         let authority = remainder.split('/').next().unwrap_or_default();
@@ -311,7 +322,8 @@ fn inspect(issues: &mut Vec<ValidationIssue>, path: &str, value: &str) {
             "obvious secret detected",
         ));
     }
-    if value.contains("/home/") || value.contains("/Users/") {
+    let normalized = lower.replace('\\', "/");
+    if normalized.contains("/home/") || normalized.contains("/users/") {
         issues.push(ValidationIssue::new(
             "home_path_detected",
             path,

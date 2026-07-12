@@ -41,7 +41,7 @@ Bounded values are:
 - `trust`: `untrusted`, `reviewed`, or `curated`
 - `example.type`: `positive` or `negative`
 
-Version 1 requires non-empty task title, objective, and acceptance criteria. A verified outcome needs a passing verification. Curated evidence cannot end with a failed verification. Negative examples need an attempt diagnostic or rejection rationale. Repository paths are relative, provenance URLs use HTTPS, and obvious secrets and absolute home-directory paths are rejected. Sanitation cannot pass with unresolved blockers.
+Version 1 requires non-empty task title, objective, and acceptance criteria. A verified outcome needs a passing verification. Curated evidence cannot end with a failed verification. Negative examples need an attempt diagnostic or rejection rationale. Repository paths are relative and cannot traverse parent directories, provenance URLs use HTTPS, and obvious secrets and absolute home-directory paths are rejected. Sanitation cannot pass with unresolved blockers.
 
 ## Validation CLI
 
