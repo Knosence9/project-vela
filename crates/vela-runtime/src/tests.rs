@@ -586,6 +586,10 @@ fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
     .unwrap();
     assert_eq!(run.record.results.len(), 2);
     assert_eq!(
+        run.record.score_summary.as_deref(),
+        Some("passed=1 failed=1 total=2 pass_rate=50pct")
+    );
+    assert_eq!(
         run.record.experiment_slot.as_deref(),
         Some("capability-parity-scan")
     );
@@ -597,6 +601,10 @@ fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
     assert_eq!(inspection.latest_eval_backends, vec!["mock", "llamacpp"]);
     assert_eq!(inspection.latest_eval_passed_backends, vec!["mock"]);
     assert_eq!(inspection.latest_eval_failed_backends, vec!["llamacpp"]);
+    assert_eq!(
+        inspection.latest_eval_score_summary.as_deref(),
+        Some("passed=1 failed=1 total=2 pass_rate=50pct")
+    );
     assert_eq!(inspection.latest_eval_result_count, 2);
     assert!(inspection
         .latest_eval_capability_groups
@@ -633,6 +641,10 @@ fn backend_eval_uses_configured_backend_when_none_is_requested() {
     let run = run_backend_eval(&bootstrap, "compare configured backend", &[], None).unwrap();
     assert_eq!(run.record.backends, vec!["mock"]);
     assert_eq!(run.record.results.len(), 1);
+    assert_eq!(
+        run.record.score_summary.as_deref(),
+        Some("passed=1 failed=0 total=1 pass_rate=100pct")
+    );
     assert_eq!(run.record.results[0].backend_id, "mock");
     assert_eq!(run.record.results[0].status, "passed");
 
