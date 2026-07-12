@@ -26,6 +26,15 @@ pub fn inspect_session(
     vela_state::inspect_session(&bootstrap.persistence.state_db_path, target, limit)
 }
 
+/// Inspects one persisted session with branch-aware title selection details.
+pub fn inspect_session_selection(
+    bootstrap: &BootstrapReport,
+    target: &str,
+    limit: usize,
+) -> Result<SessionInspectionSelection> {
+    vela_state::inspect_session_selection(&bootstrap.persistence.state_db_path, target, limit)
+}
+
 /// Lists recent persisted sessions with branch-aware depth.
 pub fn list_sessions(bootstrap: &BootstrapReport, limit: usize) -> Result<Vec<SessionBranchNode>> {
     vela_state::list_sessions(&bootstrap.persistence.state_db_path, limit)

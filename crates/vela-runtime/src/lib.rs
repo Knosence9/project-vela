@@ -21,7 +21,8 @@ pub use vela_extensions::{
 pub use vela_state::{
     InteractionMode, RuntimeTurnLifecycleRecord, SessionAction, SessionBranchNode,
     SessionBranchRecord, SessionBrowseTree, SessionCompressionRecord, SessionEventRecord,
-    SessionInspection, SessionMessageRecord, SessionSearchHit, SessionSummary,
+    SessionInspection, SessionInspectionSelection, SessionMessageRecord, SessionSearchHit,
+    SessionSummary,
 };
 
 mod ops;
