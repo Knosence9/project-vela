@@ -1586,6 +1586,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_stdout
         .contains("sparse-routing-preview :: status=bounded-preview strategy=shadow-routing"));
     assert!(list_slots_stdout.contains("latest_eval_id=None"));
+    assert!(list_slots_stdout
+        .contains("unchanged_surfaces=runtime route,runtime config,persistent policy"));
+    assert!(list_slots_stdout.contains("rollback_note=Some(\"Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.\")"));
     assert!(list_slots_stdout.contains("latest_backend_evidence=none"));
     assert!(list_slots_stdout
         .contains("local-first-replay :: status=bounded-preview strategy=offline-replay"));
@@ -1600,6 +1603,9 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     let show_slot_stdout = stdout_text(&show_slot);
     assert!(show_slot_stdout.contains("backend experiment slot: id=adapter-intake-gate status=bounded-preview strategy=offline-replay"));
     assert!(show_slot_stdout.contains("backends=embedded,llamacpp,mock,ollama"));
+    assert!(show_slot_stdout
+        .contains("unchanged_surfaces=runtime route,runtime config,persistent policy"));
+    assert!(show_slot_stdout.contains("rollback_note=Some(\"Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.\")"));
     assert!(show_slot_stdout.contains("latest_eval_id=None"));
     assert!(show_slot_stdout.contains("latest_backends=none"));
     assert!(show_slot_stdout.contains("latest_passed=none"));

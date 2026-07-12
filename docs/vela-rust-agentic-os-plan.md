@@ -327,7 +327,7 @@ Before Vela takes on deeper model-core work, the following must already be true:
 
 Allowed next slices:
 - adapter or fine-tune intake criteria for existing backend contracts: target an existing provider backend contract, compare at least two allowed backends or explain a single-backend constraint, surface provider capabilities plus pass/fail outcomes, and leave live routing/config/persistence defaults unchanged until a separate promotion slice
-- shadow-only ternary or sparse-routing experiment slots
+- shadow-only ternary or sparse-routing experiment slots with explicit unchanged runtime surfaces and rollback notes
 - richer eval policy/evidence surfaces that stay off the live route, including persisted score summaries for bounded eval runs
 - backend capability comparisons that clarify promotion criteria
 
