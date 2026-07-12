@@ -1597,6 +1597,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_stdout.contains(
         "capability-parity-scan :: status=bounded-preview strategy=bounded-backend-comparison"
     ));
+    assert!(list_slots_stdout.contains("promotion_criteria=all compared backends must record pass/fail outcomes | provider capability summaries must be visible for each backend | promotion remains descriptive until a separate reviewed routing slice"));
 
     let show_slot = run_vela(&vela_home, &["eval", "--show-slot", "adapter-intake-gate"]);
     assert!(show_slot.status.success(), "{}", stderr_text(&show_slot));
@@ -1672,6 +1673,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     );
     let show_ran_slot_stdout = stdout_text(&show_ran_slot);
     assert!(show_ran_slot_stdout.contains("backends=embedded,mock,llamacpp,ollama"));
+    assert!(show_ran_slot_stdout.contains("promotion_criteria=all compared backends must record pass/fail outcomes | provider capability summaries must be visible for each backend | promotion remains descriptive until a separate reviewed routing slice"));
     assert!(show_ran_slot_stdout.contains("latest_backends=mock,llamacpp"));
     assert!(show_ran_slot_stdout.contains("latest_passed=mock"));
     assert!(show_ran_slot_stdout.contains("latest_failed=llamacpp"));
@@ -1694,6 +1696,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_after_stdout.contains(
         "capability-parity-scan :: status=bounded-preview strategy=bounded-backend-comparison"
     ));
+    assert!(list_slots_after_stdout.contains("promotion_criteria=all compared backends must record pass/fail outcomes | provider capability summaries must be visible for each backend | promotion remains descriptive until a separate reviewed routing slice"));
     assert!(list_slots_after_stdout.contains("latest_passed=mock"));
     assert!(list_slots_after_stdout.contains("latest_failed=llamacpp"));
     assert!(list_slots_after_stdout.contains("latest_results=2"));

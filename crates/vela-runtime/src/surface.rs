@@ -116,6 +116,8 @@ pub struct BackendExperimentSlotRecord {
     pub unchanged_surfaces: Vec<String>,
     #[serde(default)]
     pub rollback_note: Option<String>,
+    #[serde(default)]
+    pub promotion_criteria: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1199,6 +1201,7 @@ fn backend_experiment_slot(
     allowed_backends: &[&str],
     unchanged_surfaces: &[&str],
     rollback_note: &str,
+    promotion_criteria: &[&str],
 ) -> BackendExperimentSlotRecord {
     BackendExperimentSlotRecord {
         id: id.to_string(),
@@ -1216,6 +1219,10 @@ fn backend_experiment_slot(
             .map(|surface| surface.to_string())
             .collect(),
         rollback_note: Some(rollback_note.to_string()),
+        promotion_criteria: promotion_criteria
+            .iter()
+            .map(|criterion| criterion.to_string())
+            .collect(),
     }
 }
 
@@ -1230,6 +1237,7 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             &["embedded", "mock", "llamacpp", "ollama"],
             &["runtime route", "runtime config", "persistent policy"],
             "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
+            &["no automatic runtime route mutation", "durable eval evidence remains inspectable"],
         ),
         backend_experiment_slot(
             "sparse-routing-preview",
@@ -1240,6 +1248,7 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             &["embedded", "mock", "llamacpp", "ollama"],
             &["runtime route", "runtime config", "persistent policy"],
             "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
+            &["no automatic runtime route mutation", "durable eval evidence remains inspectable"],
         ),
         backend_experiment_slot(
             "local-first-replay",
@@ -1250,6 +1259,7 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             &["embedded", "llamacpp", "mock", "ollama"],
             &["runtime route", "runtime config", "persistent policy"],
             "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
+            &["no automatic runtime route mutation", "durable eval evidence remains inspectable"],
         ),
         backend_experiment_slot(
             "adapter-intake-gate",
@@ -1260,6 +1270,7 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             &["embedded", "llamacpp", "mock", "ollama"],
             &["runtime route", "runtime config", "persistent policy"],
             "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
+            &["no automatic runtime route mutation", "durable eval evidence remains inspectable"],
         ),
         backend_experiment_slot(
             "capability-parity-scan",
@@ -1270,6 +1281,11 @@ fn default_backend_experiment_slots() -> Vec<BackendExperimentSlotRecord> {
             &["embedded", "mock", "llamacpp", "ollama"],
             &["runtime route", "runtime config", "persistent policy"],
             "Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.",
+            &[
+                "all compared backends must record pass/fail outcomes",
+                "provider capability summaries must be visible for each backend",
+                "promotion remains descriptive until a separate reviewed routing slice",
+            ],
         ),
     ]
 }
@@ -1295,6 +1311,9 @@ fn merged_backend_experiment_slots(
             }
             if existing_slot.rollback_note.is_none() {
                 existing_slot.rollback_note = slot.rollback_note;
+            }
+            if existing_slot.promotion_criteria.is_empty() {
+                existing_slot.promotion_criteria = slot.promotion_criteria;
             }
         } else {
             merged.push(slot);

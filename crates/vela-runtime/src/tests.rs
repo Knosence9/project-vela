@@ -533,6 +533,7 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
             allowed_backends: vec!["mock".to_string()],
             unchanged_surfaces: Vec::new(),
             rollback_note: None,
+            promotion_criteria: Vec::new(),
         }])
         .unwrap(),
     )
@@ -573,9 +574,20 @@ fn setup_backend_evals_upgrades_legacy_slot_registry() {
         Some("Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.")
     );
 
+    let capability_slot = slots
+        .iter()
+        .find(|slot| slot.id == "capability-parity-scan")
+        .expect("capability parity slot");
+    assert!(capability_slot
+        .promotion_criteria
+        .iter()
+        .any(|criterion| criterion
+            == "provider capability summaries must be visible for each backend"));
+
     let persisted = std::fs::read_to_string(&slots_path).unwrap();
     assert!(persisted.contains("unchanged_surfaces"));
     assert!(persisted.contains("rollback_note"));
+    assert!(persisted.contains("promotion_criteria"));
     assert!(persisted.contains("sparse-routing-preview"));
     assert!(persisted.contains("local-first-replay"));
     assert!(persisted.contains("adapter-intake-gate"));
@@ -623,6 +635,17 @@ fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
         inspection.slot.rollback_note.as_deref(),
         Some("Remove or ignore this bounded slot record; it does not alter runtime routing, config, or persisted policy.")
     );
+    assert!(inspection
+        .slot
+        .promotion_criteria
+        .iter()
+        .any(|criterion| criterion == "all compared backends must record pass/fail outcomes"));
+    assert!(inspection
+        .slot
+        .promotion_criteria
+        .iter()
+        .any(|criterion| criterion
+            == "promotion remains descriptive until a separate reviewed routing slice"));
     assert_eq!(inspection.latest_eval_backends, vec!["mock", "llamacpp"]);
     assert_eq!(inspection.latest_eval_passed_backends, vec!["mock"]);
     assert_eq!(inspection.latest_eval_failed_backends, vec!["llamacpp"]);
@@ -723,6 +746,7 @@ fn backend_eval_slot_falls_back_to_slot_defaults_when_configured_backend_is_disa
         allowed_backends: vec!["mock".to_string()],
         unchanged_surfaces: vec!["runtime route".to_string()],
         rollback_note: Some("Delete the custom fallback slot.".to_string()),
+        promotion_criteria: vec!["custom fallback remains descriptive".to_string()],
     });
     std::fs::write(
         &setup.slots_path,

@@ -610,13 +610,14 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
             };
             let slot = inspection.slot;
             println!(
-                "- {} :: status={} strategy={} backends={} unchanged_surfaces={} rollback_note={:?} latest_eval_id={:?} latest_eval_at={:?} latest_passed={} latest_failed={} latest_capability_groups={} latest_results={} latest_parity_summary={:?} latest_score_summary={:?} latest_backend_evidence={} prompt={:?} summary={:?}",
+                "- {} :: status={} strategy={} backends={} unchanged_surfaces={} rollback_note={:?} promotion_criteria={} latest_eval_id={:?} latest_eval_at={:?} latest_passed={} latest_failed={} latest_capability_groups={} latest_results={} latest_parity_summary={:?} latest_score_summary={:?} latest_backend_evidence={} prompt={:?} summary={:?}",
                 slot.id,
                 slot.status,
                 slot.strategy,
                 slot.allowed_backends.join(","),
                 joined_values_or_none(&slot.unchanged_surfaces, ","),
                 slot.rollback_note,
+                joined_values_or_none(&slot.promotion_criteria, " | "),
                 inspection.latest_eval_id,
                 inspection.latest_eval_created_at,
                 joined_values_or_none(&inspection.latest_eval_passed_backends, ","),
@@ -640,13 +641,14 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
                 };
                 let slot = inspection.slot;
                 println!(
-                    "backend experiment slot: id={} status={} strategy={} backends={} unchanged_surfaces={} rollback_note={:?} latest_eval_id={:?} latest_eval_at={:?} latest_backends={} latest_passed={} latest_failed={} latest_capability_groups={} latest_results={} latest_parity_summary={:?} latest_score_summary={:?} latest_backend_evidence={} prompt={:?} summary={:?} hypothesis={:?}",
+                    "backend experiment slot: id={} status={} strategy={} backends={} unchanged_surfaces={} rollback_note={:?} promotion_criteria={} latest_eval_id={:?} latest_eval_at={:?} latest_backends={} latest_passed={} latest_failed={} latest_capability_groups={} latest_results={} latest_parity_summary={:?} latest_score_summary={:?} latest_backend_evidence={} prompt={:?} summary={:?} hypothesis={:?}",
                     slot.id,
                     slot.status,
                     slot.strategy,
                     slot.allowed_backends.join(","),
                     joined_values_or_none(&slot.unchanged_surfaces, ","),
                     slot.rollback_note,
+                    joined_values_or_none(&slot.promotion_criteria, " | "),
                     inspection.latest_eval_id,
                     inspection.latest_eval_created_at,
                     joined_values_or_none(&inspection.latest_eval_backends, ","),
