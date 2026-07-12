@@ -58,6 +58,22 @@ Vela's small, inspectable Rust kernel will eventually own:
 
 Existing Rust frameworks may be studied or integrated, but Vela should not be a thin wrapper around one framework.
 
+## Development environment
+
+Nix is the supported development entry point. The flake pins the Rust toolchain, Rust quality tools, GitHub tooling, formatters, native libraries, and CI utilities used by the project:
+
+```bash
+nix develop
+```
+
+Run a single command without entering an interactive shell with:
+
+```bash
+nix develop --command <command>
+```
+
+The committed `flake.lock` keeps local development and CI reproducible across x86-64 Linux, ARM64 Linux, and Apple Silicon macOS.
+
 ## Development status
 
 The first milestone is the **evidence loop**:
