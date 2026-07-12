@@ -8,6 +8,13 @@ Python package scripts declared in `pyproject.toml`:
 
 Installed `vela` command behavior is driven by `vela_cli.main` and `vela_cli._parser`.
 
+## Current Rust install/run path
+For first-start local usage of the Rust CLI, use one of the bounded paths documented in [`docs/install-run.md`](../install-run.md):
+- `cargo build -p vela` followed by `target/debug/vela ...`
+- `cargo install --path apps/vela --root <install-root>` followed by `<install-root>/bin/vela ...`
+
+These paths are local developer startup paths, not release packaging.
+
 ## Confirmed user-facing flows
 README-visible flows to preserve:
 - `vela`
