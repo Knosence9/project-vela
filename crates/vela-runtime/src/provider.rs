@@ -17,16 +17,18 @@ pub struct RuntimeProviderCapabilities {
     pub supports_text: bool,
     pub supports_tool_loop: bool,
     pub supports_reflection_retry: bool,
+    pub supports_image_scaffold: bool,
     pub supports_images: bool,
 }
 
 impl RuntimeProviderCapabilities {
     pub fn summary_line(&self) -> String {
         format!(
-            "text={} tool_loop={} reflection_retry={} images={}",
+            "text={} tool_loop={} reflection_retry={} image_scaffold={} images={}",
             self.supports_text,
             self.supports_tool_loop,
             self.supports_reflection_retry,
+            self.supports_image_scaffold,
             self.supports_images,
         )
     }
@@ -106,6 +108,7 @@ fn ollama_backend_contract() -> RuntimeBackendContract {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
+            supports_image_scaffold: false,
             supports_images: true,
         },
     }
@@ -124,6 +127,7 @@ fn mock_backend_contract() -> RuntimeBackendContract {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
+            supports_image_scaffold: false,
             supports_images: true,
         },
     }
@@ -142,6 +146,7 @@ fn llamacpp_backend_contract() -> RuntimeBackendContract {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
+            supports_image_scaffold: true,
             supports_images: false,
         },
     }
@@ -160,6 +165,7 @@ fn embedded_backend_contract() -> RuntimeBackendContract {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
+            supports_image_scaffold: true,
             supports_images: false,
         },
     }

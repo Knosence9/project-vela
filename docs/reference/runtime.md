@@ -85,10 +85,10 @@
   - direct provider turns emit provider-specific sources such as `runtime-ollama`, `runtime-llamacpp`, or `runtime-embedded`
   - bounded tool-loop completions emit the corresponding `*-tool-loop` source
   - kernel fallbacks remain explicitly visible as `runtime-kernel`
-- Capability differences are part of the documented contract rather than hidden implementation details:
-  - Ollama and mock support text, bounded tool-loop, reflection/retry, and direct first-pass image handling
-  - llama.cpp supports text, bounded tool-loop, reflection/retry, and provider-backed text-only image scaffolds, but not direct image attachments in this slice
-  - embedded supports text plus the bounded tool-loop / reflection path for text turns and provider-backed text-only image scaffolds, but not direct image attachments in this slice
+- Capability differences are part of the documented contract rather than hidden implementation details, and `vela status` / response-route output now distinguishes direct image support from the bounded text-image scaffold path:
+  - Ollama and mock support text, bounded tool-loop, reflection/retry, and direct first-pass image handling (`image_scaffold=false`, `images=true`)
+  - llama.cpp supports text, bounded tool-loop, reflection/retry, and provider-backed text-only image scaffolds (`image_scaffold=true`), but not direct image attachments in this slice (`images=false`)
+  - embedded supports text plus the bounded tool-loop / reflection path for text turns and provider-backed text-only image scaffolds (`image_scaffold=true`), but not direct image attachments in this slice (`images=false`)
 
 ## Kernel vs provider boundary
 - keep runtime orchestration, lifecycle persistence, tool approvals, retry/fallback rules, and deterministic kernel responses in-kernel
