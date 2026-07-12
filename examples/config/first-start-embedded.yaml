@@ -1,0 +1,5 @@
+# First-start embedded/local-inference config.
+# Copy to $VELA_HOME/config.yaml and replace the model path with a local GGUF file.
+runtime:
+  provider: embedded
+  embedded_model_path: /path/to/model.gguf
