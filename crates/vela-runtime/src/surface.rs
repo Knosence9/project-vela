@@ -98,6 +98,8 @@ pub struct ModelLabPolicyRecord {
     pub allowed_experiment_strategies: Vec<String>,
     pub prohibited_behaviors: Vec<String>,
     pub required_evidence: Vec<String>,
+    #[serde(default)]
+    pub adapter_finetune_intake_criteria: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1150,7 +1152,7 @@ fn acquire_mcp_bridge_lock(path: &std::path::Path) -> Result<SchedulerJobsLock> 
 
 fn default_model_lab_policy() -> ModelLabPolicyRecord {
     ModelLabPolicyRecord {
-        version: 1,
+        version: 2,
         summary: "Deeper model-core work must stay bounded, reversible, and evidence-driven before it can influence the live kernel route.".to_string(),
         graduation_gates: vec![
             "document a bounded experiment surface before changing runtime routing".to_string(),
@@ -1171,6 +1173,12 @@ fn default_model_lab_policy() -> ModelLabPolicyRecord {
             "persisted eval runs with per-backend outcomes".to_string(),
             "bounded failure-path coverage".to_string(),
             "operator-visible docs or CLI inspection surface".to_string(),
+        ],
+        adapter_finetune_intake_criteria: vec![
+            "candidate work must target an existing provider backend contract".to_string(),
+            "eval evidence must compare at least two allowed backends or explain the single-backend constraint".to_string(),
+            "provider capabilities and pass/fail outcomes must be visible before runtime influence".to_string(),
+            "live runtime routing, config policy, and persistence defaults remain unchanged until a separate reviewed promotion slice".to_string(),
         ],
     }
 }
@@ -1312,6 +1320,14 @@ fn ensure_backend_experiment_slots(
     Ok(slots)
 }
 
+fn merge_model_lab_policy_defaults(mut policy: ModelLabPolicyRecord) -> ModelLabPolicyRecord {
+    let defaults = default_model_lab_policy();
+    if policy.adapter_finetune_intake_criteria.is_empty() {
+        policy.adapter_finetune_intake_criteria = defaults.adapter_finetune_intake_criteria;
+    }
+    policy
+}
+
 fn load_model_lab_policy(path: &std::path::Path) -> Result<ModelLabPolicyRecord> {
     if !path.exists() {
         return Ok(default_model_lab_policy());
@@ -1320,7 +1336,39 @@ fn load_model_lab_policy(path: &std::path::Path) -> Result<ModelLabPolicyRecord>
     if content.trim().is_empty() {
         return Ok(default_model_lab_policy());
     }
-    Ok(serde_json::from_str(&content)?)
+    Ok(merge_model_lab_policy_defaults(serde_json::from_str(
+        &content,
+    )?))
+}
+
+fn model_lab_policy_needs_version_upgrade(path: &std::path::Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(true);
+    }
+    let value: serde_json::Value = serde_json::from_str(&content)?;
+    let persisted_version = value
+        .get("version")
+        .and_then(|item| item.as_u64())
+        .unwrap_or_default() as u32;
+    let criteria_missing_or_empty = value
+        .get("adapter_finetune_intake_criteria")
+        .and_then(|item| item.as_array())
+        .map_or(true, |items| items.is_empty());
+    Ok(persisted_version < default_model_lab_policy().version && criteria_missing_or_empty)
+}
+
+fn ensure_model_lab_policy(path: &std::path::Path) -> Result<ModelLabPolicyRecord> {
+    let needs_upgrade = model_lab_policy_needs_version_upgrade(path)?;
+    let mut policy = load_model_lab_policy(path)?;
+    if needs_upgrade {
+        policy.version = default_model_lab_policy().version;
+        std::fs::write(path, serde_json::to_string_pretty(&policy)?)?;
+    }
+    Ok(policy)
 }
 
 fn save_backend_eval_runs(path: &std::path::Path, runs: &[BackendEvalRunRecord]) -> Result<()> {
@@ -1735,6 +1783,7 @@ pub fn setup_backend_evals(bootstrap: &BootstrapReport) -> Result<BackendEvalSet
             serde_json::to_string_pretty(&default_model_lab_policy())?,
         )?;
     }
+    let _policy = ensure_model_lab_policy(&policy_path)?;
     let run_count = load_backend_eval_runs(&runs_path)?.len();
     let slot_count = ensure_backend_experiment_slots(&slots_path)?.len();
     Ok(BackendEvalSetupReport {

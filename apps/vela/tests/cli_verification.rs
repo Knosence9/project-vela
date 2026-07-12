@@ -1419,12 +1419,60 @@ fn model_lab_policy_is_visible_via_eval_surface() {
         stderr_text(&show_policy)
     );
     let policy_stdout = stdout_text(&show_policy);
-    assert!(policy_stdout.contains("model lab policy: version=1"));
+    assert!(policy_stdout.contains("model lab policy: version=2"));
     assert!(policy_stdout.contains(
         "allowed strategies [3]: shadow-routing,offline replay,bounded backend comparison"
     ));
     assert!(policy_stdout.contains("graduation gates [3]:"));
     assert!(policy_stdout.contains("required evidence [3]:"));
+    assert!(policy_stdout.contains("adapter/fine-tune intake criteria [4]:"));
+    assert!(
+        policy_stdout.contains("candidate work must target an existing provider backend contract")
+    );
+    assert!(policy_stdout.contains(
+        "live runtime routing, config policy, and persistence defaults remain unchanged"
+    ));
+
+    std::fs::remove_dir_all(&vela_home).unwrap();
+}
+
+#[test]
+/// Verifies legacy model-lab policy files are upgraded with adapter/fine-tune criteria.
+fn legacy_model_lab_policy_gains_adapter_intake_criteria() {
+    let vela_home = temp_vela_home("model-lab-policy-legacy");
+    let evals_dir = vela_home.join("evals");
+    std::fs::create_dir_all(&evals_dir).unwrap();
+    std::fs::write(evals_dir.join("runs.json"), "[]\n").unwrap();
+    std::fs::write(evals_dir.join("slots.json"), "[]\n").unwrap();
+    std::fs::write(
+        evals_dir.join("policy.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "version": 1,
+            "summary": "legacy policy",
+            "graduation_gates": ["legacy gate"],
+            "allowed_experiment_strategies": ["offline replay"],
+            "prohibited_behaviors": ["legacy prohibited"],
+            "required_evidence": ["legacy evidence"],
+            "adapter_finetune_intake_criteria": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let show_policy = run_vela(&vela_home, &["eval", "--show-policy"]);
+    assert!(
+        show_policy.status.success(),
+        "{}",
+        stderr_text(&show_policy)
+    );
+    let policy_stdout = stdout_text(&show_policy);
+    assert!(policy_stdout.contains("model lab policy: version=2 summary=\"legacy policy\""));
+    assert!(policy_stdout.contains("adapter/fine-tune intake criteria [4]:"));
+    assert!(policy_stdout.contains(
+        "provider capabilities and pass/fail outcomes must be visible before runtime influence"
+    ));
+    let persisted = std::fs::read_to_string(evals_dir.join("policy.json")).unwrap();
+    assert!(persisted.contains("adapter_finetune_intake_criteria"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }

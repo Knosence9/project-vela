@@ -680,6 +680,13 @@ pub(crate) fn run_eval(bootstrap: &vela_runtime::BootstrapReport, args: &EvalArg
         for item in policy.required_evidence {
             println!("- {}", item);
         }
+        println!(
+            "adapter/fine-tune intake criteria [{}]:",
+            policy.adapter_finetune_intake_criteria.len()
+        );
+        for item in policy.adapter_finetune_intake_criteria {
+            println!("- {}", item);
+        }
     } else {
         let setup = vela_runtime::setup_backend_evals(bootstrap)?;
         let default_backend =
