@@ -56,6 +56,12 @@
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
 
             shellHook = ''
+              # Nix adds the writable dev-shell output to NIX_LDFLAGS. Remove it:
+              # linker wrappers split paths containing spaces into invalid arguments.
+              project_rpath="-rpath $out/lib"
+              export NIX_LDFLAGS="''${NIX_LDFLAGS//$project_rpath/}"
+              unset project_rpath
+
               if [[ $- == *i* ]]; then
                 echo "Project Vela development shell"
                 echo "Rust $(rustc --version | cut -d' ' -f2) · Cargo $(cargo --version | cut -d' ' -f2)"
