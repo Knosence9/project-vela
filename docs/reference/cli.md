@@ -187,7 +187,7 @@ Confirmed from the live Rust CLI surface in `apps/vela/src/cli.rs`:
     - `--list` prints recent durable sessions with branch depth, parent context, and bounded message/event counts
     - `--browse` groups durable sessions by root session and shows descendant branch navigation entries for multi-branch inspection
     - `--show` surfaces the branch-selection decision (`exact-session-id`, `exact-anchor-title`, `latest-descendant-of-anchor-title`, or `not-found`) before printing parentage, lineage, and descendant navigation for the selected durable session
-    - `--compress` output and `--show` compression entries surface bounded delta message/event counts, and compression rejects writes when no new durable messages exist since the latest persisted summary
+    - `--compress` output and `--show` compression entries surface bounded delta message/event counts, and compression rejects writes when no new durable messages exist since the latest persisted summary or when the summary reuses any prior persisted summary for that session
 - `vela cron`
   - `--setup`
   - `--start`

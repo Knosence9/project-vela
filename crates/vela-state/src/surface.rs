@@ -934,6 +934,14 @@ pub fn compress_session(
         {
             anyhow::bail!("compression summary matches the latest persisted summary");
         }
+        let reused_summary_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM session_compressions WHERE session_id = ?1 AND trim(summary) = ?2 LIMIT 1)",
+            params![session.id, summary],
+            |row| row.get(0),
+        )?;
+        if reused_summary_exists {
+            anyhow::bail!("compression summary reuses a previously persisted summary");
+        }
         let previous_message_count = latest_compression
             .as_ref()
             .map(|existing| existing.source_message_count)
