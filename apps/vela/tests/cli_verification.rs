@@ -748,7 +748,7 @@ fn extensions_status_and_reload_are_visible_via_cli() {
         "runtime ownership [runtime.ollama_base_url]: owner=kernel-runtime detail=provider transport endpoint changes remain restart-only during extension reload previous=\"http://127.0.0.1:11434\" current=\"http://127.0.0.1:22555\" action=restart-required"
     ));
     assert!(status_after_change_stdout.contains(
-        "runtime ownership [extensions.entries.demo.enabled]: owner=extensions detail=extension enable/disable overrides reload immediately during extension reload previous=false current=null action=reload-available"
+        "runtime ownership [extensions.entries.demo.enabled]: owner=extensions detail=extension enable/disable override removals reload immediately during extension reload previous=false current=null action=reload-available"
     ));
     let reload = run_vela(&vela_home, &["extensions", "--reload"]);
     assert!(!reload.status.success());
@@ -781,7 +781,7 @@ fn extensions_status_and_reload_are_visible_via_cli() {
     ));
     assert!(reload_stdout.contains("reload owned: extensions.entries.demo.enabled@extensions"));
     assert!(reload_stdout.contains(
-        "reload owned [extensions.entries.demo.enabled]: owner=extensions detail=extension enable/disable overrides reload immediately during extension reload previous=false reloaded=null action=reload-detected"
+        "reload owned [extensions.entries.demo.enabled]: owner=extensions detail=extension enable/disable override removals reload immediately during extension reload previous=false reloaded=null action=reload-detected"
     ));
     assert!(reload_stdout.contains("extension [activated]: id=Some(\"demo\")"));
     assert!(reload_stdout.contains("hooks=on-activate,on-reload"));

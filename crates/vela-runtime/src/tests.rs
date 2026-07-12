@@ -410,7 +410,7 @@ fn reload_extensions_rereads_config_without_resetting_sessions() {
         item.field == "extensions.entries.demo.enabled"
             && item.owner == "extensions"
             && item.detail
-                == "extension enable/disable overrides reload immediately during extension reload"
+                == "extension enable/disable override removals reload immediately during extension reload"
             && item.previous_value == "false"
             && item.reloaded_value == "null"
     }));
@@ -835,7 +835,7 @@ fn runtime_ownership_status_surfaces_reload_owned_extension_drift() {
         item.field == "extensions.entries.demo.enabled"
             && item.owner == "extensions"
             && item.detail
-                == "extension enable/disable overrides reload immediately during extension reload"
+                == "extension enable/disable override removals reload immediately during extension reload"
             && item.previous_value == "false"
             && item.reloaded_value == "null"
     }));
