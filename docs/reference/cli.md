@@ -153,6 +153,7 @@ README-visible shared slash commands:
 
 ## Backend API status surface
 - `vela status` now prints the explicit backend API contract list plus the resolved backend contract from config, including bounded local backends such as Ollama, mock, llama.cpp, and the new embedded in-process contract, so future adapters can target stable kernel-owned interfaces
+- backend capability summaries now distinguish direct image support (`images=true`) from bounded text-image scaffold support (`image_scaffold=true`), making llama.cpp and embedded image-turn parity visible without claiming direct attachment support
 
 - when `runtime.provider: embedded` is configured, `vela status` also surfaces `runtime.embedded_model_path`, a resolved-backend readiness check, and an `embedded lifecycle:` line that reports bounded load state plus the durable state-file path under `~/.vela/runtime/embedded-backend-state.json`
 - embedded config validation is now explicit before execution: `runtime.embedded_model_path` must point to an existing non-empty `.gguf` file

@@ -32,6 +32,7 @@ fn supported_runtime_backend_contracts_are_explicit() {
             && contract.default_base_url == Some("http://127.0.0.1:11434")
             && contract.direct_response_source == "runtime-ollama"
             && contract.tool_loop_response_source == "runtime-ollama-tool-loop"
+            && !contract.capabilities.supports_image_scaffold
             && contract.capabilities.supports_images
     }));
     assert!(contracts.iter().any(|contract| {
@@ -42,6 +43,7 @@ fn supported_runtime_backend_contracts_are_explicit() {
             && contract.direct_response_source == "runtime-mock"
             && contract.tool_loop_response_source == "runtime-mock-tool-loop"
             && contract.capabilities.supports_tool_loop
+            && !contract.capabilities.supports_image_scaffold
     }));
     assert!(contracts.iter().any(|contract| {
         contract.id == "llamacpp"
@@ -50,6 +52,7 @@ fn supported_runtime_backend_contracts_are_explicit() {
             && contract.default_base_url == Some("http://127.0.0.1:8080")
             && contract.direct_response_source == "runtime-llamacpp"
             && contract.tool_loop_response_source == "runtime-llamacpp-tool-loop"
+            && contract.capabilities.supports_image_scaffold
             && !contract.capabilities.supports_images
     }));
     assert!(contracts.iter().any(|contract| {
@@ -62,6 +65,7 @@ fn supported_runtime_backend_contracts_are_explicit() {
             && contract.capabilities.supports_text
             && contract.capabilities.supports_tool_loop
             && contract.capabilities.supports_reflection_retry
+            && contract.capabilities.supports_image_scaffold
             && !contract.capabilities.supports_images
     }));
 }
@@ -89,6 +93,7 @@ fn resolve_runtime_execution_wraps_ollama_provider_backend() {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
+            supports_image_scaffold: false,
             supports_images: true,
         })
     );
@@ -164,6 +169,7 @@ fn resolve_runtime_execution_wraps_llamacpp_provider_backend() {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
+            supports_image_scaffold: true,
             supports_images: false,
         })
     );
@@ -213,6 +219,7 @@ fn resolve_runtime_execution_wraps_embedded_provider_backend() {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
+            supports_image_scaffold: true,
             supports_images: false,
         })
     );
@@ -313,6 +320,7 @@ fn resolve_runtime_execution_wraps_mock_provider_backend() {
             supports_text: true,
             supports_tool_loop: true,
             supports_reflection_retry: true,
+            supports_image_scaffold: false,
             supports_images: true,
         })
     );
@@ -594,12 +602,12 @@ fn backend_experiment_slot_inspection_surfaces_latest_eval_evidence_details() {
         .latest_eval_capability_groups
         .iter()
         .any(|group| group
-            .contains("mock=>text=true tool_loop=true reflection_retry=true images=true")));
+            .contains("mock=>text=true tool_loop=true reflection_retry=true image_scaffold=false images=true")));
     assert!(inspection
         .latest_eval_capability_groups
         .iter()
         .any(|group| group
-            .contains("llamacpp=>text=true tool_loop=true reflection_retry=true images=false")));
+            .contains("llamacpp=>text=true tool_loop=true reflection_retry=true image_scaffold=true images=false")));
     assert!(inspection
         .latest_backend_evidence
         .iter()
@@ -1709,7 +1717,7 @@ fn execute_chat_turn_uses_embedded_provider_for_text_only_image_scaffold() {
     assert_eq!(report.response_source, "runtime-embedded");
     assert_eq!(
         report.response_provider_capabilities.as_deref(),
-        Some("text=true tool_loop=true reflection_retry=true images=false")
+        Some("text=true tool_loop=true reflection_retry=true image_scaffold=true images=false")
     );
 
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
@@ -1781,7 +1789,7 @@ fn execute_chat_turn_uses_ollama_provider_for_image_requests() {
         metadata
             .get("provider_capabilities")
             .and_then(|v| v.as_str()),
-        Some("text=true tool_loop=true reflection_retry=true images=true")
+        Some("text=true tool_loop=true reflection_retry=true image_scaffold=false images=true")
     );
     server.join().unwrap();
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
@@ -1865,7 +1873,7 @@ fn execute_chat_turn_routes_mixed_text_and_image_requests_through_mock_provider(
     assert_eq!(report.response_model.as_deref(), Some("mock-1"));
     assert_eq!(
         report.response_provider_capabilities.as_deref(),
-        Some("text=true tool_loop=true reflection_retry=true images=true")
+        Some("text=true tool_loop=true reflection_retry=true image_scaffold=false images=true")
     );
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
@@ -1902,7 +1910,7 @@ fn execute_chat_turn_uses_ollama_provider_when_configured() {
     assert_eq!(report.response_model.as_deref(), Some("gemma3:4b"));
     assert_eq!(
         report.response_provider_capabilities.as_deref(),
-        Some("text=true tool_loop=true reflection_retry=true images=true")
+        Some("text=true tool_loop=true reflection_retry=true image_scaffold=false images=true")
     );
     server.join().unwrap();
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
@@ -1938,7 +1946,7 @@ fn execute_chat_turn_uses_mock_provider_when_configured() {
     assert_eq!(report.response_model.as_deref(), Some("mock-1"));
     assert_eq!(
         report.response_provider_capabilities.as_deref(),
-        Some("text=true tool_loop=true reflection_retry=true images=true")
+        Some("text=true tool_loop=true reflection_retry=true image_scaffold=false images=true")
     );
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }
@@ -1978,7 +1986,7 @@ fn execute_chat_turn_uses_mock_provider_for_image_requests() {
     assert_eq!(report.response_model.as_deref(), Some("mock-1"));
     assert_eq!(
         report.response_provider_capabilities.as_deref(),
-        Some("text=true tool_loop=true reflection_retry=true images=true")
+        Some("text=true tool_loop=true reflection_retry=true image_scaffold=false images=true")
     );
     std::fs::remove_dir_all(&bootstrap.vela_home).unwrap();
 }

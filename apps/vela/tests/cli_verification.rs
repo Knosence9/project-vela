@@ -1217,7 +1217,7 @@ fn chat_query_uses_configured_ollama_provider() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Gemma local reply."));
-    assert!(turn_stdout.contains("response route: source=runtime-ollama provider=ollama model=gemma3:4b capabilities=text=true tool_loop=true reflection_retry=true images=true"));
+    assert!(turn_stdout.contains("response route: source=runtime-ollama provider=ollama model=gemma3:4b capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=false images=true"));
     server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();
@@ -1243,7 +1243,7 @@ fn chat_query_uses_configured_llamacpp_provider() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Phi local reply."));
-    assert!(turn_stdout.contains("response route: source=runtime-llamacpp provider=llamacpp model=phi-3-mini capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    assert!(turn_stdout.contains("response route: source=runtime-llamacpp provider=llamacpp model=phi-3-mini capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=true images=false"));
     server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();
@@ -1601,7 +1601,7 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(show_ran_slot_stdout.contains("latest_backends=mock,llamacpp"));
     assert!(show_ran_slot_stdout.contains("latest_passed=mock"));
     assert!(show_ran_slot_stdout.contains("latest_failed=llamacpp"));
-    assert!(show_ran_slot_stdout.contains("latest_capability_groups=llamacpp=>text=true tool_loop=true reflection_retry=true images=false | mock=>text=true tool_loop=true reflection_retry=true images=true") || show_ran_slot_stdout.contains("latest_capability_groups=mock=>text=true tool_loop=true reflection_retry=true images=true | llamacpp=>text=true tool_loop=true reflection_retry=true images=false"));
+    assert!(show_ran_slot_stdout.contains("latest_capability_groups=llamacpp=>text=true tool_loop=true reflection_retry=true image_scaffold=true images=false | mock=>text=true tool_loop=true reflection_retry=true image_scaffold=false images=true") || show_ran_slot_stdout.contains("latest_capability_groups=mock=>text=true tool_loop=true reflection_retry=true image_scaffold=false images=true | llamacpp=>text=true tool_loop=true reflection_retry=true image_scaffold=true images=false"));
     assert!(show_ran_slot_stdout.contains("latest_results=2"));
     assert!(show_ran_slot_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
     assert!(show_ran_slot_stdout.contains(
@@ -1673,7 +1673,7 @@ fn chat_query_uses_configured_mock_provider() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Mock provider says hi."));
-    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=false images=true"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -1754,7 +1754,7 @@ fn chat_image_with_configured_llamacpp_provider_uses_text_only_scaffold_path() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Phi scaffolded the image request."));
-    assert!(turn_stdout.contains("response route: source=runtime-llamacpp provider=llamacpp model=phi-3-mini capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    assert!(turn_stdout.contains("response route: source=runtime-llamacpp provider=llamacpp model=phi-3-mini capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=true images=false"));
     server.join().unwrap();
 
     std::fs::remove_dir_all(&vela_home).unwrap();
@@ -1786,7 +1786,7 @@ fn chat_image_with_configured_embedded_provider_uses_text_only_scaffold_path() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Embedded fixture reply."));
-    assert!(turn_stdout.contains("response route: source=runtime-embedded provider=embedded capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    assert!(turn_stdout.contains("response route: source=runtime-embedded provider=embedded capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=true images=false"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -1811,7 +1811,7 @@ fn chat_image_uses_configured_mock_provider() {
     assert!(turn.status.success(), "{}", stderr_text(&turn));
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout.contains("Mock provider inspected the image."));
-    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=false images=true"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -1843,7 +1843,7 @@ fn chat_query_and_image_use_configured_mock_provider() {
     let turn_stdout = stdout_text(&turn);
     assert!(turn_stdout
         .contains("Mock provider inspected the image for request: summarize the mock diagram."));
-    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=false images=true"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -1934,7 +1934,7 @@ fn chat_query_uses_embedded_provider_tool_loop() {
     assert!(turn_stdout.contains("Embedded tool-informed final answer."));
     assert!(turn_stdout.contains("lifecycle: turn=turn-"));
     assert!(turn_stdout.contains("phases=8"));
-    assert!(turn_stdout.contains("response route: source=runtime-embedded-tool-loop provider=embedded capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    assert!(turn_stdout.contains("response route: source=runtime-embedded-tool-loop provider=embedded capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=true images=false"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -1975,7 +1975,7 @@ fn chat_query_and_image_use_mock_provider_tool_loop() {
     assert!(turn_stdout.contains("Mock tool-informed final answer."));
     assert!(turn_stdout.contains("lifecycle: turn=turn-"));
     assert!(turn_stdout.contains("phases=8"));
-    assert!(turn_stdout.contains("response route: source=runtime-mock-tool-loop provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
+    assert!(turn_stdout.contains("response route: source=runtime-mock-tool-loop provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=false images=true"));
 
     std::fs::remove_dir_all(&vela_home).unwrap();
 }
@@ -2072,7 +2072,7 @@ fn chat_query_recovers_from_invalid_tool_request_with_embedded_provider() {
     assert!(turn_stdout.contains("lifecycle: turn=turn-"));
     assert!(turn_stdout.contains("phases=6"));
     assert!(turn_stdout.contains("last=finish"));
-    assert!(turn_stdout.contains("response route: source=runtime-embedded provider=embedded capabilities=text=true tool_loop=true reflection_retry=true images=false"));
+    assert!(turn_stdout.contains("response route: source=runtime-embedded provider=embedded capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=true images=false"));
 
     let _vela_home = ScopedEnvVar::set("VELA_HOME", vela_home.as_os_str());
     let bootstrap = vela_runtime::initialize_bootstrap(None, false).unwrap();
@@ -2128,7 +2128,7 @@ fn chat_query_and_image_recover_from_invalid_tool_request_with_mock_provider() {
     assert!(turn_stdout.contains("lifecycle: turn=turn-"));
     assert!(turn_stdout.contains("phases=6"));
     assert!(turn_stdout.contains("last=finish"));
-    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true images=true"));
+    assert!(turn_stdout.contains("response route: source=runtime-mock provider=mock model=mock-1 capabilities=text=true tool_loop=true reflection_retry=true image_scaffold=false images=true"));
 
     let _vela_home = ScopedEnvVar::set("VELA_HOME", vela_home.as_os_str());
     let bootstrap = vela_runtime::initialize_bootstrap(None, false).unwrap();
