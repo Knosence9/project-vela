@@ -935,9 +935,7 @@ fn reload_owned_extension_drifts(
             drifts.push(ReloadOwnedExtensionDrift {
                 field: format!("extensions.entries.{id}.enabled"),
                 owner: "extensions".to_string(),
-                detail:
-                    "extension enable/disable overrides reload immediately during extension reload"
-                        .to_string(),
+                detail: extension_entry_drift_detail(previous_enabled, reloaded_enabled),
                 previous_value: render_runtime_config_value(&previous_enabled),
                 reloaded_value: render_runtime_config_value(&reloaded_enabled),
             });
@@ -945,6 +943,24 @@ fn reload_owned_extension_drifts(
     }
 
     drifts
+}
+
+fn extension_entry_drift_detail(previous: Option<bool>, reloaded: Option<bool>) -> String {
+    match (previous, reloaded) {
+        (None, Some(_)) => {
+            "extension enable/disable override additions reload immediately during extension reload"
+                .to_string()
+        }
+        (Some(_), None) => {
+            "extension enable/disable override removals reload immediately during extension reload"
+                .to_string()
+        }
+        (Some(_), Some(_)) => {
+            "extension enable/disable override value changes reload immediately during extension reload"
+                .to_string()
+        }
+        (None, None) => "extension override drift unavailable".to_string(),
+    }
 }
 
 /// Resolves or creates a runtime session for an interactive request.
