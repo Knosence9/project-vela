@@ -1357,7 +1357,7 @@ fn scheduler_executes_and_recovers_jobs() {
         .iter_mut()
         .find(|job| job.id == added.id)
         .expect("scheduler job");
-    job.next_run_at = unix_timestamp() - 1;
+    job.next_run_at = unix_timestamp() - 181;
     save_scheduler_jobs(&setup.jobs_path, &jobs).unwrap();
     drop(lock);
 
@@ -1368,6 +1368,8 @@ fn scheduler_executes_and_recovers_jobs() {
     let first_job = get_scheduled_job(&bootstrap, &added.id).unwrap();
     assert_eq!(first_job.status, "pending");
     assert_eq!(first_job.run_count, 1);
+    assert_eq!(first_job.missed_run_count, 3);
+    assert_eq!(first_job.last_missed_run_count, 3);
     assert_eq!(first_job.last_outcome.as_deref(), Some("completed"));
     assert_eq!(
         first_job.last_progression.as_deref(),
@@ -1404,6 +1406,8 @@ fn scheduler_executes_and_recovers_jobs() {
     assert_eq!(recovered_job.status, "pending");
     assert_eq!(recovered_job.run_count, 2);
     assert_eq!(recovered_job.recovery_count, 1);
+    assert_eq!(recovered_job.missed_run_count, 3);
+    assert_eq!(recovered_job.last_missed_run_count, 0);
     assert_eq!(recovered_job.last_outcome.as_deref(), Some("completed"));
     assert_eq!(
         recovered_job.last_progression.as_deref(),

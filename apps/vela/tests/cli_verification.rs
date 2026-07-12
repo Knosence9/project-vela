@@ -2643,6 +2643,8 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     assert!(show_stdout.contains("progression=Some(\"registered\")"));
     assert!(show_stdout.contains("delivery_progression=Some(\"delivery-configured\")"));
     assert!(show_stdout.contains("delivery_attempt_count=0"));
+    assert!(show_stdout.contains("missed_run_count=0"));
+    assert!(show_stdout.contains("last_missed_run_count=0"));
     assert!(show_stdout.contains("delivery_webhook_url=Some(\"https://example.test/hook\")"));
     assert!(show_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
 
@@ -2651,6 +2653,8 @@ fn cron_registration_persists_and_invalid_flag_usage_is_rejected() {
     let list_stdout = stdout_text(&list);
     assert!(list_stdout.contains(job_id));
     assert!(list_stdout.contains("run_count=0"));
+    assert!(list_stdout.contains("missed_run_count=0"));
+    assert!(list_stdout.contains("last_missed_run_count=0"));
     assert!(list_stdout.contains("progression=Some(\"registered\")"));
     assert!(list_stdout.contains("delivery_progression=Some(\"delivery-configured\")"));
     assert!(list_stdout.contains("delivery_attempt_count=0"));
@@ -2700,6 +2704,8 @@ fn cron_report_summarizes_scheduler_state() {
     job["updated_at"] = serde_json::Value::from(16);
     job["run_count"] = serde_json::Value::from(2);
     job["recovery_count"] = serde_json::Value::from(1);
+    job["missed_run_count"] = serde_json::Value::from(4);
+    job["last_missed_run_count"] = serde_json::Value::from(3);
     job["last_started_at"] = serde_json::Value::from(11);
     job["last_completed_at"] = serde_json::Value::from(12);
     job["last_failed_at"] = serde_json::Value::from(15);
@@ -2740,6 +2746,7 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("delivery_skipped=0"));
     assert!(report_stdout.contains("total_runs=2"));
     assert!(report_stdout.contains("total_recoveries=1"));
+    assert!(report_stdout.contains("total_missed_runs=4"));
     assert!(report_stdout.contains("total_delivery_attempts=2"));
     assert!(report_stdout.contains(&format!("{}@{}", job_id, now + 42)));
     assert!(report_stdout.contains("scheduler jobs [1]:"));
@@ -2757,6 +2764,8 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(report_stdout.contains("last_recovered_at=Some(13)"));
     assert!(report_stdout.contains("last_session_id=Some(\"session-123\")"));
     assert!(report_stdout.contains("execution_token=Some(\"attempt-xyz\")"));
+    assert!(report_stdout.contains("missed_run_count=4"));
+    assert!(report_stdout.contains("last_missed_run_count=3"));
     assert!(report_stdout.contains("delivery_at=Some(14)"));
     assert!(report_stdout.contains("delivery_event_type=Some(\"scheduler.job.outcome\")"));
     assert!(report_stdout.contains("delivery_outcome=Some(\"failed\")"));
@@ -2781,6 +2790,8 @@ fn cron_report_summarizes_scheduler_state() {
     assert!(show_stdout.contains(&format!("lease_expires_at=Some({})", now + 21)));
     assert!(show_stdout.contains("last_session_id=Some(\"session-123\")"));
     assert!(show_stdout.contains("execution_token=Some(\"attempt-xyz\")"));
+    assert!(show_stdout.contains("missed_run_count=4"));
+    assert!(show_stdout.contains("last_missed_run_count=3"));
     assert!(show_stdout.contains("delivery_progression=Some(\"delivery-failed\")"));
     assert!(show_stdout.contains("delivery_attempt_count=2"));
 
@@ -2926,6 +2937,10 @@ fn cron_start_executes_due_jobs() {
             nested.get("task").and_then(|v| v.as_str()),
             Some("ping status")
         );
+        assert!(nested
+            .get("missed_run_count")
+            .and_then(|value| value.as_u64())
+            .is_some());
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
             .expect("write scheduler webhook response");
@@ -2969,6 +2984,8 @@ fn cron_start_executes_due_jobs() {
     let show_stdout = stdout_text(&show);
     assert!(show_stdout.contains("status=pending"));
     assert!(show_stdout.contains("run_count=1"));
+    assert!(show_stdout.contains("missed_run_count="));
+    assert!(show_stdout.contains("last_missed_run_count="));
     assert!(show_stdout.contains("outcome=Some(\"completed\")"));
     assert!(show_stdout.contains("progression=Some(\"completed-rescheduled\")"));
     assert!(show_stdout.contains("delivery_outcome=Some(\"delivered\")"));
