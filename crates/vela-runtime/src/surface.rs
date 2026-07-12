@@ -141,6 +141,8 @@ pub struct BackendEvalRunRecord {
     pub model_override: Option<String>,
     #[serde(default)]
     pub parity_summary: Option<String>,
+    #[serde(default)]
+    pub score_summary: Option<String>,
     pub results: Vec<BackendEvalResultRecord>,
 }
 
@@ -173,6 +175,7 @@ pub struct BackendExperimentSlotInspection {
     pub latest_eval_id: Option<String>,
     pub latest_eval_created_at: Option<i64>,
     pub latest_eval_parity_summary: Option<String>,
+    pub latest_eval_score_summary: Option<String>,
     pub latest_eval_backends: Vec<String>,
     pub latest_eval_passed_backends: Vec<String>,
     pub latest_eval_failed_backends: Vec<String>,
@@ -1869,6 +1872,25 @@ fn summarize_backend_eval_results(
     (passed, failed, capability_groups)
 }
 
+fn summarize_backend_eval_score(results: &[BackendEvalResultRecord]) -> Option<String> {
+    if results.is_empty() {
+        return None;
+    }
+    let passed = results
+        .iter()
+        .filter(|item| item.status == "passed")
+        .count();
+    let failed = results.len().saturating_sub(passed);
+    let pass_rate_percent = (passed * 100) / results.len();
+    Some(format!(
+        "passed={} failed={} total={} pass_rate={}pct",
+        passed,
+        failed,
+        results.len(),
+        pass_rate_percent
+    ))
+}
+
 fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<String> {
     if results.is_empty() {
         return None;
@@ -1883,6 +1905,7 @@ fn summarize_backend_eval_parity(results: &[BackendEvalResultRecord]) -> Option<
         experiment_slot: None,
         model_override: None,
         parity_summary: None,
+        score_summary: None,
         results: results.to_vec(),
     };
     let (passed, failed, capability_groups) = summarize_backend_eval_results(&synthetic_run);
@@ -2053,6 +2076,7 @@ fn run_backend_eval_internal(
     }
 
     let parity_summary = summarize_backend_eval_parity(&results);
+    let score_summary = summarize_backend_eval_score(&results);
     let record = BackendEvalRunRecord {
         id: format!("eval-{}", unix_timestamp_nanos()),
         prompt: prompt.to_string(),
@@ -2065,6 +2089,7 @@ fn run_backend_eval_internal(
             .filter(|value| !value.is_empty())
             .map(str::to_string),
         parity_summary,
+        score_summary,
         results,
     };
 
@@ -2083,6 +2108,8 @@ fn run_backend_eval_internal(
             "experiment_slot": record.experiment_slot,
             "model_override": record.model_override,
             "results": record.results,
+            "parity_summary": record.parity_summary,
+            "score_summary": record.score_summary,
             "runs_path": setup.runs_path,
             "source": "eval",
             "action": session.action.label(),
@@ -2108,6 +2135,8 @@ fn run_backend_eval_internal(
                 "backends": record.backends,
                 "experiment_slot": record.experiment_slot,
                 "model_override": record.model_override,
+                "parity_summary": record.parity_summary,
+                "score_summary": record.score_summary,
             })
             .to_string(),
         ),
@@ -2161,6 +2190,7 @@ pub fn inspect_backend_experiment_slots(
                 latest_eval_id: latest.map(|run| run.id.clone()),
                 latest_eval_created_at: latest.map(|run| run.created_at),
                 latest_eval_parity_summary: latest.and_then(|run| run.parity_summary.clone()),
+                latest_eval_score_summary: latest.and_then(|run| run.score_summary.clone()),
                 latest_eval_backends: latest.map(|run| run.backends.clone()).unwrap_or_default(),
                 latest_eval_passed_backends,
                 latest_eval_failed_backends,
@@ -2200,6 +2230,7 @@ pub fn get_backend_experiment_slot_inspection(
         latest_eval_id: latest.map(|run| run.id.clone()),
         latest_eval_created_at: latest.map(|run| run.created_at),
         latest_eval_parity_summary: latest.and_then(|run| run.parity_summary.clone()),
+        latest_eval_score_summary: latest.and_then(|run| run.score_summary.clone()),
         latest_eval_backends: latest.map(|run| run.backends.clone()).unwrap_or_default(),
         latest_eval_passed_backends,
         latest_eval_failed_backends,

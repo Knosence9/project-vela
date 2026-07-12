@@ -1296,6 +1296,9 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
     assert!(run_stdout.contains("slot=None"));
     assert!(run_stdout.contains("parity_summary=Some(\""));
     assert!(run_stdout.contains("parity=diverged"));
+    assert!(
+        run_stdout.contains("score_summary=Some(\"passed=2 failed=0 total=2 pass_rate=100pct\")")
+    );
     assert!(run_stdout.contains("passed=mock,llamacpp"));
     assert!(run_stdout.contains("capability_groups="));
     assert!(run_stdout.contains("backend=mock transport=in-process status=passed"));
@@ -1311,6 +1314,9 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
     assert!(list_stdout.contains("backends=mock,llamacpp"));
     assert!(list_stdout.contains("parity_summary=Some(\""));
     assert!(list_stdout.contains("parity=diverged"));
+    assert!(
+        list_stdout.contains("score_summary=Some(\"passed=2 failed=0 total=2 pass_rate=100pct\")")
+    );
     assert!(list_stdout.contains("passed=mock,llamacpp"));
     assert!(list_stdout.contains("capability_groups="));
 
@@ -1321,6 +1327,9 @@ fn backend_eval_harness_compares_backends_and_persists_results() {
     assert!(show_stdout.contains("slot=None"));
     assert!(show_stdout.contains("parity_summary=Some(\""));
     assert!(show_stdout.contains("parity=diverged"));
+    assert!(
+        show_stdout.contains("score_summary=Some(\"passed=2 failed=0 total=2 pass_rate=100pct\")")
+    );
     assert!(show_stdout.contains("passed=mock,llamacpp"));
     assert!(show_stdout.contains("capability_groups="));
     assert!(show_stdout.contains("backend=mock transport=in-process status=passed"));
@@ -1663,6 +1672,8 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(show_ran_slot_stdout.contains("latest_capability_groups=llamacpp=>text=true tool_loop=true reflection_retry=true image_scaffold=true images=false | mock=>text=true tool_loop=true reflection_retry=true image_scaffold=false images=true") || show_ran_slot_stdout.contains("latest_capability_groups=mock=>text=true tool_loop=true reflection_retry=true image_scaffold=false images=true | llamacpp=>text=true tool_loop=true reflection_retry=true image_scaffold=true images=false"));
     assert!(show_ran_slot_stdout.contains("latest_results=2"));
     assert!(show_ran_slot_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
+    assert!(show_ran_slot_stdout
+        .contains("latest_score_summary=Some(\"passed=1 failed=1 total=2 pass_rate=50pct\")"));
     assert!(show_ran_slot_stdout.contains(
         "latest_backend_evidence=mock:passed@in-process source=runtime-mock model=mock-2; llamacpp:failed@http-json source=none model=mock-2"
     ));
@@ -1681,6 +1692,8 @@ fn backend_experiment_slot_is_visible_and_runnable() {
     assert!(list_slots_after_stdout.contains("latest_failed=llamacpp"));
     assert!(list_slots_after_stdout.contains("latest_results=2"));
     assert!(list_slots_after_stdout.contains("latest_parity_summary=Some(\"parity=diverged"));
+    assert!(list_slots_after_stdout
+        .contains("latest_score_summary=Some(\"passed=1 failed=1 total=2 pass_rate=50pct\")"));
     assert!(list_slots_after_stdout.contains(
         "latest_backend_evidence=mock:passed@in-process source=runtime-mock model=mock-2; llamacpp:failed@http-json source=none model=mock-2"
     ));
