@@ -138,7 +138,7 @@ README-visible shared slash commands:
 
 ## Known Rust extension reload surface
 - `vela extensions --reload` re-reads extension config and manifests without dropping session continuity, but now separates restart-required kernel drift from reload-owned extension drift against the durable ownership baseline at `~/.vela/runtime/reload-ownership-baseline.json`; blocked reloads still tell the operator to restart Vela with the updated config to refresh that baseline, while extension-owned drift is surfaced as reload-detected or reload-applied per setting
-- extension status lines now surface declared lifecycle hooks per manifest (`hooks=none`, `hooks=on-reload`, `hooks=on-activate,on-reload`) so bounded activation intent stays visible during both `status` and `extensions --reload`
+- extension status lines now surface declared lifecycle hooks per manifest (`hooks=none`, `hooks=on-reload`, `hooks=on-activate,on-reload`) so bounded activation intent stays visible during both `status` and `extensions --reload`; non-service `on-activate` hooks now require an explicit `activate` capability, and missing capability manifests fail clearly
 - `vela status` now also surfaces the currently effective runtime ownership baseline (`bootstrap-fallback` or durable baseline), whether the active config is aligned, `reload-available`, or restart-required against that baseline, and per-setting current drift lines before an operator attempts reload
 
 ## Known Rust delegation surface
