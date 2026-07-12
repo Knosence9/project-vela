@@ -36,9 +36,19 @@ refactor(memory): isolate event serialization
 
 Keep commits cohesive. Pull requests are squash-merged so `main` retains one clear integration commit per change.
 
+## Development shell
+
+Enter the pinned project environment before running development commands:
+
+```bash
+nix develop
+```
+
+For automation and one-off commands, use `nix develop --command <command>`. Do not rely on globally installed Rust or project utilities. Add required development tools to `flake.nix`; update `flake.lock` when a flake input changes.
+
 ## Rust quality gate
 
-Before pushing non-documentation changes, run:
+Before pushing non-documentation changes, run these commands inside `nix develop`:
 
 ```bash
 cargo fmt --all --check
