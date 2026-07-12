@@ -1,0 +1,33 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Local Vela state and datasets
+/.vela/local/
+/data/raw/
+/data/cache/
+/data/downloads/
+
+# Hermes workspace state
+/.hermes/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Coverage, profiling, and temporary artifacts
+/coverage/
+*.profraw
+*.profdata
+/tmp/
