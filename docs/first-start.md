@@ -142,7 +142,7 @@ runtime:
   embedded_model_path: /path/to/model.gguf
 ```
 
-Use `target/debug/vela --ignore-user-config status` after writing config to confirm the config source and resolved backend. Drop `--ignore-user-config` when you intentionally want `$VELA_HOME/config.yaml` to take precedence.
+Use `target/debug/vela status` after writing config to confirm the config source and resolved backend. Keep `--ignore-user-config` only for fresh-home smoke tests where you intentionally want to ignore `$VELA_HOME/config.yaml`.
 
 ## Troubleshooting
 
