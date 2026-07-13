@@ -36,6 +36,30 @@ impl Event for AccountEvent {
 }
 
 #[test]
+fn decode_errors_are_standard_errors_with_stable_context() {
+    fn assert_standard_error(_: &dyn std::error::Error) {}
+
+    let unsupported = DecodeError::UnsupportedEvent {
+        event_type: "account.renamed".into(),
+        payload_version: 2,
+    };
+    let malformed = DecodeError::MalformedPayload {
+        message: "expected value".into(),
+    };
+
+    assert_standard_error(&unsupported);
+    assert_standard_error(&malformed);
+    assert_eq!(
+        unsupported.to_string(),
+        "unsupported event account.renamed at payload version 2"
+    );
+    assert_eq!(
+        malformed.to_string(),
+        "malformed event payload: expected value"
+    );
+}
+
+#[test]
 fn appends_and_replays_typed_events_in_order_after_reopening() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");

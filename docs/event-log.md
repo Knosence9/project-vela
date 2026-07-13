@@ -25,7 +25,9 @@ The public error variants are the compatibility surface:
 `Event::decode` returns only `DecodeError::UnsupportedEvent` or
 `DecodeError::MalformedPayload`; the log maps those into replay errors and adds
 the authoritative persisted stream version. Decoders cannot fabricate storage,
-ordering, or stream-position failures.
+ordering, or stream-position failures. `DecodeError` implements Rust's standard
+`Display` and `Error` traits so downstream decoders can expose and compose these
+failures without an adapter.
 
 The persisted row contains only `stream_id`, `stream_version`, `event_type`, `payload_version`, and JSON `payload`. No timestamp, event ID, actor, correlation metadata, snapshot, batch append, async runtime, or distributed guarantee is part of this slice.
 
