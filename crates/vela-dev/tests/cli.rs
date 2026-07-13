@@ -30,6 +30,46 @@ fn record_help_describes_development_records() {
 }
 
 #[test]
+fn inspects_corpus_in_deterministic_order_and_reports_failures() {
+    let corpus = format!("{}/tests/fixtures/corpus", env!("CARGO_MANIFEST_DIR"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["corpus", "inspect", &format!("{corpus}/valid")])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "nested/first.json: valid\nsecond.json: valid",
+        ))
+        .stdout(predicate::str::contains(
+            "inspected 2 records: 2 valid, 0 invalid",
+        ));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["corpus", "inspect", &format!("{corpus}/invalid")])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "inspected 2 records: 0 valid, 2 invalid",
+        ))
+        .stderr(predicate::str::contains("malformed.json: malformed_record"))
+        .stderr(predicate::str::contains(
+            "semantic.json: task.title: required",
+        ));
+}
+
+#[test]
+fn corpus_inspection_rejects_an_unreadable_root() {
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["corpus", "inspect", "tests/fixtures/missing-corpus"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("$: unreadable_corpus"));
+}
+
+#[test]
 fn validates_development_record_files_with_stable_diagnostics() {
     let fixtures = format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"));
 

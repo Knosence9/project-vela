@@ -95,6 +95,14 @@ The workspace includes schema-versioned development-record validation:
 nix develop --command cargo run --locked -p vela-dev -- record validate path/to/record.json
 ```
 
+Verified project-native records live under `corpus/development/`. Inspect every JSON record recursively, in deterministic relative-path order, with:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development
+```
+
+Inspection prints each valid record and an aggregate summary. It continues past malformed, unreadable, or semantically invalid records, emits path-prefixed diagnostics, and exits non-zero when any record is invalid.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status

@@ -50,3 +50,13 @@ nix develop --command cargo run --locked -p vela-dev -- record validate path/to/
 ```
 
 Exit status is `0` for valid records, `1` for records with semantic issues, and `2` for unreadable or malformed records. Semantic diagnostics are written to stderr as `<field path>: <stable code>: <message>` and all detected issues are emitted in deterministic traversal order.
+
+## Corpus storage and inspection
+
+Curated, project-native records are stored as JSON below `corpus/development/`. The corpus inspector recursively discovers `.json` files and processes them in sorted relative-path order:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development
+```
+
+Valid entries are listed on stdout before a final count. Record-level read, deserialization, and semantic failures are prefixed with the record's relative path on stderr; inspection continues so the summary covers the whole corpus. Exit status is `0` when every discovered record is valid, `1` when any record is invalid, and `2` when the corpus root cannot be traversed.

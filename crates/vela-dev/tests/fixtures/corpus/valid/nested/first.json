@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "task": {"title":"First","objective":"Inspect first","acceptance_criteria":["passes"]},
+  "attempts": [],
+  "outcome": {"summary":"Done","verified":true,"verification":[{"command":"test","status":"passed"}]},
+  "lessons": [],
+  "provenance": {"repository_path":"first.rs","url":"https://example.com/first"},
+  "sanitation": {"passed":true,"blockers":[]},
+  "trust":"reviewed",
+  "example":{"type":"positive","rejection_rationale":null}
+}
