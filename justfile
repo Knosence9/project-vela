@@ -24,5 +24,13 @@ clippy:
 diff-check:
     git diff --check
 
+# Verify the committed secret declarations using a disposable fixture value.
+secrets-check:
+    bash tests/secretspec-integration.sh
+
+# Run a command with Vela's declared secrets resolved by SecretSpec.
+with-secrets *command:
+    secretspec run -- {{command}}
+
 # Run the complete local quality gate.
-verify: fmt-check check test clippy diff-check
+verify: fmt-check check test clippy secrets-check diff-check
