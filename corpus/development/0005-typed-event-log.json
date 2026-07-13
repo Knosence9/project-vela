@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Define the first typed event-log and replay slice",
+    "objective": "Establish the smallest approved, durable kernel contract for typed append and deterministic replay.",
+    "acceptance_criteria": [
+      "An accepted ADR records the envelope, stream/version semantics, SQLite durability boundary, and replay compatibility contract.",
+      "Behavior tests are written before implementation for ordered append/replay and stale-writer rejection.",
+      "A synchronous typed API persists one event per transaction and replays contiguous committed events after reopening.",
+      "Unknown event types or payload versions, malformed payloads, and stored version gaps fail visibly.",
+      "The complete pinned quality gate and required pull-request checks pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added the vela-kernel manifest and event-log behavior tests before the implementation existed.",
+      "outcome": "failure",
+      "diagnostic": "The focused test target failed to compile because vela_kernel::event_log did not exist.",
+      "patch": "Added the workspace member and initial restart replay, stale expected-version, missing-stream, and StreamId tests."
+    },
+    {
+      "summary": "Implemented the minimum SQLite append/replay API and expanded compatibility tests and documentation.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Added crates/vela-kernel, ADR 0002, event-log behavior documentation, and tests for unsupported discriminators, malformed payloads, and sequence gaps."
+    },
+    {
+      "summary": "Applied independent pre-commit and CodeRabbit findings before merge.",
+      "outcome": "success",
+      "diagnostic": "Independent review identified an unnecessary SQLite 3.37 STRICT-table portability requirement; CodeRabbit found that Event::decode could fabricate log-level ReplayError variants and stream positions.",
+      "patch": "Removed STRICT from the schema and introduced DecodeError so the log alone maps decoder failures to authoritative replay positions."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now has an approved local SQLite event log with atomic optimistic append, restart-safe ordered typed replay, and explicit compatibility failures.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 345",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 345",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Approve persisted envelopes and durability boundaries before encoding them in implementation details.",
+    "Keep domain decoding errors narrower than storage and ordering errors so replay can attach authoritative persisted context.",
+    "Avoid optional database syntax that raises the minimum host-library version without adding value to the bounded contract.",
+    "An immediate SQLite transaction makes the expected-version check and single-row append one atomic concurrency boundary."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/345"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
