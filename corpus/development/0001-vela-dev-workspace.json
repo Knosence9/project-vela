@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Initialize the vela-dev Rust workspace",
+    "objective": "Provide a reproducible Rust CLI foundation for Vela development tooling",
+    "acceptance_criteria": [
+      "The pinned Nix shell builds and tests the workspace",
+      "The vela-dev CLI exposes stable help output"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added the workspace, developer CLI, quality recipes, and CI gate",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Cargo.toml, crates/vela-dev, Justfile, and .github/workflows/quality.yml"
+    }
+  ],
+  "outcome": {
+    "summary": "The repository has a Nix-backed Rust workspace and verified developer CLI",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Pin development tools before adding behavior so local and CI checks share one contract"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev",
+    "url": "https://github.com/Knosence9/project-vela/pull/335"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Define and validate versioned development records",
+    "objective": "Reject malformed, unsafe, or internally inconsistent development evidence with deterministic diagnostics",
+    "acceptance_criteria": [
+      "Schema version 1 round-trips valid records",
+      "Semantic validation reports every issue in stable order",
+      "The CLI distinguishes invalid records from unreadable or malformed input"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Implemented the typed schema and semantic validator",
+      "outcome": "failure",
+      "diagnostic": "Independent review found repository paths accepted parent traversal and Windows-style absolute paths",
+      "patch": "crates/vela-dev/src/record.rs"
+    },
+    {
+      "summary": "Added cross-platform absolute-path and parent-component rejection with regression tests",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/record.rs and crates/vela-dev/tests/record.rs"
+    }
+  ],
+  "outcome": {
+    "summary": "vela-dev validates schema-versioned records and emits stable machine-searchable diagnostics",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Security-sensitive path validation must account for both Unix and Windows syntax",
+    "Collect semantic issues instead of failing fast so one review exposes the complete correction set"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/record.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/337"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
