@@ -40,11 +40,23 @@ pub enum ExpectedVersion {
     Exact(u64),
 }
 
+/// A typed event decoder can reject an unsupported discriminator or malformed bytes.
+#[derive(Debug, Eq, PartialEq)]
+pub enum DecodeError {
+    UnsupportedEvent {
+        event_type: String,
+        payload_version: u32,
+    },
+    MalformedPayload {
+        message: String,
+    },
+}
+
 /// A typed event family controls its stable persistence discriminator and decoding.
 pub trait Event: Serialize + Sized {
     fn event_type(&self) -> &'static str;
     fn payload_version(&self) -> u32;
-    fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, ReplayError>;
+    fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError>;
 }
 
 #[derive(Debug)]
@@ -246,13 +258,17 @@ impl EventLog {
             let payload: Vec<u8> = row.get(3).map_err(storage_replay_error)?;
             let event =
                 E::decode(&event_type, payload_version, &payload).map_err(|error| match error {
-                    ReplayError::MalformedPayload { message, .. } => {
-                        ReplayError::MalformedPayload {
-                            stream_version: version,
-                            message,
-                        }
-                    }
-                    other => other,
+                    DecodeError::UnsupportedEvent {
+                        event_type,
+                        payload_version,
+                    } => ReplayError::UnsupportedEvent {
+                        event_type,
+                        payload_version,
+                    },
+                    DecodeError::MalformedPayload { message } => ReplayError::MalformedPayload {
+                        stream_version: version,
+                        message,
+                    },
                 })?;
             events.push(event);
             expected += 1;

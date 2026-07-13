@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
-use vela_kernel::event_log::{Event, EventLog, ExpectedVersion, ReplayError, StreamId};
+use vela_kernel::event_log::{
+    DecodeError, Event, EventLog, ExpectedVersion, ReplayError, StreamId,
+};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 enum AccountEvent {
@@ -20,15 +22,14 @@ impl Event for AccountEvent {
         1
     }
 
-    fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, ReplayError> {
+    fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
         if payload_version != 1 || !matches!(event_type, "account.opened" | "account.credited") {
-            return Err(ReplayError::UnsupportedEvent {
+            return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
                 payload_version,
             });
         }
-        serde_json::from_slice(payload).map_err(|error| ReplayError::MalformedPayload {
-            stream_version: 0,
+        serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
             message: error.to_string(),
         })
     }

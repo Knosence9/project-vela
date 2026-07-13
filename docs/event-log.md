@@ -22,6 +22,11 @@ The public error variants are the compatibility surface:
 - `ReplayError::InvalidStoredVersion` rejects a version that cannot be represented by the API.
 - Storage and JSON encoding failures remain explicit `Storage`/`Encode` errors rather than being treated as concurrency or compatibility failures.
 
+`Event::decode` returns only `DecodeError::UnsupportedEvent` or
+`DecodeError::MalformedPayload`; the log maps those into replay errors and adds
+the authoritative persisted stream version. Decoders cannot fabricate storage,
+ordering, or stream-position failures.
+
 The persisted row contains only `stream_id`, `stream_version`, `event_type`, `payload_version`, and JSON `payload`. No timestamp, event ID, actor, correlation metadata, snapshot, batch append, async runtime, or distributed guarantee is part of this slice.
 
 See [ADR-0002](adr/0002-typed-sqlite-event-log.md) for the durability boundary and rationale.
