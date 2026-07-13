@@ -52,6 +52,25 @@ pub enum DecodeError {
     },
 }
 
+impl fmt::Display for DecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedEvent {
+                event_type,
+                payload_version,
+            } => write!(
+                formatter,
+                "unsupported event {event_type} at payload version {payload_version}"
+            ),
+            Self::MalformedPayload { message } => {
+                write!(formatter, "malformed event payload: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
 /// A typed event family controls its stable persistence discriminator and decoding.
 pub trait Event: Serialize + Sized {
     fn event_type(&self) -> &'static str;
