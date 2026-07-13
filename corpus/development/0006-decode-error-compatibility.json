@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Make DecodeError a standard Rust error",
+    "objective": "Let downstream typed event decoders compose DecodeError with ordinary Rust error surfaces without adapters.",
+    "acceptance_criteria": [
+      "DecodeError implements std::error::Error.",
+      "Both variants have deterministic Display text with useful context.",
+      "Tests prove the standard-error trait contract and exact messages.",
+      "The event-log replay contract remains unchanged.",
+      "The pinned local and required pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added the focused integration test before changing DecodeError.",
+      "outcome": "failure",
+      "diagnostic": "Rust errors E0277 and E0599 reported that DecodeError implemented neither std::error::Error nor Display, so it could not be coerced to dyn Error or converted to a string.",
+      "patch": "Added a trait assertion and exact-message checks for UnsupportedEvent and MalformedPayload."
+    },
+    {
+      "summary": "Implemented the minimum standard error compatibility and documented it.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Added direct Display matching and an empty std::error::Error implementation in crates/vela-kernel/src/event_log.rs, plus the downstream compatibility note in docs/event-log.md."
+    },
+    {
+      "summary": "Reviewed the bounded diff and exercised debug, release, documentation, CI, and automated-review gates.",
+      "outcome": "success",
+      "diagnostic": "No blocking finding remained; CodeRabbit generated no actionable comments.",
+      "patch": "Kept the implementation direct and added no conversions, variants, error sources, or replay changes."
+    }
+  ],
+  "outcome": {
+    "summary": "DecodeError now behaves as a conventional Rust error while preserving the existing decoder and replay boundaries.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --release",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo doc --workspace --locked --no-deps",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 348",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 348",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 6 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Public decoder errors should implement Rust's standard error traits even when a higher layer maps them into richer replay errors.",
+    "A compile-time dyn Error coercion and exact variant messages provide a small deterministic test for both trait compatibility and diagnostic context.",
+    "Keep decoder failures narrow: standard error composition does not require adding storage, ordering, conversion, or source semantics."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/348"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
