@@ -109,11 +109,11 @@ See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the ver
 
 The first milestone is the **evidence loop**:
 
-1. Establish the public GitHub workflow and Rust quality gates.
-2. Build a minimal `vela-dev` CLI.
-3. Define and validate development records.
-4. Store and inspect a small Vela-native corpus.
-5. Use the creation of that tooling as the first real corpus episode.
+1. Establish the public GitHub workflow and Rust quality gates. ✅
+2. Build a minimal `vela-dev` CLI. ✅
+3. Define and validate development records. ✅
+4. Store and inspect a small Vela-native corpus. ✅
+5. Use the creation of that tooling as the first real corpus episode. ✅
 6. Begin the kernel with a typed append-only event log and replay.
 
 ## Project documents
