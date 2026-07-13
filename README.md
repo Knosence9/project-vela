@@ -133,7 +133,7 @@ The first milestone is the **evidence loop**:
 3. Define and validate development records. ✅
 4. Store and inspect a small Vela-native corpus. ✅
 5. Use the creation of that tooling as the first real corpus episode. ✅
-6. Begin the kernel with a typed append-only event log and replay.
+6. Begin the kernel with a typed append-only event log and replay. ✅
 
 ## Project documents
 
@@ -143,6 +143,7 @@ The first milestone is the **evidence loop**:
 - [`plans/03-rust-corpus-strategy.md`](plans/03-rust-corpus-strategy.md) — corpus design and quality strategy
 - [`plans/04-assistant-first-rust-mentor.md`](plans/04-assistant-first-rust-mentor.md) — assistant-first Rust feedback loop
 - [`docs/project-vela-visual.html`](docs/project-vela-visual.html) — standalone visual system map
+- [`docs/event-log.md`](docs/event-log.md) — typed append/replay behavior and stable errors
 - [`docs/adr/`](docs/adr/) — architecture decision records
 
 ## Contributing

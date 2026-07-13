@@ -1,0 +1,272 @@
+use std::{fmt, path::Path};
+
+use rusqlite::{Connection, TransactionBehavior, params};
+use serde::Serialize;
+
+/// An opaque, non-empty identifier for one event stream.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct StreamId(String);
+
+impl StreamId {
+    pub fn new(value: impl Into<String>) -> Result<Self, StreamIdError> {
+        let value = value.into();
+        if value.is_empty() {
+            Err(StreamIdError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamIdError;
+
+impl fmt::Display for StreamIdError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("stream id must not be empty")
+    }
+}
+
+impl std::error::Error for StreamIdError {}
+
+/// The stream state a caller requires before an append may succeed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExpectedVersion {
+    NoStream,
+    Exact(u64),
+}
+
+/// A typed event family controls its stable persistence discriminator and decoding.
+pub trait Event: Serialize + Sized {
+    fn event_type(&self) -> &'static str;
+    fn payload_version(&self) -> u32;
+    fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, ReplayError>;
+}
+
+#[derive(Debug)]
+pub enum EventLogError {
+    Storage(rusqlite::Error),
+    Encode(serde_json::Error),
+    WrongExpectedVersion {
+        expected: ExpectedVersion,
+        current: Option<u64>,
+    },
+    VersionOutOfRange(u64),
+}
+
+impl fmt::Display for EventLogError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Storage(error) => write!(formatter, "event-log storage error: {error}"),
+            Self::Encode(error) => write!(formatter, "event payload encoding failed: {error}"),
+            Self::WrongExpectedVersion { expected, current } => {
+                formatter.write_str("wrong expected version: expected ")?;
+                match expected {
+                    ExpectedVersion::NoStream => formatter.write_str("no stream")?,
+                    ExpectedVersion::Exact(version) => write!(formatter, "version {version}")?,
+                }
+                match current {
+                    Some(version) => write!(formatter, ", current version is {version}"),
+                    None => formatter.write_str(", stream does not exist"),
+                }
+            }
+            Self::VersionOutOfRange(version) => {
+                write!(
+                    formatter,
+                    "stream version {version} cannot be stored by SQLite"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for EventLogError {}
+
+impl From<rusqlite::Error> for EventLogError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Storage(error)
+    }
+}
+
+impl From<serde_json::Error> for EventLogError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Encode(error)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ReplayError {
+    Storage(String),
+    UnsupportedEvent {
+        event_type: String,
+        payload_version: u32,
+    },
+    MalformedPayload {
+        stream_version: u64,
+        message: String,
+    },
+    VersionGap {
+        expected: u64,
+        found: u64,
+    },
+    InvalidStoredVersion(i64),
+}
+
+impl fmt::Display for ReplayError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Storage(message) => write!(formatter, "event-log storage error: {message}"),
+            Self::UnsupportedEvent {
+                event_type,
+                payload_version,
+            } => write!(
+                formatter,
+                "unsupported event {event_type} payload version {payload_version}"
+            ),
+            Self::MalformedPayload {
+                stream_version,
+                message,
+            } => write!(
+                formatter,
+                "malformed payload at stream version {stream_version}: {message}"
+            ),
+            Self::VersionGap { expected, found } => write!(
+                formatter,
+                "stream version gap: expected version {expected}, found {found}"
+            ),
+            Self::InvalidStoredVersion(version) => {
+                write!(formatter, "invalid stored stream version {version}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReplayError {}
+
+/// A synchronous, single-node SQLite append-only event log.
+pub struct EventLog {
+    connection: Connection,
+}
+
+impl EventLog {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, EventLogError> {
+        let connection = Connection::open(path)?;
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS events (
+                stream_id TEXT NOT NULL,
+                stream_version INTEGER NOT NULL CHECK (stream_version >= 1),
+                event_type TEXT NOT NULL,
+                payload_version INTEGER NOT NULL CHECK (payload_version >= 1),
+                payload BLOB NOT NULL,
+                PRIMARY KEY (stream_id, stream_version)
+            ) WITHOUT ROWID;",
+        )?;
+        Ok(Self { connection })
+    }
+
+    pub fn append<E: Event>(
+        &mut self,
+        stream: &StreamId,
+        expected: ExpectedVersion,
+        event: &E,
+    ) -> Result<u64, EventLogError> {
+        let payload = serde_json::to_vec(event)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = transaction
+            .query_row(
+                "SELECT MAX(stream_version) FROM events WHERE stream_id = ?1",
+                [stream.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )?
+            .map(stored_version_to_u64)
+            .transpose()?;
+
+        let matches = match (expected, current) {
+            (ExpectedVersion::NoStream, None) => true,
+            (ExpectedVersion::Exact(expected), Some(current)) => expected == current,
+            _ => false,
+        };
+        if !matches {
+            return Err(EventLogError::WrongExpectedVersion { expected, current });
+        }
+
+        let version = current.unwrap_or(0) + 1;
+        let stored_version =
+            i64::try_from(version).map_err(|_| EventLogError::VersionOutOfRange(version))?;
+        transaction.execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                stream.as_str(),
+                stored_version,
+                event.event_type(),
+                event.payload_version(),
+                payload
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(version)
+    }
+
+    pub fn replay<E: Event>(&self, stream: &StreamId) -> Result<Vec<E>, ReplayError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT stream_version, event_type, payload_version, payload
+                 FROM events WHERE stream_id = ?1 ORDER BY stream_version ASC",
+            )
+            .map_err(storage_replay_error)?;
+        let mut rows = statement
+            .query([stream.as_str()])
+            .map_err(storage_replay_error)?;
+        let mut expected = 1_u64;
+        let mut events = Vec::new();
+
+        while let Some(row) = rows.next().map_err(storage_replay_error)? {
+            let stored_version: i64 = row.get(0).map_err(storage_replay_error)?;
+            let version = u64::try_from(stored_version)
+                .map_err(|_| ReplayError::InvalidStoredVersion(stored_version))?;
+            if version != expected {
+                return Err(ReplayError::VersionGap {
+                    expected,
+                    found: version,
+                });
+            }
+            let event_type: String = row.get(1).map_err(storage_replay_error)?;
+            let payload_version: u32 = row.get(2).map_err(storage_replay_error)?;
+            let payload: Vec<u8> = row.get(3).map_err(storage_replay_error)?;
+            let event =
+                E::decode(&event_type, payload_version, &payload).map_err(|error| match error {
+                    ReplayError::MalformedPayload { message, .. } => {
+                        ReplayError::MalformedPayload {
+                            stream_version: version,
+                            message,
+                        }
+                    }
+                    other => other,
+                })?;
+            events.push(event);
+            expected += 1;
+        }
+
+        Ok(events)
+    }
+}
+
+fn stored_version_to_u64(version: i64) -> Result<u64, EventLogError> {
+    u64::try_from(version)
+        .map_err(|_| EventLogError::Storage(rusqlite::Error::IntegralValueOutOfRange(0, version)))
+}
+
+fn storage_replay_error(error: rusqlite::Error) -> ReplayError {
+    ReplayError::Storage(error.to_string())
+}
