@@ -4,7 +4,7 @@
 - **Date:** 2026-07-13
 - **Owners:** Project Vela maintainers
 - **Related issue:** [#342](https://github.com/Knosence9/project-vela/issues/342)
-- **Related pull request:** To be linked when opened
+- **Related pull request:** [#345](https://github.com/Knosence9/project-vela/pull/345)
 
 ## Context
 
