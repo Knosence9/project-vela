@@ -40,6 +40,10 @@
         "status": "passed"
       },
       {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 5 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
         "command": "GitHub Rust quality gate for pull request 345",
         "status": "passed"
       },
