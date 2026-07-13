@@ -80,6 +80,25 @@ Run the complete local quality gate with:
 nix develop --command just verify
 ```
 
+## Secret management
+
+Vela commits secret **declarations** in [`secretspec.toml`](secretspec.toml), but
+secret values must remain in an external SecretSpec provider such as the system
+keyring. Set up your preferred provider once, verify the required values, and
+then run commands with only their declared secrets injected:
+
+```bash
+nix develop --command secretspec config init
+nix develop --command secretspec check
+nix develop --command just with-secrets cargo run --locked -p vela-dev -- --help
+```
+
+CI and the local quality gate use an ephemeral, permission-restricted dotenv
+fixture containing a disposable test value. They remove it on exit and never
+require or print a developer credential. See
+[`docs/adr/0001-declarative-secret-management.md`](docs/adr/0001-declarative-secret-management.md)
+for the trust boundary and rationale.
+
 ## Developer CLI
 
 The initial Rust workspace provides `vela-dev`, the command-line home for corpus and development-evidence tooling:

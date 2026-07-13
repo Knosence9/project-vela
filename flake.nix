@@ -44,6 +44,7 @@
               just
               nixfmt
               shellcheck
+              secretspec
               taplo
               typos
 
