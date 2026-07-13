@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Store and inspect a Vela-native development corpus",
+    "objective": "Discover and validate project-native development records recursively with deterministic reporting",
+    "acceptance_criteria": [
+      "Corpus inspection processes JSON records in deterministic relative-path order",
+      "Invalid records produce stable diagnostics without stopping inspection",
+      "The repository contains sanitized records for the completed bootstrap episodes"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added failing CLI coverage for valid, malformed, semantically invalid, and missing corpus inputs",
+      "outcome": "failure",
+      "diagnostic": "The vela-dev CLI rejected corpus as an unrecognized subcommand",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Implemented recursive JSON discovery, record validation, stable diagnostics, and aggregate counts",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs"
+    },
+    {
+      "summary": "Sorted discovered paths before inspection and asserted relative-path output order",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs and crates/vela-dev/tests/cli.rs"
+    }
+  ],
+  "outcome": {
+    "summary": "vela-dev inspects the repository corpus deterministically and reports every invalid record",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Test the command boundary before implementing traversal so exit codes and diagnostics remain user-visible contracts",
+    "Sort relative paths explicitly because filesystem enumeration order is not deterministic",
+    "Continue after record-level failures so one inspection exposes the complete correction set"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/339"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
