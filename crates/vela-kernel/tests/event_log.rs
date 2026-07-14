@@ -207,6 +207,7 @@ fn replay_errors_expose_only_storage_error_sources() {
         found: 2,
     };
     let invalid_version = ReplayError::InvalidStoredVersion(-1);
+    let invalid_payload_version = ReplayError::InvalidStoredPayloadVersion(-1);
 
     assert!(matches!(&storage, ReplayError::Storage(_)));
     assert!(storage.source().unwrap().is::<rusqlite::Error>());
@@ -218,6 +219,7 @@ fn replay_errors_expose_only_storage_error_sources() {
     assert!(malformed.source().is_none());
     assert!(gap.source().is_none());
     assert!(invalid_version.source().is_none());
+    assert!(invalid_payload_version.source().is_none());
 }
 
 #[test]
@@ -410,6 +412,45 @@ fn rejects_unknown_payload_versions() {
             payload_version: 2,
         }
     );
+}
+
+#[test]
+fn reports_an_out_of_range_stored_payload_version() {
+    use std::error::Error;
+
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let stream = StreamId::new("account-42").unwrap();
+    let mut log = EventLog::open(&path).unwrap();
+    log.append(
+        &stream,
+        ExpectedVersion::NoStream,
+        &AccountEvent::Opened {
+            owner: "Ada".into(),
+        },
+    )
+    .unwrap();
+    drop(log);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload_version = 4294967296 WHERE stream_id = ?1",
+            [stream.as_str()],
+        )
+        .unwrap();
+
+    let log = EventLog::open(&path).unwrap();
+    let error = log.replay::<AccountEvent>(&stream).unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "invalid stored payload version 4294967296"
+    );
+    assert_eq!(
+        error,
+        ReplayError::InvalidStoredPayloadVersion(4_294_967_296)
+    );
+    assert!(error.source().is_none());
 }
 
 #[test]

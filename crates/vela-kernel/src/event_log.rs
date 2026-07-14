@@ -156,6 +156,7 @@ impl From<serde_json::Error> for EventLogError {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ReplayError {
     Storage(rusqlite::Error),
     UnsupportedEvent {
@@ -171,6 +172,7 @@ pub enum ReplayError {
         found: u64,
     },
     InvalidStoredVersion(i64),
+    InvalidStoredPayloadVersion(i64),
 }
 
 impl PartialEq for ReplayError {
@@ -208,6 +210,9 @@ impl PartialEq for ReplayError {
                 },
             ) => left_expected == right_expected && left_found == right_found,
             (Self::InvalidStoredVersion(left), Self::InvalidStoredVersion(right)) => left == right,
+            (Self::InvalidStoredPayloadVersion(left), Self::InvalidStoredPayloadVersion(right)) => {
+                left == right
+            }
             _ => false,
         }
     }
@@ -240,6 +245,9 @@ impl fmt::Display for ReplayError {
             Self::InvalidStoredVersion(version) => {
                 write!(formatter, "invalid stored stream version {version}")
             }
+            Self::InvalidStoredPayloadVersion(version) => {
+                write!(formatter, "invalid stored payload version {version}")
+            }
         }
     }
 }
@@ -251,7 +259,8 @@ impl std::error::Error for ReplayError {
             Self::UnsupportedEvent { .. }
             | Self::MalformedPayload { .. }
             | Self::VersionGap { .. }
-            | Self::InvalidStoredVersion(_) => None,
+            | Self::InvalidStoredVersion(_)
+            | Self::InvalidStoredPayloadVersion(_) => None,
         }
     }
 }
@@ -364,7 +373,9 @@ impl EventLog {
                 });
             }
             let event_type: String = row.get(1).map_err(storage_replay_error)?;
-            let payload_version: u32 = row.get(2).map_err(storage_replay_error)?;
+            let stored_payload_version: i64 = row.get(2).map_err(storage_replay_error)?;
+            let payload_version = u32::try_from(stored_payload_version)
+                .map_err(|_| ReplayError::InvalidStoredPayloadVersion(stored_payload_version))?;
             let payload: Vec<u8> = row.get(3).map_err(storage_replay_error)?;
             let event =
                 E::decode(&event_type, payload_version, &payload).map_err(|error| match error {
