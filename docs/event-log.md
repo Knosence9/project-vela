@@ -11,7 +11,7 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 - Successful appends receive versions 1, 2, 3, and so on. A stale expectation returns `WrongExpectedVersion` and commits nothing.
 - Every append is one SQLite transaction. Opening verifies that SQLite activated WAL journaling, configures `synchronous=FULL`, and fails rather than weakening that boundary. Append success is returned only after commit.
 - Replay returns one stream in ascending, contiguous order as values decoded by the caller's typed `Event` implementation. A missing stream returns an empty vector.
-- Unknown event type/payload version, malformed payload, invalid stored version, and a version gap are errors. Replay never silently skips persisted data.
+- Unknown event type/payload version, malformed payload, invalid stored stream or payload version, and a version gap are errors. Replay never silently skips persisted data.
 
 ## Stable errors
 
@@ -25,6 +25,7 @@ The public error variants are the compatibility surface. `EventLogError` is non-
 - `ReplayError::MalformedPayload` carries the stream version and decoder diagnostic.
 - `ReplayError::VersionGap` carries the expected and observed versions.
 - `ReplayError::InvalidStoredVersion` rejects a version that cannot be represented by the API.
+- `ReplayError::InvalidStoredPayloadVersion` preserves and rejects a stored payload version outside the public `u32` domain instead of classifying valid SQLite access as a storage failure.
 - Storage failures remain explicit errors rather than being treated as caller, concurrency, or compatibility failures. Append-side `Storage` and `Encode` variants expose their wrapped SQLite or JSON errors through `std::error::Error::source`; replay-side `Storage` exposes its wrapped SQLite error the same way. Caller, concurrency, range, and replay compatibility failures have no underlying source.
 
 `Event::decode` returns only `DecodeError::UnsupportedEvent` or
