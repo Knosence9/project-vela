@@ -5,6 +5,7 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 ## Observable contract
 
 - `StreamId` accepts any non-empty UTF-8 string and treats it as opaque.
+- Event payload versions start at `1`; append rejects version `0` before opening a write transaction.
 - A new stream accepts `ExpectedVersion::NoStream`; an existing stream accepts only `ExpectedVersion::Exact(current)`.
 - Successful appends receive versions 1, 2, 3, and so on. A stale expectation returns `WrongExpectedVersion` and commits nothing.
 - Every append is one SQLite transaction. The connection uses WAL journaling and `synchronous=FULL`, and success is returned only after commit.
@@ -16,11 +17,12 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 The public error variants are the compatibility surface:
 
 - `EventLogError::WrongExpectedVersion` reports the requested and current stream state; no row is written.
+- `EventLogError::InvalidPayloadVersion` reports an invalid caller-supplied payload version; no row is written.
 - `ReplayError::UnsupportedEvent` carries the stored `event_type` and `payload_version`.
 - `ReplayError::MalformedPayload` carries the stream version and decoder diagnostic.
 - `ReplayError::VersionGap` carries the expected and observed versions.
 - `ReplayError::InvalidStoredVersion` rejects a version that cannot be represented by the API.
-- Storage failures remain explicit errors rather than being treated as concurrency or compatibility failures. Append-side `Storage` and `Encode` variants expose their wrapped SQLite or JSON errors through `std::error::Error::source`; replay-side `Storage` exposes its wrapped SQLite error the same way. Concurrency, range, and replay compatibility failures have no underlying source.
+- Storage failures remain explicit errors rather than being treated as caller, concurrency, or compatibility failures. Append-side `Storage` and `Encode` variants expose their wrapped SQLite or JSON errors through `std::error::Error::source`; replay-side `Storage` exposes its wrapped SQLite error the same way. Caller, concurrency, range, and replay compatibility failures have no underlying source.
 
 `Event::decode` returns only `DecodeError::UnsupportedEvent` or
 `DecodeError::MalformedPayload`; the log maps those into replay errors and adds

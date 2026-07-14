@@ -82,6 +82,7 @@ pub trait Event: Serialize + Sized {
 pub enum EventLogError {
     Storage(rusqlite::Error),
     Encode(serde_json::Error),
+    InvalidPayloadVersion(u32),
     WrongExpectedVersion {
         expected: ExpectedVersion,
         current: Option<u64>,
@@ -94,6 +95,9 @@ impl fmt::Display for EventLogError {
         match self {
             Self::Storage(error) => write!(formatter, "event-log storage error: {error}"),
             Self::Encode(error) => write!(formatter, "event payload encoding failed: {error}"),
+            Self::InvalidPayloadVersion(version) => {
+                write!(formatter, "invalid event payload version {version}")
+            }
             Self::WrongExpectedVersion { expected, current } => {
                 formatter.write_str("wrong expected version: expected ")?;
                 match expected {
@@ -120,7 +124,9 @@ impl std::error::Error for EventLogError {
         match self {
             Self::Storage(error) => Some(error),
             Self::Encode(error) => Some(error),
-            Self::WrongExpectedVersion { .. } | Self::VersionOutOfRange(_) => None,
+            Self::InvalidPayloadVersion(_)
+            | Self::WrongExpectedVersion { .. }
+            | Self::VersionOutOfRange(_) => None,
         }
     }
 }
@@ -267,6 +273,10 @@ impl EventLog {
         expected: ExpectedVersion,
         event: &E,
     ) -> Result<u64, EventLogError> {
+        let payload_version = event.payload_version();
+        if payload_version == 0 {
+            return Err(EventLogError::InvalidPayloadVersion(payload_version));
+        }
         let payload = serde_json::to_vec(event)?;
         let transaction = self
             .connection
@@ -300,7 +310,7 @@ impl EventLog {
                 stream.as_str(),
                 stored_version,
                 event.event_type(),
-                event.payload_version(),
+                payload_version,
                 payload
             ],
         )?;
