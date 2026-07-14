@@ -434,26 +434,35 @@ fn current_stream_version(
     connection: &Connection,
     stream: &StreamId,
 ) -> Result<Option<u64>, EventLogError> {
-    let (minimum, maximum, first_gap) = connection.query_row(
-        "SELECT
+    let (minimum, maximum, first_missing, first_gap) = connection.query_row(
+        "WITH first_gap AS (
+             SELECT MIN(candidate.stream_version) AS found
+             FROM events AS candidate
+             WHERE candidate.stream_id = ?1
+               AND candidate.stream_version > 1
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM events AS predecessor
+                   WHERE predecessor.stream_id = candidate.stream_id
+                     AND predecessor.stream_version = candidate.stream_version - 1
+               )
+         )
+         SELECT
              (SELECT MIN(stream_version) FROM events WHERE stream_id = ?1),
              (SELECT MAX(stream_version) FROM events WHERE stream_id = ?1),
-             (SELECT MIN(candidate.stream_version)
-              FROM events AS candidate
-              WHERE candidate.stream_id = ?1
-                AND candidate.stream_version > 1
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM events AS predecessor
-                    WHERE predecessor.stream_id = candidate.stream_id
-                      AND predecessor.stream_version = candidate.stream_version - 1
-                ))",
+             (SELECT COALESCE(MAX(previous.stream_version) + 1, 1)
+              FROM events AS previous
+              WHERE previous.stream_id = ?1
+                AND previous.stream_version < first_gap.found),
+             first_gap.found
+         FROM first_gap",
         [stream.as_str()],
         |row| {
             Ok((
                 row.get::<_, Option<i64>>(0)?,
                 row.get::<_, Option<i64>>(1)?,
-                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Option<i64>>(3)?,
             ))
         },
     )?;
@@ -468,11 +477,9 @@ fn current_stream_version(
         return Ok(maximum);
     }
     if let Some(first_gap) = first_gap {
+        let expected = stored_version_to_u64(first_missing)?;
         let found = stored_version_to_u64(first_gap)?;
-        return Err(EventLogError::VersionGap {
-            expected: found - 1,
-            found,
-        });
+        return Err(EventLogError::VersionGap { expected, found });
     }
     Ok(maximum)
 }

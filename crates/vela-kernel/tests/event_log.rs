@@ -522,7 +522,7 @@ fn rejects_a_hidden_invalid_stored_version_before_encoding() {
 }
 
 #[test]
-fn rejects_a_stored_version_gap_before_encoding() {
+fn reports_the_first_missing_version_for_a_wider_gap_before_encoding() {
     use std::error::Error;
 
     let directory = tempdir().unwrap();
@@ -531,7 +531,7 @@ fn rejects_a_stored_version_gap_before_encoding() {
     let log = EventLog::open(&path).unwrap();
     drop(log);
     let connection = rusqlite::Connection::open(&path).unwrap();
-    for version in [1, 3] {
+    for version in [1, 4] {
         connection
             .execute(
                 "INSERT INTO events
@@ -552,18 +552,18 @@ fn rejects_a_stored_version_gap_before_encoding() {
 
     let mut log = EventLog::open(&path).unwrap();
     let error = log
-        .append(&stream, ExpectedVersion::Exact(3), &SerializationMustNotRun)
+        .append(&stream, ExpectedVersion::Exact(4), &SerializationMustNotRun)
         .unwrap_err();
 
     assert_eq!(
         error.to_string(),
-        "stored stream version gap: expected version 2, found 3"
+        "stored stream version gap: expected version 2, found 4"
     );
     assert!(matches!(
         error,
         EventLogError::VersionGap {
             expected: 2,
-            found: 3,
+            found: 4,
         }
     ));
     assert!(error.source().is_none());
