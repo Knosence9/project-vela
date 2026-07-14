@@ -432,6 +432,42 @@ fn rejects_unknown_payload_versions() {
 }
 
 #[test]
+fn reports_zero_as_an_invalid_stored_payload_version() {
+    use std::error::Error;
+
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let stream = StreamId::new("account-42").unwrap();
+    let log = EventLog::open(&path).unwrap();
+    drop(log);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "ignore_check_constraints", true)
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES (?1, 1, 'account.opened', 0, ?2)",
+            rusqlite::params![
+                stream.as_str(),
+                serde_json::to_vec(&AccountEvent::Opened {
+                    owner: "Ada".into()
+                })
+                .unwrap()
+            ],
+        )
+        .unwrap();
+
+    let log = EventLog::open(&path).unwrap();
+    let error = log.replay::<DecoderMustNotRun>(&stream).unwrap_err();
+
+    assert_eq!(error.to_string(), "invalid stored payload version 0");
+    assert_eq!(error, ReplayError::InvalidStoredPayloadVersion(0));
+    assert!(error.source().is_none());
+}
+
+#[test]
 fn reports_an_out_of_range_stored_payload_version() {
     use std::error::Error;
 
