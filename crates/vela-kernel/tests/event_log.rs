@@ -76,7 +76,7 @@ impl Serialize for SerializationMustNotRun {
     where
         S: serde::Serializer,
     {
-        panic!("an invalid expected version must be rejected before encoding")
+        panic!("a rejected append must not encode its event")
     }
 }
 
@@ -90,7 +90,7 @@ impl Event for SerializationMustNotRun {
     }
 
     fn decode(_: &str, _: u32, _: &[u8]) -> Result<Self, DecodeError> {
-        unreachable!("an event with an invalid expectation must never be persisted")
+        unreachable!("a rejected event must never be persisted")
     }
 }
 
@@ -345,6 +345,46 @@ fn rejects_stale_expected_versions_without_writing() {
         "wrong expected version: expected no stream, current version is 1"
     );
     assert_eq!(log.replay::<AccountEvent>(&stream).unwrap(), vec![event]);
+}
+
+#[test]
+fn rejects_stale_expected_versions_before_encoding() {
+    use std::error::Error;
+
+    let directory = tempdir().unwrap();
+    let mut log = EventLog::open(directory.path().join("events.sqlite3")).unwrap();
+    let stream = StreamId::new("account-42").unwrap();
+    log.append(
+        &stream,
+        ExpectedVersion::NoStream,
+        &AccountEvent::Opened {
+            owner: "Ada".into(),
+        },
+    )
+    .unwrap();
+
+    let error = log
+        .append(&stream, ExpectedVersion::NoStream, &SerializationMustNotRun)
+        .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "wrong expected version: expected no stream, current version is 1"
+    );
+    assert!(matches!(
+        error,
+        EventLogError::WrongExpectedVersion {
+            expected: ExpectedVersion::NoStream,
+            current: Some(1),
+        }
+    ));
+    assert!(error.source().is_none());
+    assert_eq!(
+        log.replay::<AccountEvent>(&stream).unwrap(),
+        vec![AccountEvent::Opened {
+            owner: "Ada".into(),
+        }]
+    );
 }
 
 #[test]
