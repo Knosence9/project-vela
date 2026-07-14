@@ -42,11 +42,11 @@
     "verified": true,
     "verification": [
       {
-        "command": "/run/current-system/sw/bin/nix develop --command cargo test -p vela-kernel --test event_log reports_zero_as_an_invalid_stored_payload_version -- --exact",
+        "command": "nix develop --command cargo test -p vela-kernel --test event_log reports_zero_as_an_invalid_stored_payload_version -- --exact",
         "status": "passed"
       },
       {
-        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "command": "nix develop --command just verify",
         "status": "passed"
       },
       {
@@ -62,11 +62,11 @@
         "status": "passed"
       },
       {
-        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0015-zero-stored-payload-version.json # result: valid development record",
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0015-zero-stored-payload-version.json # result: valid development record",
         "status": "passed"
       },
       {
-        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 15 valid, 0 invalid",
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 15 valid, 0 invalid",
         "status": "passed"
       }
     ]
