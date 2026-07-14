@@ -425,14 +425,18 @@ fn current_stream_version(
     connection: &Connection,
     stream: &StreamId,
 ) -> Result<Option<u64>, EventLogError> {
-    connection
-        .query_row(
-            "SELECT MAX(stream_version) FROM events WHERE stream_id = ?1",
-            [stream.as_str()],
-            |row| row.get::<_, Option<i64>>(0),
-        )?
-        .map(stored_version_to_u64)
-        .transpose()
+    let (minimum, maximum) = connection.query_row(
+        "SELECT
+             (SELECT MIN(stream_version) FROM events WHERE stream_id = ?1),
+             (SELECT MAX(stream_version) FROM events WHERE stream_id = ?1)",
+        [stream.as_str()],
+        |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+    )?;
+
+    if let Some(minimum) = minimum {
+        stored_version_to_u64(minimum)?;
+    }
+    maximum.map(stored_version_to_u64).transpose()
 }
 
 fn expected_version_matches(expected: ExpectedVersion, current: Option<u64>) -> bool {
