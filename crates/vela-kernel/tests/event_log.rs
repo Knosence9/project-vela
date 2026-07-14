@@ -374,6 +374,39 @@ fn rejects_unknown_persisted_event_types() {
 }
 
 #[test]
+fn rejects_an_empty_stored_event_type_before_decoding() {
+    use std::error::Error;
+
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let stream = StreamId::new("account-42").unwrap();
+    let mut log = EventLog::open(&path).unwrap();
+    log.append(
+        &stream,
+        ExpectedVersion::NoStream,
+        &AccountEvent::Opened {
+            owner: "Ada".into(),
+        },
+    )
+    .unwrap();
+    drop(log);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET event_type = '' WHERE stream_id = ?1",
+            [stream.as_str()],
+        )
+        .unwrap();
+
+    let log = EventLog::open(&path).unwrap();
+    let error = log.replay::<DecoderMustNotRun>(&stream).unwrap_err();
+
+    assert_eq!(error.to_string(), "stored event type must not be empty");
+    assert_eq!(error, ReplayError::InvalidStoredEventType);
+    assert!(error.source().is_none());
+}
+
+#[test]
 fn unsupported_replay_reports_the_persisted_discriminator() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");

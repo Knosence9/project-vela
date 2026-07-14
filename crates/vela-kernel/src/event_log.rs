@@ -159,6 +159,7 @@ impl From<serde_json::Error> for EventLogError {
 #[non_exhaustive]
 pub enum ReplayError {
     Storage(rusqlite::Error),
+    InvalidStoredEventType,
     UnsupportedEvent {
         event_type: String,
         payload_version: u32,
@@ -179,6 +180,7 @@ impl PartialEq for ReplayError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Storage(left), Self::Storage(right)) => left.to_string() == right.to_string(),
+            (Self::InvalidStoredEventType, Self::InvalidStoredEventType) => true,
             (
                 Self::UnsupportedEvent {
                     event_type: left_type,
@@ -224,6 +226,9 @@ impl fmt::Display for ReplayError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => write!(formatter, "event-log storage error: {error}"),
+            Self::InvalidStoredEventType => {
+                formatter.write_str("stored event type must not be empty")
+            }
             Self::UnsupportedEvent {
                 event_type,
                 payload_version,
@@ -256,7 +261,8 @@ impl std::error::Error for ReplayError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Storage(error) => Some(error),
-            Self::UnsupportedEvent { .. }
+            Self::InvalidStoredEventType
+            | Self::UnsupportedEvent { .. }
             | Self::MalformedPayload { .. }
             | Self::VersionGap { .. }
             | Self::InvalidStoredVersion(_)
@@ -376,6 +382,9 @@ impl EventLog {
                 });
             }
             let event_type: String = row.get(1).map_err(storage_replay_error)?;
+            if event_type.is_empty() {
+                return Err(ReplayError::InvalidStoredEventType);
+            }
             let stored_payload_version: i64 = row.get(2).map_err(storage_replay_error)?;
             let payload_version = u32::try_from(stored_payload_version)
                 .map_err(|_| ReplayError::InvalidStoredPayloadVersion(stored_payload_version))?;
