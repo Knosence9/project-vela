@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject empty event-type discriminators before storage",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/366 by preventing the typed event log from persisting an empty compatibility discriminator.",
+    "acceptance_criteria": [
+      "An event whose event type is empty returns a dedicated EventLogError and writes no row.",
+      "The rejected stream replays as empty.",
+      "Non-empty event-type strings remain opaque and existing append and replay behavior remains unchanged.",
+      "The public event-log documentation identifies the validation boundary and stable error.",
+      "The pinned local and required pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added focused integration coverage for appending an event with an empty event-type discriminator.",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed to compile because EventLogError had no InvalidEventType variant, confirming that the append API did not expose the required rejection behavior.",
+      "patch": "Added an EmptyEventType test fixture and asserted a dedicated error plus an empty replay result without changing production behavior."
+    },
+    {
+      "summary": "Validated the discriminator at the start of append and returned a dedicated public error.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Captured Event::event_type once, rejected the empty string before payload validation, encoding, or transaction creation, and reused the validated value for insertion."
+    },
+    {
+      "summary": "Kept discriminator policy minimal and documented the compatibility surface.",
+      "outcome": "success",
+      "diagnostic": "A format policy or database migration would have exceeded the requirement; the event type remains opaque except for the non-empty invariant.",
+      "patch": "Added EventLogError::InvalidEventType with no wrapped source and updated docs/event-log.md with the append boundary and no-write contract."
+    },
+    {
+      "summary": "Ran focused and full verification, then obtained independent pre-commit and automated pull-request review.",
+      "outcome": "success",
+      "diagnostic": "The independent Codex review found no blocking findings. The GitHub Rust quality gate passed, and CodeRabbit generated no actionable comments with all five pre-merge checks passing.",
+      "patch": "No corrective patch was required after review."
+    }
+  ],
+  "outcome": {
+    "summary": "The typed append boundary now rejects empty event-type discriminators before any encoding or write transaction while preserving opaque non-empty discriminators and existing replay behavior.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test event_log rejects_empty_event_type_without_writing -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command codex review --uncommitted # result: no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 367",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 367 # result: no actionable comments and five pre-merge checks passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0011-empty-event-type-validation.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 11 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Validate persistence discriminators at the append boundary so invalid compatibility metadata never reaches encoding or storage.",
+    "A dedicated domain error distinguishes caller invariant failures from serialization and database failures.",
+    "Read trait-provided persistence metadata once, validate it, and reuse the same value to avoid disagreement between validation and insertion.",
+    "Prefer the narrow non-empty invariant over an unrequested naming policy or storage migration."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/367"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
