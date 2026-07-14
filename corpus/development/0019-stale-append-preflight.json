@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject already-stale expected versions before payload encoding",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/398 by returning the stable optimistic-concurrency error before serializing an event when the supplied expectation is already stale, without weakening the atomic append boundary.",
+    "acceptance_criteria": [
+      "An already-stale expectation returns EventLogError::WrongExpectedVersion before Serialize::serialize is invoked.",
+      "The rejected append writes no event and preserves the existing stable error context.",
+      "A matching preflight does not hold SQLite's immediate writer lock during caller-defined serialization.",
+      "The log repeats expected-version matching inside the immediate transaction so a concurrent writer cannot cause a stale append to commit.",
+      "The observable ordering is documented and the pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused regression using a serializer that panics if a stale append reaches payload encoding.",
+      "outcome": "failure",
+      "diagnostic": "The RED test panicked with 'a stale append must be rejected before encoding', proving EventLog::append serialized the event before checking the current stream version.",
+      "patch": "Added rejects_stale_expected_versions_before_encoding without changing production behavior."
+    },
+    {
+      "summary": "Moved payload encoding after expected-version matching inside the existing immediate transaction.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "The focused regression passed and stale expectations returned WrongExpectedVersion before serialization."
+    },
+    {
+      "summary": "Ran an independent pre-commit review of the first passing implementation.",
+      "outcome": "failure",
+      "diagnostic": "The review identified a concurrency regression: caller-defined serialization could now hold SQLite's global immediate writer lock for arbitrarily long CPU or user-code execution.",
+      "patch": "Replaced the lock-holding implementation with an unlocked current-version preflight, payload encoding, and a repeated authoritative expected-version check inside the immediate transaction. Shared helpers keep both checks consistent."
+    },
+    {
+      "summary": "Evaluated CodeRabbit's suggestion to move serialization back inside the immediate transaction.",
+      "outcome": "failure",
+      "diagnostic": "The suggestion would reintroduce the writer-lock regression already found by independent review and was therefore not applicable to the intended single-node concurrency boundary.",
+      "patch": "Kept serialization outside the transaction, documented the two-phase boundary, replied with the lock-scope rationale, and resolved the review thread without changing code."
+    },
+    {
+      "summary": "Verified the corrected implementation and required pull-request checks through squash merge.",
+      "outcome": "success",
+      "diagnostic": "The focused test and just verify passed, independent re-review found no blocking regressions, Rust quality gate run 29322743599 passed, CodeRabbit completed successfully, and pull request 399 squash-merged as a376595.",
+      "patch": "No further corrective patch was required after the second review."
+    }
+  ],
+  "outcome": {
+    "summary": "Append now avoids serialization for already-stale expectations, retains the previous writer-lock scope for matching calls, and repeats the version check transactionally so optimistic concurrency remains atomic.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test event_log rejects_stale_expected_versions_before_encoding -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Independent Codex pre-commit review for pull request 399: writer-lock finding corrected; re-review found no blocking regressions",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29322743599 for pull request 399",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 399: required status passed; conflicting lock-scope suggestion was answered and resolved with rationale",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 399 squash merge a376595",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0019-stale-append-preflight.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 19 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A deterministic concurrency mismatch should preempt expensive or fallible payload encoding when the stale state is already observable.",
+    "Do not hold a database writer lock across caller-defined serialization merely to improve error precedence; use an unlocked preflight and preserve an authoritative transactional recheck.",
+    "A preflight is an optimization and diagnostic boundary, not the concurrency authority: only the repeated check inside the immediate transaction protects insertion from races.",
+    "Independent review can expose a regression in an otherwise GREEN fix; record the rejected design and the correction rather than preserving only the final patch.",
+    "Automated review suggestions should be verified against the repository's concurrency guarantees and declined with explicit rationale when they reintroduce a known defect."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/399"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
