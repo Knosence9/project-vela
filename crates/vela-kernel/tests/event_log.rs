@@ -52,6 +52,26 @@ impl Event for InvalidVersionEvent {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct DivergentDiscriminatorEvent;
+
+impl Event for DivergentDiscriminatorEvent {
+    fn event_type(&self) -> &'static str {
+        unreachable!("this decoder-only event must never be persisted")
+    }
+
+    fn payload_version(&self) -> u32 {
+        unreachable!("this decoder-only event must never be persisted")
+    }
+
+    fn decode(_: &str, _: u32, _: &[u8]) -> Result<Self, DecodeError> {
+        Err(DecodeError::UnsupportedEvent {
+            event_type: "decoder.fabricated".into(),
+            payload_version: 99,
+        })
+    }
+}
+
 #[test]
 fn decode_errors_are_standard_errors_with_stable_context() {
     fn assert_standard_error(_: &dyn std::error::Error) {}
@@ -276,6 +296,31 @@ fn rejects_unknown_persisted_event_types() {
         log.replay::<AccountEvent>(&stream).unwrap_err(),
         ReplayError::UnsupportedEvent {
             event_type: "account.renamed".into(),
+            payload_version: 1,
+        }
+    );
+}
+
+#[test]
+fn unsupported_replay_reports_the_persisted_discriminator() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let stream = StreamId::new("account-42").unwrap();
+    let mut log = EventLog::open(&path).unwrap();
+    log.append(
+        &stream,
+        ExpectedVersion::NoStream,
+        &AccountEvent::Opened {
+            owner: "Ada".into(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        log.replay::<DivergentDiscriminatorEvent>(&stream)
+            .unwrap_err(),
+        ReplayError::UnsupportedEvent {
+            event_type: "account.opened".into(),
             payload_version: 1,
         }
     );
