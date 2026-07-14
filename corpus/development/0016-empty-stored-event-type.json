@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject empty stored event-type discriminators explicitly during replay",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/386 by enforcing the non-empty event-type invariant when corrupted or externally modified SQLite rows are replayed.",
+    "acceptance_criteria": [
+      "Replaying a row whose event_type is empty returns ReplayError::InvalidStoredEventType with a stable diagnostic.",
+      "The invalid stored event-type error has no underlying source and is returned before typed decoding.",
+      "Non-empty unsupported event types retain their existing compatibility classification.",
+      "The public documentation describes empty stored discriminators as replay failures.",
+      "The pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused integration test that replaces a valid persisted discriminator with the empty string and uses a panic-on-call decoder.",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed to compile because ReplayError had no InvalidStoredEventType variant, proving the stable corruption classification did not yet exist.",
+      "patch": "Added rejects_an_empty_stored_event_type_before_decoding without changing production behavior."
+    },
+    {
+      "summary": "Added an explicit persisted-discriminator guard at the replay boundary.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Replay now returns ReplayError::InvalidStoredEventType immediately after reading an empty event_type and before reading payload metadata or invoking Event::decode."
+    },
+    {
+      "summary": "Preserved forward-compatibility behavior while documenting and verifying the corruption boundary.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "The regression test asserts the exact variant, display text, absent source, and decoder bypass; existing non-empty unknown discriminator coverage remained green."
+    },
+    {
+      "summary": "Completed independent automated review and monitored the required pull-request checks.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit completed with no actionable comments, Rust quality gate run 29313552539 passed, and pull request 387 squash-merged as fb33246.",
+      "patch": "No corrective patch was required."
+    }
+  ],
+  "outcome": {
+    "summary": "Replay now classifies an empty stored event discriminator as explicit invalid persisted metadata and rejects it before typed decoder dispatch while preserving non-empty compatibility semantics.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test event_log rejects_an_empty_stored_event_type_before_decoding",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29313552539 for pull request 387",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 387: review completed with no actionable comments and required status passed",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 387 squash merge fb33246",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0016-empty-stored-event-type.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 16 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Enforce persisted metadata invariants before dispatching into extensible decoder code so corruption classification does not depend on caller behavior.",
+    "Use a panic-on-call decoder to prove replay rejects invalid metadata before crossing the typed decoding boundary.",
+    "Keep empty discriminators distinct from non-empty unsupported discriminators: the former violate storage invariants, while the latter can represent forward-compatible events.",
+    "A unit error variant is sufficient when the invalid persisted domain contains exactly one value and the stable diagnostic names that invariant."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/387"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
