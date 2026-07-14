@@ -326,25 +326,21 @@ impl EventLog {
         if payload_version == 0 {
             return Err(EventLogError::InvalidPayloadVersion(payload_version));
         }
+        let preflight_current = current_stream_version(&self.connection, stream)?;
+        if !expected_version_matches(expected, preflight_current) {
+            return Err(EventLogError::WrongExpectedVersion {
+                expected,
+                current: preflight_current,
+            });
+        }
+
         let payload = serde_json::to_vec(event)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = transaction
-            .query_row(
-                "SELECT MAX(stream_version) FROM events WHERE stream_id = ?1",
-                [stream.as_str()],
-                |row| row.get::<_, Option<i64>>(0),
-            )?
-            .map(stored_version_to_u64)
-            .transpose()?;
+        let current = current_stream_version(&transaction, stream)?;
 
-        let matches = match (expected, current) {
-            (ExpectedVersion::NoStream, None) => true,
-            (ExpectedVersion::Exact(expected), Some(current)) => expected == current,
-            _ => false,
-        };
-        if !matches {
+        if !expected_version_matches(expected, current) {
             return Err(EventLogError::WrongExpectedVersion { expected, current });
         }
 
@@ -423,6 +419,28 @@ impl EventLog {
         }
 
         Ok(events)
+    }
+}
+
+fn current_stream_version(
+    connection: &Connection,
+    stream: &StreamId,
+) -> Result<Option<u64>, EventLogError> {
+    connection
+        .query_row(
+            "SELECT MAX(stream_version) FROM events WHERE stream_id = ?1",
+            [stream.as_str()],
+            |row| row.get::<_, Option<i64>>(0),
+        )?
+        .map(stored_version_to_u64)
+        .transpose()
+}
+
+fn expected_version_matches(expected: ExpectedVersion, current: Option<u64>) -> bool {
+    match (expected, current) {
+        (ExpectedVersion::NoStream, None) => true,
+        (ExpectedVersion::Exact(expected), Some(current)) => expected == current,
+        _ => false,
     }
 }
 

@@ -8,7 +8,7 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 - Event types accept any non-empty static string and otherwise remain opaque; append rejects an empty discriminator before encoding or opening a write transaction.
 - Event payload versions start at `1`; append rejects version `0` before opening a write transaction.
 - A new stream accepts `ExpectedVersion::NoStream`; an existing stream accepts only `ExpectedVersion::Exact(current)`, where exact versions start at `1`. `Exact(0)` is invalid rather than an alias for a missing stream.
-- Successful appends receive versions 1, 2, 3, and so on. A stale expectation returns `WrongExpectedVersion` and commits nothing.
+- Successful appends receive versions 1, 2, 3, and so on. After caller metadata validation, an already-stale expectation returns `WrongExpectedVersion` before payload encoding and writes nothing. A matching preflight permits encoding outside the write transaction; the log then repeats the expected-version check atomically inside the immediate transaction so a concurrent writer still cannot cause a stale append to commit.
 - Every append is one SQLite transaction. Opening verifies that SQLite activated WAL journaling, configures `synchronous=FULL`, and fails rather than weakening that boundary. Append success is returned only after commit.
 - Replay returns one stream in ascending, contiguous order as values decoded by the caller's typed `Event` implementation. A missing stream returns an empty vector.
 - Empty or unknown event types, unknown payload versions, malformed payload, invalid stored stream or payload versions, and a version gap are errors. Replay never silently skips persisted data.
