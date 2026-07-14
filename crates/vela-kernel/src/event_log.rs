@@ -92,6 +92,10 @@ pub enum EventLogError {
         current: Option<u64>,
     },
     InvalidStoredVersion(i64),
+    VersionGap {
+        expected: u64,
+        found: u64,
+    },
     VersionOutOfRange(u64),
 }
 
@@ -127,6 +131,10 @@ impl fmt::Display for EventLogError {
             Self::InvalidStoredVersion(version) => {
                 write!(formatter, "invalid stored stream version {version}")
             }
+            Self::VersionGap { expected, found } => write!(
+                formatter,
+                "stored stream version gap: expected version {expected}, found {found}"
+            ),
             Self::VersionOutOfRange(version) => {
                 write!(
                     formatter,
@@ -148,6 +156,7 @@ impl std::error::Error for EventLogError {
             | Self::InvalidExpectedVersion(_)
             | Self::WrongExpectedVersion { .. }
             | Self::InvalidStoredVersion(_)
+            | Self::VersionGap { .. }
             | Self::VersionOutOfRange(_) => None,
         }
     }
@@ -425,18 +434,47 @@ fn current_stream_version(
     connection: &Connection,
     stream: &StreamId,
 ) -> Result<Option<u64>, EventLogError> {
-    let (minimum, maximum) = connection.query_row(
+    let (minimum, maximum, first_gap) = connection.query_row(
         "SELECT
              (SELECT MIN(stream_version) FROM events WHERE stream_id = ?1),
-             (SELECT MAX(stream_version) FROM events WHERE stream_id = ?1)",
+             (SELECT MAX(stream_version) FROM events WHERE stream_id = ?1),
+             (SELECT MIN(candidate.stream_version)
+              FROM events AS candidate
+              WHERE candidate.stream_id = ?1
+                AND candidate.stream_version > 1
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM events AS predecessor
+                    WHERE predecessor.stream_id = candidate.stream_id
+                      AND predecessor.stream_version = candidate.stream_version - 1
+                ))",
         [stream.as_str()],
-        |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+        |row| {
+            Ok((
+                row.get::<_, Option<i64>>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        },
     )?;
 
     if let Some(minimum) = minimum {
         stored_version_to_u64(minimum)?;
     }
-    maximum.map(stored_version_to_u64).transpose()
+    let maximum = maximum.map(stored_version_to_u64).transpose()?;
+    // A terminal stream cannot be extended regardless of any earlier gap, so
+    // preserve the public range-error precedence before reporting continuity.
+    if maximum == Some(i64::MAX as u64) {
+        return Ok(maximum);
+    }
+    if let Some(first_gap) = first_gap {
+        let found = stored_version_to_u64(first_gap)?;
+        return Err(EventLogError::VersionGap {
+            expected: found - 1,
+            found,
+        });
+    }
+    Ok(maximum)
 }
 
 fn expected_version_matches(expected: ExpectedVersion, current: Option<u64>) -> bool {
