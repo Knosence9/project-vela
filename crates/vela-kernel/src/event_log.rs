@@ -82,6 +82,7 @@ pub trait Event: Serialize + Sized {
 pub enum EventLogError {
     Storage(rusqlite::Error),
     Encode(serde_json::Error),
+    UnsupportedJournalMode(String),
     InvalidEventType,
     InvalidPayloadVersion(u32),
     WrongExpectedVersion {
@@ -96,6 +97,12 @@ impl fmt::Display for EventLogError {
         match self {
             Self::Storage(error) => write!(formatter, "event-log storage error: {error}"),
             Self::Encode(error) => write!(formatter, "event payload encoding failed: {error}"),
+            Self::UnsupportedJournalMode(mode) => {
+                write!(
+                    formatter,
+                    "event log requires WAL journal mode, found {mode}"
+                )
+            }
             Self::InvalidEventType => formatter.write_str("event type must not be empty"),
             Self::InvalidPayloadVersion(version) => {
                 write!(formatter, "invalid event payload version {version}")
@@ -126,7 +133,8 @@ impl std::error::Error for EventLogError {
         match self {
             Self::Storage(error) => Some(error),
             Self::Encode(error) => Some(error),
-            Self::InvalidEventType
+            Self::UnsupportedJournalMode(_)
+            | Self::InvalidEventType
             | Self::InvalidPayloadVersion(_)
             | Self::WrongExpectedVersion { .. }
             | Self::VersionOutOfRange(_) => None,
@@ -256,6 +264,11 @@ impl EventLog {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, EventLogError> {
         let connection = Connection::open(path)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
+        let journal_mode: String =
+            connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            return Err(EventLogError::UnsupportedJournalMode(journal_mode));
+        }
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (
