@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Report persisted discriminator on unsupported replay events",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/362 by ensuring unsupported-event replay diagnostics report the persisted event type and payload version rather than untrusted decoder-supplied context.",
+    "acceptance_criteria": [
+      "A decoder returning divergent discriminator values still produces the persisted event type and payload version in ReplayError.",
+      "Existing unsupported-event behavior remains unchanged for decoders that echo stored context.",
+      "The public Event and error APIs remain unchanged.",
+      "Public event-log documentation identifies persisted discriminator values as authoritative.",
+      "The pinned local and required pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a decoder that deliberately returned fabricated unsupported-event context and asserted the replay boundary reports the stored row values.",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed because replay returned decoder.fabricated at payload version 99 instead of the persisted account.opened at payload version 1.",
+      "patch": "Added focused integration coverage in crates/vela-kernel/tests/event_log.rs without changing production behavior."
+    },
+    {
+      "summary": "Made the event log authoritative when mapping unsupported decode failures.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Matched DecodeError::UnsupportedEvent without binding its context and constructed ReplayError::UnsupportedEvent from the event_type and payload_version read from SQLite."
+    },
+    {
+      "summary": "Preserved the public decoder API and documented ownership of diagnostic context.",
+      "outcome": "success",
+      "diagnostic": "Changing DecodeError would have introduced an unnecessary compatibility break; malformed payload text remains decoder-owned while stream position and persisted discriminator values remain log-owned.",
+      "patch": "Kept Event and DecodeError unchanged and updated docs/event-log.md to state that stored discriminator values are authoritative."
+    },
+    {
+      "summary": "Ran focused and full verification, then obtained independent pre-commit and automated pull-request review.",
+      "outcome": "success",
+      "diagnostic": "The independent Codex review found no blocking findings. The GitHub Rust quality gate passed, and CodeRabbit generated no actionable comments with all five pre-merge checks passing.",
+      "patch": "No corrective patch was required after review."
+    }
+  ],
+  "outcome": {
+    "summary": "Typed replay now treats the persisted row as the source of truth for unsupported event discriminators, producing trustworthy compatibility diagnostics without changing public APIs or storage format.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test event_log unsupported_replay_reports_the_persisted_discriminator -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command codex review --uncommitted # result: no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 363",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 363 # result: no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0010-authoritative-replay-discriminator.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 10 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Persistence boundaries should own diagnostics for facts read from storage rather than trusting duplicated context returned by a decoder.",
+    "An adversarial test double can expose authority confusion that well-behaved implementations hide by echoing their inputs.",
+    "Preserve a stable public API when a narrow boundary mapping can enforce the contract directly.",
+    "Separate ownership of error context explicitly: decoders own payload interpretation, while the log owns persisted discriminator and stream-position facts."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/363"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
