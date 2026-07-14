@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Report the first missing version for wider append gaps",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/414 by making append-side VersionGap diagnostics report the first missing stream version for gaps wider than one version while preserving pre-encoding rejection, error precedence, and atomic revalidation.",
+    "acceptance_criteria": [
+      "Stored stream versions one and four produce EventLogError::VersionGap with expected version two and found version four.",
+      "The invalid append is rejected before payload encoding and writes no event.",
+      "Existing invalid-version, exhausted-stream, contiguous append, and replay behavior remains intact.",
+      "The stable error contract describes the first missing version and the first stored version observed after the gap.",
+      "Pinned local verification, the Rust quality gate, CodeRabbit review, and squash auto-merge pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Widened the append continuity regression from stored versions one and three to versions one and four while retaining the serializer-that-must-not-run and unchanged-row-count assertions.",
+      "outcome": "failure",
+      "diagnostic": "The RED test received 'stored stream version gap: expected version 3, found 4' instead of expected version 2, proving that deriving expected as found minus one reports the immediate predecessor rather than the first missing version for a wider gap.",
+      "patch": "Changed only the regression fixture and assertions before running the focused test."
+    },
+    {
+      "summary": "Derived the first missing version from the stored prefix preceding the first observed row without an immediate predecessor.",
+      "outcome": "success",
+      "diagnostic": "The focused regression passed with VersionGap { expected: 2, found: 4 }; serialization did not run and the stored row count remained two.",
+      "patch": "Used one SQLite CTE query to retain minimum, maximum, first-gap, and terminal-version precedence while computing the first missing version as the greatest earlier stored version plus one, or one when no earlier row exists."
+    },
+    {
+      "summary": "Ran the complete pinned verification and reviewed the bounded diff before commit.",
+      "outcome": "success",
+      "diagnostic": "All 25 event-log integration tests, workspace tests, formatting, checking, Clippy with warnings denied, SecretSpec integration, and diff checks passed; the read-only diff review found no blocking correctness issue across empty, contiguous, corrupt, gapped, and terminal streams.",
+      "patch": "No production correction was required after GREEN; documentation was updated with wider-gap semantics."
+    },
+    {
+      "summary": "Addressed the only CodeRabbit review finding and repeated full verification.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit identified awkward wording in the stable error contract and requested 'the first stored version observed after the gap'; the wording was corrected, the thread was resolved with commit 1628ff1, and just verify passed again.",
+      "patch": "Changed one documentation sentence without altering behavior."
+    },
+    {
+      "summary": "Completed required pull-request checks and squash auto-merge.",
+      "outcome": "success",
+      "diagnostic": "Rust quality gate runs 29341468421 and 29341828091 passed, CodeRabbit passed after the review correction, and pull request 415 squash-merged as b07513d5.",
+      "patch": "No further revision was required."
+    }
+  ],
+  "outcome": {
+    "summary": "Append now reports the first missing stream version for wider stored gaps before caller serialization and still repeats validation inside the immediate transaction; the public diagnostic and documentation agree.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test event_log reports_the_first_missing_version_for_a_wider_gap_before_encoding -- --exact # RED: expected version 3 was reported instead of 2",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test event_log reports_the_first_missing_version_for_a_wider_gap_before_encoding -- --exact # GREEN",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test event_log before_encoding",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify before pull request 415",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only pre-commit review of the issue 414 diff: no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29341468421 for pull request 415",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 415: one documentation wording finding fixed and resolved in 1628ff1",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify after the review correction",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29341828091 for pull request 415",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status after review correction for pull request 415",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 415 squash merge b07513d5",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0023-first-missing-append-gap.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 23 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify with development record 0023",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "The first stored row lacking an immediate predecessor identifies where a gap ends, but subtracting one from that row does not identify where a wider gap begins.",
+    "For an ordered unique stream, the first missing version is one greater than the greatest stored version before the first post-gap row, or one when the stream starts above one.",
+    "A wider-gap regression distinguishes a true continuity diagnostic from an implementation that only works when exactly one version is missing.",
+    "Keeping minimum, maximum, first-missing, and first-found values in one SQLite statement preserves a consistent snapshot for both unlocked preflight and transactional revalidation.",
+    "A serializer that must not run and an unchanged row-count assertion jointly pin validation order and storage non-mutation.",
+    "Automated review can improve the precision of a public error contract even when the behavior and tests are already correct."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/415"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
