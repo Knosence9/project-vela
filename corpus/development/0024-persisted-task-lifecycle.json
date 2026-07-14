@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist the first active task lifecycle state",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/419 by adding a bounded task lifecycle capability that starts and loads an active task over the typed SQLite event log without speculating about later session, completion, runtime, or model behavior.",
+    "acceptance_criteria": [
+      "Non-empty opaque task IDs and goals start one active task through a versioned task.started event.",
+      "Loading after reopening SQLite returns the original ID, goal, and active status, while a missing stream returns no task.",
+      "A duplicate start is rejected without replacing the original task.",
+      "Unknown event discriminators, payload versions, and malformed payloads remain explicit replay failures.",
+      "Public behavior and non-goals are documented, pinned verification passes, and the required pull-request gates permit squash auto-merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Stopped at the architecture boundary and requested a durable human decision before selecting the next kernel capability.",
+      "outcome": "blocked",
+      "diagnostic": "The event-log bootstrap was complete with no open execution slice, while task/session lifecycle, registries, permissions, and runtime interfaces implied materially different public contracts. Issue 418 recorded the gate instead of choosing speculatively.",
+      "patch": "No source change was made; the decision issue listed bounded candidate boundaries and required explicit selection."
+    },
+    {
+      "summary": "Translated the selected task/session boundary into the smallest persisted behavior and wrote lifecycle integration tests before production code.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with unresolved import vela_kernel::task, proving that the task lifecycle API did not exist before implementation.",
+      "patch": "Added tests for start/load round trips, missing tasks, duplicate preservation, constructor validation, and replay compatibility failures."
+    },
+    {
+      "summary": "Implemented typed task values and a synchronous event-log-backed task store.",
+      "outcome": "success",
+      "diagnostic": "All seven lifecycle tests passed: task.started payload version one round-tripped after reopening, missing streams returned None, duplicates preserved the original state, and corrupted persisted metadata or payloads surfaced replay errors.",
+      "patch": "Added TaskId, TaskGoal, Task, TaskStatus, TaskStore, explicit store errors, task scoped streams, and private task.started encoding/decoding."
+    },
+    {
+      "summary": "Refactored and independently reviewed the bounded implementation before commit.",
+      "outcome": "success",
+      "diagnostic": "The implementation delegated optimistic concurrency and atomicity to ExpectedVersion::NoStream, rejected unrecognized histories instead of skipping data, documented whitespace and non-goals, and an independent read-only Codex review found no actionable defects.",
+      "patch": "Kept the lifecycle synchronous and limited to one active state; no completion, cancellation, session, model, tool, timestamp, actor, or runtime assumptions were added."
+    },
+    {
+      "summary": "Ran local and hosted quality gates, monitored automated review, and completed squash auto-merge.",
+      "outcome": "success",
+      "diagnostic": "The pinned just verify gate passed 41 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29372218025 passed. CodeRabbit's required status became successful, but its generated comment explicitly said the semantic review failed and produced no inline findings; this discrepancy was preserved rather than described as a completed review. Pull request 420 then squash-merged as ed3f9dcb.",
+      "patch": "No post-review source correction was indicated; the implementation and behavior documentation merged unchanged after pre-commit review."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela's kernel can now start and reload an active task through an append-only typed event while rejecting duplicate starts and incompatible persisted data; later lifecycle and session behavior remains intentionally undefined.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test task_lifecycle # RED: unresolved import vela_kernel::task",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test task_lifecycle # GREEN: 7 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify before pull request 420 # 41 workspace tests and all local gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only Codex pre-commit review of issue 419 changes: no actionable defects",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29372218025 for pull request 420",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit generated semantic review for pull request 420: review failed internally and produced no inline findings",
+        "status": "failed"
+      },
+      {
+        "command": "Required CodeRabbit status context for pull request 420",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 420 squash merge ed3f9dcb",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0024*.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 24 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify with development record 0024",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of issue 421 corpus change: no actionable correctness issue",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A durable human gate is preferable to silently choosing among kernel boundaries whose contracts would constrain unrelated future capabilities.",
+    "The first lifecycle slice can be useful without defining sessions or execution: a single task.started event establishes identity, objective, persistence, replay, and duplicate safety.",
+    "Using the event log's NoStream expectation gives the domain operation transactional duplicate protection without adding a second concurrency mechanism.",
+    "Keeping TaskId and TaskGoal constructors non-empty makes invalid caller state unrepresentable before storage is opened.",
+    "Lifecycle replay should preserve the event log's explicit compatibility errors rather than turn unknown or malformed history into a missing task.",
+    "A successful required status is not proof that an automated semantic review completed; generated review diagnostics and status contexts must be recorded separately when they disagree.",
+    "Explicit non-goals prevent a small persistence capability from becoming an accidental runtime, session, or personality design decision."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/420"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
