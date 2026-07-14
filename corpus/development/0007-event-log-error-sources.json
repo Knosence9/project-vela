@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve event-log error sources",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/350 by letting Rust error-reporting layers traverse the SQLite and JSON causes wrapped by EventLogError without changing its public variants or display text.",
+    "acceptance_criteria": [
+      "Storage and encoding variants expose their wrapped errors through std::error::Error::source.",
+      "Optimistic-concurrency and range failures remain source-free.",
+      "Existing public variants and display text remain unchanged.",
+      "Tests and event-log documentation describe the error-chain behavior.",
+      "The pinned local and required pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused source-chain test before changing EventLogError.",
+      "outcome": "failure",
+      "diagnostic": "The RED test panicked when unwrapping storage.source() because the empty Error implementation returned None for every variant.",
+      "patch": "Constructed all four EventLogError variants and asserted concrete source types for wrapped failures and no source for domain failures."
+    },
+    {
+      "summary": "Implemented variant-specific source delegation and documented the compatibility contract.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Returned the borrowed rusqlite or serde_json error for Storage and Encode while returning None for WrongExpectedVersion and VersionOutOfRange."
+    },
+    {
+      "summary": "Kept the fix bounded after independent diff review and automated pull-request review.",
+      "outcome": "success",
+      "diagnostic": "No blocking finding remained; CodeRabbit generated no actionable comments.",
+      "patch": "Preserved variants, formatting, dependencies, and replay behavior; only source chaining, its test, and documentation changed."
+    }
+  ],
+  "outcome": {
+    "summary": "EventLogError now composes with conventional Rust error chains while retaining source-free domain failures and its existing compatibility surface.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test event_log event_log_errors_expose_only_wrapped_error_sources",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --doc",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 351",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 351",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "An Error implementation is not fully composable when wrapper variants omit source delegation.",
+    "Test both sides of an error-chain contract: wrapped infrastructure failures should expose causes, while domain failures without underlying errors should return None.",
+    "Borrowing existing inner errors through source improves diagnostics without changing display text, variants, dependencies, or persisted behavior."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/351"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
