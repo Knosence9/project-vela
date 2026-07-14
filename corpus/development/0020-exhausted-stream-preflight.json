@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject exhausted SQLite streams before payload encoding",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/402 by returning the existing stream-version range error before serializing an event when SQLite cannot represent the next version, while retaining the authoritative transactional check.",
+    "acceptance_criteria": [
+      "A stream at SQLite's maximum signed version returns EventLogError::VersionOutOfRange(9223372036854775808) before Serialize::serialize is invoked.",
+      "The rejected append writes no event.",
+      "The in-transaction append path retains an authoritative checked next-version conversion.",
+      "Valid appends and existing validation precedence remain unchanged.",
+      "The ordering is documented and the pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused regression with a maximum-version stored row and a serializer that must not run.",
+      "outcome": "failure",
+      "diagnostic": "The RED test panicked with 'a rejected append must not encode its event', proving EventLog::append invoked caller serialization before discovering that the next version exceeded SQLite's signed integer range.",
+      "patch": "Added rejects_an_exhausted_stream_before_encoding without changing production behavior."
+    },
+    {
+      "summary": "Preflighted the checked next-version conversion after expected-version matching and before payload encoding.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "The focused regression returned VersionOutOfRange(9223372036854775808), did not invoke serialization, and confirmed the stored row count remained one."
+    },
+    {
+      "summary": "Refactored preflight and transactional conversion through one private helper.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Introduced next_stream_version so the unlocked diagnostic preflight and authoritative in-transaction path use the same increment and SQLite i64 conversion."
+    },
+    {
+      "summary": "Reviewed and verified the bounded change through squash merge.",
+      "outcome": "success",
+      "diagnostic": "A separate pre-commit diff review found no blocking correctness, concurrency, error-precedence, or test gaps. The focused test, just verify, and cargo doc passed; Rust quality gate run 29328427309 passed; CodeRabbit generated no actionable comments; and pull request 403 squash-merged as 7f8d7a1.",
+      "patch": "No review correction was required."
+    }
+  ],
+  "outcome": {
+    "summary": "Append now rejects an exhausted SQLite stream before caller-defined serialization while repeating the checked next-version conversion inside the immediate transaction before insertion.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test event_log rejects_an_exhausted_stream_before_encoding -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo doc --workspace --no-deps --locked",
+        "status": "passed"
+      },
+      {
+        "command": "Independent pre-commit diff review for issue 402: no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29328427309 for pull request 403",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 403: required status passed with no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 403 squash merge 7f8d7a1",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0020-exhausted-stream-preflight.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 20 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "An append that cannot possibly fit the persistence representation should fail before invoking expensive, fallible, or panicking caller serialization.",
+    "A preflight range check improves deterministic error precedence, but the same conversion must remain inside the immediate transaction because another writer can change the current version after preflight.",
+    "Centralizing next-version increment and representation conversion prevents the diagnostic preflight from drifting away from the authoritative write path.",
+    "Boundary regressions should assert both that caller code is not invoked and that persistent state remains unchanged."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/403"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
