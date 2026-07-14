@@ -24,7 +24,7 @@ The public error variants are the compatibility surface. `EventLogError` and `Re
 - `ReplayError::UnsupportedEvent` carries the authoritative stored `event_type` and `payload_version`, even if a decoder supplies different context in its `DecodeError`.
 - `ReplayError::MalformedPayload` carries the stream version and decoder diagnostic.
 - `ReplayError::VersionGap` carries the expected and observed versions.
-- `ReplayError::InvalidStoredVersion` rejects a version that cannot be represented by the API.
+- `ReplayError::InvalidStoredVersion` rejects a stored stream version below `1` or otherwise outside the public stream-version domain.
 - `ReplayError::InvalidStoredPayloadVersion` preserves and rejects a stored payload version outside the public `u32` domain instead of classifying valid SQLite access as a storage failure.
 - Storage failures remain explicit errors rather than being treated as caller, concurrency, or compatibility failures. Append-side `Storage` and `Encode` variants expose their wrapped SQLite or JSON errors through `std::error::Error::source`; replay-side `Storage` exposes its wrapped SQLite error the same way. Caller, concurrency, range, and replay compatibility failures have no underlying source.
 
