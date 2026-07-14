@@ -79,6 +79,7 @@ pub trait Event: Serialize + Sized {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum EventLogError {
     Storage(rusqlite::Error),
     Encode(serde_json::Error),
