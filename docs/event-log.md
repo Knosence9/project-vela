@@ -21,6 +21,7 @@ The public error variants are the compatibility surface. `EventLogError` and `Re
 - `EventLogError::InvalidEventType` reports an empty caller-supplied discriminator; no row is written.
 - `EventLogError::InvalidPayloadVersion` reports an invalid caller-supplied payload version; no row is written.
 - `EventLogError::UnsupportedJournalMode` reports the effective SQLite journal mode when opening cannot establish WAL (for example, `memory` for `:memory:`).
+- `EventLogError::InvalidStoredVersion` rejects a current stored stream version below `1` before expected-version matching; no row is written.
 - `ReplayError::UnsupportedEvent` carries the authoritative stored `event_type` and `payload_version`, even if a decoder supplies different context in its `DecodeError`.
 - `ReplayError::InvalidStoredEventType` rejects an empty stored discriminator before invoking the typed decoder.
 - `ReplayError::MalformedPayload` carries the stream version and decoder diagnostic.
