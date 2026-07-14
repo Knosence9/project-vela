@@ -52,6 +52,23 @@ impl Event for InvalidVersionEvent {
     }
 }
 
+#[derive(Serialize)]
+struct EmptyEventType;
+
+impl Event for EmptyEventType {
+    fn event_type(&self) -> &'static str {
+        ""
+    }
+
+    fn payload_version(&self) -> u32 {
+        1
+    }
+
+    fn decode(_: &str, _: u32, _: &[u8]) -> Result<Self, DecodeError> {
+        unreachable!("an event without a discriminator must never be persisted")
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct DivergentDiscriminatorEvent;
 
@@ -107,12 +124,14 @@ fn event_log_errors_expose_only_wrapped_error_sources() {
         current: Some(1),
     };
     let range = EventLogError::VersionOutOfRange(u64::MAX);
+    let invalid_event_type = EventLogError::InvalidEventType;
     let invalid_payload_version = EventLogError::InvalidPayloadVersion(0);
 
     assert!(storage.source().unwrap().is::<rusqlite::Error>());
     assert!(encode.source().unwrap().is::<serde_json::Error>());
     assert!(concurrency.source().is_none());
     assert!(range.source().is_none());
+    assert!(invalid_event_type.source().is_none());
     assert!(invalid_payload_version.source().is_none());
 }
 
@@ -128,6 +147,21 @@ fn rejects_zero_payload_version_without_writing() {
 
     assert_eq!(error.to_string(), "invalid event payload version 0");
     assert!(matches!(error, EventLogError::InvalidPayloadVersion(0)));
+    assert!(log.replay::<AccountEvent>(&stream).unwrap().is_empty());
+}
+
+#[test]
+fn rejects_empty_event_type_without_writing() {
+    let directory = tempdir().unwrap();
+    let mut log = EventLog::open(directory.path().join("events.sqlite3")).unwrap();
+    let stream = StreamId::new("invalid-type-1").unwrap();
+
+    let error = log
+        .append(&stream, ExpectedVersion::NoStream, &EmptyEventType)
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "event type must not be empty");
+    assert!(matches!(error, EventLogError::InvalidEventType));
     assert!(log.replay::<AccountEvent>(&stream).unwrap().is_empty());
 }
 

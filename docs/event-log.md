@@ -5,6 +5,7 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 ## Observable contract
 
 - `StreamId` accepts any non-empty UTF-8 string and treats it as opaque.
+- Event types accept any non-empty static string and otherwise remain opaque; append rejects an empty discriminator before encoding or opening a write transaction.
 - Event payload versions start at `1`; append rejects version `0` before opening a write transaction.
 - A new stream accepts `ExpectedVersion::NoStream`; an existing stream accepts only `ExpectedVersion::Exact(current)`.
 - Successful appends receive versions 1, 2, 3, and so on. A stale expectation returns `WrongExpectedVersion` and commits nothing.
@@ -17,6 +18,7 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 The public error variants are the compatibility surface:
 
 - `EventLogError::WrongExpectedVersion` reports the requested and current stream state; no row is written.
+- `EventLogError::InvalidEventType` reports an empty caller-supplied discriminator; no row is written.
 - `EventLogError::InvalidPayloadVersion` reports an invalid caller-supplied payload version; no row is written.
 - `ReplayError::UnsupportedEvent` carries the authoritative stored `event_type` and `payload_version`, even if a decoder supplies different context in its `DecodeError`.
 - `ReplayError::MalformedPayload` carries the stream version and decoder diagnostic.
