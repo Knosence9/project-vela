@@ -379,6 +379,11 @@ impl EventLog {
             let stored_payload_version: i64 = row.get(2).map_err(storage_replay_error)?;
             let payload_version = u32::try_from(stored_payload_version)
                 .map_err(|_| ReplayError::InvalidStoredPayloadVersion(stored_payload_version))?;
+            if payload_version == 0 {
+                return Err(ReplayError::InvalidStoredPayloadVersion(
+                    stored_payload_version,
+                ));
+            }
             let payload: Vec<u8> = row.get(3).map_err(storage_replay_error)?;
             let event =
                 E::decode(&event_type, payload_version, &payload).map_err(|error| match error {
