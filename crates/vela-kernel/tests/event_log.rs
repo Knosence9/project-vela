@@ -35,6 +35,23 @@ impl Event for AccountEvent {
     }
 }
 
+#[derive(Serialize)]
+struct InvalidVersionEvent;
+
+impl Event for InvalidVersionEvent {
+    fn event_type(&self) -> &'static str {
+        "invalid.version"
+    }
+
+    fn payload_version(&self) -> u32 {
+        0
+    }
+
+    fn decode(_: &str, _: u32, _: &[u8]) -> Result<Self, DecodeError> {
+        unreachable!("an invalid event must never be persisted")
+    }
+}
+
 #[test]
 fn decode_errors_are_standard_errors_with_stable_context() {
     fn assert_standard_error(_: &dyn std::error::Error) {}
@@ -70,11 +87,28 @@ fn event_log_errors_expose_only_wrapped_error_sources() {
         current: Some(1),
     };
     let range = EventLogError::VersionOutOfRange(u64::MAX);
+    let invalid_payload_version = EventLogError::InvalidPayloadVersion(0);
 
     assert!(storage.source().unwrap().is::<rusqlite::Error>());
     assert!(encode.source().unwrap().is::<serde_json::Error>());
     assert!(concurrency.source().is_none());
     assert!(range.source().is_none());
+    assert!(invalid_payload_version.source().is_none());
+}
+
+#[test]
+fn rejects_zero_payload_version_without_writing() {
+    let directory = tempdir().unwrap();
+    let mut log = EventLog::open(directory.path().join("events.sqlite3")).unwrap();
+    let stream = StreamId::new("invalid-1").unwrap();
+
+    let error = log
+        .append(&stream, ExpectedVersion::NoStream, &InvalidVersionEvent)
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "invalid event payload version 0");
+    assert!(matches!(error, EventLogError::InvalidPayloadVersion(0)));
+    assert!(log.replay::<AccountEvent>(&stream).unwrap().is_empty());
 }
 
 #[test]
