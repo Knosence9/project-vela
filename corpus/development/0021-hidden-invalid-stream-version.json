@@ -50,6 +50,14 @@
         "status": "passed"
       },
       {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0021-hidden-invalid-stream-version.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 21 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
         "command": "nix develop --command cargo doc --workspace --no-deps --locked",
         "status": "passed"
       },
