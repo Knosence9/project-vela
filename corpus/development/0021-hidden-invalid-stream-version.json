@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject hidden invalid stream versions before append",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/406 by rejecting a stored stream version below one before payload encoding even when a higher valid row would otherwise hide it from the current-version lookup.",
+    "acceptance_criteria": [
+      "Append detects an invalid stored stream version when invalid and valid rows coexist in one stream.",
+      "The failure is EventLogError::InvalidStoredVersion and occurs before caller serialization.",
+      "The rejected append writes no event.",
+      "The valid maximum version remains the current stream position when all stored versions are valid.",
+      "The lookup remains indexed, the behavior is documented, and pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused regression with stored stream versions zero and one plus a serializer that must not run.",
+      "outcome": "failure",
+      "diagnostic": "The RED test panicked with 'a rejected append must not encode its event', proving the MAX-only lookup masked version zero and allowed payload encoding.",
+      "patch": "Added rejects_a_hidden_invalid_stored_version_before_encoding without changing production behavior."
+    },
+    {
+      "summary": "Validated the minimum stored version before returning the maximum as the current stream position.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "The focused regression returned InvalidStoredVersion(0), did not invoke serialization, and confirmed the stored row count remained two."
+    },
+    {
+      "summary": "Refactored the minimum and maximum lookup after an independent pre-commit review identified a potential aggregate scan on every append.",
+      "outcome": "success",
+      "diagnostic": "SQLite EXPLAIN QUERY PLAN showed each scalar subquery searching the events primary key by stream_id instead of one combined aggregate over the stream.",
+      "patch": "Used separate MIN and MAX scalar subqueries in one statement so corruption detection and current-position lookup retain indexed endpoint searches."
+    },
+    {
+      "summary": "Verified and merged the bounded fix.",
+      "outcome": "success",
+      "diagnostic": "The focused regression, just verify, and cargo doc passed; Rust quality gate run 29332734324 passed; the required CodeRabbit status passed, although its walkthrough comment reported a GitHub timeout while posting review comments; and pull request 407 squash-merged as fe211f9.",
+      "patch": "No further correctness, test, or documentation correction was required."
+    }
+  ],
+  "outcome": {
+    "summary": "Append now detects any stored stream version below one before caller serialization even when a higher valid version exists, while indexed maximum lookup still supplies the current position.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test event_log rejects_a_hidden_invalid_stored_version_before_encoding -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo doc --workspace --no-deps --locked",
+        "status": "passed"
+      },
+      {
+        "command": "SQLite EXPLAIN QUERY PLAN for minimum and maximum scalar subqueries: both search the events primary key by stream_id",
+        "status": "passed"
+      },
+      {
+        "command": "Independent pre-commit diff review for issue 406: aggregate-scan concern fixed; no blocking findings remained",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29332734324 for pull request 407",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status for pull request 407; status passed, walkthrough comment disclosed a GitHub timeout while posting review comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 407 squash merge fe211f9",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A maximum-only query can hide lower-bound corruption when invalid and valid rows coexist in one stream.",
+    "Corruption regressions should combine the invalid boundary with a valid higher row so they exercise masking rather than only direct conversion.",
+    "Rejecting impossible persistent state before caller serialization preserves deterministic error precedence and avoids unnecessary or unsafe caller code.",
+    "Correctness checks on a hot append path should preserve indexed endpoint lookup; query plans are useful review evidence when an aggregate shape changes.",
+    "Required review status and review-comment delivery are distinct signals and should be recorded separately when an integration reports a posting timeout."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/407"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
