@@ -366,6 +366,9 @@ impl EventLog {
             let stored_version: i64 = row.get(0).map_err(storage_replay_error)?;
             let version = u64::try_from(stored_version)
                 .map_err(|_| ReplayError::InvalidStoredVersion(stored_version))?;
+            if version == 0 {
+                return Err(ReplayError::InvalidStoredVersion(stored_version));
+            }
             if version != expected {
                 return Err(ReplayError::VersionGap {
                     expected,

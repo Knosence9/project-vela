@@ -70,6 +70,23 @@ impl Event for EmptyEventType {
 }
 
 #[derive(Debug, Serialize)]
+struct DecoderMustNotRun;
+
+impl Event for DecoderMustNotRun {
+    fn event_type(&self) -> &'static str {
+        unreachable!("this decoder-only event must never be persisted")
+    }
+
+    fn payload_version(&self) -> u32 {
+        unreachable!("this decoder-only event must never be persisted")
+    }
+
+    fn decode(_: &str, _: u32, _: &[u8]) -> Result<Self, DecodeError> {
+        panic!("invalid stored versions must be rejected before decoding")
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct DivergentDiscriminatorEvent;
 
 impl Event for DivergentDiscriminatorEvent {
@@ -484,6 +501,42 @@ fn reports_the_version_of_a_malformed_payload() {
             ..
         }
     ));
+}
+
+#[test]
+fn reports_zero_as_an_invalid_stored_stream_version() {
+    use std::error::Error;
+
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let stream = StreamId::new("account-42").unwrap();
+    let log = EventLog::open(&path).unwrap();
+    drop(log);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "ignore_check_constraints", true)
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES (?1, 0, 'account.opened', 1, ?2)",
+            rusqlite::params![
+                stream.as_str(),
+                serde_json::to_vec(&AccountEvent::Opened {
+                    owner: "Ada".into()
+                })
+                .unwrap()
+            ],
+        )
+        .unwrap();
+
+    let log = EventLog::open(&path).unwrap();
+    let error = log.replay::<DecoderMustNotRun>(&stream).unwrap_err();
+
+    assert_eq!(error.to_string(), "invalid stored stream version 0");
+    assert_eq!(error, ReplayError::InvalidStoredVersion(0));
+    assert!(error.source().is_none());
 }
 
 #[test]
