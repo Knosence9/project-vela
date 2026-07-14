@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject stored stream version zero explicitly during replay",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/378 by preserving the approved one-based stream-version contract when corrupted or externally modified SQLite rows contain stream_version zero.",
+    "acceptance_criteria": [
+      "Replaying a row whose stream_version is zero returns ReplayError::InvalidStoredVersion(0) with a stable diagnostic.",
+      "The invalid stored stream-version error has no underlying source and is returned before typed decoding.",
+      "Positive out-of-order stream versions remain VersionGap errors.",
+      "The public documentation describes stored versions below one as invalid range failures.",
+      "The pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused integration test that bypasses SQLite CHECK constraints to persist stream version zero.",
+      "outcome": "failure",
+      "diagnostic": "The RED test received stream version gap: expected version 1, found 0, proving replay treated an out-of-domain position as a missing positive position.",
+      "patch": "Added reports_zero_as_an_invalid_stored_stream_version without changing production behavior."
+    },
+    {
+      "summary": "Added an explicit lower-bound guard at the replay conversion boundary.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "After checked i64-to-u64 conversion, replay now maps zero to ReplayError::InvalidStoredVersion before gap detection or event decoding."
+    },
+    {
+      "summary": "Strengthened the behavior test to prove invalid positions are rejected before decoder dispatch.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Replayed through a decoder that panics if invoked and asserted the exact error, diagnostic, and absent source."
+    },
+    {
+      "summary": "Completed independent review and monitored the required pull-request checks.",
+      "outcome": "success",
+      "diagnostic": "Independent pre-commit review found no blocking issues. CodeRabbit passed with one trivial optional consolidation suggestion; the existing checked conversion plus explicit zero guard was retained as the smallest change without introducing an integer cast. Rust quality gate run 29307346539 and CodeRabbit passed; pull request 379 squash-merged as 16c8332.",
+      "patch": "No corrective patch was required."
+    }
+  ],
+  "outcome": {
+    "summary": "Replay now classifies stored stream version zero as an explicit invalid persisted value, preserves positive gap semantics, and rejects the invalid position before typed decoder dispatch.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test -p vela-kernel --test event_log reports_zero_as_an_invalid_stored_stream_version -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only pre-commit review of issue 378 diff # durable evidence: https://github.com/Knosence9/project-vela/issues/380#issuecomment-4965665213",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29307346539 for pull request 379",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 379 # review completed and required status passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0014-zero-stored-stream-version.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 14 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Validate persisted values against semantic domain bounds before classifying ordering relationships; representability as u64 alone does not make zero a valid stream position.",
+    "Use a panic-on-call decoder in boundary tests to prove replay validation occurs before extensible user decoding code.",
+    "Retain positive VersionGap semantics while separating non-positive persisted positions into InvalidStoredVersion.",
+    "A direct RED diagnostic makes an error-classification bug observable even when the database schema normally prevents the invalid row."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/379"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
