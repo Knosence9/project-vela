@@ -7,7 +7,7 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 - `StreamId` accepts any non-empty UTF-8 string and treats it as opaque.
 - Event types accept any non-empty static string and otherwise remain opaque; append rejects an empty discriminator before encoding or opening a write transaction.
 - Event payload versions start at `1`; append rejects version `0` before opening a write transaction.
-- A new stream accepts `ExpectedVersion::NoStream`; an existing stream accepts only `ExpectedVersion::Exact(current)`.
+- A new stream accepts `ExpectedVersion::NoStream`; an existing stream accepts only `ExpectedVersion::Exact(current)`, where exact versions start at `1`. `Exact(0)` is invalid rather than an alias for a missing stream.
 - Successful appends receive versions 1, 2, 3, and so on. A stale expectation returns `WrongExpectedVersion` and commits nothing.
 - Every append is one SQLite transaction. Opening verifies that SQLite activated WAL journaling, configures `synchronous=FULL`, and fails rather than weakening that boundary. Append success is returned only after commit.
 - Replay returns one stream in ascending, contiguous order as values decoded by the caller's typed `Event` implementation. A missing stream returns an empty vector.
@@ -20,6 +20,7 @@ The public error variants are the compatibility surface. `EventLogError` and `Re
 - `EventLogError::WrongExpectedVersion` reports the requested and current stream state; no row is written.
 - `EventLogError::InvalidEventType` reports an empty caller-supplied discriminator; no row is written.
 - `EventLogError::InvalidPayloadVersion` reports an invalid caller-supplied payload version; no row is written.
+- `EventLogError::InvalidExpectedVersion` reports `ExpectedVersion::Exact(0)` before payload encoding; no row is written.
 - `EventLogError::UnsupportedJournalMode` reports the effective SQLite journal mode when opening cannot establish WAL (for example, `memory` for `:memory:`).
 - `EventLogError::InvalidStoredVersion` rejects a current stored stream version below `1` before expected-version matching; no row is written.
 - `ReplayError::UnsupportedEvent` carries the authoritative stored `event_type` and `payload_version`, even if a decoder supplies different context in its `DecodeError`.

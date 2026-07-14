@@ -69,6 +69,31 @@ impl Event for EmptyEventType {
     }
 }
 
+struct SerializationMustNotRun;
+
+impl Serialize for SerializationMustNotRun {
+    fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        panic!("an invalid expected version must be rejected before encoding")
+    }
+}
+
+impl Event for SerializationMustNotRun {
+    fn event_type(&self) -> &'static str {
+        "serialization.must-not-run"
+    }
+
+    fn payload_version(&self) -> u32 {
+        1
+    }
+
+    fn decode(_: &str, _: u32, _: &[u8]) -> Result<Self, DecodeError> {
+        unreachable!("an event with an invalid expectation must never be persisted")
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct DecoderMustNotRun;
 
@@ -144,6 +169,7 @@ fn event_log_errors_expose_only_wrapped_error_sources() {
     let journal_mode = EventLogError::UnsupportedJournalMode("memory".into());
     let invalid_event_type = EventLogError::InvalidEventType;
     let invalid_payload_version = EventLogError::InvalidPayloadVersion(0);
+    let invalid_expected_version = EventLogError::InvalidExpectedVersion(0);
 
     assert!(storage.source().unwrap().is::<rusqlite::Error>());
     assert!(encode.source().unwrap().is::<serde_json::Error>());
@@ -152,6 +178,7 @@ fn event_log_errors_expose_only_wrapped_error_sources() {
     assert!(journal_mode.source().is_none());
     assert!(invalid_event_type.source().is_none());
     assert!(invalid_payload_version.source().is_none());
+    assert!(invalid_expected_version.source().is_none());
 }
 
 #[test]
@@ -321,6 +348,24 @@ fn rejects_stale_expected_versions_without_writing() {
 }
 
 #[test]
+fn rejects_exact_expected_version_zero_before_encoding() {
+    use std::error::Error;
+
+    let directory = tempdir().unwrap();
+    let mut log = EventLog::open(directory.path().join("events.sqlite3")).unwrap();
+    let stream = StreamId::new("account-42").unwrap();
+
+    let error = log
+        .append(&stream, ExpectedVersion::Exact(0), &SerializationMustNotRun)
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "invalid exact expected version 0");
+    assert!(matches!(error, EventLogError::InvalidExpectedVersion(0)));
+    assert!(error.source().is_none());
+    assert!(log.replay::<AccountEvent>(&stream).unwrap().is_empty());
+}
+
+#[test]
 fn rejects_zero_as_the_current_stored_version_without_writing() {
     use std::error::Error;
 
@@ -353,7 +398,7 @@ fn rejects_zero_as_the_current_stored_version_without_writing() {
     let error = log
         .append(
             &stream,
-            ExpectedVersion::Exact(0),
+            ExpectedVersion::NoStream,
             &AccountEvent::Credited { cents: 500 },
         )
         .unwrap_err();
