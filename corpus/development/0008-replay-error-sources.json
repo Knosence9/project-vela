@@ -50,6 +50,14 @@
         "status": "passed"
       },
       {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0008-replay-error-sources.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 8 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
         "command": "GitHub Rust quality gate for pull request 355",
         "status": "passed"
       },
