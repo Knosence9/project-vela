@@ -9,17 +9,18 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 - Event payload versions start at `1`; append rejects version `0` before opening a write transaction.
 - A new stream accepts `ExpectedVersion::NoStream`; an existing stream accepts only `ExpectedVersion::Exact(current)`.
 - Successful appends receive versions 1, 2, 3, and so on. A stale expectation returns `WrongExpectedVersion` and commits nothing.
-- Every append is one SQLite transaction. The connection uses WAL journaling and `synchronous=FULL`, and success is returned only after commit.
+- Every append is one SQLite transaction. Opening verifies that SQLite activated WAL journaling, configures `synchronous=FULL`, and fails rather than weakening that boundary. Append success is returned only after commit.
 - Replay returns one stream in ascending, contiguous order as values decoded by the caller's typed `Event` implementation. A missing stream returns an empty vector.
 - Unknown event type/payload version, malformed payload, invalid stored version, and a version gap are errors. Replay never silently skips persisted data.
 
 ## Stable errors
 
-The public error variants are the compatibility surface:
+The public error variants are the compatibility surface. `EventLogError` is non-exhaustive so the pre-1.0 kernel can add explicit failures without breaking downstream wildcard matches; callers must include a fallback arm:
 
 - `EventLogError::WrongExpectedVersion` reports the requested and current stream state; no row is written.
 - `EventLogError::InvalidEventType` reports an empty caller-supplied discriminator; no row is written.
 - `EventLogError::InvalidPayloadVersion` reports an invalid caller-supplied payload version; no row is written.
+- `EventLogError::UnsupportedJournalMode` reports the effective SQLite journal mode when opening cannot establish WAL (for example, `memory` for `:memory:`).
 - `ReplayError::UnsupportedEvent` carries the authoritative stored `event_type` and `payload_version`, even if a decoder supplies different context in its `DecodeError`.
 - `ReplayError::MalformedPayload` carries the stream version and decoder diagnostic.
 - `ReplayError::VersionGap` carries the expected and observed versions.

@@ -124,6 +124,7 @@ fn event_log_errors_expose_only_wrapped_error_sources() {
         current: Some(1),
     };
     let range = EventLogError::VersionOutOfRange(u64::MAX);
+    let journal_mode = EventLogError::UnsupportedJournalMode("memory".into());
     let invalid_event_type = EventLogError::InvalidEventType;
     let invalid_payload_version = EventLogError::InvalidPayloadVersion(0);
 
@@ -131,6 +132,7 @@ fn event_log_errors_expose_only_wrapped_error_sources() {
     assert!(encode.source().unwrap().is::<serde_json::Error>());
     assert!(concurrency.source().is_none());
     assert!(range.source().is_none());
+    assert!(journal_mode.source().is_none());
     assert!(invalid_event_type.source().is_none());
     assert!(invalid_payload_version.source().is_none());
 }
@@ -216,6 +218,23 @@ fn replay_errors_expose_only_storage_error_sources() {
     assert!(malformed.source().is_none());
     assert!(gap.source().is_none());
     assert!(invalid_version.source().is_none());
+}
+
+#[test]
+fn rejects_an_event_log_without_wal_journaling() {
+    let error = match EventLog::open(":memory:") {
+        Ok(_) => panic!("an event log without WAL journaling must be rejected"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "event log requires WAL journal mode, found memory"
+    );
+    assert!(matches!(
+        error,
+        EventLogError::UnsupportedJournalMode(mode) if mode == "memory"
+    ));
 }
 
 #[test]
