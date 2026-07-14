@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject exact expected version zero before append",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/394 by rejecting ExpectedVersion::Exact(0) as an invalid caller expectation before payload encoding or storage access.",
+    "acceptance_criteria": [
+      "Exact expected versions begin at one, while NoStream remains the only valid expectation for a missing stream.",
+      "Exact(0) returns EventLogError::InvalidExpectedVersion before payload encoding and exposes no underlying source.",
+      "The rejected append writes no row and stored-data validation remains covered independently.",
+      "The public event-log documentation describes the valid expected-version domain and stable error.",
+      "The pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused behavior test with an event serializer that panics if encoding runs.",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed to compile because EventLogError had no InvalidExpectedVersion variant, confirming that Exact(0) still fell through to generic expected-version handling.",
+      "patch": "Added rejects_exact_expected_version_zero_before_encoding without changing production behavior."
+    },
+    {
+      "summary": "Added an append preflight guard and a dedicated source-less caller-domain error.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "EventLog::append now returns EventLogError::InvalidExpectedVersion(0) before consulting the event discriminator, payload version, serializer, or SQLite transaction."
+    },
+    {
+      "summary": "Ran the complete gate and found that an older corruption test used Exact(0) to reach stored-version validation.",
+      "outcome": "failure",
+      "diagnostic": "The existing rejects_zero_as_the_current_stored_version_without_writing test received the new caller error before reading the intentionally corrupted row.",
+      "patch": "Changed that test to use NoStream, which remains a valid caller expectation and still proves invalid stored current versions are rejected before concurrency matching."
+    },
+    {
+      "summary": "Verified the focused behavior, full repository gate, independent review, and required pull-request checks through merge.",
+      "outcome": "success",
+      "diagnostic": "The focused test and just verify passed, independent Codex review found no blocking issue, CodeRabbit generated no actionable comments, Rust quality gate run 29320633657 passed, and pull request 395 squash-merged as e238cb2.",
+      "patch": "No corrective patch was required after review."
+    }
+  ],
+  "outcome": {
+    "summary": "Append now rejects Exact(0) before encoding as an explicit invalid caller expectation, preserves the stream, and keeps stored corruption distinct from caller validation.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test event_log rejects_exact_expected_version_zero_before_encoding -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Independent Codex pre-commit review for pull request 395: no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29320633657 for pull request 395",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 395: review completed with no actionable comments and required status passed",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 395 squash merge e238cb2",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0018-exact-zero-expected-version.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 18 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Represent a missing stream with NoStream rather than overloading numeric version zero; invalid domain values deserve an explicit caller error.",
+    "Validate caller-controlled expectation state before event encoding so deterministic input errors cannot be masked by serializer failures or storage access.",
+    "When a new preflight validation changes error precedence, update corruption tests to use a valid caller input that still reaches the persisted-data boundary.",
+    "A serializer that deliberately panics is a concise regression probe for proving validation occurs before encoding."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/395"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
