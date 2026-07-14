@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject stored payload version zero explicitly during replay",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/382 by preserving the approved one-based payload-version contract when corrupted or externally modified SQLite rows contain payload_version zero.",
+    "acceptance_criteria": [
+      "Replaying a row whose payload_version is zero returns ReplayError::InvalidStoredPayloadVersion(0) with a stable diagnostic.",
+      "The invalid stored payload-version error has no underlying source and is returned before typed decoding.",
+      "Supported positive and out-of-range stored payload versions retain their existing classifications.",
+      "The public documentation describes stored payload versions below one as invalid range failures.",
+      "The pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused integration test that bypasses SQLite CHECK constraints to persist payload version zero.",
+      "outcome": "failure",
+      "diagnostic": "The RED test panicked in DecoderMustNotRun::decode, proving replay accepted representable zero and dispatched it to extensible typed decoding instead of rejecting the out-of-domain stored value.",
+      "patch": "Added reports_zero_as_an_invalid_stored_payload_version without changing production behavior."
+    },
+    {
+      "summary": "Added an explicit lower-bound guard at the replay conversion boundary.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "After checked i64-to-u32 conversion, replay now maps zero to ReplayError::InvalidStoredPayloadVersion before reading payload bytes or invoking Event::decode."
+    },
+    {
+      "summary": "Verified stable diagnostics and preserved neighboring replay behavior.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "The regression test asserts the exact variant, display text, absent source, and decoder bypass; focused tests for supported unknown and out-of-range payload versions remained green."
+    },
+    {
+      "summary": "Completed independent review and monitored the required pull-request checks.",
+      "outcome": "success",
+      "diagnostic": "Independent read-only pre-commit review found no blocking correctness issues. Rust quality gate run 29310419413 passed, and CodeRabbit completed with no actionable comments; pull request 383 squash-merged as fa80399.",
+      "patch": "No corrective patch was required."
+    }
+  ],
+  "outcome": {
+    "summary": "Replay now classifies stored payload version zero as an explicit invalid persisted value and rejects it before typed decoder dispatch while preserving positive compatibility semantics.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test event_log reports_zero_as_an_invalid_stored_payload_version -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only pre-commit review and TDD evidence: https://github.com/Knosence9/project-vela/issues/384#issuecomment-4965937780",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29310419413 for pull request 383",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 383: review completed with no actionable comments and required status passed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0015-zero-stored-payload-version.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 15 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Validate persisted values against semantic domain bounds after representational conversion; fitting in u32 does not make zero a valid payload version.",
+    "Use a panic-on-call decoder to prove replay rejects corrupted metadata before crossing into extensible user code.",
+    "Preserve positive unsupported-version handling while separating non-positive persisted metadata into InvalidStoredPayloadVersion.",
+    "Bypassing database CHECK constraints in a RED test makes defensive replay behavior observable without weakening the production schema."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/383"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
