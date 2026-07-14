@@ -522,6 +522,64 @@ fn rejects_a_hidden_invalid_stored_version_before_encoding() {
 }
 
 #[test]
+fn rejects_a_stored_version_gap_before_encoding() {
+    use std::error::Error;
+
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let stream = StreamId::new("account-42").unwrap();
+    let log = EventLog::open(&path).unwrap();
+    drop(log);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    for version in [1, 3] {
+        connection
+            .execute(
+                "INSERT INTO events
+                 (stream_id, stream_version, event_type, payload_version, payload)
+                 VALUES (?1, ?2, 'account.opened', 1, ?3)",
+                rusqlite::params![
+                    stream.as_str(),
+                    version,
+                    serde_json::to_vec(&AccountEvent::Opened {
+                        owner: "Ada".into()
+                    })
+                    .unwrap()
+                ],
+            )
+            .unwrap();
+    }
+    drop(connection);
+
+    let mut log = EventLog::open(&path).unwrap();
+    let error = log
+        .append(&stream, ExpectedVersion::Exact(3), &SerializationMustNotRun)
+        .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "stored stream version gap: expected version 2, found 3"
+    );
+    assert!(matches!(
+        error,
+        EventLogError::VersionGap {
+            expected: 2,
+            found: 3,
+        }
+    ));
+    assert!(error.source().is_none());
+    drop(log);
+    let event_count: u64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = ?1",
+            [stream.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(event_count, 2);
+}
+
+#[test]
 fn rejects_an_exhausted_stream_before_encoding() {
     use std::error::Error;
 
