@@ -115,7 +115,15 @@ impl fmt::Display for EventLogError {
     }
 }
 
-impl std::error::Error for EventLogError {}
+impl std::error::Error for EventLogError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            Self::Encode(error) => Some(error),
+            Self::WrongExpectedVersion { .. } | Self::VersionOutOfRange(_) => None,
+        }
+    }
+}
 
 impl From<rusqlite::Error> for EventLogError {
     fn from(error: rusqlite::Error) -> Self {

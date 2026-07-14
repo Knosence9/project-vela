@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
 use vela_kernel::event_log::{
-    DecodeError, Event, EventLog, ExpectedVersion, ReplayError, StreamId,
+    DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
 };
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -57,6 +57,24 @@ fn decode_errors_are_standard_errors_with_stable_context() {
         malformed.to_string(),
         "malformed event payload: expected value"
     );
+}
+
+#[test]
+fn event_log_errors_expose_only_wrapped_error_sources() {
+    use std::error::Error;
+
+    let storage = EventLogError::Storage(rusqlite::Error::InvalidQuery);
+    let encode = EventLogError::Encode(serde_json::from_str::<serde_json::Value>("{").unwrap_err());
+    let concurrency = EventLogError::WrongExpectedVersion {
+        expected: ExpectedVersion::NoStream,
+        current: Some(1),
+    };
+    let range = EventLogError::VersionOutOfRange(u64::MAX);
+
+    assert!(storage.source().unwrap().is::<rusqlite::Error>());
+    assert!(encode.source().unwrap().is::<serde_json::Error>());
+    assert!(concurrency.source().is_none());
+    assert!(range.source().is_none());
 }
 
 #[test]
