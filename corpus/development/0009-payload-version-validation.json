@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject invalid payload versions before storage",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/358 by rejecting payload version 0 at the event-log API boundary instead of leaking a generic SQLite constraint failure.",
+    "acceptance_criteria": [
+      "An event with payload version 0 returns a stable caller error and writes no row.",
+      "Valid positive payload versions continue to append and replay.",
+      "The caller error has no wrapped std::error::Error source.",
+      "Public event-log documentation describes the positive-version constraint and stable error.",
+      "The pinned local and required pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added the zero-version behavior and source-chain assertions before changing the implementation.",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed with Rust E0599 because EventLogError had no InvalidPayloadVersion variant.",
+      "patch": "Introduced an Event implementation that reports payload version 0, asserted the stable error text and variant, verified it has no source, and replayed the stream to prove no row was written."
+    },
+    {
+      "summary": "Validated the event payload version at the append boundary.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Added EventLogError::InvalidPayloadVersion, rejected version 0 before serialization and transaction creation, reused the validated version for insertion, and documented the contract."
+    },
+    {
+      "summary": "Ran focused regression coverage, the full pinned gate, and an independent pre-commit review.",
+      "outcome": "success",
+      "diagnostic": "The independent Codex review found no correctness issues; the existing positive-version append and replay test continued to pass.",
+      "patch": "No corrective patch was required after review."
+    },
+    {
+      "summary": "Monitored the required pull-request checks and evaluated post-merge review feedback.",
+      "outcome": "success",
+      "diagnostic": "The Rust quality gate and CodeRabbit passed. CodeRabbit left one nonblocking nitpick suggesting a serialization spy to lock in validation before serialization; the issue contract requires rejection before the write transaction, while the implementation already performs the stronger ordering.",
+      "patch": "Kept the bounded behavior test focused on the public stable error and no-write guarantee rather than adding test-only serialization instrumentation."
+    }
+  ],
+  "outcome": {
+    "summary": "Event append now reports payload version 0 as a stable source-free caller error before storage work, while positive versions retain typed append and replay behavior.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test event_log rejects_zero_payload_version_without_writing",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test event_log appends_and_replays_typed_events_in_order_after_reopening",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0009-payload-version-validation.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 9 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command codex review --uncommitted # result: no correctness issues",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 359",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 359",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Validate domain constraints at the typed API boundary so caller mistakes do not masquerade as storage failures.",
+    "Read an event discriminator once, validate it, and reuse it so persistence cannot observe a second inconsistent value.",
+    "A no-write replay assertion protects the observable atomicity contract without coupling the test to SQLite's constraint wording.",
+    "Review suggestions should be measured against the accepted contract; stronger internal ordering may remain an implementation detail unless callers depend on it."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/359"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
