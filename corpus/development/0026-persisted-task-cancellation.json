@@ -34,7 +34,7 @@
       "summary": "Ran local and hosted quality gates, monitored automated review, and completed squash auto-merge.",
       "outcome": "success",
       "diagnostic": "The pinned just verify gate passed 51 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29376110306 passed. CodeRabbit's required status passed and its review generated no actionable comments. Pull request 428 squash-merged as f787bdeb.",
-      "patch": "No review correction was required; issue 427 closed through the linked squash merge."
+      "patch": "No correction was required by the hosted CodeRabbit review; issue 427 closed through the linked squash merge."
     },
     {
       "summary": "Added self-validation evidence using the complete artifact filename.",
@@ -62,7 +62,7 @@
         "status": "passed"
       },
       {
-        "command": "nix develop --command just verify before pull request 428 # 51 workspace tests and all local gates passed",
+        "command": "nix develop --command just verify",
         "status": "passed"
       },
       {
@@ -98,7 +98,7 @@
         "status": "passed"
       },
       {
-        "command": "nix develop --command just verify with development record 0026",
+        "command": "nix develop --command just verify",
         "status": "passed"
       },
       {
