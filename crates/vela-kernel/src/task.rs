@@ -7,6 +7,7 @@ use crate::event_log::{
 };
 
 const TASK_STARTED_EVENT_TYPE: &str = "task.started";
+const TASK_COMPLETED_EVENT_TYPE: &str = "task.completed";
 const TASK_EVENT_PAYLOAD_VERSION: u32 = 1;
 
 /// An opaque, non-empty identifier for one task.
@@ -79,12 +80,14 @@ impl std::error::Error for TaskGoalError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskStatus {
     Active,
+    Completed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Task {
     id: TaskId,
     goal: TaskGoal,
+    status: TaskStatus,
 }
 
 impl Task {
@@ -97,7 +100,7 @@ impl Task {
     }
 
     pub fn status(&self) -> TaskStatus {
-        TaskStatus::Active
+        self.status
     }
 }
 
@@ -107,6 +110,8 @@ pub enum TaskStoreError {
     EventLog(EventLogError),
     Replay(ReplayError),
     AlreadyExists { task_id: TaskId },
+    NotFound { task_id: TaskId },
+    AlreadyCompleted { task_id: TaskId },
     InvalidHistory { event_count: usize },
 }
 
@@ -116,10 +121,14 @@ impl fmt::Display for TaskStoreError {
             Self::EventLog(error) => write!(formatter, "task event-log error: {error}"),
             Self::Replay(error) => write!(formatter, "task replay error: {error}"),
             Self::AlreadyExists { task_id } => write!(formatter, "task {task_id} already exists"),
+            Self::NotFound { task_id } => write!(formatter, "task {task_id} was not found"),
+            Self::AlreadyCompleted { task_id } => {
+                write!(formatter, "task {task_id} is already completed")
+            }
             Self::InvalidHistory { event_count } => {
                 write!(
                     formatter,
-                    "invalid task history with {event_count} start events"
+                    "invalid task history with {event_count} lifecycle events"
                 )
             }
         }
@@ -131,7 +140,10 @@ impl std::error::Error for TaskStoreError {
         match self {
             Self::EventLog(error) => Some(error),
             Self::Replay(error) => Some(error),
-            Self::AlreadyExists { .. } | Self::InvalidHistory { .. } => None,
+            Self::AlreadyExists { .. }
+            | Self::NotFound { .. }
+            | Self::AlreadyCompleted { .. }
+            | Self::InvalidHistory { .. } => None,
         }
     }
 }
@@ -150,16 +162,54 @@ impl TaskStore {
 
     pub fn start(&mut self, id: TaskId, goal: TaskGoal) -> Result<Task, TaskStoreError> {
         let stream = task_stream(&id);
-        let event = TaskEvent { goal: goal.clone() };
+        let event = TaskEvent::Started { goal: goal.clone() };
         match self
             .event_log
             .append(&stream, ExpectedVersion::NoStream, &event)
         {
-            Ok(_) => Ok(Task { id, goal }),
+            Ok(_) => Ok(Task {
+                id,
+                goal,
+                status: TaskStatus::Active,
+            }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
                 current: Some(_),
             }) => Err(TaskStoreError::AlreadyExists { task_id: id }),
+            Err(error) => Err(TaskStoreError::EventLog(error)),
+        }
+    }
+
+    pub fn complete(&mut self, id: &TaskId) -> Result<Task, TaskStoreError> {
+        let task = match self.load(id)? {
+            Some(task) if task.status == TaskStatus::Active => task,
+            Some(_) => {
+                return Err(TaskStoreError::AlreadyCompleted {
+                    task_id: id.clone(),
+                });
+            }
+            None => {
+                return Err(TaskStoreError::NotFound {
+                    task_id: id.clone(),
+                });
+            }
+        };
+
+        match self.event_log.append(
+            &task_stream(id),
+            ExpectedVersion::Exact(1),
+            &TaskEvent::Completed(CompletedPayload {}),
+        ) {
+            Ok(_) => Ok(Task {
+                status: TaskStatus::Completed,
+                ..task
+            }),
+            Err(EventLogError::WrongExpectedVersion {
+                expected: ExpectedVersion::Exact(1),
+                current: Some(2),
+            }) => Err(TaskStoreError::AlreadyCompleted {
+                task_id: id.clone(),
+            }),
             Err(error) => Err(TaskStoreError::EventLog(error)),
         }
     }
@@ -171,9 +221,15 @@ impl TaskStore {
             .map_err(TaskStoreError::Replay)?;
         match events.as_slice() {
             [] => Ok(None),
-            [event] => Ok(Some(Task {
+            [TaskEvent::Started { goal }] => Ok(Some(Task {
                 id: id.clone(),
-                goal: event.goal.clone(),
+                goal: goal.clone(),
+                status: TaskStatus::Active,
+            })),
+            [TaskEvent::Started { goal }, TaskEvent::Completed(_)] => Ok(Some(Task {
+                id: id.clone(),
+                goal: goal.clone(),
+                status: TaskStatus::Completed,
             })),
             _ => Err(TaskStoreError::InvalidHistory {
                 event_count: events.len(),
@@ -187,13 +243,21 @@ fn task_stream(id: &TaskId) -> StreamId {
 }
 
 #[derive(Debug, Serialize)]
-struct TaskEvent {
-    goal: TaskGoal,
+#[serde(untagged)]
+enum TaskEvent {
+    Started { goal: TaskGoal },
+    Completed(CompletedPayload),
 }
+
+#[derive(Debug, Serialize)]
+struct CompletedPayload {}
 
 impl Event for TaskEvent {
     fn event_type(&self) -> &'static str {
-        TASK_STARTED_EVENT_TYPE
+        match self {
+            Self::Started { .. } => TASK_STARTED_EVENT_TYPE,
+            Self::Completed(_) => TASK_COMPLETED_EVENT_TYPE,
+        }
     }
 
     fn payload_version(&self) -> u32 {
@@ -201,11 +265,28 @@ impl Event for TaskEvent {
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
-        if event_type != TASK_STARTED_EVENT_TYPE || payload_version != TASK_EVENT_PAYLOAD_VERSION {
+        if !matches!(
+            event_type,
+            TASK_STARTED_EVENT_TYPE | TASK_COMPLETED_EVENT_TYPE
+        ) || payload_version != TASK_EVENT_PAYLOAD_VERSION
+        {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
                 payload_version,
             });
+        }
+
+        if event_type == TASK_COMPLETED_EVENT_TYPE {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Payload {}
+
+            serde_json::from_slice::<Payload>(payload).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::Completed(CompletedPayload {}));
         }
 
         #[derive(serde::Deserialize)]
@@ -220,6 +301,6 @@ impl Event for TaskEvent {
         let goal = TaskGoal::new(payload.goal).map_err(|error| DecodeError::MalformedPayload {
             message: error.to_string(),
         })?;
-        Ok(Self { goal })
+        Ok(Self::Started { goal })
     }
 }
