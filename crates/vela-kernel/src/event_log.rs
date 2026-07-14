@@ -156,6 +156,7 @@ impl From<serde_json::Error> for EventLogError {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ReplayError {
     Storage(rusqlite::Error),
     UnsupportedEvent {

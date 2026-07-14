@@ -15,7 +15,7 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 
 ## Stable errors
 
-The public error variants are the compatibility surface. `EventLogError` is non-exhaustive so the pre-1.0 kernel can add explicit failures without breaking downstream wildcard matches; callers must include a fallback arm:
+The public error variants are the compatibility surface. `EventLogError` and `ReplayError` are non-exhaustive so the pre-1.0 kernel can add explicit failures without breaking downstream wildcard matches; callers must include a fallback arm:
 
 - `EventLogError::WrongExpectedVersion` reports the requested and current stream state; no row is written.
 - `EventLogError::InvalidEventType` reports an empty caller-supplied discriminator; no row is written.
