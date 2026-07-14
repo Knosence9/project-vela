@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist the task cancellation lifecycle",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/427 by adding one bounded terminal cancellation transition, persisted race outcomes, and explicit terminal conflicts without defining a cancellation reason or cooperative runtime cancellation.",
+    "acceptance_criteria": [
+      "Cancelling an active task appends task.cancelled payload version one and reloads the original ID and goal with cancelled status after reopening SQLite.",
+      "Cancelling a missing, completed, or already cancelled task returns the corresponding explicit domain error without creating or changing valid history.",
+      "Completion and cancellation racing on one active task persist exactly one terminal event and the losing writer reports the persisted winning state.",
+      "Replay accepts task.started followed optionally by exactly one completed or cancelled terminal event and rejects recognized lifecycle events in any other order.",
+      "Public behavior and non-goals are documented, pinned verification passes, and the required pull-request gates permit squash auto-merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created a bounded durable issue and wrote cancellation, terminal-conflict, race, and invalid-history integration tests before production code.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with 11 compiler errors because TaskStore::cancel, TaskStatus::Cancelled, and TaskStoreError::AlreadyCancelled did not exist.",
+      "patch": "Added tests for cancellation persistence, missing and conflicting transitions, completion-versus-cancellation races, terminal-first history, and events after cancellation."
+    },
+    {
+      "summary": "Implemented cancellation and refactored completion and cancellation through one exact-version terminal-transition path.",
+      "outcome": "success",
+      "diagnostic": "All 17 lifecycle integration tests passed. A losing terminal writer reloads stream version two and returns AlreadyCompleted or AlreadyCancelled according to the event that actually won.",
+      "patch": "Added TaskStatus::Cancelled, task.cancelled payload version one, TaskStore::cancel, AlreadyCancelled, cancelled replay, and shared terminal append/conflict handling."
+    },
+    {
+      "summary": "Documented the contract, stress-tested the race, and obtained independent pre-commit review.",
+      "outcome": "success",
+      "diagnostic": "The completion-versus-cancellation race passed 20 consecutive focused runs. Independent read-only Codex review found no actionable correctness, concurrency, persistence compatibility, API, test, or documentation issue; its attempted Cargo rerun could not create a build lock in the intentionally read-only sandbox, while the normal pinned run passed.",
+      "patch": "Kept cancellation reason-free and synchronous, documented one-terminal-event histories and conflict errors, and made no cooperative runtime cancellation claim."
+    },
+    {
+      "summary": "Ran local and hosted quality gates, monitored automated review, and completed squash auto-merge.",
+      "outcome": "success",
+      "diagnostic": "The pinned just verify gate passed 51 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29376110306 passed. CodeRabbit's required status passed and its review generated no actionable comments. Pull request 428 squash-merged as f787bdeb.",
+      "patch": "No correction was required by the hosted CodeRabbit review; issue 427 closed through the linked squash merge."
+    },
+    {
+      "summary": "Added self-validation evidence using the complete artifact filename.",
+      "outcome": "failure",
+      "diagnostic": "The sanitation validator rejected the verification command because an obvious-secret marker appeared across a word boundary in the harmless artifact filename.",
+      "patch": "Identified the filename text rather than a credential as the deterministic false-positive source."
+    },
+    {
+      "summary": "Captured and self-validated the merged lifecycle episode in the Vela-native development corpus.",
+      "outcome": "success",
+      "diagnostic": "Using the numeric record prefix with a wildcard avoided the false-positive marker while still identifying one artifact. The record validator accepted it, corpus inspection reported 26 valid and zero invalid records, and full pinned verification passed. Independent review identified the initially omitted self-validation evidence, which was then added explicitly while keeping runtime cancellation outside the record's claims.",
+      "patch": "Added one sanitized positive record with task, attempt, diagnostic, fix, rationale, verification, lesson, and provenance evidence, including its own validation and review correction."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela's kernel can now durably cancel an active task, reload cancelled state, serialize competing terminal transitions, report the persisted winner, and reject invalid lifecycle histories while leaving runtime cancellation undefined.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle # RED: cancellation API, status, and error were missing",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle # GREEN: 17 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Completion-versus-cancellation race integration test repeated 20 times # 20 passed",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only Codex pre-commit review of issue 427 changes: no actionable findings",
+        "status": "passed"
+      },
+      {
+        "command": "Codex review sandbox attempted a Cargo rerun but could not create the target build lock on its read-only filesystem",
+        "status": "failed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29376110306 for pull request 428",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status and semantic review for pull request 428 # no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 428 squash merge f787bdeb",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0026*.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 26 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only corpus review found omitted self-validation evidence in record 0026",
+        "status": "failed"
+      },
+      {
+        "command": "Independent read-only re-review after adding record validation, corpus inspection, and pinned verification evidence",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A cancellation state can remain bounded and durable with an empty versioned event when cancellation reasons and runtime signaling are explicit non-goals.",
+    "Completion and cancellation should share one terminal-transition path so expected-version concurrency behavior and conflict reporting cannot drift.",
+    "After an optimistic-concurrency loss, reloading the winning event is necessary to distinguish completed from cancelled rather than guessing from the attempted transition.",
+    "Replay should enumerate valid history shapes and reject terminal-first, duplicate-terminal, and post-terminal histories instead of silently repairing them.",
+    "A barrier-based two-writer test plus repeated focused runs provides practical regression evidence for terminal serialization without adding production-only test hooks.",
+    "A read-only reviewer can still validate a diff independently; its inability to create a Cargo build lock should be reported separately from successful pinned verification.",
+    "Persisted cancellation state does not imply cooperative cancellation of running work, so documentation must keep that runtime mechanism out of scope."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/428"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
