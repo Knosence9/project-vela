@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve replay storage error sources",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/354 by retaining SQLite replay failures as structured Rust error sources instead of lossy strings while keeping domain replay failures source-free.",
+    "acceptance_criteria": [
+      "Replay storage failures expose their wrapped rusqlite error through std::error::Error::source.",
+      "Unsupported events, malformed payloads, version gaps, and invalid stored versions remain source-free.",
+      "Display context, typed replay outcomes, and ReplayError equality remain stable.",
+      "Tests exercise an actual replay row-decoding failure and documentation describes the source contract.",
+      "The pinned local and required pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused replay source-chain test before changing ReplayError.",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed with Rust E0308 because ReplayError::Storage accepted a String rather than the rusqlite::Error needed for a standard error source.",
+      "patch": "Constructed storage and domain replay failures and asserted that only the storage variant exposes a rusqlite source."
+    },
+    {
+      "summary": "Retained the SQLite error through replay mapping and exercised a real row-decoding failure.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Changed Storage to wrap rusqlite::Error, delegated Error::source for that variant, kept display context unchanged, and corrupted a test payload's SQLite type to drive the production storage-error path."
+    },
+    {
+      "summary": "Corrected an equality compatibility regression found by independent review.",
+      "outcome": "success",
+      "diagnostic": "The first review found that wrapping rusqlite::Error removed ReplayError's derived Eq and PartialEq traits and forced equality-based callers to stop compiling.",
+      "patch": "Restored Eq and PartialEq with the prior display-string equality semantics and restored the existing assert_eq-based compatibility tests."
+    },
+    {
+      "summary": "Documented and reviewed the unavoidable pre-1.0 storage payload correction.",
+      "outcome": "success",
+      "diagnostic": "A follow-up review noted that changing Storage from String to rusqlite::Error is source-breaking for direct constructors and pattern matches; preserving the String payload cannot also provide a borrowed structured source.",
+      "patch": "Kept the smallest source-preserving representation, documented the intentional pre-1.0 correction in the pull request, and preserved the variant name, display context, and equality traits. CodeRabbit passed with one nonblocking suggestion to prefer structural PartialEq."
+    }
+  ],
+  "outcome": {
+    "summary": "Typed replay now preserves SQLite causes for conventional Rust error chains, domain replay failures remain source-free, and equality compatibility survives the representation correction.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test event_log replay_errors_expose_only_storage_error_sources",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 355",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 355",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Converting infrastructure errors to strings at an API boundary permanently discards the standard Rust error chain.",
+    "A focused source test should drive the real mapping path, not only construct the public error variant directly.",
+    "Changing a wrapped error type can silently remove derived compatibility traits; independent review should check trait-level API regressions as well as runtime behavior.",
+    "Before 1.0, an unavoidable representation correction should be explicit, narrowly scoped, and preserve variant names, display context, and useful comparison behavior where possible."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/355"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
