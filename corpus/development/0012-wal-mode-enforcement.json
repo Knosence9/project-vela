@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Require WAL mode when opening the event log",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/370 by preventing EventLog::open from succeeding when SQLite cannot activate the approved WAL durability mode.",
+    "acceptance_criteria": [
+      "Opening a SQLite database whose effective journal mode is not WAL returns a dedicated public error carrying the effective mode.",
+      "Opening :memory: reports the effective memory journal mode.",
+      "Filesystem-backed append and replay behavior remains unchanged.",
+      "The public documentation describes the open-time durability check and extensible error contract.",
+      "The pinned local and required pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused integration test requiring EventLog::open to reject an in-memory SQLite database.",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed because EventLog::open(\":memory:\") returned success even though SQLite retained journal mode memory instead of activating WAL.",
+      "patch": "Added rejects_an_event_log_without_wal_journaling without changing production behavior."
+    },
+    {
+      "summary": "Read back SQLite's effective journal mode and rejected any mode other than WAL.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Added EventLogError::UnsupportedJournalMode, queried PRAGMA journal_mode after requesting WAL, compared case-insensitively, and returned the observed mode before configuring the remaining connection and schema."
+    },
+    {
+      "summary": "Addressed CodeRabbit's public compatibility finding before merge.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit correctly noted that adding a variant to an exhaustive public error enum breaks downstream exhaustive matches while the documentation identifies variants as a compatibility surface.",
+      "patch": "Marked EventLogError non-exhaustive and documented that pre-1.0 downstream callers must retain a fallback match arm; CodeRabbit confirmed the finding was addressed."
+    },
+    {
+      "summary": "Ran focused and full verification, resolved the automated review thread, and monitored required pull-request gates through squash merge.",
+      "outcome": "success",
+      "diagnostic": "The required Rust quality gate and CodeRabbit both passed on the corrected commit, and pull request 371 auto-merged as 0dac9ae.",
+      "patch": "No further corrective patch was required after the compatibility fix."
+    }
+  ],
+  "outcome": {
+    "summary": "The typed event log now verifies its effective SQLite journal mode at open time and refuses to weaken the approved WAL durability boundary, while its public append error enum explicitly permits future pre-1.0 extension.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel rejects_an_event_log_without_wal_journaling -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command codex review --uncommitted # result: no blocking issue",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 371",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 371 # compatibility finding fixed in ca3f54f and confirmed addressed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0012-wal-mode-enforcement.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 12 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Requesting a SQLite PRAGMA is not the same as verifying the resulting durability mode; read back state whenever correctness depends on SQLite accepting a requested mode.",
+    "Use a real unsupported substrate such as :memory: to test that durability policy fails closed rather than silently degrading.",
+    "Public Rust error enums need an explicit extensibility strategy before adding dedicated variants, even during a pre-1.0 phase.",
+    "Treat automated review findings as evidence: verify the concern, make the narrow compatibility correction, rerun all gates, and record the rationale."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/371"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
