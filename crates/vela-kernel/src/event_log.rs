@@ -333,6 +333,7 @@ impl EventLog {
                 current: preflight_current,
             });
         }
+        next_stream_version(preflight_current)?;
 
         let payload = serde_json::to_vec(event)?;
         let transaction = self
@@ -344,9 +345,7 @@ impl EventLog {
             return Err(EventLogError::WrongExpectedVersion { expected, current });
         }
 
-        let version = current.unwrap_or(0) + 1;
-        let stored_version =
-            i64::try_from(version).map_err(|_| EventLogError::VersionOutOfRange(version))?;
+        let (version, stored_version) = next_stream_version(current)?;
         transaction.execute(
             "INSERT INTO events
              (stream_id, stream_version, event_type, payload_version, payload)
@@ -442,6 +441,13 @@ fn expected_version_matches(expected: ExpectedVersion, current: Option<u64>) -> 
         (ExpectedVersion::Exact(expected), Some(current)) => expected == current,
         _ => false,
     }
+}
+
+fn next_stream_version(current: Option<u64>) -> Result<(u64, i64), EventLogError> {
+    let version = current.unwrap_or(0) + 1;
+    let stored_version =
+        i64::try_from(version).map_err(|_| EventLogError::VersionOutOfRange(version))?;
+    Ok((version, stored_version))
 }
 
 fn stored_version_to_u64(version: i64) -> Result<u64, EventLogError> {
