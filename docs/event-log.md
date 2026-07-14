@@ -18,7 +18,7 @@ The public error variants are the compatibility surface:
 
 - `EventLogError::WrongExpectedVersion` reports the requested and current stream state; no row is written.
 - `EventLogError::InvalidPayloadVersion` reports an invalid caller-supplied payload version; no row is written.
-- `ReplayError::UnsupportedEvent` carries the stored `event_type` and `payload_version`.
+- `ReplayError::UnsupportedEvent` carries the authoritative stored `event_type` and `payload_version`, even if a decoder supplies different context in its `DecodeError`.
 - `ReplayError::MalformedPayload` carries the stream version and decoder diagnostic.
 - `ReplayError::VersionGap` carries the expected and observed versions.
 - `ReplayError::InvalidStoredVersion` rejects a version that cannot be represented by the API.

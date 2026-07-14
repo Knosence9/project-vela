@@ -347,10 +347,7 @@ impl EventLog {
             let payload: Vec<u8> = row.get(3).map_err(storage_replay_error)?;
             let event =
                 E::decode(&event_type, payload_version, &payload).map_err(|error| match error {
-                    DecodeError::UnsupportedEvent {
-                        event_type,
-                        payload_version,
-                    } => ReplayError::UnsupportedEvent {
+                    DecodeError::UnsupportedEvent { .. } => ReplayError::UnsupportedEvent {
                         event_type,
                         payload_version,
                     },
