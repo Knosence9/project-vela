@@ -137,9 +137,9 @@ impl From<serde_json::Error> for EventLogError {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum ReplayError {
-    Storage(String),
+    Storage(rusqlite::Error),
     UnsupportedEvent {
         event_type: String,
         payload_version: u32,
@@ -155,10 +155,52 @@ pub enum ReplayError {
     InvalidStoredVersion(i64),
 }
 
+impl PartialEq for ReplayError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Storage(left), Self::Storage(right)) => left.to_string() == right.to_string(),
+            (
+                Self::UnsupportedEvent {
+                    event_type: left_type,
+                    payload_version: left_version,
+                },
+                Self::UnsupportedEvent {
+                    event_type: right_type,
+                    payload_version: right_version,
+                },
+            ) => left_type == right_type && left_version == right_version,
+            (
+                Self::MalformedPayload {
+                    stream_version: left_version,
+                    message: left_message,
+                },
+                Self::MalformedPayload {
+                    stream_version: right_version,
+                    message: right_message,
+                },
+            ) => left_version == right_version && left_message == right_message,
+            (
+                Self::VersionGap {
+                    expected: left_expected,
+                    found: left_found,
+                },
+                Self::VersionGap {
+                    expected: right_expected,
+                    found: right_found,
+                },
+            ) => left_expected == right_expected && left_found == right_found,
+            (Self::InvalidStoredVersion(left), Self::InvalidStoredVersion(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ReplayError {}
+
 impl fmt::Display for ReplayError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Storage(message) => write!(formatter, "event-log storage error: {message}"),
+            Self::Storage(error) => write!(formatter, "event-log storage error: {error}"),
             Self::UnsupportedEvent {
                 event_type,
                 payload_version,
@@ -184,7 +226,17 @@ impl fmt::Display for ReplayError {
     }
 }
 
-impl std::error::Error for ReplayError {}
+impl std::error::Error for ReplayError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            Self::UnsupportedEvent { .. }
+            | Self::MalformedPayload { .. }
+            | Self::VersionGap { .. }
+            | Self::InvalidStoredVersion(_) => None,
+        }
+    }
+}
 
 /// A synchronous, single-node SQLite append-only event log.
 pub struct EventLog {
@@ -311,5 +363,5 @@ fn stored_version_to_u64(version: i64) -> Result<u64, EventLogError> {
 }
 
 fn storage_replay_error(error: rusqlite::Error) -> ReplayError {
-    ReplayError::Storage(error.to_string())
+    ReplayError::Storage(error)
 }
