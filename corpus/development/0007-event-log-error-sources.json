@@ -2,7 +2,7 @@
   "schema_version": 1,
   "task": {
     "title": "Preserve event-log error sources",
-    "objective": "Let Rust error-reporting layers traverse the SQLite and JSON causes wrapped by EventLogError without changing its public variants or display text.",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/350 by letting Rust error-reporting layers traverse the SQLite and JSON causes wrapped by EventLogError without changing its public variants or display text.",
     "acceptance_criteria": [
       "Storage and encoding variants expose their wrapped errors through std::error::Error::source.",
       "Optimistic-concurrency and range failures remain source-free.",
