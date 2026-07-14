@@ -86,6 +86,7 @@ pub enum EventLogError {
     UnsupportedJournalMode(String),
     InvalidEventType,
     InvalidPayloadVersion(u32),
+    InvalidExpectedVersion(u64),
     WrongExpectedVersion {
         expected: ExpectedVersion,
         current: Option<u64>,
@@ -108,6 +109,9 @@ impl fmt::Display for EventLogError {
             Self::InvalidEventType => formatter.write_str("event type must not be empty"),
             Self::InvalidPayloadVersion(version) => {
                 write!(formatter, "invalid event payload version {version}")
+            }
+            Self::InvalidExpectedVersion(version) => {
+                write!(formatter, "invalid exact expected version {version}")
             }
             Self::WrongExpectedVersion { expected, current } => {
                 formatter.write_str("wrong expected version: expected ")?;
@@ -141,6 +145,7 @@ impl std::error::Error for EventLogError {
             Self::UnsupportedJournalMode(_)
             | Self::InvalidEventType
             | Self::InvalidPayloadVersion(_)
+            | Self::InvalidExpectedVersion(_)
             | Self::WrongExpectedVersion { .. }
             | Self::InvalidStoredVersion(_)
             | Self::VersionOutOfRange(_) => None,
@@ -310,6 +315,9 @@ impl EventLog {
         expected: ExpectedVersion,
         event: &E,
     ) -> Result<u64, EventLogError> {
+        if matches!(expected, ExpectedVersion::Exact(0)) {
+            return Err(EventLogError::InvalidExpectedVersion(0));
+        }
         let event_type = event.event_type();
         if event_type.is_empty() {
             return Err(EventLogError::InvalidEventType);
