@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject invalid stored stream versions during append",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/390 by enforcing the positive stream-version invariant when append reads the current state of a corrupted or externally modified SQLite stream.",
+    "acceptance_criteria": [
+      "Appending to a stream whose maximum stored version is zero returns EventLogError::InvalidStoredVersion before expected-version matching.",
+      "The invalid stored-version error carries the authoritative value, has a stable diagnostic, and exposes no underlying source.",
+      "The rejected append writes no row and valid optimistic-concurrency behavior remains unchanged.",
+      "The public documentation describes the append-side persisted-data failure.",
+      "The pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused integration test that inserts stream version zero by explicitly bypassing SQLite check constraints, then attempts an append with Exact(0).",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed to compile because EventLogError had no InvalidStoredVersion variant, exposing that append had no stable classification for invalid persisted current versions.",
+      "patch": "Added rejects_zero_as_the_current_stored_version_without_writing without changing production behavior."
+    },
+    {
+      "summary": "Validated the stored maximum stream version at the existing signed-to-public conversion boundary.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "stored_version_to_u64 now maps negative values and zero to EventLogError::InvalidStoredVersion before append performs expected-version matching."
+    },
+    {
+      "summary": "Verified the stable error contract and absence of a partial write while keeping the implementation localized.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "The regression test asserts the exact variant, display text, absent source, and unchanged one-row count; documentation records the append-side failure."
+    },
+    {
+      "summary": "Completed independent review and monitored the required pull-request checks through merge.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit completed with no actionable comments, Rust quality gate run 29317745671 passed, and pull request 391 squash-merged as a092849.",
+      "patch": "No corrective patch was required."
+    }
+  ],
+  "outcome": {
+    "summary": "Append now rejects an invalid persisted current stream version before optimistic-concurrency matching, reports the authoritative value as a stable data error, and writes nothing.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test event_log rejects_zero_as_the_current_stored_version_without_writing -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29317745671 for pull request 391",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 391: review completed with no actionable comments and required status passed",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 391 squash merge a092849",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0017-invalid-current-stream-version.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 17 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Apply persisted-data invariants consistently at every read boundary: replay validation alone does not protect append logic that also reads stream metadata.",
+    "Validate the stored current version before optimistic-concurrency matching so an invalid value cannot be legitimized by a matching caller expectation.",
+    "Keep corruption distinct from storage access failure by preserving the authoritative SQLite integer in a dedicated domain error.",
+    "Assert the persisted row count after rejection to prove a failed concurrency-path append did not partially mutate the stream."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/391"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
