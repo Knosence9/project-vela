@@ -90,6 +90,7 @@ pub enum EventLogError {
         expected: ExpectedVersion,
         current: Option<u64>,
     },
+    InvalidStoredVersion(i64),
     VersionOutOfRange(u64),
 }
 
@@ -119,6 +120,9 @@ impl fmt::Display for EventLogError {
                     None => formatter.write_str(", stream does not exist"),
                 }
             }
+            Self::InvalidStoredVersion(version) => {
+                write!(formatter, "invalid stored stream version {version}")
+            }
             Self::VersionOutOfRange(version) => {
                 write!(
                     formatter,
@@ -138,6 +142,7 @@ impl std::error::Error for EventLogError {
             | Self::InvalidEventType
             | Self::InvalidPayloadVersion(_)
             | Self::WrongExpectedVersion { .. }
+            | Self::InvalidStoredVersion(_)
             | Self::VersionOutOfRange(_) => None,
         }
     }
@@ -414,8 +419,13 @@ impl EventLog {
 }
 
 fn stored_version_to_u64(version: i64) -> Result<u64, EventLogError> {
-    u64::try_from(version)
-        .map_err(|_| EventLogError::Storage(rusqlite::Error::IntegralValueOutOfRange(0, version)))
+    let version =
+        u64::try_from(version).map_err(|_| EventLogError::InvalidStoredVersion(version))?;
+    if version == 0 {
+        Err(EventLogError::InvalidStoredVersion(0))
+    } else {
+        Ok(version)
+    }
 }
 
 fn storage_replay_error(error: rusqlite::Error) -> ReplayError {
