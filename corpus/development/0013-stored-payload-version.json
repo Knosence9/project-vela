@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Report invalid stored payload versions explicitly",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/374 by classifying persisted payload-version integers outside the public u32 domain as explicit replay data errors rather than generic SQLite failures.",
+    "acceptance_criteria": [
+      "Replaying a row whose payload_version is 4294967296 returns a dedicated error carrying that exact value.",
+      "The invalid stored payload-version error has no underlying error source.",
+      "Supported payload versions and decoder behavior remain unchanged.",
+      "ReplayError remains extensible for downstream callers and the public documentation describes the stable contract.",
+      "The pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused integration test that persists a payload version one greater than u32::MAX and requires an explicit replay diagnostic.",
+      "outcome": "failure",
+      "diagnostic": "The RED test received event-log storage error: Integer 4294967296 out of range at index 2, proving replay misclassified a representational data error as failed SQLite access.",
+      "patch": "Added reports_an_out_of_range_stored_payload_version without changing production behavior."
+    },
+    {
+      "summary": "Moved payload-version conversion to an explicit replay boundary.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "Read payload_version as SQLite's native i64, converted it with u32::try_from, and mapped conversion failure to ReplayError::InvalidStoredPayloadVersion while preserving the original i64 value."
+    },
+    {
+      "summary": "Addressed CodeRabbit's public compatibility finding.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit correctly identified that adding a variant to exhaustive ReplayError could break downstream exhaustive matches.",
+      "patch": "Marked ReplayError non-exhaustive and updated the error-contract documentation to require downstream fallback arms for both public event-log error enums."
+    },
+    {
+      "summary": "Reran local verification and monitored both required pull-request checks after the review fix.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit and Rust quality gate run 29303956889 passed on the corrected commit; pull request 375 squash-merged as ab6307c.",
+      "patch": "No further corrective patch was required."
+    }
+  ],
+  "outcome": {
+    "summary": "Replay now distinguishes a valid SQLite integer that cannot be represented by the Event API from an actual storage failure, preserves the offending value, and keeps its public error surface explicitly extensible.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test event_log reports_an_out_of_range_stored_payload_version -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29303956889 for pull request 375",
+        "status": "passed"
+      },
+      {
+        "command": "CodeRabbit review for pull request 375 # compatibility finding fixed in cc0c5b8 and the final status passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0013-stored-payload-version.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 13 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Read SQLite INTEGER values in their native signed domain before converting to a narrower public type so conversion failures retain the authoritative stored value.",
+    "A successful query can still reveal incompatible persisted data; classify that separately from storage access failure.",
+    "Make public error enums non-exhaustive before extending them so downstream wildcard matches remain source-compatible.",
+    "A focused boundary-value test at u32::MAX plus one makes the representational mismatch deterministic and documents the exact contract."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/375"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
