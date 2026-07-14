@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject stored stream-version gaps before append",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/410 by rejecting a stored SQLite event-stream version gap before caller payload encoding while preserving existing invalid-version and terminal range-error precedence.",
+    "acceptance_criteria": [
+      "Append detects an internal stored stream-version gap before expected-version matching and payload encoding.",
+      "The failure is EventLogError::VersionGap with the missing immediate predecessor and the first observed version that lacks it.",
+      "The rejected append writes no event.",
+      "The immediate write transaction repeats continuity validation so concurrent state cannot bypass it.",
+      "Existing invalid-version, exhausted-stream, append, and replay behavior remains intact, documentation is updated, and pinned local and pull-request quality gates pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a focused regression with stored stream versions one and three plus a serializer that must not run.",
+      "outcome": "failure",
+      "diagnostic": "The RED test failed to compile because EventLogError had no VersionGap variant, demonstrating that append had no explicit continuity failure contract.",
+      "patch": "Added rejects_a_stored_version_gap_before_encoding without changing production behavior."
+    },
+    {
+      "summary": "Added an append-side VersionGap error and queried the first stored version whose immediate predecessor is missing.",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "The focused regression returned VersionGap { expected: 2, found: 3 } before serialization and confirmed the stored row count remained two; the same current-position helper runs during preflight and inside the immediate transaction."
+    },
+    {
+      "summary": "Ran the complete event-log suite and corrected error precedence for a terminal SQLite stream.",
+      "outcome": "failure",
+      "diagnostic": "The existing exhausted-stream regression received VersionGap for its singleton i64::MAX fixture instead of the documented VersionOutOfRange failure, because continuity validation ran before terminal range handling.",
+      "patch": "Recorded the full-suite diagnostic before changing production precedence."
+    },
+    {
+      "summary": "Refactored current-position validation to preserve terminal range-error precedence while retaining invalid-version and ordinary gap detection.",
+      "outcome": "success",
+      "diagnostic": "The full 25-test event-log suite passed; SQLite EXPLAIN QUERY PLAN showed the stream range searches and correlated predecessor probes using the events primary key.",
+      "patch": "After validating the minimum stored version, return the terminal maximum to the existing checked next-version path before reporting earlier continuity gaps; document the rationale beside the branch."
+    },
+    {
+      "summary": "Completed independent review, required pull-request checks, automated review, and squash merge.",
+      "outcome": "success",
+      "diagnostic": "Independent read-only review found no blocking issue and suggested an additional terminal-precedence test, but the existing singleton-i64::MAX fixture necessarily has missing predecessors and had already failed before the correction, so it directly pins that branch. CodeRabbit passed with one trivial suggestion for a separate start-above-one append fixture. The merged SQL predicate handles that state by finding the first stored row without its immediate predecessor, but the append path does not have a dedicated regression for that distinct fixture. Rust quality gate run 29337632910 and CodeRabbit passed; pull request 411 then auto-merged as da355d5 before any review revision.",
+      "patch": "No post-review revision was included before automatic merge; the unadded start-above-one append regression remains an explicit coverage limitation."
+    }
+  ],
+  "outcome": {
+    "summary": "Append now reports the first stored stream-version gap before caller serialization and rechecks continuity atomically, while preserving explicit invalid stored-version and terminal SQLite range failures.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test event_log rejects_a_stored_version_gap_before_encoding -- --exact",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test event_log",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo doc --workspace --no-deps --locked",
+        "status": "passed"
+      },
+      {
+        "command": "SQLite EXPLAIN QUERY PLAN for append continuity lookup: stream range searches and predecessor probes use the events primary key",
+        "status": "passed"
+      },
+      {
+        "command": "Independent pre-commit read-only diff review for issue 410: no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29337632910 for pull request 411",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status and completed review for pull request 411",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 411 squash merge da355d5",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0022-append-version-gap.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 22 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A maximum stored version is insufficient to prove that an append-only stream is contiguous; lower invalid rows and missing predecessors require explicit validation.",
+    "A serializer that must not run makes validation order observable and protects callers from unnecessary or unsafe work on rejected appends.",
+    "Unlocked preflight improves deterministic early failure, but the same invariant must be checked again inside the authoritative immediate transaction.",
+    "Full-suite tests preserve error precedence across overlapping corruption and range conditions that a focused GREEN test may not expose.",
+    "Review suggestions should be checked against exact fixture semantics: the singleton maximum-version fixture already exercises terminal range precedence over a missing predecessor, while a non-terminal start-above-one stream remains a distinct unpinned append case.",
+    "Query-plan evidence distinguishes an indexed integrity check from an accidental unbounded table scan, even when validating a stream range remains linear in that stream's length."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/event_log.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/411"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
