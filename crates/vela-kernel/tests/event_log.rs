@@ -78,6 +78,59 @@ fn event_log_errors_expose_only_wrapped_error_sources() {
 }
 
 #[test]
+fn replay_errors_expose_only_storage_error_sources() {
+    use std::error::Error;
+
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let stream = StreamId::new("account-42").unwrap();
+    let mut log = EventLog::open(&path).unwrap();
+    log.append(
+        &stream,
+        ExpectedVersion::NoStream,
+        &AccountEvent::Opened {
+            owner: "Ada".into(),
+        },
+    )
+    .unwrap();
+    drop(log);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = 1 WHERE stream_id = ?1",
+            [stream.as_str()],
+        )
+        .unwrap();
+
+    let log = EventLog::open(&path).unwrap();
+    let storage = log.replay::<AccountEvent>(&stream).unwrap_err();
+    let unsupported = ReplayError::UnsupportedEvent {
+        event_type: "account.renamed".into(),
+        payload_version: 2,
+    };
+    let malformed = ReplayError::MalformedPayload {
+        stream_version: 1,
+        message: "expected value".into(),
+    };
+    let gap = ReplayError::VersionGap {
+        expected: 1,
+        found: 2,
+    };
+    let invalid_version = ReplayError::InvalidStoredVersion(-1);
+
+    assert!(matches!(&storage, ReplayError::Storage(_)));
+    assert!(storage.source().unwrap().is::<rusqlite::Error>());
+    assert_eq!(
+        ReplayError::Storage(rusqlite::Error::InvalidQuery),
+        ReplayError::Storage(rusqlite::Error::InvalidQuery)
+    );
+    assert!(unsupported.source().is_none());
+    assert!(malformed.source().is_none());
+    assert!(gap.source().is_none());
+    assert!(invalid_version.source().is_none());
+}
+
+#[test]
 fn appends_and_replays_typed_events_in_order_after_reopening() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
