@@ -11,7 +11,7 @@ The `vela-kernel` crate contains Vela's first persistence primitive: a synchrono
 - Successful appends receive versions 1, 2, 3, and so on. A stale expectation returns `WrongExpectedVersion` and commits nothing.
 - Every append is one SQLite transaction. Opening verifies that SQLite activated WAL journaling, configures `synchronous=FULL`, and fails rather than weakening that boundary. Append success is returned only after commit.
 - Replay returns one stream in ascending, contiguous order as values decoded by the caller's typed `Event` implementation. A missing stream returns an empty vector.
-- Unknown event type/payload version, malformed payload, invalid stored stream or payload version, and a version gap are errors. Replay never silently skips persisted data.
+- Empty or unknown event types, unknown payload versions, malformed payload, invalid stored stream or payload versions, and a version gap are errors. Replay never silently skips persisted data.
 
 ## Stable errors
 
@@ -22,6 +22,7 @@ The public error variants are the compatibility surface. `EventLogError` and `Re
 - `EventLogError::InvalidPayloadVersion` reports an invalid caller-supplied payload version; no row is written.
 - `EventLogError::UnsupportedJournalMode` reports the effective SQLite journal mode when opening cannot establish WAL (for example, `memory` for `:memory:`).
 - `ReplayError::UnsupportedEvent` carries the authoritative stored `event_type` and `payload_version`, even if a decoder supplies different context in its `DecodeError`.
+- `ReplayError::InvalidStoredEventType` rejects an empty stored discriminator before invoking the typed decoder.
 - `ReplayError::MalformedPayload` carries the stream version and decoder diagnostic.
 - `ReplayError::VersionGap` carries the expected and observed versions.
 - `ReplayError::InvalidStoredVersion` rejects a stored stream version below `1` or otherwise outside the public stream-version domain.
