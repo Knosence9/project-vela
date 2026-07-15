@@ -135,6 +135,7 @@ The first milestone is the **evidence loop**:
 5. Use the creation of that tooling as the first real corpus episode. ✅
 6. Begin the kernel with a typed append-only event log and replay. ✅
 7. Start the persisted task lifecycle with durable start, output-bearing completion, reason-bearing cancellation, diagnosed failure, and load. ✅
+8. Start the persisted session lifecycle with durable creation and load. ✅
 
 ## Project documents
 
@@ -146,6 +147,7 @@ The first milestone is the **evidence loop**:
 - [`docs/project-vela-visual.html`](docs/project-vela-visual.html) — standalone visual system map
 - [`docs/event-log.md`](docs/event-log.md) — typed append/replay behavior and stable errors
 - [`docs/task-lifecycle.md`](docs/task-lifecycle.md) — persisted task start/completion/cancellation/load behavior
+- [`docs/session-lifecycle.md`](docs/session-lifecycle.md) — persisted session creation/load behavior
 - [`docs/adr/`](docs/adr/) — architecture decision records
 
 ## Contributing
