@@ -16,6 +16,7 @@ The `vela-kernel` crate starts Vela's session boundary with durable creation, cl
 - `SessionStore::reopen` requires a reopen reason and appends one `session.reopened` event containing it at payload version `2` to an existing closed session, then returns the same identity and title with status `Open`. Legacy payload-version-1 reopen events remain replayable and expose no reason. Sessions may repeat valid close/reopen transitions.
 - Newly created sessions expose no summary and neither a close nor reopen reason. Reopened sessions expose no active close reason and expose the reason from their latest reopen event. Closed sessions expose no active reopen reason and expose the reason from their latest close event.
 - `SessionStore::load` replays the session stream. It returns the same ID, title, latest summary, and status after reopening the database. A missing stream returns `None`.
+- Existing tasks may persist an immutable association to an open session through `TaskStore::associate_session`. A session may be referenced by zero or more tasks. Session close and reopen events do not mutate those task streams.
 - Renaming a missing session returns `SessionStoreError::NotFound` without creating a stream.
 - Summarizing a missing session returns `SessionStoreError::NotFound` without creating a stream.
 - Closing a missing session returns `SessionStoreError::NotFound` without creating a stream. Closing an already closed session returns `AlreadyClosed` without appending another event; racing close attempts persist exactly one close event and the loser receives `AlreadyClosed`.
@@ -28,6 +29,6 @@ The `vela-kernel` crate starts Vela's session boundary with durable creation, cl
 
 ## Non-goals
 
-This slice does not add automatic or model-generated summaries, structured close- or reopen-reason taxonomies, task membership, messages, turns, branching, compression, timestamps, actors, metadata, a runtime interface, or async execution. Those require separate lifecycle events and acceptance tests rather than assumptions in persisted state.
+This slice does not add automatic or model-generated summaries, structured close- or reopen-reason taxonomies, a session-side task membership index, moving or detaching tasks, messages, turns, branching, compression, timestamps, actors, metadata, a runtime interface, or async execution. Those require separate lifecycle events and acceptance tests rather than assumptions in persisted state.
 
 See [`event-log.md`](event-log.md) for the underlying append, durability, concurrency, and replay guarantees.
