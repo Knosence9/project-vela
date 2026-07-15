@@ -7,6 +7,7 @@ use crate::event_log::{
 };
 
 const SESSION_CREATED_EVENT_TYPE: &str = "session.created";
+const SESSION_RENAMED_EVENT_TYPE: &str = "session.renamed";
 const SESSION_CLOSED_EVENT_TYPE: &str = "session.closed";
 const SESSION_REOPENED_EVENT_TYPE: &str = "session.reopened";
 const SESSION_EVENT_PAYLOAD_VERSION: u32 = 1;
@@ -269,6 +270,36 @@ impl SessionStore {
         }
     }
 
+    pub fn rename(
+        &mut self,
+        id: &SessionId,
+        title: SessionTitle,
+    ) -> Result<Session, SessionStoreError> {
+        loop {
+            let Some(loaded) = self.load_versioned(id)? else {
+                return Err(SessionStoreError::NotFound {
+                    session_id: id.clone(),
+                });
+            };
+            match self.event_log.append(
+                &session_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                &SessionEvent::Renamed {
+                    title: title.clone(),
+                },
+            ) {
+                Ok(_) => {
+                    return Ok(Session {
+                        title,
+                        ..loaded.session
+                    });
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(SessionStoreError::EventLog(error)),
+            }
+        }
+    }
+
     pub fn close(
         &mut self,
         id: &SessionId,
@@ -329,8 +360,8 @@ impl SessionStore {
                         SessionEvent::Reopened { reason } => {
                             (SessionStatus::Open, None, reason.clone())
                         }
-                        SessionEvent::Created { .. } => {
-                            unreachable!("creation does not use session transitions")
+                        SessionEvent::Created { .. } | SessionEvent::Renamed { .. } => {
+                            unreachable!("creation and rename do not use status transitions")
                         }
                     };
                     return Ok(Session {
@@ -368,11 +399,16 @@ impl SessionStore {
                 })
             };
         };
+        let mut title = title.clone();
         let mut status = SessionStatus::Open;
         let mut closure = None;
         let mut reopen_reason = None;
         for event in &events[1..] {
             status = match (status, event) {
+                (status, SessionEvent::Renamed { title: new_title }) => {
+                    title = new_title.clone();
+                    status
+                }
                 (SessionStatus::Open, SessionEvent::Closed { reason }) => {
                     closure = reason.clone();
                     reopen_reason = None;
@@ -393,7 +429,7 @@ impl SessionStore {
         Ok(Some(VersionedSession {
             session: Session {
                 id: id.clone(),
-                title: title.clone(),
+                title,
                 status,
                 closure,
                 reopen_reason,
@@ -420,6 +456,7 @@ fn session_stream(id: &SessionId) -> StreamId {
 #[serde(untagged)]
 enum SessionEvent {
     Created { title: SessionTitle },
+    Renamed { title: SessionTitle },
     Closed { reason: Option<SessionClosure> },
     Reopened { reason: Option<SessionReopenReason> },
 }
@@ -428,6 +465,7 @@ impl Event for SessionEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::Created { .. } => SESSION_CREATED_EVENT_TYPE,
+            Self::Renamed { .. } => SESSION_RENAMED_EVENT_TYPE,
             Self::Closed { .. } => SESSION_CLOSED_EVENT_TYPE,
             Self::Reopened { .. } => SESSION_REOPENED_EVENT_TYPE,
         }
@@ -438,6 +476,7 @@ impl Event for SessionEvent {
             Self::Closed { reason: Some(_) } => SESSION_CLOSED_PAYLOAD_VERSION,
             Self::Reopened { reason: Some(_) } => SESSION_REOPENED_PAYLOAD_VERSION,
             Self::Created { .. }
+            | Self::Renamed { .. }
             | Self::Closed { reason: None }
             | Self::Reopened { reason: None } => SESSION_EVENT_PAYLOAD_VERSION,
         }
@@ -445,7 +484,9 @@ impl Event for SessionEvent {
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
         let supported = match event_type {
-            SESSION_CREATED_EVENT_TYPE => payload_version == SESSION_EVENT_PAYLOAD_VERSION,
+            SESSION_CREATED_EVENT_TYPE | SESSION_RENAMED_EVENT_TYPE => {
+                payload_version == SESSION_EVENT_PAYLOAD_VERSION
+            }
             SESSION_CLOSED_EVENT_TYPE => matches!(payload_version, 1 | 2),
             SESSION_REOPENED_EVENT_TYPE => matches!(payload_version, 1 | 2),
             _ => false,
@@ -530,6 +571,10 @@ impl Event for SessionEvent {
             SessionTitle::new(payload.title).map_err(|error| DecodeError::MalformedPayload {
                 message: error.to_string(),
             })?;
-        Ok(Self::Created { title })
+        Ok(if event_type == SESSION_CREATED_EVENT_TYPE {
+            Self::Created { title }
+        } else {
+            Self::Renamed { title }
+        })
     }
 }
