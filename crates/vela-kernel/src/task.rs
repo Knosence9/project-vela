@@ -11,6 +11,7 @@ const TASK_COMPLETED_EVENT_TYPE: &str = "task.completed";
 const TASK_CANCELLED_EVENT_TYPE: &str = "task.cancelled";
 const TASK_FAILED_EVENT_TYPE: &str = "task.failed";
 const TASK_EVENT_PAYLOAD_VERSION: u32 = 1;
+const TASK_FAILED_PAYLOAD_VERSION: u32 = 2;
 
 /// An opaque, non-empty identifier for one task.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -79,6 +80,37 @@ impl fmt::Display for TaskGoalError {
 
 impl std::error::Error for TaskGoalError {}
 
+/// The non-empty diagnostic recorded when a task fails.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct TaskFailure(String);
+
+impl TaskFailure {
+    pub fn new(value: impl Into<String>) -> Result<Self, TaskFailureError> {
+        let value = value.into();
+        if value.is_empty() {
+            Err(TaskFailureError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskFailureError;
+
+impl fmt::Display for TaskFailureError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("task failure diagnostic must not be empty")
+    }
+}
+
+impl std::error::Error for TaskFailureError {}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskStatus {
     Active,
@@ -92,6 +124,7 @@ pub struct Task {
     id: TaskId,
     goal: TaskGoal,
     status: TaskStatus,
+    failure: Option<TaskFailure>,
 }
 
 impl Task {
@@ -105,6 +138,10 @@ impl Task {
 
     pub fn status(&self) -> TaskStatus {
         self.status
+    }
+
+    pub fn failure(&self) -> Option<&TaskFailure> {
+        self.failure.as_ref()
     }
 }
 
@@ -185,6 +222,7 @@ impl TaskStore {
                 id,
                 goal,
                 status: TaskStatus::Active,
+                failure: None,
             }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
@@ -199,6 +237,7 @@ impl TaskStore {
             id,
             TaskStatus::Completed,
             TaskEvent::Completed(EmptyPayload {}),
+            None,
         )
     }
 
@@ -207,11 +246,19 @@ impl TaskStore {
             id,
             TaskStatus::Cancelled,
             TaskEvent::Cancelled(EmptyPayload {}),
+            None,
         )
     }
 
-    pub fn fail(&mut self, id: &TaskId) -> Result<Task, TaskStoreError> {
-        self.transition_to_terminal(id, TaskStatus::Failed, TaskEvent::Failed(EmptyPayload {}))
+    pub fn fail(&mut self, id: &TaskId, failure: TaskFailure) -> Result<Task, TaskStoreError> {
+        self.transition_to_terminal(
+            id,
+            TaskStatus::Failed,
+            TaskEvent::Failed {
+                failure: Some(failure.clone()),
+            },
+            Some(failure),
+        )
     }
 
     fn transition_to_terminal(
@@ -219,6 +266,7 @@ impl TaskStore {
         id: &TaskId,
         status: TaskStatus,
         event: TaskEvent,
+        failure: Option<TaskFailure>,
     ) -> Result<Task, TaskStoreError> {
         let task = match self.load(id)? {
             Some(task) if task.status == TaskStatus::Active => task,
@@ -234,7 +282,11 @@ impl TaskStore {
             .event_log
             .append(&task_stream(id), ExpectedVersion::Exact(1), &event)
         {
-            Ok(_) => Ok(Task { status, ..task }),
+            Ok(_) => Ok(Task {
+                status,
+                failure,
+                ..task
+            }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::Exact(1),
                 current: Some(2),
@@ -259,21 +311,25 @@ impl TaskStore {
                 id: id.clone(),
                 goal: goal.clone(),
                 status: TaskStatus::Active,
+                failure: None,
             })),
             [TaskEvent::Started { goal }, TaskEvent::Completed(_)] => Ok(Some(Task {
                 id: id.clone(),
                 goal: goal.clone(),
                 status: TaskStatus::Completed,
+                failure: None,
             })),
             [TaskEvent::Started { goal }, TaskEvent::Cancelled(_)] => Ok(Some(Task {
                 id: id.clone(),
                 goal: goal.clone(),
                 status: TaskStatus::Cancelled,
+                failure: None,
             })),
-            [TaskEvent::Started { goal }, TaskEvent::Failed(_)] => Ok(Some(Task {
+            [TaskEvent::Started { goal }, TaskEvent::Failed { failure }] => Ok(Some(Task {
                 id: id.clone(),
                 goal: goal.clone(),
                 status: TaskStatus::Failed,
+                failure: failure.clone(),
             })),
             _ => Err(TaskStoreError::InvalidHistory {
                 event_count: events.len(),
@@ -307,7 +363,7 @@ enum TaskEvent {
     Started { goal: TaskGoal },
     Completed(EmptyPayload),
     Cancelled(EmptyPayload),
-    Failed(EmptyPayload),
+    Failed { failure: Option<TaskFailure> },
 }
 
 #[derive(Debug, Serialize)]
@@ -319,23 +375,29 @@ impl Event for TaskEvent {
             Self::Started { .. } => TASK_STARTED_EVENT_TYPE,
             Self::Completed(_) => TASK_COMPLETED_EVENT_TYPE,
             Self::Cancelled(_) => TASK_CANCELLED_EVENT_TYPE,
-            Self::Failed(_) => TASK_FAILED_EVENT_TYPE,
+            Self::Failed { .. } => TASK_FAILED_EVENT_TYPE,
         }
     }
 
     fn payload_version(&self) -> u32 {
-        TASK_EVENT_PAYLOAD_VERSION
+        match self {
+            Self::Failed { .. } => TASK_FAILED_PAYLOAD_VERSION,
+            _ => TASK_EVENT_PAYLOAD_VERSION,
+        }
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
-        if !matches!(
-            event_type,
-            TASK_STARTED_EVENT_TYPE
-                | TASK_COMPLETED_EVENT_TYPE
-                | TASK_CANCELLED_EVENT_TYPE
-                | TASK_FAILED_EVENT_TYPE
-        ) || payload_version != TASK_EVENT_PAYLOAD_VERSION
-        {
+        let supported = match event_type {
+            TASK_STARTED_EVENT_TYPE | TASK_COMPLETED_EVENT_TYPE | TASK_CANCELLED_EVENT_TYPE => {
+                payload_version == TASK_EVENT_PAYLOAD_VERSION
+            }
+            TASK_FAILED_EVENT_TYPE => matches!(
+                payload_version,
+                TASK_EVENT_PAYLOAD_VERSION | TASK_FAILED_PAYLOAD_VERSION
+            ),
+            _ => false,
+        };
+        if !supported {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
                 payload_version,
@@ -344,7 +406,7 @@ impl Event for TaskEvent {
 
         if matches!(
             event_type,
-            TASK_COMPLETED_EVENT_TYPE | TASK_CANCELLED_EVENT_TYPE | TASK_FAILED_EVENT_TYPE
+            TASK_COMPLETED_EVENT_TYPE | TASK_CANCELLED_EVENT_TYPE
         ) {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -358,8 +420,41 @@ impl Event for TaskEvent {
             return Ok(match event_type {
                 TASK_COMPLETED_EVENT_TYPE => Self::Completed(EmptyPayload {}),
                 TASK_CANCELLED_EVENT_TYPE => Self::Cancelled(EmptyPayload {}),
-                TASK_FAILED_EVENT_TYPE => Self::Failed(EmptyPayload {}),
-                _ => unreachable!("terminal event types were validated above"),
+                _ => unreachable!("empty terminal event types were validated above"),
+            });
+        }
+
+        if event_type == TASK_FAILED_EVENT_TYPE && payload_version == TASK_EVENT_PAYLOAD_VERSION {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Payload {}
+
+            serde_json::from_slice::<Payload>(payload).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::Failed { failure: None });
+        }
+
+        if event_type == TASK_FAILED_EVENT_TYPE {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Payload {
+                failure: String,
+            }
+
+            let payload: Payload =
+                serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            let failure = TaskFailure::new(payload.failure).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::Failed {
+                failure: Some(failure),
             });
         }
 
