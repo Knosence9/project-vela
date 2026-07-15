@@ -245,3 +245,170 @@ fn load_surfaces_unknown_versions_and_malformed_payloads() {
         })
     ));
 }
+
+#[test]
+fn closes_and_loads_a_closed_session_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("review").unwrap();
+    let title = SessionTitle::new("Review the implementation").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), title.clone())
+        .unwrap();
+
+    let session = SessionStore::open(&path).unwrap().close(&id).unwrap();
+
+    assert_eq!(session.id(), &id);
+    assert_eq!(session.title(), &title);
+    assert_eq!(session.status(), SessionStatus::Closed);
+    assert_eq!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap(),
+        Some(session)
+    );
+
+    let (event_type, payload_version, payload): (String, u32, Vec<u8>) =
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT event_type, payload_version, payload FROM events WHERE stream_id = 'session:review' AND stream_version = 2",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+    assert_eq!(event_type, "session.closed");
+    assert_eq!(payload_version, 1);
+    assert_eq!(payload, br#"{}"#);
+}
+
+#[test]
+fn closing_missing_and_closed_sessions_returns_domain_errors() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = SessionStore::open(&path).unwrap();
+    let missing = SessionId::new("missing").unwrap();
+
+    let error = store.close(&missing).unwrap_err();
+    assert!(matches!(
+        error,
+        SessionStoreError::NotFound { ref session_id } if session_id == &missing
+    ));
+    assert!(error.source().is_none());
+    assert_eq!(store.load(&missing).unwrap(), None);
+
+    let id = SessionId::new("closed").unwrap();
+    store
+        .create(id.clone(), SessionTitle::new("Closed once").unwrap())
+        .unwrap();
+    let closed = store.close(&id).unwrap();
+    let error = store.close(&id).unwrap_err();
+    assert!(matches!(
+        error,
+        SessionStoreError::AlreadyClosed { ref session_id } if session_id == &id
+    ));
+    assert_eq!(error.to_string(), "session closed is already closed");
+    assert!(error.source().is_none());
+    assert_eq!(store.load(&id).unwrap(), Some(closed));
+}
+
+#[test]
+fn racing_closes_persist_exactly_one_terminal_event() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("race-close").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Race").unwrap())
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+
+    let first_path = path.clone();
+    let first_id = id.clone();
+    let first_barrier = Arc::clone(&barrier);
+    let first = thread::spawn(move || {
+        let mut store = SessionStore::open(first_path).unwrap();
+        first_barrier.wait();
+        store.close(&first_id)
+    });
+    let second_path = path.clone();
+    let second = thread::spawn(move || {
+        let mut store = SessionStore::open(second_path).unwrap();
+        barrier.wait();
+        store.close(&id)
+    });
+
+    match (first.join().unwrap(), second.join().unwrap()) {
+        (Ok(winner), Err(SessionStoreError::AlreadyClosed { .. }))
+        | (Err(SessionStoreError::AlreadyClosed { .. }), Ok(winner)) => {
+            assert_eq!(winner.status(), SessionStatus::Closed);
+        }
+        outcomes => panic!("unexpected close race outcomes: {outcomes:?}"),
+    }
+    let close_count: u32 = rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = 'session:race-close' AND event_type = 'session.closed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(close_count, 1);
+}
+
+#[test]
+fn load_rejects_closed_without_creation_and_duplicate_close_events() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("invalid-close").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Invalid history").unwrap())
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'session.closed', payload = X'7B7D' WHERE stream_id = 'session:invalid-close'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::InvalidHistory { event_count: 1 }
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'session.created', payload = X'7B227469746C65223A22496E76616C696420686973746F7279227D' WHERE stream_id = 'session:invalid-close'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:invalid-close', 2, 'session.closed', 1, X'7B22756E6578706563746564223A747275657D')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'session:invalid-close' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:invalid-close', 3, 'session.closed', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::InvalidHistory { event_count: 3 }
+    ));
+}
