@@ -8,7 +8,8 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     session::{
-        SessionId, SessionIdError, SessionStatus, SessionStore, SessionStoreError, SessionTitle,
+        SessionClosure, SessionClosureError, SessionId, SessionIdError, SessionStatus,
+        SessionStore, SessionStoreError, SessionTitle,
     },
 };
 
@@ -80,7 +81,12 @@ fn rejects_empty_session_values() {
         SessionTitle::new("").unwrap_err().to_string(),
         "session title must not be empty"
     );
+    assert_eq!(
+        SessionClosure::new("").unwrap_err().to_string(),
+        "session closure reason must not be empty"
+    );
     let _: SessionIdError = SessionId::new("").unwrap_err();
+    let _: SessionClosureError = SessionClosure::new("").unwrap_err();
 }
 
 #[test]
@@ -257,11 +263,16 @@ fn closes_and_loads_a_closed_session_after_reopening() {
         .create(id.clone(), title.clone())
         .unwrap();
 
-    let session = SessionStore::open(&path).unwrap().close(&id).unwrap();
+    let closure = SessionClosure::new(" Review completed ").unwrap();
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .close(&id, closure.clone())
+        .unwrap();
 
     assert_eq!(session.id(), &id);
     assert_eq!(session.title(), &title);
     assert_eq!(session.status(), SessionStatus::Closed);
+    assert_eq!(session.closure(), Some(&closure));
     assert_eq!(
         SessionStore::open(&path).unwrap().load(&id).unwrap(),
         Some(session)
@@ -277,8 +288,8 @@ fn closes_and_loads_a_closed_session_after_reopening() {
             )
             .unwrap();
     assert_eq!(event_type, "session.closed");
-    assert_eq!(payload_version, 1);
-    assert_eq!(payload, br#"{}"#);
+    assert_eq!(payload_version, 2);
+    assert_eq!(payload, br#"{"reason":" Review completed "}"#);
 }
 
 #[test]
@@ -288,7 +299,9 @@ fn closing_missing_and_closed_sessions_returns_domain_errors() {
     let mut store = SessionStore::open(&path).unwrap();
     let missing = SessionId::new("missing").unwrap();
 
-    let error = store.close(&missing).unwrap_err();
+    let error = store
+        .close(&missing, SessionClosure::new("Missing").unwrap())
+        .unwrap_err();
     assert!(matches!(
         error,
         SessionStoreError::NotFound { ref session_id } if session_id == &missing
@@ -300,8 +313,12 @@ fn closing_missing_and_closed_sessions_returns_domain_errors() {
     store
         .create(id.clone(), SessionTitle::new("Closed once").unwrap())
         .unwrap();
-    let closed = store.close(&id).unwrap();
-    let error = store.close(&id).unwrap_err();
+    let closed = store
+        .close(&id, SessionClosure::new("Closed").unwrap())
+        .unwrap();
+    let error = store
+        .close(&id, SessionClosure::new("Closed").unwrap())
+        .unwrap_err();
     assert!(matches!(
         error,
         SessionStoreError::AlreadyClosed { ref session_id } if session_id == &id
@@ -328,13 +345,13 @@ fn racing_closes_persist_exactly_one_terminal_event() {
     let first = thread::spawn(move || {
         let mut store = SessionStore::open(first_path).unwrap();
         first_barrier.wait();
-        store.close(&first_id)
+        store.close(&first_id, SessionClosure::new("First").unwrap())
     });
     let second_path = path.clone();
     let second = thread::spawn(move || {
         let mut store = SessionStore::open(second_path).unwrap();
         barrier.wait();
-        store.close(&id)
+        store.close(&id, SessionClosure::new("Closed").unwrap())
     });
 
     match (first.join().unwrap(), second.join().unwrap()) {
@@ -363,13 +380,16 @@ fn reopens_and_loads_an_open_session_after_restarting() {
     let title = SessionTitle::new("Continue the session").unwrap();
     let mut store = SessionStore::open(&path).unwrap();
     store.create(id.clone(), title.clone()).unwrap();
-    store.close(&id).unwrap();
+    store
+        .close(&id, SessionClosure::new("Closed").unwrap())
+        .unwrap();
 
     let session = SessionStore::open(&path).unwrap().reopen(&id).unwrap();
 
     assert_eq!(session.id(), &id);
     assert_eq!(session.title(), &title);
     assert_eq!(session.status(), SessionStatus::Open);
+    assert_eq!(session.closure(), None);
     assert_eq!(
         SessionStore::open(&path).unwrap().load(&id).unwrap(),
         Some(session)
@@ -424,12 +444,16 @@ fn sessions_can_close_again_after_reopening() {
     store
         .create(id.clone(), SessionTitle::new("Repeat transitions").unwrap())
         .unwrap();
-    store.close(&id).unwrap();
+    store
+        .close(&id, SessionClosure::new("First close").unwrap())
+        .unwrap();
     store.reopen(&id).unwrap();
 
-    let session = store.close(&id).unwrap();
+    let closure = SessionClosure::new("Second close").unwrap();
+    let session = store.close(&id, closure.clone()).unwrap();
 
     assert_eq!(session.status(), SessionStatus::Closed);
+    assert_eq!(session.closure(), Some(&closure));
     assert_eq!(store.load(&id).unwrap(), Some(session));
 }
 
@@ -442,7 +466,9 @@ fn racing_reopens_persist_exactly_one_reopen_event() {
     setup
         .create(id.clone(), SessionTitle::new("Race reopen").unwrap())
         .unwrap();
-    setup.close(&id).unwrap();
+    setup
+        .close(&id, SessionClosure::new("Closed").unwrap())
+        .unwrap();
     let barrier = Arc::new(Barrier::new(2));
 
     let first_path = path.clone();
@@ -591,5 +617,73 @@ fn load_rejects_reopen_without_close_and_duplicate_reopen_events() {
     assert!(matches!(
         SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
         SessionStoreError::InvalidHistory { event_count: 4 }
+    ));
+}
+
+#[test]
+fn loads_legacy_close_events_without_a_reason() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("legacy-close").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Legacy").unwrap())
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events VALUES ('session:legacy-close', 2, 'session.closed', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(session.status(), SessionStatus::Closed);
+    assert_eq!(session.closure(), None);
+}
+
+#[test]
+fn rejects_empty_version_two_close_reasons() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("empty-close").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Invalid close").unwrap())
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events VALUES ('session:empty-close', 2, 'session.closed', 2, X'7B22726561736F6E223A22227D')",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload_version = 3 WHERE stream_id = 'session:empty-close' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::UnsupportedEvent {
+            ref event_type,
+            payload_version: 3,
+        }) if event_type == "session.closed"
     ));
 }

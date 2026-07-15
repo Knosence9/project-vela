@@ -10,6 +10,7 @@ const SESSION_CREATED_EVENT_TYPE: &str = "session.created";
 const SESSION_CLOSED_EVENT_TYPE: &str = "session.closed";
 const SESSION_REOPENED_EVENT_TYPE: &str = "session.reopened";
 const SESSION_EVENT_PAYLOAD_VERSION: u32 = 1;
+const SESSION_CLOSED_PAYLOAD_VERSION: u32 = 2;
 
 /// An opaque, non-empty identifier for one session.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -78,6 +79,37 @@ impl fmt::Display for SessionTitleError {
 
 impl std::error::Error for SessionTitleError {}
 
+/// The non-empty reason recorded when a session closes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionClosure(String);
+
+impl SessionClosure {
+    pub fn new(value: impl Into<String>) -> Result<Self, SessionClosureError> {
+        let value = value.into();
+        if value.is_empty() {
+            Err(SessionClosureError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionClosureError;
+
+impl fmt::Display for SessionClosureError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("session closure reason must not be empty")
+    }
+}
+
+impl std::error::Error for SessionClosureError {}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionStatus {
     Open,
@@ -89,6 +121,7 @@ pub struct Session {
     id: SessionId,
     title: SessionTitle,
     status: SessionStatus,
+    closure: Option<SessionClosure>,
 }
 
 impl Session {
@@ -102,6 +135,10 @@ impl Session {
 
     pub fn status(&self) -> SessionStatus {
         self.status
+    }
+
+    pub fn closure(&self) -> Option<&SessionClosure> {
+        self.closure.as_ref()
     }
 }
 
@@ -184,6 +221,7 @@ impl SessionStore {
                 id,
                 title,
                 status: SessionStatus::Open,
+                closure: None,
             }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
@@ -193,12 +231,19 @@ impl SessionStore {
         }
     }
 
-    pub fn close(&mut self, id: &SessionId) -> Result<Session, SessionStoreError> {
+    pub fn close(
+        &mut self,
+        id: &SessionId,
+        closure: SessionClosure,
+    ) -> Result<Session, SessionStoreError> {
         self.transition(
             id,
             SessionStatus::Open,
             SessionStatus::Closed,
-            &SessionEvent::Closed {},
+            Some(closure.clone()),
+            &SessionEvent::Closed {
+                reason: Some(closure),
+            },
             |session_id| SessionStoreError::AlreadyClosed { session_id },
         )
     }
@@ -208,6 +253,7 @@ impl SessionStore {
             id,
             SessionStatus::Closed,
             SessionStatus::Open,
+            None,
             &SessionEvent::Reopened {},
             |session_id| SessionStoreError::AlreadyOpen { session_id },
         )
@@ -218,6 +264,7 @@ impl SessionStore {
         id: &SessionId,
         required_status: SessionStatus,
         next_status: SessionStatus,
+        next_closure: Option<SessionClosure>,
         event: &SessionEvent,
         already_transitioned: impl Fn(SessionId) -> SessionStoreError,
     ) -> Result<Session, SessionStoreError> {
@@ -239,6 +286,7 @@ impl SessionStore {
                 Ok(_) => {
                     return Ok(Session {
                         status: next_status,
+                        closure: next_closure,
                         ..loaded.session
                     });
                 }
@@ -271,10 +319,17 @@ impl SessionStore {
             };
         };
         let mut status = SessionStatus::Open;
+        let mut closure = None;
         for event in &events[1..] {
             status = match (status, event) {
-                (SessionStatus::Open, SessionEvent::Closed {}) => SessionStatus::Closed,
-                (SessionStatus::Closed, SessionEvent::Reopened {}) => SessionStatus::Open,
+                (SessionStatus::Open, SessionEvent::Closed { reason }) => {
+                    closure = reason.clone();
+                    SessionStatus::Closed
+                }
+                (SessionStatus::Closed, SessionEvent::Reopened {}) => {
+                    closure = None;
+                    SessionStatus::Open
+                }
                 _ => {
                     return Err(SessionStoreError::InvalidHistory {
                         event_count: events.len(),
@@ -287,6 +342,7 @@ impl SessionStore {
                 id: id.clone(),
                 title: title.clone(),
                 status,
+                closure,
             },
             stream_version: u64::try_from(events.len()).map_err(|_| {
                 SessionStoreError::InvalidHistory {
@@ -310,7 +366,7 @@ fn session_stream(id: &SessionId) -> StreamId {
 #[serde(untagged)]
 enum SessionEvent {
     Created { title: SessionTitle },
-    Closed {},
+    Closed { reason: Option<SessionClosure> },
     Reopened {},
 }
 
@@ -318,24 +374,55 @@ impl Event for SessionEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::Created { .. } => SESSION_CREATED_EVENT_TYPE,
-            Self::Closed {} => SESSION_CLOSED_EVENT_TYPE,
+            Self::Closed { .. } => SESSION_CLOSED_EVENT_TYPE,
             Self::Reopened {} => SESSION_REOPENED_EVENT_TYPE,
         }
     }
 
     fn payload_version(&self) -> u32 {
-        SESSION_EVENT_PAYLOAD_VERSION
+        match self {
+            Self::Closed { reason: Some(_) } => SESSION_CLOSED_PAYLOAD_VERSION,
+            Self::Created { .. } | Self::Closed { reason: None } | Self::Reopened {} => {
+                SESSION_EVENT_PAYLOAD_VERSION
+            }
+        }
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
-        if !matches!(
-            event_type,
-            SESSION_CREATED_EVENT_TYPE | SESSION_CLOSED_EVENT_TYPE | SESSION_REOPENED_EVENT_TYPE
-        ) || payload_version != SESSION_EVENT_PAYLOAD_VERSION
-        {
+        let supported = match event_type {
+            SESSION_CREATED_EVENT_TYPE | SESSION_REOPENED_EVENT_TYPE => {
+                payload_version == SESSION_EVENT_PAYLOAD_VERSION
+            }
+            SESSION_CLOSED_EVENT_TYPE => matches!(payload_version, 1 | 2),
+            _ => false,
+        };
+        if !supported {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
                 payload_version,
+            });
+        }
+
+        if event_type == SESSION_CLOSED_EVENT_TYPE
+            && payload_version == SESSION_CLOSED_PAYLOAD_VERSION
+        {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Payload {
+                reason: String,
+            }
+
+            let payload: Payload =
+                serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            let reason = SessionClosure::new(payload.reason).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::Closed {
+                reason: Some(reason),
             });
         }
 
@@ -353,7 +440,7 @@ impl Event for SessionEvent {
                 }
             })?;
             return Ok(if event_type == SESSION_CLOSED_EVENT_TYPE {
-                Self::Closed {}
+                Self::Closed { reason: None }
             } else {
                 Self::Reopened {}
             });
