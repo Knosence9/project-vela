@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist session close lifecycle",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/451 by adding one durable terminal close transition to persisted sessions, then resolve the valid post-merge review finding in issue https://github.com/Knosence9/project-vela/issues/453 without expanding into resume, turns, membership, or runtime behavior.",
+    "acceptance_criteria": [
+      "Closing an open session persists one session.closed payload-version-one event and returns the same identity and title with closed status.",
+      "Loading after reopening SQLite preserves closed status, while missing and already-closed sessions return explicit domain errors without extra events.",
+      "Racing closes persist exactly one terminal event, and a writer holding a stale loaded session classifies the winning close as AlreadyClosed.",
+      "Replay accepts only created or created-followed-by-closed histories and surfaces unsupported, malformed, and invalid histories explicitly.",
+      "Documentation, pinned verification, independent review, and required hosted gates pass before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 451 and added close lifecycle tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with 12 Rust E0599 errors because SessionStore::close, SessionStatus::Closed, SessionStoreError::NotFound, and SessionStoreError::AlreadyClosed did not exist.",
+      "patch": "Added tests for close and reopen, exact event metadata and empty payload, missing and repeated close errors, racing close outcomes, malformed closed payloads, close-before-create history, and duplicate close history."
+    },
+    {
+      "summary": "Implemented the smallest persisted close transition and strict replay contract.",
+      "outcome": "success",
+      "diagnostic": "The focused session lifecycle suite passed 13 tests after adding the typed event, closed state, transition errors, exact expected-version append, and created-followed-by-closed replay arm.",
+      "patch": "Added session.closed version-one encoding and decoding, SessionStatus::Closed, SessionStore::close, NotFound and AlreadyClosed domain errors, and updated lifecycle documentation and non-goals."
+    },
+    {
+      "summary": "Strengthened optimistic-concurrency classification after independent pre-commit review found two concrete gaps.",
+      "outcome": "success",
+      "diagnostic": "The first review observed that every non-one current version was being collapsed to AlreadyClosed and that the thread barrier did not guarantee the contested append branch. Restricting remapping to current version two preserved other event-log errors; the new stale-loaded-close unit test first failed because close_loaded did not exist, then passed after extracting the loaded transition. The integration race also began asserting exactly one persisted close row.",
+      "patch": "Matched only WrongExpectedVersion with current version two, reloaded the winner, extracted a private close_loaded transition for deterministic stale-writer testing, and counted persisted terminal events in the public concurrency test."
+    },
+    {
+      "summary": "Ran local and hosted gates and squash-merged the close lifecycle.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 79 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. Independent final review found no blockers. GitHub Rust quality run 29389243273 and CodeRabbit passed, and pull request 452 squash-merged as dbaf9c38be2274ca5cae707da8d9c9279720883b.",
+      "patch": "Committed the bounded implementation and documentation, linked issue 451, enabled squash auto-merge, and monitored both required checks to completion."
+    },
+    {
+      "summary": "Resolved a valid non-blocking CodeRabbit finding that arrived immediately before auto-merge completed.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit correctly noted that a successfully reloaded two-event winner can only be closed because load already propagates malformed or invalid histories; the defensive open arm was unreachable and its synthetic event count would have been inaccurate. Issue 453 tracked the correction. Focused regression, full pinned verification, independent review, Rust quality run 29389603707, and CodeRabbit all passed; pull request 454 squash-merged as 69b0845d94bb88e5c40e383a8261b160b61a9259.",
+      "patch": "Removed the unreachable status fallback, retained winner reload and explicit error propagation, and asserted the closed-state invariant without changing observable behavior."
+    },
+    {
+      "summary": "Captured, validated, and independently reviewed the complete implementation and corrective episode in the Vela-native corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 32 valid and zero invalid records, and full pinned verification passed with the record included. The first independent review found that provenance should point to the final corrective pull request and that artifact self-validation evidence was missing; both gaps were corrected before final review.",
+      "patch": "Added one sanitized positive record with task, compiler-observed RED attempts, concurrency diagnostics and fixes, lifecycle rationale, local and hosted verification, review disposition and correction, lessons, self-validation evidence, and final merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now durably closes open sessions with one typed terminal event, reloads their closed state, rejects missing, repeated, malformed, and invalid transitions explicitly, and preserves one winner under concurrent close attempts.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # RED: 12 E0599 errors for missing close lifecycle API",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --lib stale_loaded_close_is_classified_from_the_winning_event # RED: close_loaded method missing",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --lib stale_loaded_close_is_classified_from_the_winning_event # GREEN: 1 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # GREEN: 13 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 79 workspace tests passed for pull request 452",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only pre-commit review after concurrency fixes # no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29389243273 and required CodeRabbit status for pull request 452",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 452 squash merge dbaf9c38be2274ca5cae707da8d9c9279720883b",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # follow-up issue 453 passed after removing unreachable fallback",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of issue 453 correction # no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29389603707 and required CodeRabbit status for pull request 454",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 454 squash merge 69b0845d94bb88e5c40e383a8261b160b61a9259",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0032-session-close.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 32 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 79 workspace tests passed with the development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of issue 455 corpus record # initial provenance and self-validation gaps corrected before final review",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A terminal lifecycle event should use the aggregate stream's exact current version so duplicate and concurrent transitions remain atomic without a separate write lock in the domain layer.",
+    "A thread barrier before a compound load-and-append method proves concurrent invocation but not the internal stale-append path; extracting the loaded transition permits a deterministic stale-writer regression while the public race test verifies observable outcomes and persisted row count.",
+    "Optimistic-concurrency errors should only be translated when the observed current version identifies a known valid winner; broader matching can hide future events or corrupted histories.",
+    "Reloading a winning stream should delegate malformed and invalid history classification to the normal replay path instead of synthesizing approximate domain errors.",
+    "Automated review can finish at the same moment auto-merge unlocks; a valid non-blocking finding should still become an immediate bounded follow-up with its own issue, tests, review, and gates.",
+    "Close reasons, summaries, resume behavior, turns, and task membership remain separate decisions rather than fields inferred into the first terminal session event."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/454"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
