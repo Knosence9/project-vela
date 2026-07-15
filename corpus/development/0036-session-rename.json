@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist session title changes",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/469 by adding replayable session title changes without expanding into summaries, task membership, messages, turns, metadata, or runtime behavior.",
+    "acceptance_criteria": [
+      "SessionStore::rename requires an existing session and a validated SessionTitle while preserving non-empty UTF-8 and whitespace exactly.",
+      "Renaming persists one payload-version-one session.renamed event and returns the latest title after reopening SQLite.",
+      "Repeated renames project the latest title while preserving open or closed status and the active close or reopen reason.",
+      "A missing session returns NotFound without creating a stream, while malformed, unsupported, and pre-creation rename events remain explicit replay or invalid-history errors.",
+      "Documentation and all local and hosted gates pass before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 469 and added session rename lifecycle tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed to compile at four call sites because SessionStore had no rename method.",
+      "patch": "Added tests for exact event persistence, reload projection, repeated renames across close and reopen transitions, missing sessions, malformed and unsupported payloads, and rename before creation."
+    },
+    {
+      "summary": "Implemented typed session rename persistence and replay projection.",
+      "outcome": "success",
+      "diagnostic": "The focused session lifecycle suite passed 26 tests after adding the rename API, event encoding and decoding, optimistic append loop, and title projection.",
+      "patch": "Added the session.renamed discriminator at payload version one, reused SessionTitle validation and payload shape, allowed rename events after creation in either lifecycle status, and retained explicit invalid-history handling."
+    },
+    {
+      "summary": "Refactored through existing event-log boundaries and independently reviewed the final diff.",
+      "outcome": "success",
+      "diagnostic": "The implementation reused the expected-version append and title decoder patterns without introducing a second title type or status transition path; independent Codex review found no blocking defect.",
+      "patch": "Kept rename independent from close and reopen status transitions while preserving their projected active reasons."
+    },
+    {
+      "summary": "Ran local and hosted gates and squash-merged the rename lifecycle.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 91 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29397675769 and CodeRabbit passed, CodeRabbit generated no actionable comments, and pull request 470 squash-merged as 93c13db3e171beb121b028dfa6a28c00563d8a01.",
+      "patch": "Committed the bounded implementation and documentation, linked issue 469, enabled squash auto-merge, and monitored both required checks to completion."
+    },
+    {
+      "summary": "Captured and independently reviewed the merged episode in the Vela-native corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 36 valid and zero invalid records, full pinned verification passed with the record included, and independent Codex review found no blocking issue.",
+      "patch": "Added one sanitized positive record with task, RED and GREEN attempts, persistence rationale, replay validation, local and hosted verification, lessons, and merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now durably rename existing open or closed sessions, replay the latest title without disturbing lifecycle state or active reasons, and reject invalid persisted rename data explicitly.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # RED: compile failure because SessionStore::rename did not exist",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # GREEN: 26 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 91 workspace tests plus all repository gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # no blocking correctness or replay defect found",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29397675769 and required CodeRabbit status for pull request 470 # both passed; CodeRabbit generated no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 470 squash merge 93c13db3e171beb121b028dfa6a28c00563d8a01",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0036-session-rename.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 36 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 91 workspace tests passed with the development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent pre-commit review of issue 471 corpus record # no blocking issue found",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A rename is an event-sourced data change, not a session status transition, so it should preserve the current status and active lifecycle reason.",
+    "Reusing the validated SessionTitle and its version-one payload shape keeps the persistence boundary small and avoids parallel string validation.",
+    "Optimistic expected-version retries allow a rename to serialize with concurrent lifecycle writes and project from the latest accepted history.",
+    "Replay should permit rename events only after creation while continuing to reject rename-before-create as invalid history.",
+    "Malformed and unsupported persisted rename events must fail explicitly rather than silently retaining an older title.",
+    "Session summaries, task membership, messages, turns, metadata, and runtime behavior remain separate product decisions."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/470"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
