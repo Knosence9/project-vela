@@ -7,11 +7,15 @@ use std::{
 use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
-    task::{TaskFailure, TaskGoal, TaskId, TaskStatus, TaskStore, TaskStoreError},
+    task::{TaskFailure, TaskGoal, TaskId, TaskOutput, TaskStatus, TaskStore, TaskStoreError},
 };
 
 fn failure() -> TaskFailure {
     TaskFailure::new("provider request failed").unwrap()
+}
+
+fn output() -> TaskOutput {
+    TaskOutput::new("task completed").unwrap()
 }
 
 #[test]
@@ -29,6 +33,7 @@ fn starts_and_loads_an_active_task_after_reopening() {
     assert_eq!(task.id(), &id);
     assert_eq!(task.goal(), &goal);
     assert_eq!(task.status(), TaskStatus::Active);
+    assert_eq!(task.output(), None);
     assert_eq!(task.failure(), None);
 
     let loaded = TaskStore::open(&path).unwrap().load(&id).unwrap().unwrap();
@@ -46,16 +51,70 @@ fn completes_and_loads_a_completed_task_after_reopening() {
         .start(id.clone(), goal.clone())
         .unwrap();
 
-    let completed = TaskStore::open(&path).unwrap().complete(&id).unwrap();
+    let output = TaskOutput::new("Supervision models compared").unwrap();
+    let completed = TaskStore::open(&path)
+        .unwrap()
+        .complete(&id, output.clone())
+        .unwrap();
 
     assert_eq!(completed.id(), &id);
     assert_eq!(completed.goal(), &goal);
     assert_eq!(completed.status(), TaskStatus::Completed);
+    assert_eq!(completed.output(), Some(&output));
     assert_eq!(completed.failure(), None);
     assert_eq!(
         TaskStore::open(&path).unwrap().load(&id).unwrap(),
         Some(completed)
     );
+}
+
+#[test]
+fn persists_completion_output_in_the_typed_event_payload() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("completion-payload").unwrap();
+    let output = TaskOutput::new(" compared 3 supervision models ").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(id.clone(), TaskGoal::new("Compare models").unwrap())
+        .unwrap();
+
+    let completed = store.complete(&id, output.clone()).unwrap();
+
+    assert_eq!(completed.output().unwrap().as_str(), output.as_str());
+    let (payload_version, payload): (u32, Vec<u8>) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_version, payload FROM events WHERE stream_id = 'task:completion-payload' AND stream_version = 2",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(payload_version, 2);
+    assert_eq!(payload, br#"{"output":" compared 3 supervision models "}"#);
+}
+
+#[test]
+fn loads_a_legacy_v1_completion_without_output() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("legacy-completion").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(id.clone(), TaskGoal::new("Read old history").unwrap())
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events VALUES ('task:legacy-completion', 2, 'task.completed', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+
+    let completed = store.load(&id).unwrap().unwrap();
+
+    assert_eq!(completed.status(), TaskStatus::Completed);
+    assert_eq!(completed.output(), None);
 }
 
 #[test]
@@ -74,6 +133,7 @@ fn cancels_and_loads_a_cancelled_task_after_reopening() {
     assert_eq!(cancelled.id(), &id);
     assert_eq!(cancelled.goal(), &goal);
     assert_eq!(cancelled.status(), TaskStatus::Cancelled);
+    assert_eq!(cancelled.output(), None);
     assert_eq!(cancelled.failure(), None);
     assert_eq!(
         TaskStore::open(&path).unwrap().load(&id).unwrap(),
@@ -101,6 +161,7 @@ fn fails_and_loads_a_failed_task_after_reopening() {
     assert_eq!(failed.id(), &id);
     assert_eq!(failed.goal(), &goal);
     assert_eq!(failed.status(), TaskStatus::Failed);
+    assert_eq!(failed.output(), None);
     assert_eq!(failed.failure(), Some(&failure));
     assert_eq!(
         TaskStore::open(&path).unwrap().load(&id).unwrap(),
@@ -199,7 +260,7 @@ fn rejects_repeated_or_conflicting_terminal_transitions() {
     store
         .start(completed_id.clone(), TaskGoal::new("Finish").unwrap())
         .unwrap();
-    store.complete(&completed_id).unwrap();
+    store.complete(&completed_id, output()).unwrap();
     store
         .start(cancelled_id.clone(), TaskGoal::new("Stop").unwrap())
         .unwrap();
@@ -214,7 +275,7 @@ fn rejects_repeated_or_conflicting_terminal_transitions() {
         TaskStoreError::AlreadyCancelled { task_id } if task_id == cancelled_id
     ));
     assert!(matches!(
-        store.complete(&cancelled_id).unwrap_err(),
+        store.complete(&cancelled_id, output()).unwrap_err(),
         TaskStoreError::AlreadyCancelled { task_id } if task_id == cancelled_id
     ));
     assert!(matches!(
@@ -246,7 +307,7 @@ fn failed_tasks_reject_every_later_terminal_transition() {
     assert!(repeated_failure.source().is_none());
     for error in [
         repeated_failure,
-        store.complete(&id).unwrap_err(),
+        store.complete(&id, output()).unwrap_err(),
         store.cancel(&id).unwrap_err(),
     ] {
         assert!(matches!(
@@ -273,7 +334,7 @@ fn racing_completion_and_failure_persist_one_terminal_state() {
     let completion = thread::spawn(move || {
         let mut store = TaskStore::open(complete_path).unwrap();
         complete_barrier.wait();
-        store.complete(&complete_id)
+        store.complete(&complete_id, output())
     });
     let failure_result = thread::spawn(move || {
         let mut store = TaskStore::open(path).unwrap();
@@ -314,7 +375,7 @@ fn racing_completion_and_cancellation_persist_one_terminal_state() {
     let completion = thread::spawn(move || {
         let mut store = TaskStore::open(complete_path).unwrap();
         complete_barrier.wait();
-        store.complete(&complete_id)
+        store.complete(&complete_id, output())
     });
     let cancellation = thread::spawn(move || {
         let mut store = TaskStore::open(path).unwrap();
@@ -342,7 +403,7 @@ fn rejects_completing_an_unknown_task_without_creating_it() {
     let id = TaskId::new("missing").unwrap();
     let mut store = TaskStore::open(&path).unwrap();
 
-    let error = store.complete(&id).unwrap_err();
+    let error = store.complete(&id, output()).unwrap_err();
 
     assert!(matches!(
         error,
@@ -362,9 +423,9 @@ fn rejects_completing_a_completed_task_and_preserves_it() {
     store
         .start(id.clone(), TaskGoal::new("Review the kernel").unwrap())
         .unwrap();
-    let completed = store.complete(&id).unwrap();
+    let completed = store.complete(&id, output()).unwrap();
 
-    let error = store.complete(&id).unwrap_err();
+    let error = store.complete(&id, output()).unwrap_err();
 
     assert!(matches!(
         error,
@@ -405,7 +466,7 @@ fn rejects_a_duplicate_start_and_preserves_the_original_task() {
 }
 
 #[test]
-fn rejects_empty_task_ids_and_goals_before_opening_storage() {
+fn rejects_empty_task_values_before_opening_storage() {
     assert_eq!(
         TaskId::new("").unwrap_err().to_string(),
         "task id must not be empty"
@@ -413,6 +474,10 @@ fn rejects_empty_task_ids_and_goals_before_opening_storage() {
     assert_eq!(
         TaskGoal::new("").unwrap_err().to_string(),
         "task goal must not be empty"
+    );
+    assert_eq!(
+        TaskOutput::new("").unwrap_err().to_string(),
+        "task output must not be empty"
     );
     assert_eq!(
         TaskFailure::new("").unwrap_err().to_string(),
@@ -506,6 +571,35 @@ fn task_load_surfaces_a_malformed_payload() {
 }
 
 #[test]
+fn task_load_rejects_an_empty_persisted_completion_output() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("task-42").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(id.clone(), TaskGoal::new("Review the kernel").unwrap())
+        .unwrap();
+    store.complete(&id, output()).unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE stream_id = 'task:task-42' AND stream_version = 2",
+            [br#"{"output":""}"#.as_slice()],
+        )
+        .unwrap();
+
+    let error = TaskStore::open(&path).unwrap().load(&id).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn task_load_rejects_an_empty_persisted_failure_diagnostic() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -591,7 +685,7 @@ fn rejects_events_after_completion_as_invalid_history() {
     store
         .start(id.clone(), TaskGoal::new("Review the kernel").unwrap())
         .unwrap();
-    store.complete(&id).unwrap();
+    store.complete(&id, output()).unwrap();
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute(
