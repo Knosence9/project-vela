@@ -134,7 +134,7 @@ The first milestone is the **evidence loop**:
 4. Store and inspect a small Vela-native corpus. ✅
 5. Use the creation of that tooling as the first real corpus episode. ✅
 6. Begin the kernel with a typed append-only event log and replay. ✅
-7. Start the persisted task lifecycle with durable start, completion, cancellation, failure, and load. ✅
+7. Start the persisted task lifecycle with durable start, completion, cancellation, diagnosed failure, and load. ✅
 
 ## Project documents
 
