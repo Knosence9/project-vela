@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist session close reason",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/461 by persisting a validated close reason without expanding into structured taxonomies, reopen reasons, summaries, turns, metadata, or runtime behavior.",
+    "acceptance_criteria": [
+      "SessionClosure rejects empty values while preserving non-empty UTF-8 and whitespace exactly.",
+      "Closing an open session persists one session.closed payload-version-two event containing the reason and exposes it after reopening SQLite.",
+      "Legacy payload-version-one close events remain replayable without a reason, while malformed, empty, or unsupported version-two payloads remain explicit replay errors.",
+      "Open and reopened sessions expose no active close reason, and a later close replaces the prior projected reason.",
+      "Existing missing, repeated, and racing close guarantees remain intact, with documentation and all local and hosted gates passing before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 461 and added reason-bearing close lifecycle tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with 13 compiler errors: unresolved SessionClosure imports, the old one-argument close signature, and the missing Session::closure projection accessor.",
+      "patch": "Added tests for value validation, exact version-two payload persistence, reload projection, legacy version-one replay, malformed and unsupported payloads, reason clearing on reopen, replacement after a later close, and existing race behavior."
+    },
+    {
+      "summary": "Implemented the typed close reason and versioned event compatibility boundary.",
+      "outcome": "success",
+      "diagnostic": "The focused session lifecycle suite passed 20 tests after adding SessionClosure, reason-bearing close calls, version-two encoding, version-aware decoding, and replay projection.",
+      "patch": "Added SessionClosure and SessionClosureError, an optional closure projection on Session, version-two session.closed payloads, legacy version-one decoding, and explicit clearing on reopen."
+    },
+    {
+      "summary": "Refined repeated-close behavior and independently reviewed the final diff.",
+      "outcome": "success",
+      "diagnostic": "A repeated close/reopen/close test demonstrates that the current projection uses the newest persisted reason. Twenty consecutive close-race runs passed, and independent Codex pre-commit review found no blocking correctness or compatibility defect.",
+      "patch": "Kept the existing optimistic transition loop and replay fold, passing only the next closure projection through the shared helper rather than adding a parallel lifecycle path."
+    },
+    {
+      "summary": "Ran local and hosted gates and squash-merged the close-reason lifecycle.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 85 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29392894177 and CodeRabbit passed, CodeRabbit generated no actionable comments, and pull request 462 squash-merged as 3cad4aad14cd2b141b24d5abefcb993d3836146d.",
+      "patch": "Committed the bounded implementation and documentation, linked issue 461, enabled squash auto-merge, and monitored both required checks to completion."
+    },
+    {
+      "summary": "Captured and independently reviewed the merged episode in the Vela-native corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 34 valid and zero invalid records, full pinned verification passed with the record included, and independent read-only review found no blocking issue.",
+      "patch": "Added one sanitized positive record with task, RED and GREEN attempts, compatibility rationale, local and hosted verification, lessons, self-validation evidence, and merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now requires and durably persists a non-empty session close reason, restores it after reload, clears it on reopen, replaces it on later closes, and retains explicit compatibility with legacy reasonless close events.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # RED: 13 compiler errors for missing closure value, close signature, and projection",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # GREEN: 20 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 85 workspace tests plus all repository gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "20 consecutive pinned runs of racing_closes_persist_exactly_one_terminal_event # all passed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # no blocking correctness or compatibility defect found",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29392894177 and required CodeRabbit status for pull request 462 # both passed; CodeRabbit generated no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 462 squash merge 3cad4aad14cd2b141b24d5abefcb993d3836146d",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0034-session-close-reason.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 34 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 85 workspace tests passed with the development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of issue 463 corpus record # no blocking issue found",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Evolving a typed event payload should assign a new payload version while retaining an explicit decoder for persisted legacy events.",
+    "A validated domain value prevents new empty reasons at the API boundary, while replay must independently reject malformed persisted data.",
+    "A close reason is projected state only while the session is closed; reopening clears the active projection without erasing historical evidence.",
+    "Repeated close and reopen transitions should derive the current reason from the latest valid close event rather than retaining stale aggregate state.",
+    "The existing optimistic transition helper can preserve concurrency behavior when payload evidence is added, avoiding a second write path.",
+    "Structured reason taxonomies, reopen reasons, actors, timestamps, summaries, turns, and runtime behavior remain separate product decisions."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/462"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
