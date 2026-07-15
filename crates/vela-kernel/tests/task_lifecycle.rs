@@ -7,8 +7,15 @@ use std::{
 use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
-    task::{TaskFailure, TaskGoal, TaskId, TaskOutput, TaskStatus, TaskStore, TaskStoreError},
+    task::{
+        TaskCancellation, TaskFailure, TaskGoal, TaskId, TaskOutput, TaskStatus, TaskStore,
+        TaskStoreError,
+    },
 };
+
+fn cancellation() -> TaskCancellation {
+    TaskCancellation::new("request superseded").unwrap()
+}
 
 fn failure() -> TaskFailure {
     TaskFailure::new("provider request failed").unwrap()
@@ -34,6 +41,7 @@ fn starts_and_loads_an_active_task_after_reopening() {
     assert_eq!(task.goal(), &goal);
     assert_eq!(task.status(), TaskStatus::Active);
     assert_eq!(task.output(), None);
+    assert_eq!(task.cancellation(), None);
     assert_eq!(task.failure(), None);
 
     let loaded = TaskStore::open(&path).unwrap().load(&id).unwrap().unwrap();
@@ -61,6 +69,7 @@ fn completes_and_loads_a_completed_task_after_reopening() {
     assert_eq!(completed.goal(), &goal);
     assert_eq!(completed.status(), TaskStatus::Completed);
     assert_eq!(completed.output(), Some(&output));
+    assert_eq!(completed.cancellation(), None);
     assert_eq!(completed.failure(), None);
     assert_eq!(
         TaskStore::open(&path).unwrap().load(&id).unwrap(),
@@ -128,17 +137,74 @@ fn cancels_and_loads_a_cancelled_task_after_reopening() {
         .start(id.clone(), goal.clone())
         .unwrap();
 
-    let cancelled = TaskStore::open(&path).unwrap().cancel(&id).unwrap();
+    let reason = TaskCancellation::new("user changed direction").unwrap();
+    let cancelled = TaskStore::open(&path)
+        .unwrap()
+        .cancel(&id, reason.clone())
+        .unwrap();
 
     assert_eq!(cancelled.id(), &id);
     assert_eq!(cancelled.goal(), &goal);
     assert_eq!(cancelled.status(), TaskStatus::Cancelled);
     assert_eq!(cancelled.output(), None);
     assert_eq!(cancelled.failure(), None);
+    assert_eq!(cancelled.cancellation(), Some(&reason));
     assert_eq!(
         TaskStore::open(&path).unwrap().load(&id).unwrap(),
         Some(cancelled)
     );
+}
+
+#[test]
+fn persists_cancellation_reason_in_the_typed_event_payload() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("cancellation-payload").unwrap();
+    let reason = TaskCancellation::new(" user changed direction ").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(
+            id.clone(),
+            TaskGoal::new("Preserve cancellation context").unwrap(),
+        )
+        .unwrap();
+
+    let cancelled = store.cancel(&id, reason.clone()).unwrap();
+
+    assert_eq!(cancelled.cancellation().unwrap().as_str(), reason.as_str());
+    let (payload_version, payload): (u32, Vec<u8>) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_version, payload FROM events WHERE stream_id = 'task:cancellation-payload' AND stream_version = 2",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(payload_version, 2);
+    assert_eq!(payload, br#"{"reason":" user changed direction "}"#);
+}
+
+#[test]
+fn loads_a_legacy_v1_cancellation_without_a_reason() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("legacy-cancellation").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(id.clone(), TaskGoal::new("Read old history").unwrap())
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events VALUES ('task:legacy-cancellation', 2, 'task.cancelled', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+
+    let cancelled = store.load(&id).unwrap().unwrap();
+
+    assert_eq!(cancelled.status(), TaskStatus::Cancelled);
+    assert_eq!(cancelled.cancellation(), None);
 }
 
 #[test]
@@ -162,6 +228,7 @@ fn fails_and_loads_a_failed_task_after_reopening() {
     assert_eq!(failed.goal(), &goal);
     assert_eq!(failed.status(), TaskStatus::Failed);
     assert_eq!(failed.output(), None);
+    assert_eq!(failed.cancellation(), None);
     assert_eq!(failed.failure(), Some(&failure));
     assert_eq!(
         TaskStore::open(&path).unwrap().load(&id).unwrap(),
@@ -241,7 +308,7 @@ fn rejects_cancelling_an_unknown_task_without_creating_it() {
     let id = TaskId::new("missing").unwrap();
     let mut store = TaskStore::open(&path).unwrap();
 
-    let error = store.cancel(&id).unwrap_err();
+    let error = store.cancel(&id, cancellation()).unwrap_err();
 
     assert!(matches!(
         error,
@@ -264,14 +331,14 @@ fn rejects_repeated_or_conflicting_terminal_transitions() {
     store
         .start(cancelled_id.clone(), TaskGoal::new("Stop").unwrap())
         .unwrap();
-    store.cancel(&cancelled_id).unwrap();
+    store.cancel(&cancelled_id, cancellation()).unwrap();
 
     assert!(matches!(
-        store.cancel(&completed_id).unwrap_err(),
+        store.cancel(&completed_id, cancellation()).unwrap_err(),
         TaskStoreError::AlreadyCompleted { task_id } if task_id == completed_id
     ));
     assert!(matches!(
-        store.cancel(&cancelled_id).unwrap_err(),
+        store.cancel(&cancelled_id, cancellation()).unwrap_err(),
         TaskStoreError::AlreadyCancelled { task_id } if task_id == cancelled_id
     ));
     assert!(matches!(
@@ -308,7 +375,7 @@ fn failed_tasks_reject_every_later_terminal_transition() {
     for error in [
         repeated_failure,
         store.complete(&id, output()).unwrap_err(),
-        store.cancel(&id).unwrap_err(),
+        store.cancel(&id, cancellation()).unwrap_err(),
     ] {
         assert!(matches!(
             error,
@@ -380,7 +447,7 @@ fn racing_completion_and_cancellation_persist_one_terminal_state() {
     let cancellation = thread::spawn(move || {
         let mut store = TaskStore::open(path).unwrap();
         barrier.wait();
-        store.cancel(&id)
+        store.cancel(&id, cancellation())
     });
 
     let completion = completion.join().unwrap();
@@ -482,6 +549,10 @@ fn rejects_empty_task_values_before_opening_storage() {
     assert_eq!(
         TaskFailure::new("").unwrap_err().to_string(),
         "task failure diagnostic must not be empty"
+    );
+    assert_eq!(
+        TaskCancellation::new("").unwrap_err().to_string(),
+        "task cancellation reason must not be empty"
     );
 }
 
@@ -585,6 +656,35 @@ fn task_load_rejects_an_empty_persisted_completion_output() {
         .execute(
             "UPDATE events SET payload = ?1 WHERE stream_id = 'task:task-42' AND stream_version = 2",
             [br#"{"output":""}"#.as_slice()],
+        )
+        .unwrap();
+
+    let error = TaskStore::open(&path).unwrap().load(&id).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn task_load_rejects_an_empty_persisted_cancellation_reason() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("task-42").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(id.clone(), TaskGoal::new("Review the kernel").unwrap())
+        .unwrap();
+    store.cancel(&id, cancellation()).unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE stream_id = 'task:task-42' AND stream_version = 2",
+            [br#"{"reason":""}"#.as_slice()],
         )
         .unwrap();
 
@@ -737,7 +837,7 @@ fn rejects_events_after_cancellation_as_invalid_history() {
     store
         .start(id.clone(), TaskGoal::new("Review the kernel").unwrap())
         .unwrap();
-    store.cancel(&id).unwrap();
+    store.cancel(&id, cancellation()).unwrap();
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute(
