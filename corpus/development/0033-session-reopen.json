@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist session reopen lifecycle",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/457 by adding durable reopen transitions to closed sessions without expanding into reasons, summaries, task membership, turns, branching, or runtime behavior.",
+    "acceptance_criteria": [
+      "Reopening a closed session persists one session.reopened payload-version-one event and returns the same identity and title with open status.",
+      "Loading after reopening SQLite preserves reopened status, while missing and already-open sessions return explicit domain errors without extra events.",
+      "Racing reopen attempts persist exactly one reopen event, and valid sessions can alternate close and reopen transitions repeatedly.",
+      "Replay accepts only histories that begin with creation and alternate close and reopen events, while unsupported, malformed, and invalid histories remain explicit errors.",
+      "Documentation, pinned verification, independent review, CodeRabbit, and the required Rust quality gate pass before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 457 and added reopen lifecycle tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with nine Rust E0599 errors because SessionStore::reopen and SessionStoreError::AlreadyOpen did not exist.",
+      "patch": "Added tests for durable reopen and exact event metadata, missing and already-open errors, repeated close/reopen transitions, racing reopen outcomes, malformed reopened payloads, reopen-before-close history, and duplicate reopen history."
+    },
+    {
+      "summary": "Implemented typed reopen persistence and alternating lifecycle replay.",
+      "outcome": "success",
+      "diagnostic": "The focused session lifecycle suite passed 18 tests after adding the event, domain transition, version-aware snapshots, and alternating replay fold.",
+      "patch": "Added session.reopened version-one encoding and decoding, SessionStore::reopen, AlreadyOpen, version-aware loading, repeated close support, and lifecycle documentation."
+    },
+    {
+      "summary": "Fixed cyclic contention behavior exposed by independent pre-commit review.",
+      "outcome": "success",
+      "diagnostic": "The first review found symmetric three-writer interleavings where a stale close or reopen could leak WrongExpectedVersion after the opposite transition made the request applicable again. A shared transition loop now reloads and retries stale expected versions, returns the domain already-transitioned error when the requested state won, and keeps storage failures explicit. Final independent re-review found no blocking issue.",
+      "patch": "Refactored close and reopen through one optimistic transition helper that appends at the loaded stream version and retries only WrongExpectedVersion conflicts."
+    },
+    {
+      "summary": "Ran local and hosted gates and squash-merged the reopen lifecycle.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 83 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. The reopen race test also passed 20 consecutive focused runs. GitHub Rust quality run 29391319772 and CodeRabbit passed with no actionable comments, and pull request 458 squash-merged as 8705423225be4a8fda1c540cdde4e013402a1d33.",
+      "patch": "Committed the bounded implementation and documentation, linked issue 457, enabled squash auto-merge, and monitored both required checks to completion."
+    },
+    {
+      "summary": "Captured and independently reviewed the merged episode in the Vela-native corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 33 valid and zero invalid records, full pinned verification passed with the record included, and independent read-only review found no discrete correctness issue.",
+      "patch": "Added one sanitized positive record with task, RED and GREEN attempts, contention diagnostics and fix, rationale, local and hosted verification, lessons, self-validation evidence, and merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now durably reopens closed sessions, reloads alternating open and closed lifecycle state, rejects missing, repeated, malformed, and invalid transitions explicitly, and preserves one winner under concurrent reopen attempts.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # RED: nine E0599 errors for missing reopen API and AlreadyOpen",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # GREEN: 18 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 83 workspace tests plus all repository gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "20 consecutive pinned runs of racing_reopens_persist_exactly_one_reopen_event # all passed",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only pre-commit review # cyclic close/reopen contention findings fixed; final re-review found no blocking issue",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29391319772 and required CodeRabbit status for pull request 458 # both passed; CodeRabbit generated no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 458 squash merge 8705423225be4a8fda1c540cdde4e013402a1d33",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0033-session-reopen.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 33 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 83 workspace tests passed with the development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of issue 459 corpus record # no discrete correctness issue found",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A reversible event-sourced lifecycle needs the aggregate's current stream version, not a fixed version that only works for the first transition.",
+    "Replay for a cyclic two-state lifecycle is clearer and safer as an explicit alternating state fold than as a growing list of accepted event-array shapes.",
+    "Same-operation race tests prove one persisted winner, but reversible lifecycles also require reasoning about interleavings with the opposite transition.",
+    "On an optimistic conflict, reloading and retrying only when the requested transition is applicable prevents storage-version details from leaking through the domain API while preserving explicit non-concurrency failures.",
+    "Close and reopen share one transition mechanism, which keeps expected-version, missing-stream, and contention behavior consistent without duplicating lifecycle code.",
+    "Close or reopen reasons, summaries, task membership, turns, and runtime behavior remain separate decisions rather than fields inferred into this lifecycle slice."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/458"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
