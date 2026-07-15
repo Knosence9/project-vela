@@ -8,8 +8,8 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     session::{
-        SessionClosure, SessionClosureError, SessionId, SessionIdError, SessionStatus,
-        SessionStore, SessionStoreError, SessionTitle,
+        SessionClosure, SessionClosureError, SessionId, SessionIdError, SessionReopenReason,
+        SessionReopenReasonError, SessionStatus, SessionStore, SessionStoreError, SessionTitle,
     },
 };
 
@@ -28,6 +28,7 @@ fn creates_and_loads_an_open_session_after_reopening() {
     assert_eq!(session.id(), &id);
     assert_eq!(session.title(), &title);
     assert_eq!(session.status(), SessionStatus::Open);
+    assert_eq!(session.reopen_reason(), None);
     assert_eq!(
         SessionStore::open(&path).unwrap().load(&id).unwrap(),
         Some(session)
@@ -85,8 +86,13 @@ fn rejects_empty_session_values() {
         SessionClosure::new("").unwrap_err().to_string(),
         "session closure reason must not be empty"
     );
+    assert_eq!(
+        SessionReopenReason::new("").unwrap_err().to_string(),
+        "session reopen reason must not be empty"
+    );
     let _: SessionIdError = SessionId::new("").unwrap_err();
     let _: SessionClosureError = SessionClosure::new("").unwrap_err();
+    let _: SessionReopenReasonError = SessionReopenReason::new("").unwrap_err();
 }
 
 #[test]
@@ -273,6 +279,7 @@ fn closes_and_loads_a_closed_session_after_reopening() {
     assert_eq!(session.title(), &title);
     assert_eq!(session.status(), SessionStatus::Closed);
     assert_eq!(session.closure(), Some(&closure));
+    assert_eq!(session.reopen_reason(), None);
     assert_eq!(
         SessionStore::open(&path).unwrap().load(&id).unwrap(),
         Some(session)
@@ -384,12 +391,17 @@ fn reopens_and_loads_an_open_session_after_restarting() {
         .close(&id, SessionClosure::new("Closed").unwrap())
         .unwrap();
 
-    let session = SessionStore::open(&path).unwrap().reopen(&id).unwrap();
+    let reason = SessionReopenReason::new(" Continue with new evidence ").unwrap();
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .reopen(&id, reason.clone())
+        .unwrap();
 
     assert_eq!(session.id(), &id);
     assert_eq!(session.title(), &title);
     assert_eq!(session.status(), SessionStatus::Open);
     assert_eq!(session.closure(), None);
+    assert_eq!(session.reopen_reason(), Some(&reason));
     assert_eq!(
         SessionStore::open(&path).unwrap().load(&id).unwrap(),
         Some(session)
@@ -404,8 +416,8 @@ fn reopens_and_loads_an_open_session_after_restarting() {
             )
             .unwrap();
     assert_eq!(event_type, "session.reopened");
-    assert_eq!(payload_version, 1);
-    assert_eq!(payload, br#"{}"#);
+    assert_eq!(payload_version, 2);
+    assert_eq!(payload, br#"{"reason":" Continue with new evidence "}"#);
 }
 
 #[test]
@@ -416,7 +428,9 @@ fn reopening_missing_and_open_sessions_returns_domain_errors() {
     let missing = SessionId::new("missing-reopen").unwrap();
 
     assert!(matches!(
-        store.reopen(&missing).unwrap_err(),
+        store
+            .reopen(&missing, SessionReopenReason::new("Retry").unwrap())
+            .unwrap_err(),
         SessionStoreError::NotFound { ref session_id } if session_id == &missing
     ));
     assert_eq!(store.load(&missing).unwrap(), None);
@@ -425,7 +439,9 @@ fn reopening_missing_and_open_sessions_returns_domain_errors() {
     let open = store
         .create(id.clone(), SessionTitle::new("Still open").unwrap())
         .unwrap();
-    let error = store.reopen(&id).unwrap_err();
+    let error = store
+        .reopen(&id, SessionReopenReason::new("Retry").unwrap())
+        .unwrap_err();
     assert!(matches!(
         error,
         SessionStoreError::AlreadyOpen { ref session_id } if session_id == &id
@@ -436,7 +452,7 @@ fn reopening_missing_and_open_sessions_returns_domain_errors() {
 }
 
 #[test]
-fn sessions_can_close_again_after_reopening() {
+fn repeated_transitions_replace_the_active_reason() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
     let id = SessionId::new("repeat").unwrap();
@@ -447,13 +463,22 @@ fn sessions_can_close_again_after_reopening() {
     store
         .close(&id, SessionClosure::new("First close").unwrap())
         .unwrap();
-    store.reopen(&id).unwrap();
+    store
+        .reopen(&id, SessionReopenReason::new("More work").unwrap())
+        .unwrap();
 
     let closure = SessionClosure::new("Second close").unwrap();
     let session = store.close(&id, closure.clone()).unwrap();
 
     assert_eq!(session.status(), SessionStatus::Closed);
     assert_eq!(session.closure(), Some(&closure));
+    assert_eq!(session.reopen_reason(), None);
+
+    let reason = SessionReopenReason::new("Second investigation").unwrap();
+    let session = store.reopen(&id, reason.clone()).unwrap();
+    assert_eq!(session.status(), SessionStatus::Open);
+    assert_eq!(session.closure(), None);
+    assert_eq!(session.reopen_reason(), Some(&reason));
     assert_eq!(store.load(&id).unwrap(), Some(session));
 }
 
@@ -477,13 +502,13 @@ fn racing_reopens_persist_exactly_one_reopen_event() {
     let first = thread::spawn(move || {
         let mut store = SessionStore::open(first_path).unwrap();
         first_barrier.wait();
-        store.reopen(&first_id)
+        store.reopen(&first_id, SessionReopenReason::new("First").unwrap())
     });
     let second_path = path.clone();
     let second = thread::spawn(move || {
         let mut store = SessionStore::open(second_path).unwrap();
         barrier.wait();
-        store.reopen(&id)
+        store.reopen(&id, SessionReopenReason::new("Second").unwrap())
     });
 
     match (first.join().unwrap(), second.join().unwrap()) {
@@ -685,5 +710,99 @@ fn rejects_empty_version_two_close_reasons() {
             ref event_type,
             payload_version: 3,
         }) if event_type == "session.closed"
+    ));
+}
+
+#[test]
+fn loads_legacy_reopen_events_without_a_reason() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("legacy-reopen").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Legacy reopen").unwrap())
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:legacy-reopen', 2, 'session.closed', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:legacy-reopen', 3, 'session.reopened', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(session.status(), SessionStatus::Open);
+    assert_eq!(session.closure(), None);
+    assert_eq!(session.reopen_reason(), None);
+}
+
+#[test]
+fn rejects_malformed_and_unsupported_reopen_reason_payloads() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("invalid-reopen-reason").unwrap();
+    let mut store = SessionStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            SessionTitle::new("Invalid reopen reason").unwrap(),
+        )
+        .unwrap();
+    store
+        .close(&id, SessionClosure::new("Closed").unwrap())
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:invalid-reopen-reason', 3, 'session.reopened', 2, X'7B22726561736F6E223A22227D')",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 3,
+            ..
+        })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'session:invalid-reopen-reason' AND stream_version = 3",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 3,
+            ..
+        })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload_version = 3 WHERE stream_id = 'session:invalid-reopen-reason' AND stream_version = 3",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::UnsupportedEvent {
+            ref event_type,
+            payload_version: 3,
+        }) if event_type == "session.reopened"
     ));
 }
