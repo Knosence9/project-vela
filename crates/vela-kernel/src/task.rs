@@ -5,18 +5,21 @@ use serde::Serialize;
 use crate::event_log::{
     DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
 };
+use crate::session::{SessionId, SessionStatus, SessionStore, SessionStoreError, session_stream};
 
 const TASK_STARTED_EVENT_TYPE: &str = "task.started";
 const TASK_COMPLETED_EVENT_TYPE: &str = "task.completed";
 const TASK_CANCELLED_EVENT_TYPE: &str = "task.cancelled";
 const TASK_FAILED_EVENT_TYPE: &str = "task.failed";
+const TASK_SESSION_ASSOCIATED_EVENT_TYPE: &str = "task.session_associated";
 const TASK_EVENT_PAYLOAD_VERSION: u32 = 1;
 const TASK_COMPLETED_PAYLOAD_VERSION: u32 = 2;
 const TASK_CANCELLED_PAYLOAD_VERSION: u32 = 2;
 const TASK_FAILED_PAYLOAD_VERSION: u32 = 2;
 
 /// An opaque, non-empty identifier for one task.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct TaskId(String);
 
 impl TaskId {
@@ -191,6 +194,7 @@ pub struct Task {
     output: Option<TaskOutput>,
     cancellation: Option<TaskCancellation>,
     failure: Option<TaskFailure>,
+    session_id: Option<SessionId>,
 }
 
 impl Task {
@@ -217,6 +221,10 @@ impl Task {
     pub fn failure(&self) -> Option<&TaskFailure> {
         self.failure.as_ref()
     }
+
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session_id.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -224,12 +232,35 @@ impl Task {
 pub enum TaskStoreError {
     EventLog(EventLogError),
     Replay(ReplayError),
-    AlreadyExists { task_id: TaskId },
-    NotFound { task_id: TaskId },
-    AlreadyCompleted { task_id: TaskId },
-    AlreadyCancelled { task_id: TaskId },
-    AlreadyFailed { task_id: TaskId },
-    InvalidHistory { event_count: usize },
+    AlreadyExists {
+        task_id: TaskId,
+    },
+    NotFound {
+        task_id: TaskId,
+    },
+    AlreadyCompleted {
+        task_id: TaskId,
+    },
+    AlreadyCancelled {
+        task_id: TaskId,
+    },
+    AlreadyFailed {
+        task_id: TaskId,
+    },
+    SessionNotFound {
+        session_id: SessionId,
+    },
+    SessionClosed {
+        session_id: SessionId,
+    },
+    AlreadyAssociated {
+        task_id: TaskId,
+        session_id: SessionId,
+    },
+    Session(SessionStoreError),
+    InvalidHistory {
+        event_count: usize,
+    },
 }
 
 impl fmt::Display for TaskStoreError {
@@ -248,6 +279,20 @@ impl fmt::Display for TaskStoreError {
             Self::AlreadyFailed { task_id } => {
                 write!(formatter, "task {task_id} has already failed")
             }
+            Self::SessionNotFound { session_id } => {
+                write!(formatter, "session {session_id} was not found")
+            }
+            Self::SessionClosed { session_id } => {
+                write!(formatter, "session {session_id} is closed")
+            }
+            Self::AlreadyAssociated {
+                task_id,
+                session_id,
+            } => write!(
+                formatter,
+                "task {task_id} is already associated with session {session_id}"
+            ),
+            Self::Session(error) => write!(formatter, "task session-store error: {error}"),
             Self::InvalidHistory { event_count } => {
                 write!(
                     formatter,
@@ -263,11 +308,15 @@ impl std::error::Error for TaskStoreError {
         match self {
             Self::EventLog(error) => Some(error),
             Self::Replay(error) => Some(error),
+            Self::Session(error) => Some(error),
             Self::AlreadyExists { .. }
             | Self::NotFound { .. }
             | Self::AlreadyCompleted { .. }
             | Self::AlreadyCancelled { .. }
             | Self::AlreadyFailed { .. }
+            | Self::SessionNotFound { .. }
+            | Self::SessionClosed { .. }
+            | Self::AlreadyAssociated { .. }
             | Self::InvalidHistory { .. } => None,
         }
     }
@@ -276,13 +325,18 @@ impl std::error::Error for TaskStoreError {
 /// A synchronous task lifecycle store backed by the typed event log.
 pub struct TaskStore {
     event_log: EventLog,
+    sessions: SessionStore,
 }
 
 impl TaskStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, TaskStoreError> {
-        EventLog::open(path)
-            .map(|event_log| Self { event_log })
-            .map_err(TaskStoreError::EventLog)
+        let path = path.as_ref();
+        let event_log = EventLog::open(path).map_err(TaskStoreError::EventLog)?;
+        let sessions = SessionStore::open(path).map_err(TaskStoreError::Session)?;
+        Ok(Self {
+            event_log,
+            sessions,
+        })
     }
 
     pub fn start(&mut self, id: TaskId, goal: TaskGoal) -> Result<Task, TaskStoreError> {
@@ -299,6 +353,7 @@ impl TaskStore {
                 output: None,
                 cancellation: None,
                 failure: None,
+                session_id: None,
             }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
@@ -351,6 +406,60 @@ impl TaskStore {
         )
     }
 
+    pub fn associate_session(
+        &mut self,
+        id: &TaskId,
+        session_id: &SessionId,
+    ) -> Result<Task, TaskStoreError> {
+        loop {
+            let Some(loaded) = self.load_versioned(id)? else {
+                return Err(TaskStoreError::NotFound {
+                    task_id: id.clone(),
+                });
+            };
+            if let Some(existing) = loaded.task.session_id() {
+                return Err(TaskStoreError::AlreadyAssociated {
+                    task_id: id.clone(),
+                    session_id: existing.clone(),
+                });
+            }
+
+            let (session, session_version) = self
+                .sessions
+                .load_with_version(session_id)
+                .map_err(TaskStoreError::Session)?
+                .ok_or_else(|| TaskStoreError::SessionNotFound {
+                    session_id: session_id.clone(),
+                })?;
+            if session.status() == SessionStatus::Closed {
+                return Err(TaskStoreError::SessionClosed {
+                    session_id: session_id.clone(),
+                });
+            }
+
+            let event = TaskEvent::SessionAssociated {
+                task_id: id.clone(),
+                session_id: session_id.clone(),
+            };
+            match self.event_log.append_if_stream_unchanged(
+                &task_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                &session_stream(session_id),
+                ExpectedVersion::Exact(session_version),
+                &event,
+            ) {
+                Ok(_) => {
+                    return Ok(Task {
+                        session_id: Some(session_id.clone()),
+                        ..loaded.task
+                    });
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(TaskStoreError::EventLog(error)),
+            }
+        }
+    }
+
     fn transition_to_terminal(
         &mut self,
         id: &TaskId,
@@ -360,84 +469,108 @@ impl TaskStore {
         cancellation: Option<TaskCancellation>,
         failure: Option<TaskFailure>,
     ) -> Result<Task, TaskStoreError> {
-        let task = match self.load(id)? {
-            Some(task) if task.status == TaskStatus::Active => task,
-            Some(task) => return Err(terminal_state_error(id, task.status)),
-            None => {
-                return Err(TaskStoreError::NotFound {
-                    task_id: id.clone(),
-                });
-            }
-        };
+        loop {
+            let loaded = match self.load_versioned(id)? {
+                Some(loaded) if loaded.task.status == TaskStatus::Active => loaded,
+                Some(loaded) => return Err(terminal_state_error(id, loaded.task.status)),
+                None => {
+                    return Err(TaskStoreError::NotFound {
+                        task_id: id.clone(),
+                    });
+                }
+            };
 
-        match self
-            .event_log
-            .append(&task_stream(id), ExpectedVersion::Exact(1), &event)
-        {
-            Ok(_) => Ok(Task {
-                status,
-                output,
-                cancellation,
-                failure,
-                ..task
-            }),
-            Err(EventLogError::WrongExpectedVersion {
-                expected: ExpectedVersion::Exact(1),
-                current: Some(2),
-            }) => {
-                let winner = self.load(id)?.ok_or_else(|| TaskStoreError::NotFound {
-                    task_id: id.clone(),
-                })?;
-                Err(terminal_state_error(id, winner.status))
+            match self.event_log.append(
+                &task_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                &event,
+            ) {
+                Ok(_) => {
+                    return Ok(Task {
+                        status,
+                        output,
+                        cancellation,
+                        failure,
+                        ..loaded.task
+                    });
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(TaskStoreError::EventLog(error)),
             }
-            Err(error) => Err(TaskStoreError::EventLog(error)),
         }
     }
 
     pub fn load(&self, id: &TaskId) -> Result<Option<Task>, TaskStoreError> {
+        self.load_versioned(id)
+            .map(|loaded| loaded.map(|loaded| loaded.task))
+    }
+
+    fn load_versioned(&self, id: &TaskId) -> Result<Option<VersionedTask>, TaskStoreError> {
         let events = self
             .event_log
             .replay::<TaskEvent>(&task_stream(id))
             .map_err(TaskStoreError::Replay)?;
-        match events.as_slice() {
-            [] => Ok(None),
-            [TaskEvent::Started { goal }] => Ok(Some(Task {
-                id: id.clone(),
-                goal: goal.clone(),
-                status: TaskStatus::Active,
-                output: None,
-                cancellation: None,
-                failure: None,
-            })),
-            [TaskEvent::Started { goal }, TaskEvent::Completed { output }] => Ok(Some(Task {
-                id: id.clone(),
-                goal: goal.clone(),
-                status: TaskStatus::Completed,
-                output: output.clone(),
-                cancellation: None,
-                failure: None,
-            })),
-            [TaskEvent::Started { goal }, TaskEvent::Cancelled { reason }] => Ok(Some(Task {
-                id: id.clone(),
-                goal: goal.clone(),
-                status: TaskStatus::Cancelled,
-                output: None,
-                cancellation: reason.clone(),
-                failure: None,
-            })),
-            [TaskEvent::Started { goal }, TaskEvent::Failed { failure }] => Ok(Some(Task {
-                id: id.clone(),
-                goal: goal.clone(),
-                status: TaskStatus::Failed,
-                output: None,
-                cancellation: None,
-                failure: failure.clone(),
-            })),
-            _ => Err(TaskStoreError::InvalidHistory {
-                event_count: events.len(),
-            }),
+        let Some(TaskEvent::Started { goal }) = events.first() else {
+            return if events.is_empty() {
+                Ok(None)
+            } else {
+                Err(TaskStoreError::InvalidHistory {
+                    event_count: events.len(),
+                })
+            };
+        };
+
+        let mut task = Task {
+            id: id.clone(),
+            goal: goal.clone(),
+            status: TaskStatus::Active,
+            output: None,
+            cancellation: None,
+            failure: None,
+            session_id: None,
+        };
+        for event in &events[1..] {
+            match event {
+                TaskEvent::SessionAssociated {
+                    task_id,
+                    session_id,
+                } if task.session_id.is_none() && task_id == id => {
+                    task.session_id = Some(session_id.clone());
+                }
+                TaskEvent::Completed { output } if task.status == TaskStatus::Active => {
+                    task.status = TaskStatus::Completed;
+                    task.output = output.clone();
+                }
+                TaskEvent::Cancelled { reason } if task.status == TaskStatus::Active => {
+                    task.status = TaskStatus::Cancelled;
+                    task.cancellation = reason.clone();
+                }
+                TaskEvent::Failed { failure } if task.status == TaskStatus::Active => {
+                    task.status = TaskStatus::Failed;
+                    task.failure = failure.clone();
+                }
+                _ => {
+                    return Err(TaskStoreError::InvalidHistory {
+                        event_count: events.len(),
+                    });
+                }
+            }
         }
+
+        Ok(Some(VersionedTask {
+            task,
+            stream_version: u64::try_from(events.len()).map_err(|_| {
+                TaskStoreError::InvalidHistory {
+                    event_count: events.len(),
+                }
+            })?,
+        }))
     }
+}
+
+struct VersionedTask {
+    task: Task,
+    stream_version: u64,
 }
 
 fn terminal_state_error(id: &TaskId, status: TaskStatus) -> TaskStoreError {
@@ -462,10 +595,22 @@ fn task_stream(id: &TaskId) -> StreamId {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum TaskEvent {
-    Started { goal: TaskGoal },
-    Completed { output: Option<TaskOutput> },
-    Cancelled { reason: Option<TaskCancellation> },
-    Failed { failure: Option<TaskFailure> },
+    Started {
+        goal: TaskGoal,
+    },
+    Completed {
+        output: Option<TaskOutput>,
+    },
+    Cancelled {
+        reason: Option<TaskCancellation>,
+    },
+    Failed {
+        failure: Option<TaskFailure>,
+    },
+    SessionAssociated {
+        task_id: TaskId,
+        session_id: SessionId,
+    },
 }
 
 impl Event for TaskEvent {
@@ -475,6 +620,7 @@ impl Event for TaskEvent {
             Self::Completed { .. } => TASK_COMPLETED_EVENT_TYPE,
             Self::Cancelled { .. } => TASK_CANCELLED_EVENT_TYPE,
             Self::Failed { .. } => TASK_FAILED_EVENT_TYPE,
+            Self::SessionAssociated { .. } => TASK_SESSION_ASSOCIATED_EVENT_TYPE,
         }
     }
 
@@ -483,7 +629,7 @@ impl Event for TaskEvent {
             Self::Completed { .. } => TASK_COMPLETED_PAYLOAD_VERSION,
             Self::Cancelled { .. } => TASK_CANCELLED_PAYLOAD_VERSION,
             Self::Failed { .. } => TASK_FAILED_PAYLOAD_VERSION,
-            Self::Started { .. } => TASK_EVENT_PAYLOAD_VERSION,
+            Self::Started { .. } | Self::SessionAssociated { .. } => TASK_EVENT_PAYLOAD_VERSION,
         }
     }
 
@@ -502,6 +648,7 @@ impl Event for TaskEvent {
                 payload_version,
                 TASK_EVENT_PAYLOAD_VERSION | TASK_FAILED_PAYLOAD_VERSION
             ),
+            TASK_SESSION_ASSOCIATED_EVENT_TYPE => payload_version == TASK_EVENT_PAYLOAD_VERSION,
             _ => false,
         };
         if !supported {
@@ -602,6 +749,33 @@ impl Event for TaskEvent {
             })?;
             return Ok(Self::Failed {
                 failure: Some(failure),
+            });
+        }
+
+        if event_type == TASK_SESSION_ASSOCIATED_EVENT_TYPE {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Payload {
+                task_id: String,
+                session_id: String,
+            }
+
+            let payload: Payload =
+                serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            let task_id =
+                TaskId::new(payload.task_id).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            let session_id = SessionId::new(payload.session_id).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::SessionAssociated {
+                task_id,
+                session_id,
             });
         }
 

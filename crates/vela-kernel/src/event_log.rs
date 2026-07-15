@@ -324,7 +324,36 @@ impl EventLog {
         expected: ExpectedVersion,
         event: &E,
     ) -> Result<u64, EventLogError> {
-        if matches!(expected, ExpectedVersion::Exact(0)) {
+        self.append_guarded(stream, expected, None, event)
+    }
+
+    /// Appends only while both the target and prerequisite streams remain at expected versions.
+    pub fn append_if_stream_unchanged<E: Event>(
+        &mut self,
+        stream: &StreamId,
+        expected: ExpectedVersion,
+        prerequisite: &StreamId,
+        prerequisite_expected: ExpectedVersion,
+        event: &E,
+    ) -> Result<u64, EventLogError> {
+        self.append_guarded(
+            stream,
+            expected,
+            Some((prerequisite, prerequisite_expected)),
+            event,
+        )
+    }
+
+    fn append_guarded<E: Event>(
+        &mut self,
+        stream: &StreamId,
+        expected: ExpectedVersion,
+        prerequisite: Option<(&StreamId, ExpectedVersion)>,
+        event: &E,
+    ) -> Result<u64, EventLogError> {
+        if matches!(expected, ExpectedVersion::Exact(0))
+            || matches!(prerequisite, Some((_, ExpectedVersion::Exact(0))))
+        {
             return Err(EventLogError::InvalidExpectedVersion(0));
         }
         let event_type = event.event_type();
@@ -343,6 +372,15 @@ impl EventLog {
             });
         }
         next_stream_version(preflight_current)?;
+        if let Some((prerequisite, prerequisite_expected)) = prerequisite {
+            let current = current_stream_version(&self.connection, prerequisite)?;
+            if !expected_version_matches(prerequisite_expected, current) {
+                return Err(EventLogError::WrongExpectedVersion {
+                    expected: prerequisite_expected,
+                    current,
+                });
+            }
+        }
 
         let payload = serde_json::to_vec(event)?;
         let transaction = self
@@ -352,6 +390,15 @@ impl EventLog {
 
         if !expected_version_matches(expected, current) {
             return Err(EventLogError::WrongExpectedVersion { expected, current });
+        }
+        if let Some((prerequisite, prerequisite_expected)) = prerequisite {
+            let current = current_stream_version(&transaction, prerequisite)?;
+            if !expected_version_matches(prerequisite_expected, current) {
+                return Err(EventLogError::WrongExpectedVersion {
+                    expected: prerequisite_expected,
+                    current,
+                });
+            }
         }
 
         let (version, stored_version) = next_stream_version(current)?;

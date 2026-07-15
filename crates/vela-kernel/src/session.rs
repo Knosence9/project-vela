@@ -16,7 +16,8 @@ const SESSION_CLOSED_PAYLOAD_VERSION: u32 = 2;
 const SESSION_REOPENED_PAYLOAD_VERSION: u32 = 2;
 
 /// An opaque, non-empty identifier for one session.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct SessionId(String);
 
 impl SessionId {
@@ -454,6 +455,14 @@ impl SessionStore {
             .map(|loaded| loaded.map(|loaded| loaded.session))
     }
 
+    pub(crate) fn load_with_version(
+        &self,
+        id: &SessionId,
+    ) -> Result<Option<(Session, u64)>, SessionStoreError> {
+        self.load_versioned(id)
+            .map(|loaded| loaded.map(|loaded| (loaded.session, loaded.stream_version)))
+    }
+
     fn load_versioned(
         &self,
         id: &SessionId,
@@ -531,7 +540,7 @@ struct VersionedSession {
     stream_version: u64,
 }
 
-fn session_stream(id: &SessionId) -> StreamId {
+pub(crate) fn session_stream(id: &SessionId) -> StreamId {
     StreamId::new(format!("session:{id}")).expect("a prefixed session stream is never empty")
 }
 

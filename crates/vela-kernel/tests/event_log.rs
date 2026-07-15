@@ -182,6 +182,65 @@ fn event_log_errors_expose_only_wrapped_error_sources() {
 }
 
 #[test]
+fn guarded_append_requires_both_stream_versions_to_remain_unchanged() {
+    let directory = tempdir().unwrap();
+    let mut log = EventLog::open(directory.path().join("events.sqlite3")).unwrap();
+    let target = StreamId::new("task:42").unwrap();
+    let guard = StreamId::new("session:7").unwrap();
+    log.append(
+        &target,
+        ExpectedVersion::NoStream,
+        &AccountEvent::Opened {
+            owner: "task".into(),
+        },
+    )
+    .unwrap();
+    log.append(
+        &guard,
+        ExpectedVersion::NoStream,
+        &AccountEvent::Opened {
+            owner: "session".into(),
+        },
+    )
+    .unwrap();
+    log.append(
+        &guard,
+        ExpectedVersion::Exact(1),
+        &AccountEvent::Credited { cents: 1 },
+    )
+    .unwrap();
+
+    let error = log
+        .append_if_stream_unchanged(
+            &target,
+            ExpectedVersion::Exact(1),
+            &guard,
+            ExpectedVersion::Exact(1),
+            &AccountEvent::Credited { cents: 2 },
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        EventLogError::WrongExpectedVersion {
+            expected: ExpectedVersion::Exact(1),
+            current: Some(2),
+        }
+    ));
+    assert_eq!(log.replay::<AccountEvent>(&target).unwrap().len(), 1);
+
+    log.append_if_stream_unchanged(
+        &target,
+        ExpectedVersion::Exact(1),
+        &guard,
+        ExpectedVersion::Exact(2),
+        &AccountEvent::Credited { cents: 2 },
+    )
+    .unwrap();
+    assert_eq!(log.replay::<AccountEvent>(&target).unwrap().len(), 2);
+}
+
+#[test]
 fn rejects_zero_payload_version_without_writing() {
     let directory = tempdir().unwrap();
     let mut log = EventLog::open(directory.path().join("events.sqlite3")).unwrap();
