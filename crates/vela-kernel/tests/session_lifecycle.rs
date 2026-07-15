@@ -9,7 +9,8 @@ use vela_kernel::{
     event_log::ReplayError,
     session::{
         SessionClosure, SessionClosureError, SessionId, SessionIdError, SessionReopenReason,
-        SessionReopenReasonError, SessionStatus, SessionStore, SessionStoreError, SessionTitle,
+        SessionReopenReasonError, SessionStatus, SessionStore, SessionStoreError, SessionSummary,
+        SessionSummaryError, SessionTitle,
     },
 };
 
@@ -141,6 +142,169 @@ fn renaming_a_missing_session_returns_not_found_without_creating_a_stream() {
         SessionStoreError::NotFound { ref session_id } if session_id == &id
     ));
     assert_eq!(store.load(&id).unwrap(), None);
+}
+
+#[test]
+fn summarizes_and_loads_the_latest_summary_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("summary").unwrap();
+    let mut store = SessionStore::open(&path).unwrap();
+    store
+        .create(id.clone(), SessionTitle::new("Investigate").unwrap())
+        .unwrap();
+    let closure = SessionClosure::new("Paused").unwrap();
+    store.close(&id, closure.clone()).unwrap();
+
+    let first = SessionSummary::new(" First finding ").unwrap();
+    let summarized = store.summarize(&id, first).unwrap();
+    assert_eq!(summarized.status(), SessionStatus::Closed);
+    assert_eq!(summarized.closure(), Some(&closure));
+
+    let latest = SessionSummary::new(" Latest finding ").unwrap();
+    let summarized = store.summarize(&id, latest.clone()).unwrap();
+
+    assert_eq!(summarized.summary(), Some(&latest));
+    assert_eq!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap(),
+        Some(summarized)
+    );
+    let (event_type, payload_version, payload): (String, u32, Vec<u8>) =
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT event_type, payload_version, payload FROM events WHERE stream_id = 'session:summary' AND stream_version = 4",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+    assert_eq!(event_type, "session.summarized");
+    assert_eq!(payload_version, 1);
+    assert_eq!(payload, br#"{"summary":" Latest finding "}"#);
+    assert_eq!(latest.as_str(), " Latest finding ");
+}
+
+#[test]
+fn summary_validation_and_missing_session_are_explicit() {
+    assert_eq!(
+        SessionSummary::new("").unwrap_err().to_string(),
+        "session summary must not be empty"
+    );
+    let _: SessionSummaryError = SessionSummary::new("").unwrap_err();
+
+    let directory = tempdir().unwrap();
+    let mut store = SessionStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let id = SessionId::new("missing-summary").unwrap();
+    let error = store
+        .summarize(&id, SessionSummary::new("Finding").unwrap())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SessionStoreError::NotFound { ref session_id } if session_id == &id
+    ));
+    assert_eq!(store.load(&id).unwrap(), None);
+}
+
+#[test]
+fn racing_summaries_both_persist_as_valid_updates() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("race-summary").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Race summary").unwrap())
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+
+    let first_path = path.clone();
+    let first_id = id.clone();
+    let first_barrier = Arc::clone(&barrier);
+    let first = thread::spawn(move || {
+        let mut store = SessionStore::open(first_path).unwrap();
+        first_barrier.wait();
+        store.summarize(&first_id, SessionSummary::new("First").unwrap())
+    });
+    let second_path = path.clone();
+    let second_id = id.clone();
+    let second = thread::spawn(move || {
+        let mut store = SessionStore::open(second_path).unwrap();
+        barrier.wait();
+        store.summarize(&second_id, SessionSummary::new("Second").unwrap())
+    });
+
+    let first = first.join().unwrap().unwrap();
+    let second = second.join().unwrap().unwrap();
+    assert!(matches!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&id)
+            .unwrap()
+            .unwrap()
+            .summary(),
+        Some(summary) if summary == first.summary().unwrap() || summary == second.summary().unwrap()
+    ));
+    let summary_count: u32 = rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = 'session:race-summary' AND event_type = 'session.summarized'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(summary_count, 2);
+}
+
+#[test]
+fn load_rejects_invalid_summary_events_and_summary_before_creation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("invalid-summary").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Original").unwrap())
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:invalid-summary', 2, 'session.summarized', 1, X'7B2273756D6D617279223A22227D')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload_version = 2 WHERE stream_id = 'session:invalid-summary' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::UnsupportedEvent {
+            ref event_type,
+            payload_version: 2,
+        }) if event_type == "session.summarized"
+    ));
+
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:summary-before-create', 1, 'session.summarized', 1, X'7B2273756D6D617279223A2246696E64696E67227D')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&SessionId::new("summary-before-create").unwrap())
+            .unwrap_err(),
+        SessionStoreError::InvalidHistory { event_count: 1 }
+    ));
 }
 
 #[test]
