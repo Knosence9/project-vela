@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "List persisted tasks associated with a session",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/482 by adding a deterministic read-only membership query over the existing immutable association from task to session without introducing a duplicate projection table, reassociation, pagination, runtime, identity, provider, or permission policy.",
+    "acceptance_criteria": [
+      "An existing session returns all associated active and terminal tasks in ascending task identifier order with each task replayed to its latest state.",
+      "Unassociated tasks and tasks belonging to other sessions are excluded, while closed and reopened sessions retain membership across database reopen.",
+      "A missing session returns the existing typed domain error and listing appends no events.",
+      "Malformed payloads and associations whose payload task does not match the owning stream remain explicit replay or invalid-history errors.",
+      "Documentation, independent review, the local repository gate, CodeRabbit, and the hosted Rust quality gate pass before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 482 and wrote session membership acceptance tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED suite failed to compile because TaskStore had no list_for_session method.",
+      "patch": "Added integration scenarios for deterministic filtering and ordering, latest terminal state, database reopen, closed and reopened sessions, missing sessions, no-write behavior, malformed payloads, and stream-to-payload mismatch."
+    },
+    {
+      "summary": "Implemented filtered typed event replay and the task membership query.",
+      "outcome": "success",
+      "diagnostic": "The focused suite passed after the query verified the session, decoded persisted task.session_associated events, replayed each matching task history, validated stream ownership, and sorted the resulting tasks by opaque identifier bytes.",
+      "patch": "Added a crate-private replay_event_type helper and public TaskStore::list_for_session without adding a mutable session-side index or new lifecycle event."
+    },
+    {
+      "summary": "Made read-only and corruption behavior observable in tests and documentation.",
+      "outcome": "success",
+      "diagnostic": "Event counts remained unchanged across listing calls, valid terminal state was returned from full task replay, and corrupted association payloads surfaced as Replay or InvalidHistory rather than being skipped.",
+      "patch": "Extended association integration coverage and updated the task lifecycle, session lifecycle, README milestone, and explicit non-goals."
+    },
+    {
+      "summary": "Performed independent pre-commit review and full local verification.",
+      "outcome": "success",
+      "diagnostic": "An independent Codex review identified no blocking or follow-up defect; pinned just verify passed formatting, checking, 109 workspace tests, Clippy with warnings denied, SecretSpec integration, and diff checks.",
+      "patch": "Retained the replay design owned by the task aggregate after review and committed the implementation, tests, and documentation as one bounded Conventional Commit."
+    },
+    {
+      "summary": "Published, reviewed, and squash-merged the query capability.",
+      "outcome": "success",
+      "diagnostic": "GitHub Rust quality gate run 29459097365 passed, CodeRabbit reported no actionable comments and all five pre-merge checks passed, and pull request 483 squash-merged as 38a7053944190be8891620e2fd0abf43784e19af.",
+      "patch": "Linked issue 482, enabled squash auto-merge, monitored both required checks, and synchronized local main after merge."
+    },
+    {
+      "summary": "Captured and validated the merged episode in the Vela-native corpus.",
+      "outcome": "success",
+      "diagnostic": "The schema-v1 record validator accepted the artifact, complete corpus inspection reported 39 valid and zero invalid records, and pinned full verification passed with the record included.",
+      "patch": "Added one positive curated record with RED and GREEN attempts, replay rationale, corruption diagnostics, review evidence, lessons, and public merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now recover the latest persisted tasks belonging to any existing session in deterministic order while preserving association history owned by each task and surfacing corrupt data explicitly.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_session_association # RED: compile failure because list_for_session did not exist",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_session_association # GREEN: 13 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # formatting, checking, 109 workspace tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # no blocking or follow-up findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29459097365 and required CodeRabbit status for pull request 483 # passed",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 483 squash merge 38a7053944190be8891620e2fd0abf43784e19af",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0039-session-membership.json # valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # 39 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # all repository gates passed with the development record included",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A reverse membership view does not require a second mutable aggregate when the authoritative association event owned by the task already carries both identifiers.",
+    "A read model should replay each matching aggregate to its latest state rather than reconstructing partial task state from the association row.",
+    "Deterministic ordering belongs in the query contract because SQLite row order and append chronology are not stable membership semantics.",
+    "Read-only behavior deserves an event-count assertion even when the implementation appears structurally incapable of writing.",
+    "A reverse query must validate that the association payload task identifier matches the stream that owns the event; otherwise corrupt cross-stream data can impersonate another task.",
+    "Closed and reopened session status should not erase membership because the immutable relation remains owned by task history.",
+    "A linear scan is the smallest correct bootstrap design; pagination or a derived index should wait for measured scale and explicit consistency requirements."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/483"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
