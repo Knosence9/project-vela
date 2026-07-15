@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist session summaries",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/473 by adding replayable session summaries without expanding into automatic generation, messages, turns, timestamps, actors, metadata, or runtime behavior.",
+    "acceptance_criteria": [
+      "SessionStore::summarize requires an existing session and a validated non-empty SessionSummary while preserving UTF-8 and whitespace exactly.",
+      "Summarizing persists payload-version-one session.summarized events and replays the latest summary after reopening SQLite.",
+      "Repeated and concurrent summaries form valid expected-version histories while preserving title, status, and the active close or reopen reason.",
+      "A missing session returns NotFound without creating a stream, while malformed, unsupported, and pre-creation summary events remain explicit replay or invalid-history errors.",
+      "Documentation, independent review, and all local and hosted gates pass before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 473 and added persisted summary lifecycle tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed to compile because SessionSummary, SessionSummaryError, and SessionStore::summarize did not exist.",
+      "patch": "Added tests for exact event persistence, reload projection, repeated summaries, missing sessions, malformed and unsupported payloads, summary before creation, and racing summary writers."
+    },
+    {
+      "summary": "Implemented typed session summary persistence and replay projection.",
+      "outcome": "success",
+      "diagnostic": "The session lifecycle suite passed 30 tests after adding the summary value, API, event encoding and decoding, optimistic append retry, and latest-summary projection.",
+      "patch": "Added the session.summarized discriminator at payload version one, validated non-empty summary payloads, initialized new sessions without summaries, and allowed summary events after creation in either lifecycle status."
+    },
+    {
+      "summary": "Refactored through existing event-log boundaries and independently reviewed the implementation.",
+      "outcome": "success",
+      "diagnostic": "The implementation reused exact expected-version retries and event replay without creating a second persistence path; pinned Codex review found no blocking regression.",
+      "patch": "Kept summary updates independent from status transitions so rename, close, and reopen continue to project from one authoritative event history."
+    },
+    {
+      "summary": "Addressed CodeRabbit's actionable lifecycle-preservation coverage finding.",
+      "outcome": "success",
+      "diagnostic": "The initial hosted review noted that the summary test preserved a close reason but did not demonstrate preservation through a reopen despite the documented contract.",
+      "patch": "Extended the test to summarize while closed, reopen with a typed reason, verify the prior summary survives reopening, summarize again, and verify the latest summary and active reopen reason survive database reload."
+    },
+    {
+      "summary": "Ran local and hosted gates and squash-merged the session summary lifecycle.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 95 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality runs 29399773591 and 29400424906 passed, the final CodeRabbit review generated no actionable comments, and pull request 474 squash-merged as 3e50d56ae72ea46cc2b263a51d9948e90dcae035.",
+      "patch": "Committed the bounded implementation, review fix, tests, and documentation; linked issue 473; enabled squash auto-merge; and monitored both required checks to completion."
+    },
+    {
+      "summary": "Captured and independently reviewed the merged episode in the Vela-native corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 37 valid and zero invalid records, full pinned verification passed with the record included, and independent Codex review found no blocking issue.",
+      "patch": "Added one sanitized positive record with task, RED and GREEN attempts, concurrency and replay rationale, the hosted review diagnostic and fix, local and hosted verification, lessons, and merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now durably summarize existing open or closed sessions, replay the latest validated summary without disturbing lifecycle state or active reasons, serialize racing summary writers, and reject invalid persisted summary data explicitly.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle summarizes_and_loads_the_latest_summary_after_reopening # RED: compile failure because summary types and API did not exist",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # GREEN: 30 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 95 workspace tests plus all repository gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --base main # no blocking correctness, replay, or concurrency defect found",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate runs 29399773591 and 29400424906 and required CodeRabbit status for pull request 474 # all passed after the review fix",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 474 squash merge 3e50d56ae72ea46cc2b263a51d9948e90dcae035",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0037-session-summary.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 37 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 95 workspace tests passed with the development record included",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # no blocking corpus issue found",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A summary is an event-sourced data projection rather than a status transition, so it should preserve the session's title, status, and active lifecycle reason.",
+    "A validated SessionSummary value keeps empty persisted summaries out of both the write API and replayed state while preserving meaningful whitespace.",
+    "Optimistic expected-version retries serialize concurrent summary and lifecycle writes against the latest accepted history instead of dropping either update.",
+    "Replay should permit repeated summary events only after creation and project the latest value while rejecting summary-before-create as invalid history.",
+    "Malformed and unsupported persisted summary events must fail explicitly rather than silently retaining an older summary.",
+    "A test name and documented contract can imply more than one state path; hosted review usefully exposed the missing reopen-reason preservation assertion.",
+    "Automatic summary generation, messages, turns, timestamps, actors, metadata, and runtime behavior remain separate product decisions."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/474"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
