@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist task cancellation reason",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/443 by persisting one opaque non-empty reason on new cancelled tasks while preserving replay compatibility for legacy empty cancellation events and leaving structured cancellation and runtime policy undefined.",
+    "acceptance_criteria": [
+      "Cancelling an active task requires a non-empty UTF-8 reason, preserves its exact content, and reloads it after reopening SQLite.",
+      "New task.cancelled events use payload version two while legacy empty payload-version-one cancellations remain replayable without a reason.",
+      "Empty caller and persisted reasons are rejected explicitly, and non-cancelled task states expose no cancellation reason.",
+      "Existing missing-task, terminal-conflict, race, completion-output, failure-diagnostic, invalid-history, and explicit replay-error behavior remains intact.",
+      "Public behavior and non-goals are documented, pinned verification passes, and required pull-request gates permit squash auto-merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 443 and wrote cancellation-reason lifecycle assertions before adding production API support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with unresolved TaskCancellation, an unexpected second argument to the old TaskStore::cancel API, and a missing Task::cancellation accessor.",
+      "patch": "Added reopening and direct-payload tests that required a validated reason and asserted the returned, persisted, and replayed task retained it."
+    },
+    {
+      "summary": "Evolved cancellation with an explicitly versioned reason payload.",
+      "outcome": "success",
+      "diagnostic": "New writes stored payload version two with exact whitespace-preserving reason JSON. A dedicated compatibility test replayed an empty version-one cancellation as cancelled state with no reason, while an empty version-two reason surfaced an explicit malformed-payload replay error.",
+      "patch": "Added TaskCancellation and TaskCancellationError, optional cancellation data on Task, a required reason argument on TaskStore::cancel, and version-aware task.cancelled encoding and decoding."
+    },
+    {
+      "summary": "Retained existing terminal lifecycle behavior and documented the bounded cancellation contract.",
+      "outcome": "success",
+      "diagnostic": "All 31 task lifecycle integration tests passed, including completion-cancellation races, terminal conflicts, legacy replay, malformed history, completion output, failure diagnostics, and reason absence on active, completed, and failed tasks.",
+      "patch": "Reused the exact-version terminal append and persisted-winner reload path, updated existing cancellation callers, and documented that reasons remain opaque rather than defining a structured taxonomy, actor, cooperative cancellation, or runtime behavior."
+    },
+    {
+      "summary": "Ran local and hosted quality gates, monitored automated review, and completed squash auto-merge.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 65 workspace integration tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29385730444 passed. CodeRabbit passed all pre-merge checks and generated no actionable comments. Pull request 444 squash-merged as a696cba878e77229c51a00c8123368e17dd7955e.",
+      "patch": "No correctness correction was required by hosted review; the bounded implementation merged unchanged after local verification."
+    },
+    {
+      "summary": "Captured and self-validated the merged episode in the Vela-native development corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 30 valid and zero invalid records, full pinned verification passed with the record included, and independent read-only review found no blocking record issue.",
+      "patch": "Added one sanitized positive record containing the task, compiler-observed RED attempt, diagnostic, compatibility fix, lifecycle rationale, local and hosted verification, review result, lessons, and merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now durably preserves an opaque reason for newly cancelled tasks in a version-two event, replays legacy version-one cancellations without inventing a reason, rejects empty reason data explicitly, and retains serialized terminal transitions without defining structured cancellation or runtime policy.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle persists_cancellation_reason_in_the_typed_event_payload # RED: cancellation reason API was missing",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle # GREEN: 31 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 65 workspace integration tests passed before merge",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29385730444 for pull request 444",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status for pull request 444 # passed with no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 444 squash merge a696cba878e77229c51a00c8123368e17dd7955e",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0030-cancellation-reason.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 30 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of issue 445 corpus record # no blocking record issue",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Persisted payload shape changes need a new payload version even when the event discriminator and terminal meaning stay unchanged.",
+    "A compatibility decoder can preserve legacy cancelled state honestly by exposing no reason rather than inventing a value or rejecting valid old history.",
+    "Opaque validated UTF-8 is a sufficient first cancellation boundary; structured taxonomies, request actors, and cooperative runtime cancellation can remain separate decisions.",
+    "Whitespace-preserving tests and direct payload assertions make it explicit that the kernel stores caller reasons without normalization or reinterpretation.",
+    "Terminal races should continue using one exact-version append path so adding cancellation data does not weaken persisted-winner conflict reporting.",
+    "Symmetric lifecycle data still needs explicit version, compatibility, absence, malformed-payload, and documentation tests rather than relying on analogy alone."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/444"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
