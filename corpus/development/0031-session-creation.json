@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Add persisted session creation and load lifecycle",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/447 by adding one durable session creation/load boundary over the typed SQLite event log while leaving close, resume, turns, task membership, and runtime behavior undefined.",
+    "acceptance_criteria": [
+      "Non-empty session IDs and titles preserve their exact UTF-8 content without trimming or reinterpretation.",
+      "Creating a session persists one session.created payload-version-one event and loading after reopening SQLite returns the same ID, title, and open status.",
+      "Session streams remain isolated from task streams with the same external ID, while duplicate and racing creates preserve exactly one original session.",
+      "Missing streams return no session, and unsupported events, versions, malformed payloads, and invalid histories surface explicit errors rather than being skipped.",
+      "Public behavior and non-goals are documented, pinned verification passes, and required pull-request gates permit squash auto-merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 447 and wrote session lifecycle integration tests before adding production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with Rust error E0432 because vela_kernel::session did not exist.",
+      "patch": "Added acceptance tests for create/reopen/load, missing streams, empty domain values, isolation from task streams, duplicate and racing creates, replay errors, invalid history, and exact persisted payload shape."
+    },
+    {
+      "summary": "Implemented the smallest typed persisted session boundary, then corrected its event serialization shape while greenward.",
+      "outcome": "success",
+      "diagnostic": "The first production pass compiled but four lifecycle tests exposed externally tagged enum JSON containing a Created wrapper. Marking SessionEvent untagged produced the documented flat title payload, after which all focused lifecycle behavior passed.",
+      "patch": "Added SessionId, SessionTitle, SessionStatus, Session, SessionStore, explicit store errors, a session-prefixed stream, and strict session.created version-one encoding and decoding; exported the session module from vela-kernel."
+    },
+    {
+      "summary": "Made the racing-create proof deterministic after full verification exposed a test-setup lock race.",
+      "outcome": "success",
+      "diagnostic": "One combined verification run timed out after a racing-create worker could fail while concurrently initializing the SQLite schema, leaving its peer blocked at the barrier. Opening the store once before spawning writers separated schema setup from the behavior under test.",
+      "patch": "Initialized the event-log schema before the two racing SessionStore connections, then ran the targeted concurrency test successfully 20 consecutive times."
+    },
+    {
+      "summary": "Documented the bounded lifecycle, ran local and hosted gates, reviewed automated findings, and completed squash auto-merge.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 74 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks; rustdoc also passed with warnings denied. GitHub Rust quality run 29387424359 and CodeRabbit passed. CodeRabbit raised only two trivial suggestions: make the one-variant public status enum non-exhaustive and name columns in a test-only raw insert. Neither was blocking for the verified contract. Pull request 448 squash-merged as 55d5f3da4616df1a5326871e3ca2604f5924fdeb.",
+      "patch": "Added session lifecycle documentation and milestone status. No correctness correction was required by hosted review; the compatibility annotation and test-maintainability suggestions remain bounded follow-up candidates rather than post-review scope expansion."
+    },
+    {
+      "summary": "Captured, corrected, and independently reviewed the merged episode in the Vela-native development corpus.",
+      "outcome": "success",
+      "diagnostic": "The first validation attempt rejected a hyphenated task stream phrase because its boundary contained a conservative secret-marker substring. Rephrasing it without changing meaning allowed the record validator to pass; complete corpus inspection then reported 31 valid and zero invalid records, full pinned verification passed with the record included, and independent read-only review found no blocking record issue.",
+      "patch": "Added one sanitized positive record containing the task, compiler-observed RED attempt, serialization correction, concurrency-test diagnostic and fix, lifecycle rationale, local and hosted verification, review dispositions, lessons, and merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now durably creates and reloads validated open sessions on isolated session streams, rejects duplicate or malformed histories explicitly, and preserves exactly one winner under concurrent creation without speculating about later session or runtime transitions.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test session_lifecycle # RED: vela_kernel::session was unresolved",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test session_lifecycle # GREEN: 9 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 74 workspace tests passed before merge",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps --locked",
+        "status": "passed"
+      },
+      {
+        "command": "Targeted racing_creates_persist_exactly_one_session test repeated 20 times after deterministic setup fix",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29387424359 for pull request 448",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status for pull request 448 # passed with two trivial non-blocking suggestions",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 448 squash merge 55d5f3da4616df1a5326871e3ca2604f5924fdeb",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0031-session-creation.json # initial sanitation rejection corrected; final result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 31 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of issue 449 corpus record # no blocking record issue",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A new aggregate can reuse the typed event log while retaining a distinct stream prefix, preventing external IDs from colliding across task and session domains.",
+    "An untagged event enum keeps persisted JSON aligned with the explicit payload contract; direct payload assertions catch accidental serde representation changes that replay tests alone can miss.",
+    "Concurrency tests should initialize shared storage before synchronizing competing behavior, or setup failures can strand peers at a barrier and disguise a test-harness defect as a product deadlock.",
+    "ExpectedVersion::NoStream supplies the required atomic create-once boundary, so duplicate and racing session creation do not need a separate preflight existence check.",
+    "One created event is enough for the initial session boundary; close, resume, task membership, turns, and runtime semantics should arrive as separately tested lifecycle decisions.",
+    "Automated review findings should be recorded with severity and disposition; trivial API-evolution and test-maintainability suggestions do not invalidate a passing bounded slice."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/448"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
