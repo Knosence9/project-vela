@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist task failure diagnostics",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/435 by persisting one opaque non-empty diagnostic on new failed tasks while preserving replay compatibility for legacy empty failure events and leaving structured error policy and runtime execution undefined.",
+    "acceptance_criteria": [
+      "Failing an active task requires a non-empty UTF-8 diagnostic, preserves its exact content, and reloads it after reopening SQLite.",
+      "New task.failed events use payload version two while legacy empty payload-version-one failures remain replayable without a diagnostic.",
+      "Empty caller and persisted diagnostics are rejected explicitly, and non-failed task states expose no failure diagnostic.",
+      "Existing missing-task, terminal-conflict, race, invalid-history, and explicit replay-error behavior remains intact.",
+      "Public behavior and non-goals are documented, pinned verification passes, and required pull-request gates permit squash auto-merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 435 and wrote the diagnostic persistence assertion before adding production API support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with three compiler errors because TaskFailure, the diagnostic argument on TaskStore::fail, and Task::failure did not exist.",
+      "patch": "Added a reopening test that required a validated failure value and asserted the returned and replayed task retained it."
+    },
+    {
+      "summary": "Implemented the first diagnostic payload using the existing failure event version.",
+      "outcome": "failure",
+      "diagnostic": "The focused test passed, but pre-commit reasoning identified that assigning new diagnostic semantics to payload version one would make already-persisted empty task.failed events malformed instead of replayable.",
+      "patch": "Discarded the same-version schema change before commit and treated persistence compatibility as part of the observable contract."
+    },
+    {
+      "summary": "Introduced a version-two failure payload and retained the legacy version-one decoder.",
+      "outcome": "success",
+      "diagnostic": "New writes stored payload version two with the exact diagnostic JSON. A dedicated compatibility test replayed an empty version-one failure as failed state with no diagnostic, while empty version-two diagnostics surfaced an explicit malformed-payload replay error.",
+      "patch": "Added TaskFailure and TaskFailureError, optional failure data on Task, version-aware task.failed encoding and decoding, and strict diagnostic validation."
+    },
+    {
+      "summary": "Preserved terminal concurrency behavior and independently reviewed the final change.",
+      "outcome": "success",
+      "diagnostic": "All 25 lifecycle integration tests passed, and the completion-versus-failure race passed 20 consecutive focused runs. Independent read-only Codex review found no discrete correctness issue in schema compatibility, lifecycle transitions, tests, or documentation.",
+      "patch": "Kept the existing exact-version terminal append and persisted-winner reload path, and documented that diagnostics remain opaque rather than defining taxonomy, retries, or runtime behavior."
+    },
+    {
+      "summary": "Ran local and hosted quality gates, monitored automated review, and completed squash auto-merge.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 59 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29381766623 passed. CodeRabbit passed with two explicitly trivial refactor suggestions and no blocking finding. Pull request 436 squash-merged as 46e3323056dc14f75a45423d04df962f0db50b9e.",
+      "patch": "No correctness correction was required by hosted review; its suggestions to derive returned terminal state from the event and extract duplicate empty-payload decoding remain optional maintainability follow-ups rather than unverified implementation claims."
+    },
+    {
+      "summary": "Captured and self-validated the merged episode in the Vela-native development corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 28 valid and zero invalid records, full pinned verification passed with the record included, and independent read-only review found no blocking record issue.",
+      "patch": "Added one sanitized positive record containing task, failed attempt, diagnostic, compatibility fix, concurrency rationale, local and hosted verification, review disposition, lessons, and provenance evidence."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now durably preserves an opaque diagnostic for newly failed tasks in a version-two event, replays legacy version-one failures without data loss, rejects empty diagnostic data explicitly, and retains serialized terminal transitions without defining runtime error policy.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test task_lifecycle fails_and_loads_a_failed_task_after_reopening # RED: diagnostic API was missing",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test task_lifecycle # GREEN: 25 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "Completion-versus-failure race integration test repeated 20 times # 20 passed",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only Codex pre-commit review of issue 435 changes # no discrete correctness issue",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 59 workspace tests passed before merge",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29381766623 for pull request 436",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status for pull request 436 # passed with two trivial non-blocking refactor suggestions",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 436 squash merge 46e3323056dc14f75a45423d04df962f0db50b9e",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0028*.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 28 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only Codex review of issue 437 corpus record # no blocking record issue",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Changing a persisted payload shape requires a new payload version even when the event discriminator and lifecycle meaning stay the same.",
+    "A compatibility decoder can preserve legacy failed state honestly by exposing no diagnostic rather than inventing one or rejecting valid old history.",
+    "Opaque validated UTF-8 is a sufficient first diagnostic boundary; taxonomy, stack traces, retry policy, and runtime execution can remain separate decisions.",
+    "Whitespace-preserving tests and direct payload assertions make it explicit that the kernel stores caller evidence without normalization or reinterpretation.",
+    "Terminal races should continue using one exact-version append path so adding payload data does not weaken persisted-winner conflict reporting.",
+    "Automated review suggestions should be recorded with their severity and disposition; trivial maintainability ideas are not correctness failures and need not expand a bounded slice after its gates pass."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/436"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
