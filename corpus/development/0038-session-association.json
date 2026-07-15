@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist immutable association from tasks to sessions",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/478 by connecting the existing task and session aggregates through one replayable immutable association without introducing detach, move, cascading lifecycle, conversation, provider, tool, or scheduling policy.",
+    "acceptance_criteria": [
+      "Associating an existing task with an existing open session appends exactly one typed event and survives SQLite reopen and replay.",
+      "Unknown tasks, unknown sessions, closed sessions, and repeated association attempts return typed errors without appending an event.",
+      "Legacy tasks remain loadable as unassociated, malformed histories fail explicitly, and session close or reopen does not mutate an existing association.",
+      "Concurrent task or session changes cannot validate against stale cross-stream state and produce an invalid association.",
+      "Documentation, independent review, and all local and hosted gates pass before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 478 and added task and session association acceptance tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED tests could not compile because the task session projection, association command, typed event, and association errors did not exist.",
+      "patch": "Added integration coverage for persistence and reload, missing aggregates, closed sessions, immutable association, legacy tasks, close and reopen preservation, invalid histories, and concurrent stream changes."
+    },
+    {
+      "summary": "Implemented the typed association event, task projection, and guarded command.",
+      "outcome": "success",
+      "diagnostic": "The focused association and event-log tests passed after the command loaded both aggregates, required an open session, and persisted one payload-version-one task.session-associated event.",
+      "patch": "Added an optional SessionId to replayed task state, explicit association decoding and history validation, typed command errors, and immutable reassociation rejection."
+    },
+    {
+      "summary": "Made cross-stream validation atomic at the event-log boundary.",
+      "outcome": "success",
+      "diagnostic": "Checking task and session independently before append leaves a race in which either stream can advance after validation; the event log therefore rechecks the target and prerequisite versions inside the same SQLite transaction.",
+      "patch": "Added append_if_stream_unchanged with optimistic preflight and transactional version guards, then retried racing command attempts from freshly replayed state."
+    },
+    {
+      "summary": "Refactored through existing aggregate replay and independently reviewed the implementation.",
+      "outcome": "success",
+      "diagnostic": "The implementation preserved terminal task transitions and session close or reopen as independent histories; the pinned independent pre-commit review reported no actionable findings after fixes.",
+      "patch": "Kept association ownership in the task stream, reused session versioned loading and event-log expected-version semantics, and documented the aggregate and persistence boundaries."
+    },
+    {
+      "summary": "Assessed CodeRabbit's post-gate transactional test nitpick.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit marked one heavy-lift nitpick: the public guarded-append test proves stale prerequisite rejection but does not deterministically pause between preflight and the transactional recheck. The review did not identify a production defect, all required checks passed, and adding synchronization hooks solely for that internal timing path was outside the bounded behavior slice.",
+      "patch": "Retained the tested transactional recheck and recorded the coverage distinction rather than adding test-only concurrency machinery after the required gate had passed."
+    },
+    {
+      "summary": "Ran local and hosted gates and squash-merged the association lifecycle.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed before publication, GitHub Rust quality gate run 29456447441 passed, CodeRabbit reported all five pre-merge checks passed with successful required status, and pull request 479 squash-merged as 5d6af051d505bc6608137b7050cf1135e7d9fe97.",
+      "patch": "Committed the bounded implementation, tests, and documentation; linked issue 478; enabled squash auto-merge; and monitored both required checks to completion."
+    },
+    {
+      "summary": "Captured and validated the merged episode in the Vela-native corpus.",
+      "outcome": "success",
+      "diagnostic": "The focused association suite passed 10 tests, the initial record validator accepted the sanitized artifact, complete corpus inspection reported 38 valid and zero invalid records, and pinned full verification passed 106 workspace tests plus every repository gate.",
+      "patch": "Added one positive schema-v1 record with task, RED and GREEN attempts, atomicity rationale, replay and lifecycle diagnostics, review evidence, lessons, and merged provenance."
+    },
+    {
+      "summary": "Fixed the blocking independent corpus-review finding.",
+      "outcome": "success",
+      "diagnostic": "Independent Codex review found that the original record filename accidentally formed a credential-prefix scanner marker across adjacent words when copied into a verification command, making the self-referential record invalid after the earlier validation run.",
+      "patch": "Renamed the record to 0038-session-association.json, updated its validation evidence, and reran record, corpus, full repository, and independent review gates."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now durably associate one existing task with one open session, replay that immutable relation without coupling aggregate lifecycles, and prevent stale cross-stream validation from creating an invalid association.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test task_session_association # RED: compile failure because association state, API, event, and errors did not exist",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test task_session_association # GREEN: 10 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # all formatting, workspace tests, checking, Clippy, SecretSpec, and diff gates passed before publication",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --base main # no actionable findings after fixes",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29456447441 and required CodeRabbit status for pull request 479 # passed",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 479 squash merge 5d6af051d505bc6608137b7050cf1135e7d9fe97",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0038-session-association.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 38 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 106 workspace tests plus all repository gates passed with the development record included",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # blocking filename sanitation finding fixed; final review passed",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "An immutable association belongs to one aggregate's event history; storing it in the task stream keeps session lifecycle changes from silently rewriting task state.",
+    "Cross-aggregate commands need a persistence primitive that validates both the target stream and prerequisite stream in one transaction rather than relying only on application-level reads.",
+    "Optimistic preflight is useful for fast rejection, but correctness comes from repeating all version checks inside the append transaction.",
+    "Replay must distinguish legacy absence of an association from malformed, duplicate, unsupported, or pre-creation association events.",
+    "Closing or reopening a session after association should not cascade into the task history unless a future product decision explicitly introduces that policy.",
+    "Deterministically exercising the interval between preflight and transactional recheck would require a deliberate synchronization seam; that deeper internal test should not be conflated with a production correctness defect.",
+    "Task creation under a session, move, detach, conversation identity, provider execution, tool permissions, and scheduling remain separate boundaries."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/479"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
