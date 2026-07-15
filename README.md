@@ -137,6 +137,7 @@ The first milestone is the **evidence loop**:
 7. Start the persisted task lifecycle with durable start, output-bearing completion, reason-bearing cancellation, diagnosed failure, and load. ✅
 8. Start the persisted session lifecycle with durable creation, close, reopen, and load. ✅
 9. Connect persisted tasks to open sessions with an immutable association. ✅
+10. Query each persisted session's associated tasks in deterministic order. ✅
 
 ## Project documents
 

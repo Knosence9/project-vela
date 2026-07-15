@@ -363,3 +363,163 @@ fn session_close_and_reopen_leave_task_association_unchanged() {
         Some(&session_id)
     );
 }
+
+#[test]
+fn lists_latest_tasks_for_a_session_in_task_id_order_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let session_id = SessionId::new("session-7").unwrap();
+    let other_session_id = SessionId::new("session-8").unwrap();
+    let first = TaskId::new("task-a").unwrap();
+    let second = TaskId::new("task-b").unwrap();
+    let unrelated = TaskId::new("task-c").unwrap();
+    let unassociated = TaskId::new("task-d").unwrap();
+
+    let mut sessions = SessionStore::open(&path).unwrap();
+    sessions
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Kernel work").unwrap(),
+        )
+        .unwrap();
+    sessions
+        .create(
+            other_session_id.clone(),
+            SessionTitle::new("Other work").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    for id in [&second, &first, &unrelated, &unassociated] {
+        tasks
+            .start(id.clone(), TaskGoal::new(format!("Goal for {id}")).unwrap())
+            .unwrap();
+    }
+    tasks.associate_session(&second, &session_id).unwrap();
+    tasks.associate_session(&first, &session_id).unwrap();
+    tasks
+        .associate_session(&unrelated, &other_session_id)
+        .unwrap();
+    tasks
+        .complete(&second, TaskOutput::new("finished").unwrap())
+        .unwrap();
+    drop(tasks);
+
+    sessions
+        .close(
+            &session_id,
+            SessionClosure::new("checkpoint reached").unwrap(),
+        )
+        .unwrap();
+    let count_before_list: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+
+    let listed = TaskStore::open(&path)
+        .unwrap()
+        .list_for_session(&session_id)
+        .unwrap();
+    assert_eq!(
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        count_before_list
+    );
+
+    assert_eq!(
+        listed.iter().map(|task| task.id()).collect::<Vec<_>>(),
+        vec![&first, &second]
+    );
+    assert_eq!(listed[0].status(), TaskStatus::Active);
+    assert_eq!(listed[1].status(), TaskStatus::Completed);
+    assert_eq!(listed[1].output().unwrap().as_str(), "finished");
+    assert!(
+        listed
+            .iter()
+            .all(|task| task.session_id() == Some(&session_id))
+    );
+
+    sessions
+        .reopen(
+            &session_id,
+            SessionReopenReason::new("continue work").unwrap(),
+        )
+        .unwrap();
+    let count_before_reopened_list = count_before_list + 1;
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .list_for_session(&session_id)
+            .unwrap(),
+        listed
+    );
+    assert_eq!(
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        count_before_reopened_list
+    );
+}
+
+#[test]
+fn listing_surfaces_malformed_and_inconsistent_associations() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let session_id = SessionId::new("session-7").unwrap();
+    let task_id = TaskId::new("task-42").unwrap();
+    let other_task_id = TaskId::new("task-43").unwrap();
+    create_task_and_session(&path, &task_id, &session_id);
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(other_task_id.clone(), TaskGoal::new("Other work").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE stream_id = 'task:task-42' AND stream_version = 2",
+            [br#"{"task_id":"task-42","session_id":""}"#.as_slice()],
+        )
+        .unwrap();
+    let error = tasks.list_for_session(&session_id).unwrap_err();
+    assert!(matches!(
+        error,
+        TaskStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE stream_id = 'task:task-42' AND stream_version = 2",
+            [br#"{"task_id":"task-43","session_id":"session-7"}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        tasks.list_for_session(&session_id).unwrap_err(),
+        TaskStoreError::InvalidHistory { .. }
+    ));
+}
+
+#[test]
+fn listing_tasks_for_a_missing_session_returns_session_not_found() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let session_id = SessionId::new("missing-session").unwrap();
+
+    let error = TaskStore::open(&path)
+        .unwrap()
+        .list_for_session(&session_id)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskStoreError::SessionNotFound { session_id: ref id } if id == &session_id
+    ));
+}

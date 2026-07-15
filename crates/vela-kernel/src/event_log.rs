@@ -475,6 +475,57 @@ impl EventLog {
 
         Ok(events)
     }
+
+    pub(crate) fn replay_event_type<E: Event>(
+        &self,
+        event_type: &str,
+    ) -> Result<Vec<(String, E)>, ReplayError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT stream_id, stream_version, payload_version, payload
+                 FROM events WHERE event_type = ?1
+                 ORDER BY stream_id ASC, stream_version ASC",
+            )
+            .map_err(storage_replay_error)?;
+        let mut rows = statement
+            .query([event_type])
+            .map_err(storage_replay_error)?;
+        let mut events = Vec::new();
+
+        while let Some(row) = rows.next().map_err(storage_replay_error)? {
+            let stream_id: String = row.get(0).map_err(storage_replay_error)?;
+            let stored_version: i64 = row.get(1).map_err(storage_replay_error)?;
+            let stream_version = u64::try_from(stored_version)
+                .map_err(|_| ReplayError::InvalidStoredVersion(stored_version))?;
+            if stream_version == 0 {
+                return Err(ReplayError::InvalidStoredVersion(stored_version));
+            }
+            let stored_payload_version: i64 = row.get(2).map_err(storage_replay_error)?;
+            let payload_version = u32::try_from(stored_payload_version)
+                .map_err(|_| ReplayError::InvalidStoredPayloadVersion(stored_payload_version))?;
+            if payload_version == 0 {
+                return Err(ReplayError::InvalidStoredPayloadVersion(
+                    stored_payload_version,
+                ));
+            }
+            let payload: Vec<u8> = row.get(3).map_err(storage_replay_error)?;
+            let event =
+                E::decode(event_type, payload_version, &payload).map_err(|error| match error {
+                    DecodeError::UnsupportedEvent { .. } => ReplayError::UnsupportedEvent {
+                        event_type: event_type.to_owned(),
+                        payload_version,
+                    },
+                    DecodeError::MalformedPayload { message } => ReplayError::MalformedPayload {
+                        stream_version,
+                        message,
+                    },
+                })?;
+            events.push((stream_id, event));
+        }
+
+        Ok(events)
+    }
 }
 
 fn current_stream_version(

@@ -505,6 +505,49 @@ impl TaskStore {
             .map(|loaded| loaded.map(|loaded| loaded.task))
     }
 
+    /// Replays the tasks associated with an existing session in ascending ID order.
+    pub fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<Task>, TaskStoreError> {
+        if self
+            .sessions
+            .load(session_id)
+            .map_err(TaskStoreError::Session)?
+            .is_none()
+        {
+            return Err(TaskStoreError::SessionNotFound {
+                session_id: session_id.clone(),
+            });
+        }
+
+        let associations = self
+            .event_log
+            .replay_event_type::<TaskEvent>(TASK_SESSION_ASSOCIATED_EVENT_TYPE)
+            .map_err(TaskStoreError::Replay)?;
+        let mut tasks = Vec::new();
+        for (stream_id, association) in associations {
+            let TaskEvent::SessionAssociated {
+                task_id,
+                session_id: associated_session_id,
+            } = association
+            else {
+                unreachable!("the event query selects only task session associations")
+            };
+            if associated_session_id != *session_id {
+                continue;
+            }
+            let Some(loaded) = self.load_versioned(&task_id)? else {
+                return Err(TaskStoreError::InvalidHistory { event_count: 1 });
+            };
+            if stream_id != task_stream(&task_id).as_str() {
+                return Err(TaskStoreError::InvalidHistory {
+                    event_count: usize::try_from(loaded.stream_version).unwrap_or(usize::MAX),
+                });
+            }
+            tasks.push(loaded.task);
+        }
+        tasks.sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
+        Ok(tasks)
+    }
+
     fn load_versioned(&self, id: &TaskId) -> Result<Option<VersionedTask>, TaskStoreError> {
         let events = self
             .event_log
