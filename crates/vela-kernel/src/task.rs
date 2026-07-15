@@ -11,6 +11,7 @@ const TASK_COMPLETED_EVENT_TYPE: &str = "task.completed";
 const TASK_CANCELLED_EVENT_TYPE: &str = "task.cancelled";
 const TASK_FAILED_EVENT_TYPE: &str = "task.failed";
 const TASK_EVENT_PAYLOAD_VERSION: u32 = 1;
+const TASK_COMPLETED_PAYLOAD_VERSION: u32 = 2;
 const TASK_FAILED_PAYLOAD_VERSION: u32 = 2;
 
 /// An opaque, non-empty identifier for one task.
@@ -80,6 +81,37 @@ impl fmt::Display for TaskGoalError {
 
 impl std::error::Error for TaskGoalError {}
 
+/// The non-empty output recorded when a task completes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct TaskOutput(String);
+
+impl TaskOutput {
+    pub fn new(value: impl Into<String>) -> Result<Self, TaskOutputError> {
+        let value = value.into();
+        if value.is_empty() {
+            Err(TaskOutputError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskOutputError;
+
+impl fmt::Display for TaskOutputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("task output must not be empty")
+    }
+}
+
+impl std::error::Error for TaskOutputError {}
+
 /// The non-empty diagnostic recorded when a task fails.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -124,6 +156,7 @@ pub struct Task {
     id: TaskId,
     goal: TaskGoal,
     status: TaskStatus,
+    output: Option<TaskOutput>,
     failure: Option<TaskFailure>,
 }
 
@@ -138,6 +171,10 @@ impl Task {
 
     pub fn status(&self) -> TaskStatus {
         self.status
+    }
+
+    pub fn output(&self) -> Option<&TaskOutput> {
+        self.output.as_ref()
     }
 
     pub fn failure(&self) -> Option<&TaskFailure> {
@@ -222,6 +259,7 @@ impl TaskStore {
                 id,
                 goal,
                 status: TaskStatus::Active,
+                output: None,
                 failure: None,
             }),
             Err(EventLogError::WrongExpectedVersion {
@@ -232,11 +270,14 @@ impl TaskStore {
         }
     }
 
-    pub fn complete(&mut self, id: &TaskId) -> Result<Task, TaskStoreError> {
+    pub fn complete(&mut self, id: &TaskId, output: TaskOutput) -> Result<Task, TaskStoreError> {
         self.transition_to_terminal(
             id,
             TaskStatus::Completed,
-            TaskEvent::Completed(EmptyPayload {}),
+            TaskEvent::Completed {
+                output: Some(output.clone()),
+            },
+            Some(output),
             None,
         )
     }
@@ -246,6 +287,7 @@ impl TaskStore {
             id,
             TaskStatus::Cancelled,
             TaskEvent::Cancelled(EmptyPayload {}),
+            None,
             None,
         )
     }
@@ -257,6 +299,7 @@ impl TaskStore {
             TaskEvent::Failed {
                 failure: Some(failure.clone()),
             },
+            None,
             Some(failure),
         )
     }
@@ -266,6 +309,7 @@ impl TaskStore {
         id: &TaskId,
         status: TaskStatus,
         event: TaskEvent,
+        output: Option<TaskOutput>,
         failure: Option<TaskFailure>,
     ) -> Result<Task, TaskStoreError> {
         let task = match self.load(id)? {
@@ -284,6 +328,7 @@ impl TaskStore {
         {
             Ok(_) => Ok(Task {
                 status,
+                output,
                 failure,
                 ..task
             }),
@@ -311,24 +356,28 @@ impl TaskStore {
                 id: id.clone(),
                 goal: goal.clone(),
                 status: TaskStatus::Active,
+                output: None,
                 failure: None,
             })),
-            [TaskEvent::Started { goal }, TaskEvent::Completed(_)] => Ok(Some(Task {
+            [TaskEvent::Started { goal }, TaskEvent::Completed { output }] => Ok(Some(Task {
                 id: id.clone(),
                 goal: goal.clone(),
                 status: TaskStatus::Completed,
+                output: output.clone(),
                 failure: None,
             })),
             [TaskEvent::Started { goal }, TaskEvent::Cancelled(_)] => Ok(Some(Task {
                 id: id.clone(),
                 goal: goal.clone(),
                 status: TaskStatus::Cancelled,
+                output: None,
                 failure: None,
             })),
             [TaskEvent::Started { goal }, TaskEvent::Failed { failure }] => Ok(Some(Task {
                 id: id.clone(),
                 goal: goal.clone(),
                 status: TaskStatus::Failed,
+                output: None,
                 failure: failure.clone(),
             })),
             _ => Err(TaskStoreError::InvalidHistory {
@@ -361,7 +410,7 @@ fn task_stream(id: &TaskId) -> StreamId {
 #[serde(untagged)]
 enum TaskEvent {
     Started { goal: TaskGoal },
-    Completed(EmptyPayload),
+    Completed { output: Option<TaskOutput> },
     Cancelled(EmptyPayload),
     Failed { failure: Option<TaskFailure> },
 }
@@ -373,7 +422,7 @@ impl Event for TaskEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::Started { .. } => TASK_STARTED_EVENT_TYPE,
-            Self::Completed(_) => TASK_COMPLETED_EVENT_TYPE,
+            Self::Completed { .. } => TASK_COMPLETED_EVENT_TYPE,
             Self::Cancelled(_) => TASK_CANCELLED_EVENT_TYPE,
             Self::Failed { .. } => TASK_FAILED_EVENT_TYPE,
         }
@@ -381,6 +430,7 @@ impl Event for TaskEvent {
 
     fn payload_version(&self) -> u32 {
         match self {
+            Self::Completed { .. } => TASK_COMPLETED_PAYLOAD_VERSION,
             Self::Failed { .. } => TASK_FAILED_PAYLOAD_VERSION,
             _ => TASK_EVENT_PAYLOAD_VERSION,
         }
@@ -388,9 +438,13 @@ impl Event for TaskEvent {
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
         let supported = match event_type {
-            TASK_STARTED_EVENT_TYPE | TASK_COMPLETED_EVENT_TYPE | TASK_CANCELLED_EVENT_TYPE => {
+            TASK_STARTED_EVENT_TYPE | TASK_CANCELLED_EVENT_TYPE => {
                 payload_version == TASK_EVENT_PAYLOAD_VERSION
             }
+            TASK_COMPLETED_EVENT_TYPE => matches!(
+                payload_version,
+                TASK_EVENT_PAYLOAD_VERSION | TASK_COMPLETED_PAYLOAD_VERSION
+            ),
             TASK_FAILED_EVENT_TYPE => matches!(
                 payload_version,
                 TASK_EVENT_PAYLOAD_VERSION | TASK_FAILED_PAYLOAD_VERSION
@@ -404,10 +458,10 @@ impl Event for TaskEvent {
             });
         }
 
-        if matches!(
-            event_type,
-            TASK_COMPLETED_EVENT_TYPE | TASK_CANCELLED_EVENT_TYPE
-        ) {
+        if event_type == TASK_CANCELLED_EVENT_TYPE
+            || (event_type == TASK_COMPLETED_EVENT_TYPE
+                && payload_version == TASK_EVENT_PAYLOAD_VERSION)
+        {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
             struct Payload {}
@@ -418,9 +472,29 @@ impl Event for TaskEvent {
                 }
             })?;
             return Ok(match event_type {
-                TASK_COMPLETED_EVENT_TYPE => Self::Completed(EmptyPayload {}),
+                TASK_COMPLETED_EVENT_TYPE => Self::Completed { output: None },
                 TASK_CANCELLED_EVENT_TYPE => Self::Cancelled(EmptyPayload {}),
                 _ => unreachable!("empty terminal event types were validated above"),
+            });
+        }
+
+        if event_type == TASK_COMPLETED_EVENT_TYPE {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Payload {
+                output: String,
+            }
+
+            let payload: Payload =
+                serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            let output =
+                TaskOutput::new(payload.output).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            return Ok(Self::Completed {
+                output: Some(output),
             });
         }
 
