@@ -1,6 +1,6 @@
 # Persisted task lifecycle
 
-The `vela-kernel` crate starts Vela's task/session boundary with a deliberately small lifecycle: starting, completing with an output, cancelling with a reason, failing with a diagnostic, and loading a task over the typed SQLite event log.
+The `vela-kernel` crate provides a deliberately small task lifecycle: starting, completing with an output, cancelling with a reason, failing with a diagnostic, and loading a task over the typed SQLite event log.
 
 ## Observable contract
 
