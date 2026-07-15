@@ -225,14 +225,10 @@ impl SessionStore {
                 let winner = self.load(id)?.ok_or_else(|| SessionStoreError::NotFound {
                     session_id: id.clone(),
                 })?;
-                match winner.status {
-                    SessionStatus::Closed => Err(SessionStoreError::AlreadyClosed {
-                        session_id: id.clone(),
-                    }),
-                    SessionStatus::Open => {
-                        Err(SessionStoreError::InvalidHistory { event_count: 1 })
-                    }
-                }
+                debug_assert_eq!(winner.status, SessionStatus::Closed);
+                Err(SessionStoreError::AlreadyClosed {
+                    session_id: id.clone(),
+                })
             }
             Err(error) => Err(SessionStoreError::EventLog(error)),
         }
