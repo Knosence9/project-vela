@@ -17,6 +17,7 @@ The `vela-kernel` crate provides a deliberately small task lifecycle: starting, 
 - `TaskStore::cancel` loads an existing active task and appends a `task.cancelled` event containing the supplied reason at payload version `2` with the exact current stream version. It returns the task with `Cancelled` status and the same reason.
 - `TaskStore::fail` loads an existing active task and appends a `task.failed` event containing the supplied diagnostic at payload version `2` with the exact current stream version. It returns the task with `Failed` status and the same diagnostic.
 - `TaskStore::load` replays the task stream. It returns the same ID, goal, and current status after reopening the database. A missing stream returns `None`.
+- `TaskStore::list_for_session` requires an existing session and returns every task associated with it in ascending `TaskId` order. Each result is replayed to its latest state, so active and terminal tasks are included. Closed and reopened sessions retain their membership, tasks associated with other sessions and unassociated tasks are excluded, and reopening the database does not change the result. A missing session returns `SessionNotFound` and the query appends no events.
 - Newly completed tasks expose the output persisted by their completion event. Legacy payload-version-1 completion events with the old empty payload remain replayable and expose no output. Active, cancelled, and failed tasks expose no completion output.
 - Newly cancelled tasks expose the reason persisted by their cancellation event. Legacy payload-version-1 cancellation events with the old empty payload remain replayable and expose no reason. Active, completed, and failed tasks expose no cancellation reason.
 - Active, completed, and cancelled tasks expose no failure diagnostic. Newly failed tasks expose the diagnostic persisted by their failure event. Legacy payload-version-1 failure events with the old empty payload remain replayable and expose no diagnostic.
@@ -33,6 +34,6 @@ The `vela-kernel` crate provides a deliberately small task lifecycle: starting, 
 
 ## Non-goals
 
-This slice does not add a structured result, failure, or cancellation taxonomy, artifacts, stack traces, retry policy, timestamps, actors, model messages, tools, child tasks, moving or detaching associations, session-side task indexes, async execution, cooperative runtime cancellation, or a runtime interface. Those require separate lifecycle events and acceptance tests rather than assumptions in the persisted state.
+This slice does not add a structured result, failure, or cancellation taxonomy, artifacts, stack traces, retry policy, timestamps, actors, model messages, tools, child tasks, moving or detaching associations, a duplicate mutable session-side task index, pagination, async execution, cooperative runtime cancellation, or a runtime interface. Those require separate lifecycle events and acceptance tests rather than assumptions in the persisted state.
 
 See [`event-log.md`](event-log.md) for the underlying append, durability, concurrency, and replay guarantees.
