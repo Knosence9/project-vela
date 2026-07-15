@@ -8,6 +8,7 @@ use crate::event_log::{
 
 const SESSION_CREATED_EVENT_TYPE: &str = "session.created";
 const SESSION_RENAMED_EVENT_TYPE: &str = "session.renamed";
+const SESSION_SUMMARIZED_EVENT_TYPE: &str = "session.summarized";
 const SESSION_CLOSED_EVENT_TYPE: &str = "session.closed";
 const SESSION_REOPENED_EVENT_TYPE: &str = "session.reopened";
 const SESSION_EVENT_PAYLOAD_VERSION: u32 = 1;
@@ -81,6 +82,37 @@ impl fmt::Display for SessionTitleError {
 
 impl std::error::Error for SessionTitleError {}
 
+/// A non-empty persisted summary of a session's relevant context.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionSummary(String);
+
+impl SessionSummary {
+    pub fn new(value: impl Into<String>) -> Result<Self, SessionSummaryError> {
+        let value = value.into();
+        if value.is_empty() {
+            Err(SessionSummaryError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionSummaryError;
+
+impl fmt::Display for SessionSummaryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("session summary must not be empty")
+    }
+}
+
+impl std::error::Error for SessionSummaryError {}
+
 /// The non-empty reason recorded when a session closes.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -153,6 +185,7 @@ pub enum SessionStatus {
 pub struct Session {
     id: SessionId,
     title: SessionTitle,
+    summary: Option<SessionSummary>,
     status: SessionStatus,
     closure: Option<SessionClosure>,
     reopen_reason: Option<SessionReopenReason>,
@@ -165,6 +198,10 @@ impl Session {
 
     pub fn title(&self) -> &SessionTitle {
         &self.title
+    }
+
+    pub fn summary(&self) -> Option<&SessionSummary> {
+        self.summary.as_ref()
     }
 
     pub fn status(&self) -> SessionStatus {
@@ -258,6 +295,7 @@ impl SessionStore {
             Ok(_) => Ok(Session {
                 id,
                 title,
+                summary: None,
                 status: SessionStatus::Open,
                 closure: None,
                 reopen_reason: None,
@@ -291,6 +329,36 @@ impl SessionStore {
                 Ok(_) => {
                     return Ok(Session {
                         title,
+                        ..loaded.session
+                    });
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(SessionStoreError::EventLog(error)),
+            }
+        }
+    }
+
+    pub fn summarize(
+        &mut self,
+        id: &SessionId,
+        summary: SessionSummary,
+    ) -> Result<Session, SessionStoreError> {
+        loop {
+            let Some(loaded) = self.load_versioned(id)? else {
+                return Err(SessionStoreError::NotFound {
+                    session_id: id.clone(),
+                });
+            };
+            match self.event_log.append(
+                &session_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                &SessionEvent::Summarized {
+                    summary: summary.clone(),
+                },
+            ) {
+                Ok(_) => {
+                    return Ok(Session {
+                        summary: Some(summary),
                         ..loaded.session
                     });
                 }
@@ -360,8 +428,12 @@ impl SessionStore {
                         SessionEvent::Reopened { reason } => {
                             (SessionStatus::Open, None, reason.clone())
                         }
-                        SessionEvent::Created { .. } | SessionEvent::Renamed { .. } => {
-                            unreachable!("creation and rename do not use status transitions")
+                        SessionEvent::Created { .. }
+                        | SessionEvent::Renamed { .. }
+                        | SessionEvent::Summarized { .. } => {
+                            unreachable!(
+                                "creation, rename, and summary do not use status transitions"
+                            )
                         }
                     };
                     return Ok(Session {
@@ -400,6 +472,7 @@ impl SessionStore {
             };
         };
         let mut title = title.clone();
+        let mut summary = None;
         let mut status = SessionStatus::Open;
         let mut closure = None;
         let mut reopen_reason = None;
@@ -407,6 +480,15 @@ impl SessionStore {
             status = match (status, event) {
                 (status, SessionEvent::Renamed { title: new_title }) => {
                     title = new_title.clone();
+                    status
+                }
+                (
+                    status,
+                    SessionEvent::Summarized {
+                        summary: new_summary,
+                    },
+                ) => {
+                    summary = Some(new_summary.clone());
                     status
                 }
                 (SessionStatus::Open, SessionEvent::Closed { reason }) => {
@@ -430,6 +512,7 @@ impl SessionStore {
             session: Session {
                 id: id.clone(),
                 title,
+                summary,
                 status,
                 closure,
                 reopen_reason,
@@ -457,6 +540,7 @@ fn session_stream(id: &SessionId) -> StreamId {
 enum SessionEvent {
     Created { title: SessionTitle },
     Renamed { title: SessionTitle },
+    Summarized { summary: SessionSummary },
     Closed { reason: Option<SessionClosure> },
     Reopened { reason: Option<SessionReopenReason> },
 }
@@ -466,6 +550,7 @@ impl Event for SessionEvent {
         match self {
             Self::Created { .. } => SESSION_CREATED_EVENT_TYPE,
             Self::Renamed { .. } => SESSION_RENAMED_EVENT_TYPE,
+            Self::Summarized { .. } => SESSION_SUMMARIZED_EVENT_TYPE,
             Self::Closed { .. } => SESSION_CLOSED_EVENT_TYPE,
             Self::Reopened { .. } => SESSION_REOPENED_EVENT_TYPE,
         }
@@ -477,6 +562,7 @@ impl Event for SessionEvent {
             Self::Reopened { reason: Some(_) } => SESSION_REOPENED_PAYLOAD_VERSION,
             Self::Created { .. }
             | Self::Renamed { .. }
+            | Self::Summarized { .. }
             | Self::Closed { reason: None }
             | Self::Reopened { reason: None } => SESSION_EVENT_PAYLOAD_VERSION,
         }
@@ -484,9 +570,9 @@ impl Event for SessionEvent {
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
         let supported = match event_type {
-            SESSION_CREATED_EVENT_TYPE | SESSION_RENAMED_EVENT_TYPE => {
-                payload_version == SESSION_EVENT_PAYLOAD_VERSION
-            }
+            SESSION_CREATED_EVENT_TYPE
+            | SESSION_RENAMED_EVENT_TYPE
+            | SESSION_SUMMARIZED_EVENT_TYPE => payload_version == SESSION_EVENT_PAYLOAD_VERSION,
             SESSION_CLOSED_EVENT_TYPE => matches!(payload_version, 1 | 2),
             SESSION_REOPENED_EVENT_TYPE => matches!(payload_version, 1 | 2),
             _ => false,
@@ -555,6 +641,25 @@ impl Event for SessionEvent {
             } else {
                 Self::Reopened { reason: None }
             });
+        }
+
+        if event_type == SESSION_SUMMARIZED_EVENT_TYPE {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct SummaryPayload {
+                summary: String,
+            }
+
+            let payload: SummaryPayload =
+                serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            let summary = SessionSummary::new(payload.summary).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::Summarized { summary });
         }
 
         #[derive(serde::Deserialize)]
