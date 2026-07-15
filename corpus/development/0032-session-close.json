@@ -6,8 +6,8 @@
     "acceptance_criteria": [
       "Closing an open session persists one session.closed payload-version-one event and returns the same identity and title with closed status.",
       "Loading after reopening SQLite preserves closed status, while missing and already-closed sessions return explicit domain errors without extra events.",
-      "Racing closes persist exactly one terminal event, and a writer holding a stale loaded session classifies the winning close as AlreadyClosed.",
-      "Replay accepts only created or created-followed-by-closed histories and surfaces unsupported, malformed, and invalid histories explicitly.",
+      "Racing closes persist exactly one terminal event: the winner succeeds and a stale writer's own close attempt returns AlreadyClosed.",
+      "Replay returns the missing-session result for an empty stream, accepts created or created-followed-by-closed non-empty histories, and surfaces unsupported, malformed, and invalid histories explicitly.",
       "Documentation, pinned verification, independent review, and required hosted gates pass before squash merge."
     ]
   },
