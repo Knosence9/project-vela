@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist task completion output",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/439 by persisting one opaque non-empty output on new completed tasks while preserving replay compatibility for legacy empty completion events and leaving structured results and runtime execution undefined.",
+    "acceptance_criteria": [
+      "Completing an active task requires a non-empty UTF-8 output, preserves its exact content, and reloads it after reopening SQLite.",
+      "New task.completed events use payload version two while legacy empty payload-version-one completions remain replayable without output.",
+      "Empty caller and persisted outputs are rejected explicitly, and non-completed task states expose no completion output.",
+      "Existing missing-task, terminal-conflict, race, failure-diagnostic, invalid-history, and explicit replay-error behavior remains intact.",
+      "Public behavior and non-goals are documented, pinned verification passes, and required pull-request gates permit squash auto-merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 439 and wrote completion-output lifecycle assertions before adding production API support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with unresolved TaskOutput, an unexpected second argument to the old TaskStore::complete API, and a missing Task::output accessor.",
+      "patch": "Added reopening and direct-payload tests that required a validated output and asserted the returned, persisted, and replayed task retained it."
+    },
+    {
+      "summary": "Evolved successful completion with an explicitly versioned output payload.",
+      "outcome": "success",
+      "diagnostic": "New writes stored payload version two with exact whitespace-preserving output JSON. A dedicated compatibility test replayed an empty version-one completion as completed state with no output, while empty version-two output surfaced an explicit malformed-payload replay error.",
+      "patch": "Added TaskOutput and TaskOutputError, optional output data on Task, a required output argument on TaskStore::complete, and version-aware task.completed encoding and decoding."
+    },
+    {
+      "summary": "Retained existing terminal lifecycle behavior and documented the bounded result contract.",
+      "outcome": "success",
+      "diagnostic": "All 28 task lifecycle integration tests passed, including completion races, terminal conflicts, legacy replay, malformed history, diagnosed failures, and output absence on active, cancelled, and failed tasks.",
+      "patch": "Reused the exact-version terminal append and persisted-winner reload path, updated existing completion callers, and documented that outputs remain opaque rather than defining structured results, artifacts, sessions, or runtime behavior."
+    },
+    {
+      "summary": "Ran local and hosted quality gates, monitored automated review, and completed squash auto-merge.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 62 workspace integration tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29384129154 passed. CodeRabbit passed all pre-merge checks with one trivial suggestion to add a multi-byte UTF-8 fixture and no blocking finding. Pull request 440 squash-merged as 05a736709b2970e76c7eb599e7b3beb458c8f7a9.",
+      "patch": "No correctness correction was required by hosted review; the suggested non-ASCII fixture remains an optional test-strengthening follow-up because Rust strings, serde_json round-trip behavior, and the existing opaque UTF-8 type do not introduce an alternate encoding path."
+    },
+    {
+      "summary": "Captured and self-validated the merged episode in the Vela-native development corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 29 valid and zero invalid records, full pinned verification passed with the record included, and independent read-only review found no blocking record issue.",
+      "patch": "Added one sanitized positive record containing the task, compiler-observed RED attempt, diagnostic, compatibility fix, lifecycle rationale, local and hosted verification, review disposition, lessons, and merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now durably preserves an opaque output for newly completed tasks in a version-two event, replays legacy version-one completions without inventing output, rejects empty output data explicitly, and retains serialized terminal transitions without defining structured result or runtime policy.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle completes_and_loads_a_completed_task_after_reopening # RED: output API was missing",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle # GREEN: 28 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 62 workspace integration tests passed before merge",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29384129154 for pull request 440",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status for pull request 440 # passed with one trivial non-blocking test suggestion",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 440 squash merge 05a736709b2970e76c7eb599e7b3beb458c8f7a9",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0029-completion-output.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 29 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of issue 441 corpus record # no blocking record issue",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Persisted payload shape changes need a new payload version even when the event discriminator and terminal meaning stay unchanged.",
+    "A compatibility decoder can preserve legacy completed state honestly by exposing no output rather than inventing a value or rejecting valid old history.",
+    "Opaque validated UTF-8 is a sufficient first completion boundary; structured results, artifacts, and runtime behavior can remain separate decisions.",
+    "Whitespace-preserving tests and direct payload assertions make it explicit that the kernel stores caller output without normalization or reinterpretation.",
+    "Terminal races should continue using one exact-version append path so adding result data does not weaken persisted-winner conflict reporting.",
+    "Automated review suggestions should be recorded with severity and disposition; a trivial test-strengthening idea does not need to expand a bounded, already-verified slice."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/440"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
