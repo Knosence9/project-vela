@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist the task failure lifecycle",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/431 by adding one bounded terminal failure transition, persisted race outcomes, and explicit terminal conflicts without defining a failure reason or runtime execution behavior.",
+    "acceptance_criteria": [
+      "Failing an active task appends task.failed payload version one and reloads the original ID and goal with failed status after reopening SQLite.",
+      "Failing a missing, completed, cancelled, or already failed task returns the corresponding explicit domain error without creating or changing valid history.",
+      "Failure racing with another terminal transition persists exactly one terminal event and the losing writer reports the persisted winning state.",
+      "Replay accepts task.started followed optionally by exactly one completed, cancelled, or failed terminal event and rejects recognized lifecycle events in any other order.",
+      "Public behavior and non-goals are documented, pinned verification passes, and the required pull-request gates permit squash auto-merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created a bounded durable issue and wrote failure persistence, terminal-conflict, race, and invalid-history integration tests before production code.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed with eight compiler errors because TaskStore::fail, TaskStatus::Failed, and TaskStoreError::AlreadyFailed did not exist.",
+      "patch": "Added tests for failure persistence, missing and conflicting transitions, completion-versus-failure races, terminal-first history, and events after failure."
+    },
+    {
+      "summary": "Implemented failure through the existing exact-version terminal-transition path.",
+      "outcome": "success",
+      "diagnostic": "All 22 lifecycle integration tests passed. A losing terminal writer reloads stream version two and returns AlreadyCompleted or AlreadyFailed according to the event that actually won.",
+      "patch": "Added TaskStatus::Failed, task.failed payload version one, TaskStore::fail, AlreadyFailed, failed replay, and strict empty terminal payload decoding."
+    },
+    {
+      "summary": "Documented the contract, stress-tested the race, and obtained independent pre-commit review.",
+      "outcome": "success",
+      "diagnostic": "The completion-versus-failure race passed 20 consecutive focused runs. Independent Codex review found no discrete correctness, persistence compatibility, concurrency, API, test, or documentation bug, and its focused kernel tests passed.",
+      "patch": "Kept failure reason-free and synchronous, documented one-terminal-event histories and persisted-state conflict errors, and made no retry or runtime execution claim."
+    },
+    {
+      "summary": "Ran local and hosted quality gates, monitored automated review, and completed squash auto-merge.",
+      "outcome": "success",
+      "diagnostic": "The pinned just verify gate passed 56 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29378685844 passed. CodeRabbit's required status passed and its review generated no actionable comments. Pull request 432 squash-merged as f58ad340.",
+      "patch": "No correction was required by the hosted CodeRabbit review; issue 431 closed through the linked squash merge."
+    },
+    {
+      "summary": "Added self-validation evidence using the complete artifact filename.",
+      "outcome": "failure",
+      "diagnostic": "The sanitation validator rejected the verification command because an obvious-secret marker appeared across a word boundary in the harmless artifact filename.",
+      "patch": "Identified the filename text rather than a credential as the deterministic false-positive source."
+    },
+    {
+      "summary": "Captured and self-validated the merged lifecycle episode in the Vela-native development corpus.",
+      "outcome": "success",
+      "diagnostic": "Using the numeric record prefix with a wildcard avoided the false-positive marker while still identifying one artifact. The record validator accepted it, corpus inspection reported 27 valid and zero invalid records, and full pinned verification passed. Initial independent Codex corpus review found no discrete correctness issue but could not resolve a nested nix command inside its review shell; final re-review validated the record directly and found no blocking or revision-worthy issue.",
+      "patch": "Added one sanitized positive record with task, attempt, diagnostic, fix, rationale, verification, lesson, and provenance evidence, including its own validation and independent review."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela's kernel can now durably fail an active task, reload failed state, serialize competing terminal transitions, report the persisted winner, and reject invalid lifecycle histories while leaving failure diagnostics and runtime execution undefined.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle # RED: failure API, status, and error were missing",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle # GREEN: 22 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 56 workspace tests passed",
+        "status": "passed"
+      },
+      {
+        "command": "Completion-versus-failure race integration test repeated 20 times # 20 passed",
+        "status": "passed"
+      },
+      {
+        "command": "Independent Codex pre-commit review of issue 431 changes # no discrete bug found and focused kernel tests passed",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29378685844 for pull request 432",
+        "status": "passed"
+      },
+      {
+        "command": "Required CodeRabbit status and semantic review for pull request 432 # no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 432 squash merge f58ad340",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0027*.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 27 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent Codex corpus review attempted a nested validation but could not resolve nix inside its review shell",
+        "status": "failed"
+      },
+      {
+        "command": "Independent Codex corpus re-review of issue 433 record # record validated and no blocking or revision-worthy issue found",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A durable failure state can remain bounded with an empty versioned event when diagnostics, retries, and runtime execution are explicit non-goals.",
+    "Completion, cancellation, and failure should share one terminal-transition path so expected-version concurrency behavior and persisted-state conflict reporting cannot drift.",
+    "After an optimistic-concurrency loss, reloading the winning event is necessary to report completed, cancelled, or failed state rather than guessing from the attempted transition.",
+    "Replay should enumerate valid history shapes and reject terminal-first, duplicate-terminal, and post-terminal histories instead of silently repairing them.",
+    "A barrier-based two-writer test plus repeated focused runs provides practical regression evidence for terminal serialization without production-only test hooks.",
+    "Persisted failed state does not imply a failure diagnostic, retry policy, or executable runtime, so documentation and evidence must keep those mechanisms outside the slice's claims."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/432"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
