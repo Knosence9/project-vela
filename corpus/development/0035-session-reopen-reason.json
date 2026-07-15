@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist session reopen reason",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/465 by persisting a validated reopen reason without expanding into structured taxonomies, summaries, turns, metadata, or runtime behavior.",
+    "acceptance_criteria": [
+      "SessionReopenReason rejects empty values while preserving non-empty UTF-8 and whitespace exactly.",
+      "Reopening a closed session persists one session.reopened payload-version-two event containing the reason and exposes it after reopening SQLite.",
+      "Legacy payload-version-one reopen events remain replayable without a reason, while malformed, empty, or unsupported new payloads remain explicit replay errors.",
+      "Newly created and closed sessions expose no reopen reason, and repeated close/reopen transitions project the latest reopen reason.",
+      "Existing missing, repeated, and racing reopen guarantees remain intact, with documentation and all local and hosted gates passing before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 465 and added reason-bearing reopen lifecycle tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED command failed to compile because SessionReopenReason, Session::reopen_reason, and the reason-bearing SessionStore::reopen signature did not exist.",
+      "patch": "Added tests for value validation, exact version-two payload persistence, reload projection, legacy version-one replay, malformed and unsupported payloads, inactive-reason clearing, repeated transitions, and existing race behavior."
+    },
+    {
+      "summary": "Implemented the typed reopen reason and versioned event compatibility boundary.",
+      "outcome": "success",
+      "diagnostic": "The focused session lifecycle suite passed 22 tests after adding SessionReopenReason, reason-bearing reopen calls, version-two encoding, version-aware decoding, and replay projection.",
+      "patch": "Added SessionReopenReason and SessionReopenReasonError, an optional reopen_reason projection on Session, version-two session.reopened payloads, legacy version-one decoding, and explicit clearing on close."
+    },
+    {
+      "summary": "Refactored transition projection and independently reviewed the final implementation diff.",
+      "outcome": "success",
+      "diagnostic": "The initial full gate exposed Clippy's argument-count limit after adding another projected field. Deriving the post-transition status and active reasons from the persisted event removed the extra arguments; full verification then passed, and independent Codex review found no blocking defect.",
+      "patch": "Kept the existing optimistic transition loop and replay fold, deriving the successful transition projection from the event instead of passing parallel status and reason arguments."
+    },
+    {
+      "summary": "Ran local and hosted gates and squash-merged the reopen-reason lifecycle.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed 87 workspace tests plus formatting, checking, Clippy, SecretSpec, and diff checks. GitHub Rust quality run 29395716150 and CodeRabbit passed, CodeRabbit generated no actionable comments, and pull request 466 squash-merged as 5811c0d46dee3773b18a11b455c5141104b09ed8.",
+      "patch": "Committed the bounded implementation and documentation, linked issue 465, enabled squash auto-merge, and monitored both required checks to completion."
+    },
+    {
+      "summary": "Captured and independently reviewed the merged episode in the Vela-native corpus.",
+      "outcome": "success",
+      "diagnostic": "The record validator accepted the artifact, complete corpus inspection reported 35 valid and zero invalid records, full pinned verification passed with the record included, and independent pre-commit review found no blocking issue.",
+      "patch": "Added one sanitized positive record with task, RED and GREEN attempts, the Clippy diagnostic and fix, compatibility rationale, local and hosted verification, lessons, and merged provenance."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now requires and durably persists a non-empty session reopen reason, restores the latest reason after reload, clears it on close, replaces it on later reopens, and retains explicit compatibility with legacy reasonless reopen events.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # RED: compile failure for missing reopen reason value, API, and projection",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test -p vela-kernel --test session_lifecycle # GREEN: 22 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # initial refactor diagnostic: clippy too_many_arguments on SessionStore::transition",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command just verify # final: 87 workspace tests plus all repository gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # no blocking correctness or compatibility defect found",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29395716150 and required CodeRabbit status for pull request 466 # both passed; CodeRabbit generated no actionable comments",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 466 squash merge 5811c0d46dee3773b18a11b455c5141104b09ed8",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0035-session-reopen-reason.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: 35 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # 87 workspace tests passed with the development record included",
+        "status": "passed"
+      },
+      {
+        "command": "Independent pre-commit review of issue 467 corpus record # no blocking issue found",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Evolving a typed event payload should assign a new payload version while retaining an explicit decoder for persisted legacy events.",
+    "A validated domain value prevents new empty reasons at the API boundary, while replay must independently reject malformed persisted data.",
+    "A reopen reason is projected state only while the session is open after a reopen; closing clears the active projection without erasing historical evidence.",
+    "Repeated close and reopen transitions should derive the current reason from the latest valid reopen event rather than retaining stale aggregate state.",
+    "Deriving transition projections from the event keeps status and active reasons coherent while avoiding a widening helper signature.",
+    "A full lint gate can expose a design-pressure diagnostic after behavior is green; the smallest useful response is to remove redundant parameters rather than suppress the lint.",
+    "Structured reason taxonomies, actors, timestamps, summaries, turns, and runtime behavior remain separate product decisions."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/466"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
