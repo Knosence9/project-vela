@@ -161,9 +161,18 @@ fn summarizes_and_loads_the_latest_summary_after_reopening() {
     assert_eq!(summarized.status(), SessionStatus::Closed);
     assert_eq!(summarized.closure(), Some(&closure));
 
+    let reopen_reason = SessionReopenReason::new("Continue investigation").unwrap();
+    let reopened = store.reopen(&id, reopen_reason.clone()).unwrap();
+    assert_eq!(
+        reopened.summary().map(SessionSummary::as_str),
+        Some(" First finding ")
+    );
+
     let latest = SessionSummary::new(" Latest finding ").unwrap();
     let summarized = store.summarize(&id, latest.clone()).unwrap();
 
+    assert_eq!(summarized.status(), SessionStatus::Open);
+    assert_eq!(summarized.reopen_reason(), Some(&reopen_reason));
     assert_eq!(summarized.summary(), Some(&latest));
     assert_eq!(
         SessionStore::open(&path).unwrap().load(&id).unwrap(),
@@ -173,7 +182,7 @@ fn summarizes_and_loads_the_latest_summary_after_reopening() {
         rusqlite::Connection::open(&path)
             .unwrap()
             .query_row(
-                "SELECT event_type, payload_version, payload FROM events WHERE stream_id = 'session:summary' AND stream_version = 4",
+                "SELECT event_type, payload_version, payload FROM events WHERE stream_id = 'session:summary' AND stream_version = 5",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
