@@ -75,6 +75,44 @@ fn cancels_and_loads_a_cancelled_task_after_reopening() {
 }
 
 #[test]
+fn fails_and_loads_a_failed_task_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("research:rust-agents").unwrap();
+    let goal = TaskGoal::new("Compare supervision models").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(id.clone(), goal.clone())
+        .unwrap();
+
+    let failed = TaskStore::open(&path).unwrap().fail(&id).unwrap();
+
+    assert_eq!(failed.id(), &id);
+    assert_eq!(failed.goal(), &goal);
+    assert_eq!(failed.status(), TaskStatus::Failed);
+    assert_eq!(
+        TaskStore::open(&path).unwrap().load(&id).unwrap(),
+        Some(failed)
+    );
+}
+
+#[test]
+fn rejects_failing_an_unknown_task_without_creating_it() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("missing").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+
+    let error = store.fail(&id).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskStoreError::NotFound { ref task_id } if task_id == &id
+    ));
+    assert_eq!(store.load(&id).unwrap(), None);
+}
+
+#[test]
 fn rejects_cancelling_an_unknown_task_without_creating_it() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -118,6 +156,79 @@ fn rejects_repeated_or_conflicting_terminal_transitions() {
         store.complete(&cancelled_id).unwrap_err(),
         TaskStoreError::AlreadyCancelled { task_id } if task_id == cancelled_id
     ));
+    assert!(matches!(
+        store.fail(&completed_id).unwrap_err(),
+        TaskStoreError::AlreadyCompleted { task_id } if task_id == completed_id
+    ));
+    assert!(matches!(
+        store.fail(&cancelled_id).unwrap_err(),
+        TaskStoreError::AlreadyCancelled { task_id } if task_id == cancelled_id
+    ));
+}
+
+#[test]
+fn failed_tasks_reject_every_later_terminal_transition() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("failed").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(id.clone(), TaskGoal::new("Try once").unwrap())
+        .unwrap();
+    store.fail(&id).unwrap();
+
+    let repeated_failure = store.fail(&id).unwrap_err();
+    assert_eq!(
+        repeated_failure.to_string(),
+        "task failed has already failed"
+    );
+    assert!(repeated_failure.source().is_none());
+    for error in [
+        repeated_failure,
+        store.complete(&id).unwrap_err(),
+        store.cancel(&id).unwrap_err(),
+    ] {
+        assert!(matches!(
+            error,
+            TaskStoreError::AlreadyFailed { ref task_id } if task_id == &id
+        ));
+    }
+}
+
+#[test]
+fn racing_completion_and_failure_persist_one_terminal_state() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("failure-race").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(id.clone(), TaskGoal::new("Choose one outcome").unwrap())
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+
+    let complete_path = path.clone();
+    let complete_id = id.clone();
+    let complete_barrier = Arc::clone(&barrier);
+    let completion = thread::spawn(move || {
+        let mut store = TaskStore::open(complete_path).unwrap();
+        complete_barrier.wait();
+        store.complete(&complete_id)
+    });
+    let failure = thread::spawn(move || {
+        let mut store = TaskStore::open(path).unwrap();
+        barrier.wait();
+        store.fail(&id)
+    });
+
+    match (completion.join().unwrap(), failure.join().unwrap()) {
+        (Ok(task), Err(TaskStoreError::AlreadyCompleted { .. })) => {
+            assert_eq!(task.status(), TaskStatus::Completed);
+        }
+        (Err(TaskStoreError::AlreadyFailed { .. }), Ok(task)) => {
+            assert_eq!(task.status(), TaskStatus::Failed);
+        }
+        outcomes => panic!("unexpected terminal race outcomes: {outcomes:?}"),
+    }
 }
 
 #[test]
@@ -360,6 +471,19 @@ fn rejects_terminal_events_before_start_as_invalid_history() {
         error,
         TaskStoreError::InvalidHistory { event_count: 1 }
     ));
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET event_type = 'task.failed' WHERE stream_id = 'task:task-42'",
+            [],
+        )
+        .unwrap();
+    let error = TaskStore::open(&path).unwrap().load(&id).unwrap_err();
+    assert!(matches!(
+        error,
+        TaskStoreError::InvalidHistory { event_count: 1 }
+    ));
 }
 
 #[test]
@@ -376,6 +500,32 @@ fn rejects_events_after_completion_as_invalid_history() {
         .unwrap()
         .execute(
             "INSERT INTO events VALUES ('task:task-42', 3, 'task.completed', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+
+    let error = TaskStore::open(&path).unwrap().load(&id).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskStoreError::InvalidHistory { event_count: 3 }
+    ));
+}
+
+#[test]
+fn rejects_events_after_failure_as_invalid_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = TaskId::new("task-42").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(id.clone(), TaskGoal::new("Review the kernel").unwrap())
+        .unwrap();
+    store.fail(&id).unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events VALUES ('task:task-42', 3, 'task.failed', 1, X'7B7D')",
             [],
         )
         .unwrap();
