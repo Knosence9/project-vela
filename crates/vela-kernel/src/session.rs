@@ -8,6 +8,7 @@ use crate::event_log::{
 
 const SESSION_CREATED_EVENT_TYPE: &str = "session.created";
 const SESSION_CLOSED_EVENT_TYPE: &str = "session.closed";
+const SESSION_REOPENED_EVENT_TYPE: &str = "session.reopened";
 const SESSION_EVENT_PAYLOAD_VERSION: u32 = 1;
 
 /// An opaque, non-empty identifier for one session.
@@ -112,6 +113,7 @@ pub enum SessionStoreError {
     AlreadyExists { session_id: SessionId },
     NotFound { session_id: SessionId },
     AlreadyClosed { session_id: SessionId },
+    AlreadyOpen { session_id: SessionId },
     InvalidHistory { event_count: usize },
 }
 
@@ -129,6 +131,9 @@ impl fmt::Display for SessionStoreError {
             Self::AlreadyClosed { session_id } => {
                 write!(formatter, "session {session_id} is already closed")
             }
+            Self::AlreadyOpen { session_id } => {
+                write!(formatter, "session {session_id} is already open")
+            }
             Self::InvalidHistory { event_count } => write!(
                 formatter,
                 "invalid session history with {event_count} lifecycle events"
@@ -145,6 +150,7 @@ impl std::error::Error for SessionStoreError {
             Self::AlreadyExists { .. }
             | Self::NotFound { .. }
             | Self::AlreadyClosed { .. }
+            | Self::AlreadyOpen { .. }
             | Self::InvalidHistory { .. } => None,
         }
     }
@@ -188,74 +194,112 @@ impl SessionStore {
     }
 
     pub fn close(&mut self, id: &SessionId) -> Result<Session, SessionStoreError> {
-        let session = match self.load(id)? {
-            Some(session) if session.status == SessionStatus::Open => session,
-            Some(_) => {
-                return Err(SessionStoreError::AlreadyClosed {
-                    session_id: id.clone(),
-                });
-            }
-            None => {
-                return Err(SessionStoreError::NotFound {
-                    session_id: id.clone(),
-                });
-            }
-        };
-        self.close_loaded(id, session)
+        self.transition(
+            id,
+            SessionStatus::Open,
+            SessionStatus::Closed,
+            &SessionEvent::Closed {},
+            |session_id| SessionStoreError::AlreadyClosed { session_id },
+        )
     }
 
-    fn close_loaded(
+    pub fn reopen(&mut self, id: &SessionId) -> Result<Session, SessionStoreError> {
+        self.transition(
+            id,
+            SessionStatus::Closed,
+            SessionStatus::Open,
+            &SessionEvent::Reopened {},
+            |session_id| SessionStoreError::AlreadyOpen { session_id },
+        )
+    }
+
+    fn transition(
         &mut self,
         id: &SessionId,
-        session: Session,
+        required_status: SessionStatus,
+        next_status: SessionStatus,
+        event: &SessionEvent,
+        already_transitioned: impl Fn(SessionId) -> SessionStoreError,
     ) -> Result<Session, SessionStoreError> {
-        match self.event_log.append(
-            &session_stream(id),
-            ExpectedVersion::Exact(1),
-            &SessionEvent::Closed {},
-        ) {
-            Ok(_) => Ok(Session {
-                status: SessionStatus::Closed,
-                ..session
-            }),
-            Err(EventLogError::WrongExpectedVersion {
-                expected: ExpectedVersion::Exact(1),
-                current: Some(2),
-            }) => {
-                let winner = self.load(id)?.ok_or_else(|| SessionStoreError::NotFound {
-                    session_id: id.clone(),
-                })?;
-                debug_assert_eq!(winner.status, SessionStatus::Closed);
-                Err(SessionStoreError::AlreadyClosed {
-                    session_id: id.clone(),
-                })
+        loop {
+            let loaded = match self.load_versioned(id)? {
+                Some(loaded) if loaded.session.status == required_status => loaded,
+                Some(_) => return Err(already_transitioned(id.clone())),
+                None => {
+                    return Err(SessionStoreError::NotFound {
+                        session_id: id.clone(),
+                    });
+                }
+            };
+            match self.event_log.append(
+                &session_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                event,
+            ) {
+                Ok(_) => {
+                    return Ok(Session {
+                        status: next_status,
+                        ..loaded.session
+                    });
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(SessionStoreError::EventLog(error)),
             }
-            Err(error) => Err(SessionStoreError::EventLog(error)),
         }
     }
 
     pub fn load(&self, id: &SessionId) -> Result<Option<Session>, SessionStoreError> {
+        self.load_versioned(id)
+            .map(|loaded| loaded.map(|loaded| loaded.session))
+    }
+
+    fn load_versioned(
+        &self,
+        id: &SessionId,
+    ) -> Result<Option<VersionedSession>, SessionStoreError> {
         let events = self
             .event_log
             .replay::<SessionEvent>(&session_stream(id))
             .map_err(SessionStoreError::Replay)?;
-        match events.as_slice() {
-            [] => Ok(None),
-            [SessionEvent::Created { title }] => Ok(Some(Session {
-                id: id.clone(),
-                title: title.clone(),
-                status: SessionStatus::Open,
-            })),
-            [SessionEvent::Created { title }, SessionEvent::Closed {}] => Ok(Some(Session {
-                id: id.clone(),
-                title: title.clone(),
-                status: SessionStatus::Closed,
-            })),
-            _ => Err(SessionStoreError::InvalidHistory {
-                event_count: events.len(),
-            }),
+        let Some(SessionEvent::Created { title }) = events.first() else {
+            return if events.is_empty() {
+                Ok(None)
+            } else {
+                Err(SessionStoreError::InvalidHistory {
+                    event_count: events.len(),
+                })
+            };
+        };
+        let mut status = SessionStatus::Open;
+        for event in &events[1..] {
+            status = match (status, event) {
+                (SessionStatus::Open, SessionEvent::Closed {}) => SessionStatus::Closed,
+                (SessionStatus::Closed, SessionEvent::Reopened {}) => SessionStatus::Open,
+                _ => {
+                    return Err(SessionStoreError::InvalidHistory {
+                        event_count: events.len(),
+                    });
+                }
+            };
         }
+        Ok(Some(VersionedSession {
+            session: Session {
+                id: id.clone(),
+                title: title.clone(),
+                status,
+            },
+            stream_version: u64::try_from(events.len()).map_err(|_| {
+                SessionStoreError::InvalidHistory {
+                    event_count: events.len(),
+                }
+            })?,
+        }))
     }
+}
+
+struct VersionedSession {
+    session: Session,
+    stream_version: u64,
 }
 
 fn session_stream(id: &SessionId) -> StreamId {
@@ -267,6 +311,7 @@ fn session_stream(id: &SessionId) -> StreamId {
 enum SessionEvent {
     Created { title: SessionTitle },
     Closed {},
+    Reopened {},
 }
 
 impl Event for SessionEvent {
@@ -274,6 +319,7 @@ impl Event for SessionEvent {
         match self {
             Self::Created { .. } => SESSION_CREATED_EVENT_TYPE,
             Self::Closed {} => SESSION_CLOSED_EVENT_TYPE,
+            Self::Reopened {} => SESSION_REOPENED_EVENT_TYPE,
         }
     }
 
@@ -284,7 +330,7 @@ impl Event for SessionEvent {
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
         if !matches!(
             event_type,
-            SESSION_CREATED_EVENT_TYPE | SESSION_CLOSED_EVENT_TYPE
+            SESSION_CREATED_EVENT_TYPE | SESSION_CLOSED_EVENT_TYPE | SESSION_REOPENED_EVENT_TYPE
         ) || payload_version != SESSION_EVENT_PAYLOAD_VERSION
         {
             return Err(DecodeError::UnsupportedEvent {
@@ -293,7 +339,10 @@ impl Event for SessionEvent {
             });
         }
 
-        if event_type == SESSION_CLOSED_EVENT_TYPE {
+        if matches!(
+            event_type,
+            SESSION_CLOSED_EVENT_TYPE | SESSION_REOPENED_EVENT_TYPE
+        ) {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
             struct Payload {}
@@ -303,7 +352,11 @@ impl Event for SessionEvent {
                     message: error.to_string(),
                 }
             })?;
-            return Ok(Self::Closed {});
+            return Ok(if event_type == SESSION_CLOSED_EVENT_TYPE {
+                Self::Closed {}
+            } else {
+                Self::Reopened {}
+            });
         }
 
         #[derive(serde::Deserialize)]
@@ -321,34 +374,5 @@ impl Event for SessionEvent {
                 message: error.to_string(),
             })?;
         Ok(Self::Created { title })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[test]
-    fn stale_loaded_close_is_classified_from_the_winning_event() {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("events.sqlite3");
-        let id = SessionId::new("contested-close").unwrap();
-        let mut winner = SessionStore::open(&path).unwrap();
-        winner
-            .create(id.clone(), SessionTitle::new("Contested").unwrap())
-            .unwrap();
-        let mut loser = SessionStore::open(&path).unwrap();
-        let winner_snapshot = winner.load(&id).unwrap().unwrap();
-        let loser_snapshot = loser.load(&id).unwrap().unwrap();
-
-        winner.close_loaded(&id, winner_snapshot).unwrap();
-        let error = loser.close_loaded(&id, loser_snapshot).unwrap_err();
-
-        assert!(matches!(
-            error,
-            SessionStoreError::AlreadyClosed { ref session_id } if session_id == &id
-        ));
     }
 }

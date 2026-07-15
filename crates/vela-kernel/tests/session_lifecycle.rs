@@ -356,6 +356,129 @@ fn racing_closes_persist_exactly_one_terminal_event() {
 }
 
 #[test]
+fn reopens_and_loads_an_open_session_after_restarting() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("reopen").unwrap();
+    let title = SessionTitle::new("Continue the session").unwrap();
+    let mut store = SessionStore::open(&path).unwrap();
+    store.create(id.clone(), title.clone()).unwrap();
+    store.close(&id).unwrap();
+
+    let session = SessionStore::open(&path).unwrap().reopen(&id).unwrap();
+
+    assert_eq!(session.id(), &id);
+    assert_eq!(session.title(), &title);
+    assert_eq!(session.status(), SessionStatus::Open);
+    assert_eq!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap(),
+        Some(session)
+    );
+    let (event_type, payload_version, payload): (String, u32, Vec<u8>) =
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT event_type, payload_version, payload FROM events WHERE stream_id = 'session:reopen' AND stream_version = 3",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+    assert_eq!(event_type, "session.reopened");
+    assert_eq!(payload_version, 1);
+    assert_eq!(payload, br#"{}"#);
+}
+
+#[test]
+fn reopening_missing_and_open_sessions_returns_domain_errors() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = SessionStore::open(&path).unwrap();
+    let missing = SessionId::new("missing-reopen").unwrap();
+
+    assert!(matches!(
+        store.reopen(&missing).unwrap_err(),
+        SessionStoreError::NotFound { ref session_id } if session_id == &missing
+    ));
+    assert_eq!(store.load(&missing).unwrap(), None);
+
+    let id = SessionId::new("already-open").unwrap();
+    let open = store
+        .create(id.clone(), SessionTitle::new("Still open").unwrap())
+        .unwrap();
+    let error = store.reopen(&id).unwrap_err();
+    assert!(matches!(
+        error,
+        SessionStoreError::AlreadyOpen { ref session_id } if session_id == &id
+    ));
+    assert_eq!(error.to_string(), "session already-open is already open");
+    assert!(error.source().is_none());
+    assert_eq!(store.load(&id).unwrap(), Some(open));
+}
+
+#[test]
+fn sessions_can_close_again_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("repeat").unwrap();
+    let mut store = SessionStore::open(&path).unwrap();
+    store
+        .create(id.clone(), SessionTitle::new("Repeat transitions").unwrap())
+        .unwrap();
+    store.close(&id).unwrap();
+    store.reopen(&id).unwrap();
+
+    let session = store.close(&id).unwrap();
+
+    assert_eq!(session.status(), SessionStatus::Closed);
+    assert_eq!(store.load(&id).unwrap(), Some(session));
+}
+
+#[test]
+fn racing_reopens_persist_exactly_one_reopen_event() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("race-reopen").unwrap();
+    let mut setup = SessionStore::open(&path).unwrap();
+    setup
+        .create(id.clone(), SessionTitle::new("Race reopen").unwrap())
+        .unwrap();
+    setup.close(&id).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+
+    let first_path = path.clone();
+    let first_id = id.clone();
+    let first_barrier = Arc::clone(&barrier);
+    let first = thread::spawn(move || {
+        let mut store = SessionStore::open(first_path).unwrap();
+        first_barrier.wait();
+        store.reopen(&first_id)
+    });
+    let second_path = path.clone();
+    let second = thread::spawn(move || {
+        let mut store = SessionStore::open(second_path).unwrap();
+        barrier.wait();
+        store.reopen(&id)
+    });
+
+    match (first.join().unwrap(), second.join().unwrap()) {
+        (Ok(winner), Err(SessionStoreError::AlreadyOpen { .. }))
+        | (Err(SessionStoreError::AlreadyOpen { .. }), Ok(winner)) => {
+            assert_eq!(winner.status(), SessionStatus::Open);
+        }
+        outcomes => panic!("unexpected reopen race outcomes: {outcomes:?}"),
+    }
+    let reopen_count: u32 = rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = 'session:race-reopen' AND event_type = 'session.reopened'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reopen_count, 1);
+}
+
+#[test]
 fn load_rejects_closed_without_creation_and_duplicate_close_events() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -410,5 +533,63 @@ fn load_rejects_closed_without_creation_and_duplicate_close_events() {
     assert!(matches!(
         SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
         SessionStoreError::InvalidHistory { event_count: 3 }
+    ));
+}
+
+#[test]
+fn load_rejects_reopen_without_close_and_duplicate_reopen_events() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("invalid-reopen").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Invalid reopen").unwrap())
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:invalid-reopen', 2, 'session.reopened', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::InvalidHistory { event_count: 2 }
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'session.closed' WHERE stream_id = 'session:invalid-reopen' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:invalid-reopen', 3, 'session.reopened', 1, X'7B22756E6578706563746564223A747275657D')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 3,
+            ..
+        })
+    ));
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'session:invalid-reopen' AND stream_version = 3",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:invalid-reopen', 4, 'session.reopened', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::InvalidHistory { event_count: 4 }
     ));
 }
