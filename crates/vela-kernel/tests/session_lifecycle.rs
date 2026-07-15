@@ -62,6 +62,88 @@ fn persists_the_title_in_the_typed_event_payload() {
 }
 
 #[test]
+fn renames_and_loads_a_session_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("rename").unwrap();
+    let mut store = SessionStore::open(&path).unwrap();
+    store
+        .create(id.clone(), SessionTitle::new("Original").unwrap())
+        .unwrap();
+
+    let title = SessionTitle::new(" Renamed session ").unwrap();
+    let session = store.rename(&id, title.clone()).unwrap();
+
+    assert_eq!(session.title(), &title);
+    assert_eq!(session.status(), SessionStatus::Open);
+    assert_eq!(session.closure(), None);
+    assert_eq!(session.reopen_reason(), None);
+    assert_eq!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap(),
+        Some(session)
+    );
+    let (event_type, payload_version, payload): (String, u32, Vec<u8>) =
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT event_type, payload_version, payload FROM events WHERE stream_id = 'session:rename' AND stream_version = 2",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+    assert_eq!(event_type, "session.renamed");
+    assert_eq!(payload_version, 1);
+    assert_eq!(payload, br#"{"title":" Renamed session "}"#);
+}
+
+#[test]
+fn repeated_renames_preserve_lifecycle_state_and_project_the_latest_title() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("rename-transitions").unwrap();
+    let mut store = SessionStore::open(&path).unwrap();
+    store
+        .create(id.clone(), SessionTitle::new("Original").unwrap())
+        .unwrap();
+    let closure = SessionClosure::new("Complete").unwrap();
+    store.close(&id, closure.clone()).unwrap();
+
+    let closed = store
+        .rename(&id, SessionTitle::new("Closed title").unwrap())
+        .unwrap();
+    assert_eq!(closed.status(), SessionStatus::Closed);
+    assert_eq!(closed.closure(), Some(&closure));
+
+    let reason = SessionReopenReason::new("Continue").unwrap();
+    store.reopen(&id, reason.clone()).unwrap();
+    let title = SessionTitle::new("Latest title").unwrap();
+    let open = store.rename(&id, title.clone()).unwrap();
+
+    assert_eq!(open.title(), &title);
+    assert_eq!(open.status(), SessionStatus::Open);
+    assert_eq!(open.closure(), None);
+    assert_eq!(open.reopen_reason(), Some(&reason));
+    assert_eq!(store.load(&id).unwrap(), Some(open));
+}
+
+#[test]
+fn renaming_a_missing_session_returns_not_found_without_creating_a_stream() {
+    let directory = tempdir().unwrap();
+    let mut store = SessionStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let id = SessionId::new("missing-rename").unwrap();
+
+    let error = store
+        .rename(&id, SessionTitle::new("Title").unwrap())
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SessionStoreError::NotFound { ref session_id } if session_id == &id
+    ));
+    assert_eq!(store.load(&id).unwrap(), None);
+}
+
+#[test]
 fn loading_an_unknown_session_returns_none() {
     let directory = tempdir().unwrap();
     let store = SessionStore::open(directory.path().join("events.sqlite3")).unwrap();
@@ -187,7 +269,7 @@ fn load_surfaces_unknown_events_and_invalid_histories() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute(
-            "UPDATE events SET event_type = 'session.renamed' WHERE stream_id = 'session:session-42'",
+            "UPDATE events SET event_type = 'session.archived' WHERE stream_id = 'session:session-42'",
             [],
         )
         .unwrap();
@@ -196,7 +278,7 @@ fn load_surfaces_unknown_events_and_invalid_histories() {
     assert!(matches!(
         error,
         SessionStoreError::Replay(ReplayError::UnsupportedEvent { ref event_type, payload_version: 1 })
-            if event_type == "session.renamed"
+            if event_type == "session.archived"
     ));
     assert!(error.source().is_some());
 
@@ -255,6 +337,61 @@ fn load_surfaces_unknown_versions_and_malformed_payloads() {
             stream_version: 1,
             ..
         })
+    ));
+}
+
+#[test]
+fn load_rejects_invalid_rename_events() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = SessionId::new("invalid-rename").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(id.clone(), SessionTitle::new("Original").unwrap())
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:invalid-rename', 2, 'session.renamed', 1, X'7B227469746C65223A22227D')",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload_version = 2 WHERE stream_id = 'session:invalid-rename' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().load(&id).unwrap_err(),
+        SessionStoreError::Replay(ReplayError::UnsupportedEvent {
+            ref event_type,
+            payload_version: 2,
+        }) if event_type == "session.renamed"
+    ));
+
+    let before_create = SessionId::new("rename-before-create").unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('session:rename-before-create', 1, 'session.renamed', 1, X'7B227469746C65223A2252656E616D6564227D')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&before_create)
+            .unwrap_err(),
+        SessionStoreError::InvalidHistory { event_count: 1 }
     ));
 }
 
