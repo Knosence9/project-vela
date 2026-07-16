@@ -1,10 +1,15 @@
+use std::{
+    sync::{Arc, Barrier},
+    thread,
+};
+
 use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     task::{
-        TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationIdError,
-        TaskObservationKind, TaskObservationText, TaskObservationTextError, TaskOutput, TaskStore,
-        TaskStoreError,
+        TaskCancellation, TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationIdError,
+        TaskObservationKind, TaskObservationText, TaskObservationTextError, TaskOutput, TaskStatus,
+        TaskStore, TaskStoreError,
     },
 };
 
@@ -137,6 +142,152 @@ fn rejects_duplicate_observation_ids_without_appending() {
 }
 
 #[test]
+fn racing_distinct_observations_both_persist_in_stream_order() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("distinct-race").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            task_id.clone(),
+            TaskGoal::new("Keep both observations").unwrap(),
+        )
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+
+    let other_path = path.clone();
+    let second_path = path.clone();
+    let other_id = task_id.clone();
+    let other_barrier = Arc::clone(&barrier);
+    let first = thread::spawn(move || {
+        let mut store = TaskStore::open(other_path).unwrap();
+        other_barrier.wait();
+        store.append_observation(
+            &other_id,
+            observation_id("first"),
+            TaskObservationKind::Attempt,
+            observation_text("First writer"),
+        )
+    });
+    let second = thread::spawn(move || {
+        let mut store = TaskStore::open(second_path).unwrap();
+        barrier.wait();
+        store.append_observation(
+            &task_id,
+            observation_id("second"),
+            TaskObservationKind::Diagnostic,
+            observation_text("Second writer"),
+        )
+    });
+
+    first.join().unwrap().unwrap();
+    second.join().unwrap().unwrap();
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&TaskId::new("distinct-race").unwrap())
+        .unwrap()
+        .unwrap();
+    let ids: Vec<_> = task
+        .observations()
+        .iter()
+        .map(|observation| observation.id().as_str())
+        .collect();
+    assert!(matches!(
+        ids.as_slice(),
+        ["first", "second"] | ["second", "first"]
+    ));
+}
+
+#[test]
+fn racing_duplicate_observation_ids_persist_exactly_one() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("duplicate-race").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            task_id.clone(),
+            TaskGoal::new("Choose one meaning").unwrap(),
+        )
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+
+    let other_path = path.clone();
+    let other_id = task_id.clone();
+    let other_barrier = Arc::clone(&barrier);
+    let first = thread::spawn(move || {
+        let mut store = TaskStore::open(other_path).unwrap();
+        other_barrier.wait();
+        store.append_observation(
+            &other_id,
+            observation_id("same"),
+            TaskObservationKind::Attempt,
+            observation_text("First meaning"),
+        )
+    });
+    let second = thread::spawn(move || {
+        let mut store = TaskStore::open(path).unwrap();
+        barrier.wait();
+        store.append_observation(
+            &task_id,
+            observation_id("same"),
+            TaskObservationKind::Correction,
+            observation_text("Second meaning"),
+        )
+    });
+
+    match (first.join().unwrap(), second.join().unwrap()) {
+        (Ok(task), Err(TaskStoreError::DuplicateObservation { .. }))
+        | (Err(TaskStoreError::DuplicateObservation { .. }), Ok(task)) => {
+            assert_eq!(task.observations().len(), 1);
+        }
+        outcomes => panic!("unexpected duplicate observation race outcomes: {outcomes:?}"),
+    }
+}
+
+#[test]
+fn racing_observation_and_completion_never_append_after_terminal() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("terminal-race").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(task_id.clone(), TaskGoal::new("Freeze evidence").unwrap())
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+
+    let other_path = path.clone();
+    let other_id = task_id.clone();
+    let other_barrier = Arc::clone(&barrier);
+    let observation = thread::spawn(move || {
+        let mut store = TaskStore::open(other_path).unwrap();
+        other_barrier.wait();
+        store.append_observation(
+            &other_id,
+            observation_id("racing"),
+            TaskObservationKind::Verification,
+            observation_text("Racing evidence"),
+        )
+    });
+    let completion = thread::spawn(move || {
+        let mut store = TaskStore::open(path).unwrap();
+        barrier.wait();
+        store.complete(&task_id, TaskOutput::new("Done").unwrap())
+    });
+
+    let observation = observation.join().unwrap();
+    let completed = completion.join().unwrap().unwrap();
+    assert_eq!(completed.status(), TaskStatus::Completed);
+    match observation {
+        Ok(task) => assert_eq!(task.observations().len(), 1),
+        Err(TaskStoreError::AlreadyCompleted { .. }) => {
+            assert!(completed.observations().is_empty())
+        }
+        outcome => panic!("unexpected observation race outcome: {outcome:?}"),
+    }
+}
+
+#[test]
 fn rejects_unknown_and_terminal_tasks_without_changing_streams() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -169,6 +320,13 @@ fn rejects_unknown_and_terminal_tasks_without_changing_streams() {
     store
         .fail(&failed_id, TaskFailure::new("Failed").unwrap())
         .unwrap();
+    let cancelled_id = TaskId::new("cancelled").unwrap();
+    store
+        .start(cancelled_id.clone(), TaskGoal::new("Cancel").unwrap())
+        .unwrap();
+    store
+        .cancel(&cancelled_id, TaskCancellation::new("Cancelled").unwrap())
+        .unwrap();
     let before: u64 = rusqlite::Connection::open(&path)
         .unwrap()
         .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
@@ -195,6 +353,17 @@ fn rejects_unknown_and_terminal_tasks_without_changing_streams() {
             )
             .unwrap_err(),
         TaskStoreError::AlreadyFailed { ref task_id } if task_id == &failed_id
+    ));
+    assert!(matches!(
+        store
+            .append_observation(
+                &cancelled_id,
+                observation_id("late-cancelled"),
+                TaskObservationKind::Correction,
+                observation_text("Too late"),
+            )
+            .unwrap_err(),
+        TaskStoreError::AlreadyCancelled { ref task_id } if task_id == &cancelled_id
     ));
     assert_eq!(
         rusqlite::Connection::open(&path)
@@ -302,20 +471,23 @@ fn existing_task_history_without_observations_replays_unchanged() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
     let task_id = TaskId::new("legacy-shape").unwrap();
-    let mut store = TaskStore::open(&path).unwrap();
-    let started = store
-        .start(task_id.clone(), TaskGoal::new("No observations").unwrap())
+    let store = TaskStore::open(&path).unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('task:legacy-shape', 1, 'task.started', 1, ?1)",
+            [br#"{"goal":"No observations"}"#.as_slice()],
+        )
         .unwrap();
-    assert!(started.observations().is_empty());
-    store
-        .complete(&task_id, TaskOutput::new("Done").unwrap())
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('task:legacy-shape', 2, 'task.completed', 1, X'7B7D')",
+            [],
+        )
         .unwrap();
 
-    let loaded = TaskStore::open(&path)
-        .unwrap()
-        .load(&task_id)
-        .unwrap()
-        .unwrap();
+    let loaded = store.load(&task_id).unwrap().unwrap();
     assert!(loaded.observations().is_empty());
-    assert_eq!(loaded.output().unwrap().as_str(), "Done");
+    assert_eq!(loaded.status(), TaskStatus::Completed);
+    assert_eq!(loaded.output(), None);
 }
