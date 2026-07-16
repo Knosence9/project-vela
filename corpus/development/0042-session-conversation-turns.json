@@ -64,6 +64,14 @@
         "status": "passed"
       },
       {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0042-session-conversation-turns.json # valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # 42 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
         "command": "GitHub Rust quality gate run 29465752396 and required CodeRabbit status for pull request 496",
         "status": "passed"
       },
