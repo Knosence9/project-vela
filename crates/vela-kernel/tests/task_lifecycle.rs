@@ -7,11 +7,135 @@ use std::{
 use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
+    session::{SessionId, SessionStore, SessionTitle},
     task::{
         TaskCancellation, TaskFailure, TaskGoal, TaskId, TaskOutput, TaskStatus, TaskStore,
         TaskStoreError,
     },
 };
+
+#[test]
+fn lists_no_tasks_from_an_empty_store() {
+    let directory = tempdir().unwrap();
+    let store = TaskStore::open(directory.path().join("events.sqlite3")).unwrap();
+
+    assert!(store.list().unwrap().is_empty());
+}
+
+#[test]
+fn lists_latest_tasks_in_id_order_after_reopening_without_writing() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let session_id = SessionId::new("planning").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(session_id.clone(), SessionTitle::new("Planning").unwrap())
+        .unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    let later_id = TaskId::new("zeta").unwrap();
+    store
+        .start(later_id.clone(), TaskGoal::new("Later task").unwrap())
+        .unwrap();
+    store.associate_session(&later_id, &session_id).unwrap();
+    let output = TaskOutput::new("Done").unwrap();
+    store.complete(&later_id, output.clone()).unwrap();
+    let earlier_id = TaskId::new("alpha").unwrap();
+    let failure = TaskFailure::new("Unavailable").unwrap();
+    store
+        .start(earlier_id.clone(), TaskGoal::new("Earlier task").unwrap())
+        .unwrap();
+    store.fail(&earlier_id, failure.clone()).unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let before: u64 = connection
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    drop(connection);
+    let tasks = TaskStore::open(&path).unwrap().list().unwrap();
+
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0].id(), &earlier_id);
+    assert_eq!(tasks[0].status(), TaskStatus::Failed);
+    assert_eq!(tasks[0].failure(), Some(&failure));
+    assert_eq!(tasks[0].session_id(), None);
+    assert_eq!(tasks[1].id(), &later_id);
+    assert_eq!(tasks[1].goal().as_str(), "Later task");
+    assert_eq!(tasks[1].status(), TaskStatus::Completed);
+    assert_eq!(tasks[1].output(), Some(&output));
+    assert_eq!(tasks[1].session_id(), Some(&session_id));
+    assert_eq!(
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row::<u64, _, _>("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
+fn listing_tasks_excludes_session_streams_with_matching_external_ids() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let shared = "shared";
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            SessionId::new(shared).unwrap(),
+            SessionTitle::new("Session").unwrap(),
+        )
+        .unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            TaskId::new(shared).unwrap(),
+            TaskGoal::new("Task with the same external ID").unwrap(),
+        )
+        .unwrap();
+
+    let tasks = TaskStore::open(&path).unwrap().list().unwrap();
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].id().as_str(), shared);
+}
+
+#[test]
+fn listing_tasks_rejects_malformed_creation_payloads_and_stream_ids() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            TaskId::new("corrupt").unwrap(),
+            TaskGoal::new("Corrupt me").unwrap(),
+        )
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'task:corrupt'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        TaskStore::open(&path).unwrap().list().unwrap_err(),
+        TaskStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            ..
+        })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET stream_id = 'task:', payload = X'7B22676F616C223A22436F7272757074206D65227D'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        TaskStore::open(&path).unwrap().list().unwrap_err(),
+        TaskStoreError::InvalidStreamId { ref stream_id } if stream_id == "task:"
+    ));
+}
 
 fn cancellation() -> TaskCancellation {
     TaskCancellation::new("request superseded").unwrap()
