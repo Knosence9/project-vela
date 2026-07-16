@@ -227,6 +227,7 @@ pub enum SessionStoreError {
     NotFound { session_id: SessionId },
     AlreadyClosed { session_id: SessionId },
     AlreadyOpen { session_id: SessionId },
+    InvalidStreamId { stream_id: String },
     InvalidHistory { event_count: usize },
 }
 
@@ -247,6 +248,9 @@ impl fmt::Display for SessionStoreError {
             Self::AlreadyOpen { session_id } => {
                 write!(formatter, "session {session_id} is already open")
             }
+            Self::InvalidStreamId { stream_id } => {
+                write!(formatter, "invalid session stream id {stream_id}")
+            }
             Self::InvalidHistory { event_count } => write!(
                 formatter,
                 "invalid session history with {event_count} lifecycle events"
@@ -264,6 +268,7 @@ impl std::error::Error for SessionStoreError {
             | Self::NotFound { .. }
             | Self::AlreadyClosed { .. }
             | Self::AlreadyOpen { .. }
+            | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. } => None,
         }
     }
@@ -455,6 +460,32 @@ impl SessionStore {
             .map(|loaded| loaded.map(|loaded| loaded.session))
     }
 
+    /// Replays every persisted session in ascending ID order.
+    pub fn list(&self) -> Result<Vec<Session>, SessionStoreError> {
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type::<SessionEvent>(SESSION_CREATED_EVENT_TYPE)
+            .map_err(SessionStoreError::Replay)?;
+        let mut sessions = Vec::with_capacity(streams.len());
+
+        for (stream_id, events) in streams {
+            let Some(external_id) = stream_id.strip_prefix("session:") else {
+                return Err(SessionStoreError::InvalidStreamId { stream_id });
+            };
+            let id =
+                SessionId::new(external_id).map_err(|_| SessionStoreError::InvalidStreamId {
+                    stream_id: stream_id.clone(),
+                })?;
+            let Some(loaded) = Self::project_versioned(&id, events)? else {
+                return Err(SessionStoreError::InvalidHistory { event_count: 0 });
+            };
+            sessions.push(loaded.session);
+        }
+
+        sessions.sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
+        Ok(sessions)
+    }
+
     pub(crate) fn load_with_version(
         &self,
         id: &SessionId,
@@ -471,6 +502,13 @@ impl SessionStore {
             .event_log
             .replay::<SessionEvent>(&session_stream(id))
             .map_err(SessionStoreError::Replay)?;
+        Self::project_versioned(id, events)
+    }
+
+    fn project_versioned(
+        id: &SessionId,
+        events: Vec<SessionEvent>,
+    ) -> Result<Option<VersionedSession>, SessionStoreError> {
         let Some(SessionEvent::Created { title }) = events.first() else {
             return if events.is_empty() {
                 Ok(None)
