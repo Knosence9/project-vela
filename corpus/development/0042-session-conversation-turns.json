@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist ordered session conversation turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/495 by persisting user-visible human and assistant turns in the existing session aggregate without inventing system, provider, tool, permission, or extensible actor semantics.",
+    "acceptance_criteria": [
+      "Open sessions append non-empty human and assistant turns as payload-version-1 events and replay exact content in persisted order.",
+      "Closing preserves prior turns and rejects new ones without writing, while reopening permits later turns in the same transcript.",
+      "Missing sessions, malformed turn payloads, unsupported versions, and invalid lifecycle ordering remain explicit errors.",
+      "Concurrent valid turn appends both persist in one valid order, and load and list expose the same transcript after reopening the database.",
+      "Documentation, independent review, local verification, required hosted checks, and squash merge complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Resolved the architecture tracker with the approved smallest conversation contract and created bounded issue 495.",
+      "outcome": "success",
+      "diagnostic": "The selected boundary used a closed Human/Assistant role enum, opaque non-empty content, the existing session stream, and open-session-only appends; system prompts, provider/model metadata, tool traffic, permissions, and extensible actor identity remained explicit non-goals.",
+      "patch": "Closed decision issue 494 with the approved contract before changing persisted behavior."
+    },
+    {
+      "summary": "Wrote focused conversation acceptance tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The RED suite failed to compile because SessionTurnRole, SessionTurnContent, SessionTurnContentError, SessionStore::append_turn, Session::turns, and SessionStoreError::SessionClosed did not exist.",
+      "patch": "Added scenarios for ordered replay, exact payloads, close and reopen interaction, missing and closed sessions, concurrent appends, malformed role and content payloads, unsupported versions, and invalid history."
+    },
+    {
+      "summary": "Implemented ordered conversation persistence in the existing session aggregate.",
+      "outcome": "success",
+      "diagnostic": "The focused GREEN suite passed 4 tests, and the repeated repository gate passed 121 tests with no formatting, checking, Clippy, SecretSpec, or diff failures.",
+      "patch": "Added validated turn types, session.turn_appended encoding and decoding, open-session append with optimistic retry, transcript projection through load and list, explicit closed-session rejection, and observable-contract documentation."
+    },
+    {
+      "summary": "Completed independent pre-commit review and hosted verification.",
+      "outcome": "success",
+      "diagnostic": "Pinned Codex review found no blocking correctness issues. Pull request 496 passed required CodeRabbit and Rust quality statuses; CodeRabbit reported a temporary review-volume limit in its summary, so no unobserved detailed findings are claimed.",
+      "patch": "Kept the reviewed implementation unchanged except for documentation precision, a list-projection assertion, and an accurate internal unreachable diagnostic, then reran the full local gate."
+    },
+    {
+      "summary": "Squash-merged and synchronized the conversation capability.",
+      "outcome": "success",
+      "diagnostic": "Pull request 496 merged as b6ff1739b24c633f72eeb7a0fdb5a59caf2085dc after Rust quality gate run 29465752396 and the required CodeRabbit status passed; local main fast-forwarded to the merge commit.",
+      "patch": "Linked issue 495, enabled squash auto-merge, monitored required statuses, and synchronized the local repository before recording this episode."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela sessions now durably preserve an ordered user-visible human and assistant transcript across close, reopen, database reopen, and deterministic listing while rejecting closed-session writes and corrupt histories explicitly.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test session_conversation # RED: compile failure because the turn contract did not exist",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test session_conversation # GREEN: 4 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # no blocking correctness findings",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # formatting, workspace checks, 121 tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29465752396 and required CodeRabbit status for pull request 496",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 496 squash merge b6ff1739b24c633f72eeb7a0fdb5a59caf2085dc",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A bounded transcript can use the session event stream for both lifecycle and turn ordering without introducing a second index or migration.",
+    "A closed Human/Assistant role set records user-visible conversation while deliberately postponing system, model, tool, permission, and personality semantics.",
+    "Open-session-only append rules should be enforced both at command time and during history replay so races and corrupt stored orderings fail consistently.",
+    "Optimistic retry lets concurrent valid turns both persist while a competing close causes the retried writer to observe and respect the closed state.",
+    "Collection queries should project conversation fields through the same aggregate projector as load-by-identifier to prevent transcript drift.",
+    "Hosted status success and review-comment content are distinct evidence; a rate-limited review summary should be reported transparently rather than described as a detailed review."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/496"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
