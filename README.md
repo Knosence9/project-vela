@@ -138,6 +138,7 @@ The first milestone is the **evidence loop**:
 8. Start the persisted session lifecycle with durable creation, close, reopen, and load. ✅
 9. Connect persisted tasks to open sessions with an immutable association. ✅
 10. Query each persisted session's associated tasks in deterministic order. ✅
+11. Discover every persisted session in deterministic order without a separate index. ✅
 
 ## Project documents
 

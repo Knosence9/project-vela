@@ -12,7 +12,133 @@ use vela_kernel::{
         SessionReopenReasonError, SessionStatus, SessionStore, SessionStoreError, SessionSummary,
         SessionSummaryError, SessionTitle,
     },
+    task::{TaskGoal, TaskId, TaskStore},
 };
+
+#[test]
+fn lists_no_sessions_from_an_empty_store() {
+    let directory = tempdir().unwrap();
+    let store = SessionStore::open(directory.path().join("events.sqlite3")).unwrap();
+
+    assert!(store.list().unwrap().is_empty());
+}
+
+#[test]
+fn lists_latest_sessions_in_id_order_after_reopening_without_writing() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = SessionStore::open(&path).unwrap();
+    let later_id = SessionId::new("zeta").unwrap();
+    store
+        .create(later_id.clone(), SessionTitle::new("Old title").unwrap())
+        .unwrap();
+    store
+        .rename(&later_id, SessionTitle::new("Latest title").unwrap())
+        .unwrap();
+    store
+        .summarize(&later_id, SessionSummary::new("Current context").unwrap())
+        .unwrap();
+    let earlier_id = SessionId::new("alpha").unwrap();
+    let closure = SessionClosure::new("Finished").unwrap();
+    store
+        .create(
+            earlier_id.clone(),
+            SessionTitle::new("First alphabetically").unwrap(),
+        )
+        .unwrap();
+    store.close(&earlier_id, closure.clone()).unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let before: u64 = connection
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    drop(connection);
+    let sessions = SessionStore::open(&path).unwrap().list().unwrap();
+
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].id(), &earlier_id);
+    assert_eq!(sessions[0].status(), SessionStatus::Closed);
+    assert_eq!(sessions[0].closure(), Some(&closure));
+    assert_eq!(sessions[1].id(), &later_id);
+    assert_eq!(sessions[1].title().as_str(), "Latest title");
+    assert_eq!(
+        sessions[1].summary().map(SessionSummary::as_str),
+        Some("Current context")
+    );
+    assert_eq!(sessions[1].status(), SessionStatus::Open);
+    assert_eq!(
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row::<u64, _, _>("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
+fn listing_sessions_excludes_task_streams_with_matching_external_ids() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let shared = "shared";
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            SessionId::new(shared).unwrap(),
+            SessionTitle::new("Session").unwrap(),
+        )
+        .unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            TaskId::new(shared).unwrap(),
+            TaskGoal::new("Task with the same external ID").unwrap(),
+        )
+        .unwrap();
+
+    let sessions = SessionStore::open(&path).unwrap().list().unwrap();
+
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id().as_str(), shared);
+}
+
+#[test]
+fn listing_sessions_rejects_malformed_creation_payloads_and_stream_ids() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            SessionId::new("corrupt").unwrap(),
+            SessionTitle::new("Corrupt me").unwrap(),
+        )
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'session:corrupt'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().list().unwrap_err(),
+        SessionStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            ..
+        })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET stream_id = 'session:', payload = X'7B227469746C65223A22436F7272757074206D65227D'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        SessionStore::open(&path).unwrap().list().unwrap_err(),
+        SessionStoreError::InvalidStreamId { ref stream_id } if stream_id == "session:"
+    ));
+}
 
 #[test]
 fn creates_and_loads_an_open_session_after_reopening() {

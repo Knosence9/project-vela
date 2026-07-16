@@ -526,6 +526,85 @@ impl EventLog {
 
         Ok(events)
     }
+
+    pub(crate) fn replay_streams_with_event_type<E: Event>(
+        &self,
+        event_type: &str,
+    ) -> Result<Vec<(String, Vec<E>)>, ReplayError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT event.stream_id, event.stream_version, event.event_type,
+                        event.payload_version, event.payload
+                 FROM events AS event
+                 WHERE EXISTS (
+                     SELECT 1 FROM events AS marker
+                     WHERE marker.stream_id = event.stream_id AND marker.event_type = ?1
+                 )
+                 ORDER BY event.stream_id ASC, event.stream_version ASC",
+            )
+            .map_err(storage_replay_error)?;
+        let mut rows = statement
+            .query([event_type])
+            .map_err(storage_replay_error)?;
+        let mut streams: Vec<(String, Vec<E>)> = Vec::new();
+
+        while let Some(row) = rows.next().map_err(storage_replay_error)? {
+            let stream_id: String = row.get(0).map_err(storage_replay_error)?;
+            let stored_version: i64 = row.get(1).map_err(storage_replay_error)?;
+            let stream_version = u64::try_from(stored_version)
+                .map_err(|_| ReplayError::InvalidStoredVersion(stored_version))?;
+            if stream_version == 0 {
+                return Err(ReplayError::InvalidStoredVersion(stored_version));
+            }
+            let expected = streams
+                .last()
+                .filter(|(id, _)| id == &stream_id)
+                .map_or(1, |(_, events)| events.len() as u64 + 1);
+            if stream_version != expected {
+                return Err(ReplayError::VersionGap {
+                    expected,
+                    found: stream_version,
+                });
+            }
+            let stored_event_type: String = row.get(2).map_err(storage_replay_error)?;
+            if stored_event_type.is_empty() {
+                return Err(ReplayError::InvalidStoredEventType);
+            }
+            let stored_payload_version: i64 = row.get(3).map_err(storage_replay_error)?;
+            let payload_version = u32::try_from(stored_payload_version)
+                .map_err(|_| ReplayError::InvalidStoredPayloadVersion(stored_payload_version))?;
+            if payload_version == 0 {
+                return Err(ReplayError::InvalidStoredPayloadVersion(
+                    stored_payload_version,
+                ));
+            }
+            let payload: Vec<u8> = row.get(4).map_err(storage_replay_error)?;
+            let event =
+                E::decode(&stored_event_type, payload_version, &payload).map_err(|error| {
+                    match error {
+                        DecodeError::UnsupportedEvent { .. } => ReplayError::UnsupportedEvent {
+                            event_type: stored_event_type,
+                            payload_version,
+                        },
+                        DecodeError::MalformedPayload { message } => {
+                            ReplayError::MalformedPayload {
+                                stream_version,
+                                message,
+                            }
+                        }
+                    }
+                })?;
+
+            if let Some((_, events)) = streams.last_mut().filter(|(id, _)| id == &stream_id) {
+                events.push(event);
+            } else {
+                streams.push((stream_id, vec![event]));
+            }
+        }
+
+        Ok(streams)
+    }
 }
 
 fn current_stream_version(
