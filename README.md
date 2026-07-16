@@ -140,6 +140,7 @@ The first milestone is the **evidence loop**:
 10. Query each persisted session's associated tasks in deterministic order. ✅
 11. Discover every persisted session in deterministic order without a separate index. ✅
 12. Discover every persisted task in deterministic order without a separate index. ✅
+13. Persist ordered human and assistant conversation turns within open sessions. ✅
 
 ## Project documents
 

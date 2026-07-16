@@ -1,6 +1,6 @@
 use std::{fmt, path::Path};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::event_log::{
     DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
@@ -9,6 +9,7 @@ use crate::event_log::{
 const SESSION_CREATED_EVENT_TYPE: &str = "session.created";
 const SESSION_RENAMED_EVENT_TYPE: &str = "session.renamed";
 const SESSION_SUMMARIZED_EVENT_TYPE: &str = "session.summarized";
+const SESSION_TURN_APPENDED_EVENT_TYPE: &str = "session.turn_appended";
 const SESSION_CLOSED_EVENT_TYPE: &str = "session.closed";
 const SESSION_REOPENED_EVENT_TYPE: &str = "session.reopened";
 const SESSION_EVENT_PAYLOAD_VERSION: u32 = 1;
@@ -114,6 +115,61 @@ impl fmt::Display for SessionSummaryError {
 
 impl std::error::Error for SessionSummaryError {}
 
+/// The participant represented by one user-visible conversation turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTurnRole {
+    Human,
+    Assistant,
+}
+
+/// Non-empty, opaque UTF-8 content for one user-visible conversation turn.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionTurnContent(String);
+
+impl SessionTurnContent {
+    pub fn new(value: impl Into<String>) -> Result<Self, SessionTurnContentError> {
+        let value = value.into();
+        if value.is_empty() {
+            Err(SessionTurnContentError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionTurnContentError;
+
+impl fmt::Display for SessionTurnContentError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("session turn content must not be empty")
+    }
+}
+
+impl std::error::Error for SessionTurnContentError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionTurn {
+    role: SessionTurnRole,
+    content: SessionTurnContent,
+}
+
+impl SessionTurn {
+    pub fn role(&self) -> SessionTurnRole {
+        self.role
+    }
+
+    pub fn content(&self) -> &SessionTurnContent {
+        &self.content
+    }
+}
+
 /// The non-empty reason recorded when a session closes.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -190,6 +246,7 @@ pub struct Session {
     status: SessionStatus,
     closure: Option<SessionClosure>,
     reopen_reason: Option<SessionReopenReason>,
+    turns: Vec<SessionTurn>,
 }
 
 impl Session {
@@ -216,6 +273,10 @@ impl Session {
     pub fn reopen_reason(&self) -> Option<&SessionReopenReason> {
         self.reopen_reason.as_ref()
     }
+
+    pub fn turns(&self) -> &[SessionTurn] {
+        &self.turns
+    }
 }
 
 #[derive(Debug)]
@@ -227,6 +288,7 @@ pub enum SessionStoreError {
     NotFound { session_id: SessionId },
     AlreadyClosed { session_id: SessionId },
     AlreadyOpen { session_id: SessionId },
+    SessionClosed { session_id: SessionId },
     InvalidStreamId { stream_id: String },
     InvalidHistory { event_count: usize },
 }
@@ -248,6 +310,9 @@ impl fmt::Display for SessionStoreError {
             Self::AlreadyOpen { session_id } => {
                 write!(formatter, "session {session_id} is already open")
             }
+            Self::SessionClosed { session_id } => {
+                write!(formatter, "session {session_id} is closed")
+            }
             Self::InvalidStreamId { stream_id } => {
                 write!(formatter, "invalid session stream id {stream_id}")
             }
@@ -268,6 +333,7 @@ impl std::error::Error for SessionStoreError {
             | Self::NotFound { .. }
             | Self::AlreadyClosed { .. }
             | Self::AlreadyOpen { .. }
+            | Self::SessionClosed { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. } => None,
         }
@@ -305,6 +371,7 @@ impl SessionStore {
                 status: SessionStatus::Open,
                 closure: None,
                 reopen_reason: None,
+                turns: Vec::new(),
             }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
@@ -374,6 +441,41 @@ impl SessionStore {
         }
     }
 
+    pub fn append_turn(
+        &mut self,
+        id: &SessionId,
+        role: SessionTurnRole,
+        content: SessionTurnContent,
+    ) -> Result<Session, SessionStoreError> {
+        loop {
+            let Some(mut loaded) = self.load_versioned(id)? else {
+                return Err(SessionStoreError::NotFound {
+                    session_id: id.clone(),
+                });
+            };
+            if loaded.session.status == SessionStatus::Closed {
+                return Err(SessionStoreError::SessionClosed {
+                    session_id: id.clone(),
+                });
+            }
+            match self.event_log.append(
+                &session_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                &SessionEvent::TurnAppended {
+                    role,
+                    content: content.clone(),
+                },
+            ) {
+                Ok(_) => {
+                    loaded.session.turns.push(SessionTurn { role, content });
+                    return Ok(loaded.session);
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(SessionStoreError::EventLog(error)),
+            }
+        }
+    }
+
     pub fn close(
         &mut self,
         id: &SessionId,
@@ -436,9 +538,10 @@ impl SessionStore {
                         }
                         SessionEvent::Created { .. }
                         | SessionEvent::Renamed { .. }
-                        | SessionEvent::Summarized { .. } => {
+                        | SessionEvent::Summarized { .. }
+                        | SessionEvent::TurnAppended { .. } => {
                             unreachable!(
-                                "creation, rename, and summary do not use status transitions"
+                                "creation, rename, summary, and turn events do not use status transitions"
                             )
                         }
                     };
@@ -523,6 +626,7 @@ impl SessionStore {
         let mut status = SessionStatus::Open;
         let mut closure = None;
         let mut reopen_reason = None;
+        let mut turns = Vec::new();
         for event in &events[1..] {
             status = match (status, event) {
                 (status, SessionEvent::Renamed { title: new_title }) => {
@@ -537,6 +641,13 @@ impl SessionStore {
                 ) => {
                     summary = Some(new_summary.clone());
                     status
+                }
+                (SessionStatus::Open, SessionEvent::TurnAppended { role, content }) => {
+                    turns.push(SessionTurn {
+                        role: *role,
+                        content: content.clone(),
+                    });
+                    SessionStatus::Open
                 }
                 (SessionStatus::Open, SessionEvent::Closed { reason }) => {
                     closure = reason.clone();
@@ -563,6 +674,7 @@ impl SessionStore {
                 status,
                 closure,
                 reopen_reason,
+                turns,
             },
             stream_version: u64::try_from(events.len()).map_err(|_| {
                 SessionStoreError::InvalidHistory {
@@ -585,11 +697,25 @@ pub(crate) fn session_stream(id: &SessionId) -> StreamId {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum SessionEvent {
-    Created { title: SessionTitle },
-    Renamed { title: SessionTitle },
-    Summarized { summary: SessionSummary },
-    Closed { reason: Option<SessionClosure> },
-    Reopened { reason: Option<SessionReopenReason> },
+    Created {
+        title: SessionTitle,
+    },
+    Renamed {
+        title: SessionTitle,
+    },
+    Summarized {
+        summary: SessionSummary,
+    },
+    TurnAppended {
+        role: SessionTurnRole,
+        content: SessionTurnContent,
+    },
+    Closed {
+        reason: Option<SessionClosure>,
+    },
+    Reopened {
+        reason: Option<SessionReopenReason>,
+    },
 }
 
 impl Event for SessionEvent {
@@ -598,6 +724,7 @@ impl Event for SessionEvent {
             Self::Created { .. } => SESSION_CREATED_EVENT_TYPE,
             Self::Renamed { .. } => SESSION_RENAMED_EVENT_TYPE,
             Self::Summarized { .. } => SESSION_SUMMARIZED_EVENT_TYPE,
+            Self::TurnAppended { .. } => SESSION_TURN_APPENDED_EVENT_TYPE,
             Self::Closed { .. } => SESSION_CLOSED_EVENT_TYPE,
             Self::Reopened { .. } => SESSION_REOPENED_EVENT_TYPE,
         }
@@ -610,6 +737,7 @@ impl Event for SessionEvent {
             Self::Created { .. }
             | Self::Renamed { .. }
             | Self::Summarized { .. }
+            | Self::TurnAppended { .. }
             | Self::Closed { reason: None }
             | Self::Reopened { reason: None } => SESSION_EVENT_PAYLOAD_VERSION,
         }
@@ -619,7 +747,8 @@ impl Event for SessionEvent {
         let supported = match event_type {
             SESSION_CREATED_EVENT_TYPE
             | SESSION_RENAMED_EVENT_TYPE
-            | SESSION_SUMMARIZED_EVENT_TYPE => payload_version == SESSION_EVENT_PAYLOAD_VERSION,
+            | SESSION_SUMMARIZED_EVENT_TYPE
+            | SESSION_TURN_APPENDED_EVENT_TYPE => payload_version == SESSION_EVENT_PAYLOAD_VERSION,
             SESSION_CLOSED_EVENT_TYPE => matches!(payload_version, 1 | 2),
             SESSION_REOPENED_EVENT_TYPE => matches!(payload_version, 1 | 2),
             _ => false,
@@ -687,6 +816,29 @@ impl Event for SessionEvent {
                 Self::Closed { reason: None }
             } else {
                 Self::Reopened { reason: None }
+            });
+        }
+
+        if event_type == SESSION_TURN_APPENDED_EVENT_TYPE {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct TurnPayload {
+                role: SessionTurnRole,
+                content: String,
+            }
+
+            let payload: TurnPayload =
+                serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            let content = SessionTurnContent::new(payload.content).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::TurnAppended {
+                role: payload.role,
+                content,
             });
         }
 
