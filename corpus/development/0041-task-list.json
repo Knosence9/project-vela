@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "List every persisted task deterministically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/490 by adding a read-only task discovery query over authoritative event histories without introducing a projection table, pagination, runtime/provider API, child tasks, priority, or identity and tool policy.",
+    "acceptance_criteria": [
+      "An empty store returns no tasks, while a populated store returns every task in ascending identifier order with its latest goal, lifecycle status, terminal detail, and optional session association.",
+      "Listing is unchanged after reopening the database, excludes session streams with matching external identifiers, and appends no events.",
+      "Malformed payloads, invalid histories, and malformed owning task stream identifiers remain explicit errors rather than being skipped.",
+      "Discovery and full stream replay use one SQLite read snapshot, and load-by-identifier and listing share the same projection logic.",
+      "Documentation, independent review, the local repository gate, required hosted checks, review correction, and squash merge complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 490 and wrote task listing acceptance tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED suite failed to compile because TaskStore had no list method and TaskStoreError had no InvalidStreamId variant.",
+      "patch": "Added integration scenarios for an empty store, deterministic ordering, latest terminal and session-association state, database reopen, isolation from session streams, no-write behavior, malformed payloads, and malformed stream identities."
+    },
+    {
+      "summary": "Implemented event-based task discovery and reused task history projection.",
+      "outcome": "success",
+      "diagnostic": "The focused suite passed 35 tests after selecting every stream marked by task.started, validating owning task stream identifiers, projecting full histories, and sorting tasks by opaque identifier bytes.",
+      "patch": "Added TaskStore::list, TaskStoreError::InvalidStreamId, shared task projection logic, observable-contract documentation, and the README milestone entry."
+    },
+    {
+      "summary": "Completed independent pre-commit review and the local quality gate.",
+      "outcome": "success",
+      "diagnostic": "The pinned Codex review reported no findings, and just verify passed formatting, workspace checks, 117 tests, Clippy with warnings denied, SecretSpec integration, and diff checks.",
+      "patch": "Kept the implementation aligned with the existing one-snapshot session listing pattern and committed it using a Conventional Commit."
+    },
+    {
+      "summary": "Addressed CodeRabbit's documentation finding and reverified the branch.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit identified one minor omission: the list contract did not explicitly name InvalidStreamId for malformed owning task stream identities. The finding was valid, fixed, acknowledged, and resolved; the repeated local and hosted gates passed.",
+      "patch": "Extended the observable contract with the explicit InvalidStreamId result, committed the correction, and pushed it to pull request 491."
+    },
+    {
+      "summary": "Squash-merged and synchronized the task discovery capability.",
+      "outcome": "success",
+      "diagnostic": "Pull request 491 merged as 8fbca64b1b7fa3b04fa0d210f0dc4ec98649a085 after hosted Rust quality gate run 29463392567 and CodeRabbit passed, and local main fast-forwarded to the merge commit.",
+      "patch": "Linked issue 490, enabled squash auto-merge, monitored both required statuses, and restored the local repository to synchronized main before recording the episode."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now discover every persisted task in deterministic order from one consistent read snapshot while replaying authoritative histories, preserving terminal and session-association state, and surfacing corrupt task data explicitly.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle # RED: compile failure because list and InvalidStreamId did not exist",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test task_lifecycle # GREEN: 35 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # no findings",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # formatting, checking, 117 workspace tests, Clippy, SecretSpec, and diff gates passed before and after review correction",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29463392567 and required CodeRabbit status for pull request 491 # passed after the review correction",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 491 squash merge 8fbca64b1b7fa3b04fa0d210f0dc4ec98649a085",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Task discovery can use the existing start discriminator as a durable index seed without adding a second mutable projection.",
+    "A collection query over event-sourced aggregates should consume complete histories from one read snapshot rather than discover identifiers and replay each stream separately.",
+    "Projection logic shared by load-by-identifier and collection queries prevents lifecycle ordering and corruption behavior from drifting.",
+    "Stream namespaces isolate task and session aggregates even when their public identifiers are equal.",
+    "Collection tests should verify not only ordering and reopen stability but also latest terminal details, optional associations, and absence of writes.",
+    "Automated review findings that clarify an observable error contract are worth fixing even when implementation and tests already enforce the behavior.",
+    "After a review correction, both local verification and required hosted checks should run again before merge evidence is claimed."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/491"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
