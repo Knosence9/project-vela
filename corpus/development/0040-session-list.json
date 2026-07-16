@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "List every persisted session deterministically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/486 by adding a read-only session discovery query over authoritative event histories without introducing a projection table, pagination, runtime/provider API, messages, or identity and tool policy.",
+    "acceptance_criteria": [
+      "An empty store returns no sessions, while a populated store returns every session in ascending identifier order with its latest title, summary, lifecycle status, and active reason.",
+      "Listing is unchanged after reopening the database, excludes task streams with matching external identifiers, and appends no events.",
+      "Malformed payloads, invalid histories, and malformed owning session stream identifiers remain explicit errors rather than being skipped.",
+      "Concurrent writers cannot produce a mixed-time listing because discovery and full stream replay use one SQLite read snapshot.",
+      "Documentation, independent review, the local repository gate, required hosted checks, and squash merge complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Created bounded issue 486 and wrote session-listing acceptance tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The focused RED suite failed to compile because SessionStore had no list method and SessionStoreError had no InvalidStreamId variant.",
+      "patch": "Added integration scenarios for an empty store, deterministic ordering, latest projected state, database reopen, isolation from task streams, no-write behavior, malformed payloads, and malformed stream identities."
+    },
+    {
+      "summary": "Implemented event-based session discovery and reused session history projection.",
+      "outcome": "success",
+      "diagnostic": "The focused suite passed 34 tests after listing decoded creation events, derived validated session identifiers from owning streams, replayed full histories, and sorted projected sessions by opaque identifier bytes.",
+      "patch": "Added SessionStore::list, SessionStoreError::InvalidStreamId, shared session projection logic, observable-contract documentation, and the README milestone entry."
+    },
+    {
+      "summary": "Fixed the independent review finding about inconsistent concurrent reads.",
+      "outcome": "success",
+      "diagnostic": "The first independent Codex review found that separate discovery and per-stream replay statements could mix snapshots under racing writers; the second review reported no actionable findings after the fix.",
+      "patch": "Added a crate-private event-log query that selects and decodes every event from all matching streams in one ordered SQLite statement, then projects each session from that single read snapshot."
+    },
+    {
+      "summary": "Verified and published the bounded kernel capability.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed formatting, workspace checks, 113 tests, Clippy with warnings denied, SecretSpec integration, and diff checks; hosted Rust quality gate run 29461923200 passed. CodeRabbit's required status passed, while its comment explicitly reported a temporary review-volume limit rather than a substantive review.",
+      "patch": "Committed the implementation as a Conventional Commit, linked issue 486 from pull request 487, enabled squash auto-merge, and monitored both required statuses."
+    },
+    {
+      "summary": "Squash-merged and synchronized the session discovery capability.",
+      "outcome": "success",
+      "diagnostic": "Pull request 487 merged as 38b8895970e6a0d491f2f111d68a62d8c1c6f00e after both required statuses passed, and local main fast-forwarded to the merge commit.",
+      "patch": "Removed the remote feature branch through auto-merge and restored the local repository to synchronized main before recording the episode."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now discover every persisted session in deterministic order from one consistent read snapshot while replaying authoritative histories and surfacing corrupt session data explicitly.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test session_lifecycle # RED: compile failure because list and InvalidStreamId did not exist",
+        "status": "failed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-kernel --test session_lifecycle # GREEN: 34 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command codex review --uncommitted # initial P2 mixed-snapshot finding fixed; repeat review had no findings",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify # formatting, checking, 113 workspace tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29461923200 and required CodeRabbit status for pull request 487 # passed; CodeRabbit comment disclosed temporary review-volume limit",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 487 squash merge 38b8895970e6a0d491f2f111d68a62d8c1c6f00e",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Session discovery can use the existing creation discriminator as a durable index seed without adding a second mutable projection.",
+    "A collection query over event-sourced aggregates needs one read snapshot; scanning identifiers and replaying streams in separate statements can return a mixed-time view under concurrent writers.",
+    "Selecting all events for matching streams in one ordered SQL statement preserves stream version validation and gives projection code a consistent input boundary.",
+    "Projection logic should be shared between load-by-identifier and collection queries so lifecycle ordering and corruption behavior cannot drift.",
+    "Stream namespaces isolate task and session aggregates even when their public identifiers are equal.",
+    "A required status can pass while an automated reviewer is rate-limited, so durable evidence must distinguish status completion from substantive review findings.",
+    "Read-only behavior and deterministic ordering are observable contracts worth direct tests rather than implementation assumptions."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/session.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/487"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
