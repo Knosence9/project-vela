@@ -1,6 +1,6 @@
 use std::{fmt, path::Path};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::event_log::{
     DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
@@ -12,6 +12,7 @@ const TASK_COMPLETED_EVENT_TYPE: &str = "task.completed";
 const TASK_CANCELLED_EVENT_TYPE: &str = "task.cancelled";
 const TASK_FAILED_EVENT_TYPE: &str = "task.failed";
 const TASK_SESSION_ASSOCIATED_EVENT_TYPE: &str = "task.session_associated";
+const TASK_OBSERVATION_APPENDED_EVENT_TYPE: &str = "task.observation_appended";
 const TASK_EVENT_PAYLOAD_VERSION: u32 = 1;
 const TASK_COMPLETED_PAYLOAD_VERSION: u32 = 2;
 const TASK_CANCELLED_PAYLOAD_VERSION: u32 = 2;
@@ -53,6 +54,105 @@ impl fmt::Display for TaskIdError {
 }
 
 impl std::error::Error for TaskIdError {}
+
+/// A caller-supplied identifier that is unique among one task's observations.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct TaskObservationId(String);
+
+impl TaskObservationId {
+    pub fn new(value: impl Into<String>) -> Result<Self, TaskObservationIdError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            Err(TaskObservationIdError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TaskObservationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskObservationIdError;
+
+impl fmt::Display for TaskObservationIdError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("task observation id must not be blank")
+    }
+}
+
+impl std::error::Error for TaskObservationIdError {}
+
+/// The stable typed category of persisted task execution evidence.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskObservationKind {
+    Attempt,
+    Diagnostic,
+    Correction,
+    Verification,
+}
+
+/// Non-blank opaque UTF-8 evidence recorded for one task observation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct TaskObservationText(String);
+
+impl TaskObservationText {
+    pub fn new(value: impl Into<String>) -> Result<Self, TaskObservationTextError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            Err(TaskObservationTextError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskObservationTextError;
+
+impl fmt::Display for TaskObservationTextError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("task observation text must not be blank")
+    }
+}
+
+impl std::error::Error for TaskObservationTextError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskObservation {
+    id: TaskObservationId,
+    kind: TaskObservationKind,
+    text: TaskObservationText,
+}
+
+impl TaskObservation {
+    pub fn id(&self) -> &TaskObservationId {
+        &self.id
+    }
+
+    pub fn kind(&self) -> TaskObservationKind {
+        self.kind
+    }
+
+    pub fn text(&self) -> &TaskObservationText {
+        &self.text
+    }
+}
 
 /// The non-empty objective recorded when a task starts.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -195,6 +295,7 @@ pub struct Task {
     cancellation: Option<TaskCancellation>,
     failure: Option<TaskFailure>,
     session_id: Option<SessionId>,
+    observations: Vec<TaskObservation>,
 }
 
 impl Task {
@@ -224,6 +325,10 @@ impl Task {
 
     pub fn session_id(&self) -> Option<&SessionId> {
         self.session_id.as_ref()
+    }
+
+    pub fn observations(&self) -> &[TaskObservation] {
+        &self.observations
     }
 }
 
@@ -256,6 +361,10 @@ pub enum TaskStoreError {
     AlreadyAssociated {
         task_id: TaskId,
         session_id: SessionId,
+    },
+    DuplicateObservation {
+        task_id: TaskId,
+        observation_id: TaskObservationId,
     },
     Session(SessionStoreError),
     InvalidStreamId {
@@ -295,6 +404,13 @@ impl fmt::Display for TaskStoreError {
                 formatter,
                 "task {task_id} is already associated with session {session_id}"
             ),
+            Self::DuplicateObservation {
+                task_id,
+                observation_id,
+            } => write!(
+                formatter,
+                "task {task_id} already has observation {observation_id}"
+            ),
             Self::Session(error) => write!(formatter, "task session-store error: {error}"),
             Self::InvalidStreamId { stream_id } => {
                 write!(formatter, "invalid task stream id {stream_id}")
@@ -323,6 +439,7 @@ impl std::error::Error for TaskStoreError {
             | Self::SessionNotFound { .. }
             | Self::SessionClosed { .. }
             | Self::AlreadyAssociated { .. }
+            | Self::DuplicateObservation { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. } => None,
         }
@@ -361,6 +478,7 @@ impl TaskStore {
                 cancellation: None,
                 failure: None,
                 session_id: None,
+                observations: Vec::new(),
             }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
@@ -411,6 +529,57 @@ impl TaskStore {
             None,
             Some(failure),
         )
+    }
+
+    pub fn append_observation(
+        &mut self,
+        id: &TaskId,
+        observation_id: TaskObservationId,
+        kind: TaskObservationKind,
+        text: TaskObservationText,
+    ) -> Result<Task, TaskStoreError> {
+        loop {
+            let Some(mut loaded) = self.load_versioned(id)? else {
+                return Err(TaskStoreError::NotFound {
+                    task_id: id.clone(),
+                });
+            };
+            if loaded.task.status != TaskStatus::Active {
+                return Err(terminal_state_error(id, loaded.task.status));
+            }
+            if loaded
+                .task
+                .observations
+                .iter()
+                .any(|observation| observation.id == observation_id)
+            {
+                return Err(TaskStoreError::DuplicateObservation {
+                    task_id: id.clone(),
+                    observation_id,
+                });
+            }
+
+            match self.event_log.append(
+                &task_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                &TaskEvent::ObservationAppended {
+                    id: observation_id.clone(),
+                    kind,
+                    text: text.clone(),
+                },
+            ) {
+                Ok(_) => {
+                    loaded.task.observations.push(TaskObservation {
+                        id: observation_id,
+                        kind,
+                        text,
+                    });
+                    return Ok(loaded.task);
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(TaskStoreError::EventLog(error)),
+            }
+        }
     }
 
     pub fn associate_session(
@@ -610,9 +779,20 @@ impl TaskStore {
             cancellation: None,
             failure: None,
             session_id: None,
+            observations: Vec::new(),
         };
         for event in &events[1..] {
             match event {
+                TaskEvent::ObservationAppended { id, kind, text }
+                    if task.status == TaskStatus::Active
+                        && !task.observations.iter().any(|item| item.id == *id) =>
+                {
+                    task.observations.push(TaskObservation {
+                        id: id.clone(),
+                        kind: *kind,
+                        text: text.clone(),
+                    });
+                }
                 TaskEvent::SessionAssociated {
                     task_id,
                     session_id,
@@ -693,6 +873,11 @@ enum TaskEvent {
         task_id: TaskId,
         session_id: SessionId,
     },
+    ObservationAppended {
+        id: TaskObservationId,
+        kind: TaskObservationKind,
+        text: TaskObservationText,
+    },
 }
 
 impl Event for TaskEvent {
@@ -703,6 +888,7 @@ impl Event for TaskEvent {
             Self::Cancelled { .. } => TASK_CANCELLED_EVENT_TYPE,
             Self::Failed { .. } => TASK_FAILED_EVENT_TYPE,
             Self::SessionAssociated { .. } => TASK_SESSION_ASSOCIATED_EVENT_TYPE,
+            Self::ObservationAppended { .. } => TASK_OBSERVATION_APPENDED_EVENT_TYPE,
         }
     }
 
@@ -711,7 +897,9 @@ impl Event for TaskEvent {
             Self::Completed { .. } => TASK_COMPLETED_PAYLOAD_VERSION,
             Self::Cancelled { .. } => TASK_CANCELLED_PAYLOAD_VERSION,
             Self::Failed { .. } => TASK_FAILED_PAYLOAD_VERSION,
-            Self::Started { .. } | Self::SessionAssociated { .. } => TASK_EVENT_PAYLOAD_VERSION,
+            Self::Started { .. }
+            | Self::SessionAssociated { .. }
+            | Self::ObservationAppended { .. } => TASK_EVENT_PAYLOAD_VERSION,
         }
     }
 
@@ -730,7 +918,9 @@ impl Event for TaskEvent {
                 payload_version,
                 TASK_EVENT_PAYLOAD_VERSION | TASK_FAILED_PAYLOAD_VERSION
             ),
-            TASK_SESSION_ASSOCIATED_EVENT_TYPE => payload_version == TASK_EVENT_PAYLOAD_VERSION,
+            TASK_SESSION_ASSOCIATED_EVENT_TYPE | TASK_OBSERVATION_APPENDED_EVENT_TYPE => {
+                payload_version == TASK_EVENT_PAYLOAD_VERSION
+            }
             _ => false,
         };
         if !supported {
@@ -831,6 +1021,36 @@ impl Event for TaskEvent {
             })?;
             return Ok(Self::Failed {
                 failure: Some(failure),
+            });
+        }
+
+        if event_type == TASK_OBSERVATION_APPENDED_EVENT_TYPE {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Payload {
+                id: String,
+                kind: TaskObservationKind,
+                text: String,
+            }
+
+            let payload: Payload =
+                serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+            let id = TaskObservationId::new(payload.id).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            let text = TaskObservationText::new(payload.text).map_err(|error| {
+                DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::ObservationAppended {
+                id,
+                kind: payload.kind,
+                text,
             });
         }
 
