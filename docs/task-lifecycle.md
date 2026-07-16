@@ -1,6 +1,6 @@
 # Persisted task lifecycle
 
-The `vela-kernel` crate provides a deliberately small task lifecycle: starting, completing with an output, cancelling with a reason, failing with a diagnostic, associating with a session, and loading a task over the typed SQLite event log.
+The `vela-kernel` crate provides a deliberately small task lifecycle: starting, completing with an output, cancelling with a reason, failing with a diagnostic, associating with a session, and loading or listing tasks over the typed SQLite event log.
 
 ## Observable contract
 
@@ -17,6 +17,7 @@ The `vela-kernel` crate provides a deliberately small task lifecycle: starting, 
 - `TaskStore::cancel` loads an existing active task and appends a `task.cancelled` event containing the supplied reason at payload version `2` with the exact current stream version. It returns the task with `Cancelled` status and the same reason.
 - `TaskStore::fail` loads an existing active task and appends a `task.failed` event containing the supplied diagnostic at payload version `2` with the exact current stream version. It returns the task with `Failed` status and the same diagnostic.
 - `TaskStore::load` replays the task stream. It returns the same ID, goal, and current status after reopening the database. A missing stream returns `None`.
+- `TaskStore::list` discovers task streams from their existing start events, replays every task from one consistent SQLite read snapshot, and returns them in ascending `TaskId` order. Each task includes its latest lifecycle status, terminal detail, and optional session association. An empty store returns an empty list, session streams remain excluded even when their external identifiers match task identifiers, and reopening the database does not change the result. Listing appends no events and does not maintain a separate mutable index.
 - `TaskStore::list_for_session` requires an existing session and returns every task associated with it in ascending `TaskId` order. Each result is replayed to its latest state, so active and terminal tasks are included. Closed and reopened sessions retain their membership, tasks associated with other sessions and unassociated tasks are excluded, and reopening the database does not change the result. A missing session returns `SessionNotFound` and the query appends no events.
 - Newly completed tasks expose the output persisted by their completion event. Legacy payload-version-1 completion events with the old empty payload remain replayable and expose no output. Active, cancelled, and failed tasks expose no completion output.
 - Newly cancelled tasks expose the reason persisted by their cancellation event. Legacy payload-version-1 cancellation events with the old empty payload remain replayable and expose no reason. Active, completed, and failed tasks expose no cancellation reason.
@@ -30,7 +31,7 @@ The `vela-kernel` crate provides a deliberately small task lifecycle: starting, 
 - Unknown event discriminators or payload versions and malformed payloads, including an empty persisted completion output, cancellation reason, failure diagnostic, or association identifier, remain explicit `ReplayError` values wrapped by `TaskStoreError::Replay`; persisted data is never skipped.
 - Valid histories start with one `task.started` event, contain at most one `task.session_associated` event, and contain at most one terminal `task.completed`, `task.cancelled`, or `task.failed` event. Association may appear before or after the terminal event. Terminal-first, duplicate starts, associations, or terminal events, events after a terminal event other than the single association, and association payloads naming a different task are invalid history rather than implicit state changes.
 
-`TaskStoreError` is non-exhaustive. Wrapped event-log, replay, and session-store failures are exposed through `std::error::Error::source`; domain errors such as `AlreadyExists`, `NotFound`, `AlreadyCompleted`, `AlreadyCancelled`, `AlreadyFailed`, `SessionNotFound`, `SessionClosed`, `AlreadyAssociated`, and `InvalidHistory` have no source.
+`TaskStoreError` is non-exhaustive. Wrapped event-log, replay, and session-store failures are exposed through `std::error::Error::source`; domain errors such as `AlreadyExists`, `NotFound`, `AlreadyCompleted`, `AlreadyCancelled`, `AlreadyFailed`, `SessionNotFound`, `SessionClosed`, `AlreadyAssociated`, `InvalidStreamId`, and `InvalidHistory` have no source.
 
 ## Non-goals
 

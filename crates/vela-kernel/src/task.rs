@@ -258,6 +258,9 @@ pub enum TaskStoreError {
         session_id: SessionId,
     },
     Session(SessionStoreError),
+    InvalidStreamId {
+        stream_id: String,
+    },
     InvalidHistory {
         event_count: usize,
     },
@@ -293,6 +296,9 @@ impl fmt::Display for TaskStoreError {
                 "task {task_id} is already associated with session {session_id}"
             ),
             Self::Session(error) => write!(formatter, "task session-store error: {error}"),
+            Self::InvalidStreamId { stream_id } => {
+                write!(formatter, "invalid task stream id {stream_id}")
+            }
             Self::InvalidHistory { event_count } => {
                 write!(
                     formatter,
@@ -317,6 +323,7 @@ impl std::error::Error for TaskStoreError {
             | Self::SessionNotFound { .. }
             | Self::SessionClosed { .. }
             | Self::AlreadyAssociated { .. }
+            | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. } => None,
         }
     }
@@ -505,6 +512,31 @@ impl TaskStore {
             .map(|loaded| loaded.map(|loaded| loaded.task))
     }
 
+    /// Replays every persisted task in ascending ID order.
+    pub fn list(&self) -> Result<Vec<Task>, TaskStoreError> {
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type::<TaskEvent>(TASK_STARTED_EVENT_TYPE)
+            .map_err(TaskStoreError::Replay)?;
+        let mut tasks = Vec::with_capacity(streams.len());
+
+        for (stream_id, events) in streams {
+            let Some(external_id) = stream_id.strip_prefix("task:") else {
+                return Err(TaskStoreError::InvalidStreamId { stream_id });
+            };
+            let id = TaskId::new(external_id).map_err(|_| TaskStoreError::InvalidStreamId {
+                stream_id: stream_id.clone(),
+            })?;
+            let Some(loaded) = Self::project_versioned(&id, events)? else {
+                return Err(TaskStoreError::InvalidHistory { event_count: 0 });
+            };
+            tasks.push(loaded.task);
+        }
+
+        tasks.sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
+        Ok(tasks)
+    }
+
     /// Replays the tasks associated with an existing session in ascending ID order.
     pub fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<Task>, TaskStoreError> {
         if self
@@ -553,6 +585,13 @@ impl TaskStore {
             .event_log
             .replay::<TaskEvent>(&task_stream(id))
             .map_err(TaskStoreError::Replay)?;
+        Self::project_versioned(id, events)
+    }
+
+    fn project_versioned(
+        id: &TaskId,
+        events: Vec<TaskEvent>,
+    ) -> Result<Option<VersionedTask>, TaskStoreError> {
         let Some(TaskEvent::Started { goal }) = events.first() else {
             return if events.is_empty() {
                 Ok(None)
