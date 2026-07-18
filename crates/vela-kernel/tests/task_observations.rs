@@ -155,12 +155,12 @@ fn racing_distinct_observations_both_persist_in_stream_order() {
         .unwrap();
     let barrier = Arc::new(Barrier::new(2));
 
-    let other_path = path.clone();
-    let second_path = path.clone();
+    let first_store = TaskStore::open(&path).unwrap();
+    let second_store = TaskStore::open(&path).unwrap();
     let other_id = task_id.clone();
     let other_barrier = Arc::clone(&barrier);
     let first = thread::spawn(move || {
-        let mut store = TaskStore::open(other_path).unwrap();
+        let mut store = first_store;
         other_barrier.wait();
         store.append_observation(
             &other_id,
@@ -170,7 +170,7 @@ fn racing_distinct_observations_both_persist_in_stream_order() {
         )
     });
     let second = thread::spawn(move || {
-        let mut store = TaskStore::open(second_path).unwrap();
+        let mut store = second_store;
         barrier.wait();
         store.append_observation(
             &task_id,
@@ -212,11 +212,13 @@ fn racing_duplicate_observation_ids_persist_exactly_one() {
         .unwrap();
     let barrier = Arc::new(Barrier::new(2));
 
-    let other_path = path.clone();
+    let first_store = TaskStore::open(&path).unwrap();
+    let second_store = TaskStore::open(&path).unwrap();
     let other_id = task_id.clone();
+    let second_id = task_id.clone();
     let other_barrier = Arc::clone(&barrier);
     let first = thread::spawn(move || {
-        let mut store = TaskStore::open(other_path).unwrap();
+        let mut store = first_store;
         other_barrier.wait();
         store.append_observation(
             &other_id,
@@ -226,10 +228,10 @@ fn racing_duplicate_observation_ids_persist_exactly_one() {
         )
     });
     let second = thread::spawn(move || {
-        let mut store = TaskStore::open(path).unwrap();
+        let mut store = second_store;
         barrier.wait();
         store.append_observation(
-            &task_id,
+            &second_id,
             observation_id("same"),
             TaskObservationKind::Correction,
             observation_text("Second meaning"),
@@ -243,6 +245,12 @@ fn racing_duplicate_observation_ids_persist_exactly_one() {
         }
         outcomes => panic!("unexpected duplicate observation race outcomes: {outcomes:?}"),
     }
+    let persisted = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.observations().len(), 1);
 }
 
 #[test]
@@ -256,11 +264,13 @@ fn racing_observation_and_completion_never_append_after_terminal() {
         .unwrap();
     let barrier = Arc::new(Barrier::new(2));
 
-    let other_path = path.clone();
+    let observation_store = TaskStore::open(&path).unwrap();
+    let completion_store = TaskStore::open(&path).unwrap();
     let other_id = task_id.clone();
+    let completion_id = task_id.clone();
     let other_barrier = Arc::clone(&barrier);
     let observation = thread::spawn(move || {
-        let mut store = TaskStore::open(other_path).unwrap();
+        let mut store = observation_store;
         other_barrier.wait();
         store.append_observation(
             &other_id,
@@ -270,21 +280,32 @@ fn racing_observation_and_completion_never_append_after_terminal() {
         )
     });
     let completion = thread::spawn(move || {
-        let mut store = TaskStore::open(path).unwrap();
+        let mut store = completion_store;
         barrier.wait();
-        store.complete(&task_id, TaskOutput::new("Done").unwrap())
+        store.complete(&completion_id, TaskOutput::new("Done").unwrap())
     });
 
     let observation = observation.join().unwrap();
     let completed = completion.join().unwrap().unwrap();
     assert_eq!(completed.status(), TaskStatus::Completed);
-    match observation {
-        Ok(task) => assert_eq!(task.observations().len(), 1),
+    let expected_observation_count = match observation {
+        Ok(task) => {
+            assert_eq!(task.observations().len(), 1);
+            1
+        }
         Err(TaskStoreError::AlreadyCompleted { .. }) => {
-            assert!(completed.observations().is_empty())
+            assert!(completed.observations().is_empty());
+            0
         }
         outcome => panic!("unexpected observation race outcome: {outcome:?}"),
-    }
+    };
+    let persisted = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.status(), TaskStatus::Completed);
+    assert_eq!(persisted.observations().len(), expected_observation_count);
 }
 
 #[test]
