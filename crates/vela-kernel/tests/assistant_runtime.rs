@@ -1,4 +1,4 @@
-use std::{cell::RefCell, error::Error, fmt, rc::Rc};
+use std::{cell::RefCell, error::Error, fmt, path::PathBuf, rc::Rc};
 
 use tempfile::tempdir;
 use vela_kernel::{
@@ -42,6 +42,29 @@ impl fmt::Display for FakeProviderFailure {
 }
 
 impl Error for FakeProviderFailure {}
+
+struct ClosingProvider {
+    path: PathBuf,
+    session_id: SessionId,
+    calls: Rc<RefCell<usize>>,
+}
+
+impl AssistantProvider for ClosingProvider {
+    fn complete(
+        &mut self,
+        _transcript: &[vela_kernel::session::SessionTurn],
+    ) -> Result<SessionTurnContent, ProviderError> {
+        *self.calls.borrow_mut() += 1;
+        SessionStore::open(&self.path)
+            .unwrap()
+            .close(
+                &self.session_id,
+                SessionClosure::new("closed during provider call").unwrap(),
+            )
+            .unwrap();
+        Ok(SessionTurnContent::new("cannot be appended").unwrap())
+    }
+}
 
 #[test]
 fn executes_one_turn_against_the_durable_ordered_transcript() {
@@ -185,7 +208,15 @@ fn provider_failure_preserves_only_the_new_human_turn_and_error_source() {
         .unwrap_err();
 
     assert!(matches!(error, RuntimeError::Provider(_)));
-    assert_eq!(error.source().unwrap().to_string(), "provider unavailable");
+    let provider_error = error.source().unwrap();
+    assert_eq!(provider_error.to_string(), "provider unavailable");
+    assert!(
+        provider_error
+            .source()
+            .unwrap()
+            .downcast_ref::<FakeProviderFailure>()
+            .is_some()
+    );
     let persisted = SessionStore::open(&path)
         .unwrap()
         .load(&session_id)
@@ -194,4 +225,53 @@ fn provider_failure_preserves_only_the_new_human_turn_and_error_source() {
     assert_eq!(persisted.turns().len(), 1);
     assert_eq!(persisted.turns()[0].role(), SessionTurnRole::Human);
     assert_eq!(persisted.turns()[0].content().as_str(), "durable question");
+}
+
+#[test]
+fn session_closure_after_provider_success_preserves_only_the_human_turn() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("assistant-append-failure").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Assistant append failure").unwrap(),
+        )
+        .unwrap();
+    let calls = Rc::new(RefCell::new(0));
+    let provider = ClosingProvider {
+        path: path.clone(),
+        session_id: session_id.clone(),
+        calls: Rc::clone(&calls),
+    };
+    let mut runtime = AssistantRuntime::open(&path, provider).unwrap();
+
+    let error = runtime
+        .execute_turn(
+            &session_id,
+            SessionTurnContent::new("durable before provider call").unwrap(),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::Session(vela_kernel::session::SessionStoreError::SessionClosed { .. })
+    ));
+    assert_eq!(*calls.borrow(), 1);
+    let persisted = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        persisted.closure().unwrap().as_str(),
+        "closed during provider call"
+    );
+    assert_eq!(persisted.turns().len(), 1);
+    assert_eq!(persisted.turns()[0].role(), SessionTurnRole::Human);
+    assert_eq!(
+        persisted.turns()[0].content().as_str(),
+        "durable before provider call"
+    );
 }
