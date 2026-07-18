@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Execute one provider-neutral assistant turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/505 by adding a synchronous, tool-free runtime that persists a human turn, invokes one caller-supplied provider against the durable transcript, and persists its assistant response with explicit partial-commit failures.",
+    "acceptance_criteria": [
+      "A fake provider receives the prior ordered transcript plus the newly durable human turn, and its assistant response survives database reopen.",
+      "Missing and closed sessions reject execution before provider invocation and preserve their histories.",
+      "Provider failure preserves the human turn, appends no assistant turn, and remains available through the standard error source chain.",
+      "Ownership, retry, credential, compatibility, and partial-commit semantics are documented without adding tools, async execution, task mutation, or storage events.",
+      "Independent review, local verification, required hosted checks, and squash merge complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Resolved the runtime architecture boundary before implementation.",
+      "outcome": "success",
+      "diagnostic": "Issue 504 delegated the choice after the persisted session, task, conversation, and observation substrate was complete. The selected boundary owns one synchronous session turn and deliberately defers task evidence because multiple aggregate writes would introduce unresolved partial-commit semantics.",
+      "patch": "Defined AssistantRuntime ownership, provider-neutral transcript and response types, human-provider-assistant ordering, no automatic retries, explicit partial commits, compatibility, and non-goals in issue 505."
+    },
+    {
+      "summary": "Wrote focused runtime acceptance tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The RED command failed with unresolved import vela_kernel::runtime because no runtime module or provider contract existed.",
+      "patch": "Added fake-provider scenarios for ordered durable success, missing and closed sessions, provider failure, persisted outcomes, and error-source preservation."
+    },
+    {
+      "summary": "Implemented the minimal synchronous runtime and documented its failure boundary.",
+      "outcome": "success",
+      "diagnostic": "The GREEN suite passed three focused tests. Existing SessionStore append semantics made the human turn durable before the external call and left it committed when the provider failed.",
+      "patch": "Added AssistantProvider, ProviderError, RuntimeError, and AssistantRuntime with one complete call, plus assistant-runtime documentation and lifecycle cross-references; no dependencies or persisted event formats changed."
+    },
+    {
+      "summary": "Fixed the strict Clippy gate after initial full verification.",
+      "outcome": "failure",
+      "diagnostic": "All tests passed, but Clippy denied the nested fake-provider call-recording type as type_complexity.",
+      "patch": "Introduced small RecordedTranscript and SharedCalls test aliases, removed unnecessary Send and Sync bounds from the synchronous provider error, strengthened missing and closed history assertions, and reran the full gate."
+    },
+    {
+      "summary": "Completed independent pre-commit review and pinned verification.",
+      "outcome": "success",
+      "diagnostic": "An independent read-only Codex review inspected the staged runtime, session durability semantics, tests, and documentation and reported no blocking findings. The final local quality gate passed formatting, workspace checks, all 134 tests, Clippy with warnings denied, SecretSpec integration, and diff checks.",
+      "patch": "Committed e1fd7dd with the reviewed implementation and pushed the bounded feature branch."
+    },
+    {
+      "summary": "Monitored hosted review and squash-merged the runtime.",
+      "outcome": "success",
+      "diagnostic": "Pull request 506 passed Rust quality gate run 29649146616 and the required CodeRabbit status. CodeRabbit reported only two trivial test-coverage suggestions and no blocking finding; squash auto-merge completed as f54af77b8bab6100032a6153c1a42a2b434db28d, issue 505 closed, and local main fast-forwarded to the merge.",
+      "patch": "Kept the production contract unchanged, accepted the non-blocking follow-up suggestions as future test hardening, and synchronized main before recording this episode."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now executes one synchronous provider-neutral assistant turn over a durable session transcript, with caller-owned provider configuration, exactly one invocation, explicit error sources, no automatic retries, and documented partial-commit behavior.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test assistant_runtime # RED: unresolved vela_kernel::runtime import",
+        "status": "failed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test assistant_runtime # GREEN: 3 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify # formatting, workspace checks, 134 tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0044-single-turn-runtime.json",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # 44 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29649146616 and required CodeRabbit review/status at https://github.com/Knosence9/project-vela/pull/506",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 506 squash merge f54af77b8bab6100032a6153c1a42a2b434db28d",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Persisting the human turn before provider invocation gives failures a replayable recovery point without pretending an external call and SQLite append are one transaction.",
+    "Automatic provider retry is unsafe at this boundary because a failed response path may still have produced external effects; caller-requested retry should be explicit and observable as another turn.",
+    "Reusing SessionTurn and SessionTurnContent keeps the provider boundary aligned with durable transcript semantics and avoids premature provider request schemas.",
+    "Task evidence should not be coupled to the first runtime slice until partial commits across session and task aggregates have an explicit contract.",
+    "Strict quality gates should include test code: a harmless nested fixture type can still block Clippy and is best simplified rather than suppressed.",
+    "Hosted review can distinguish blocking correctness defects from optional test hardening; the latter should remain visible without expanding a merged bounded slice."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/runtime.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/506"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
