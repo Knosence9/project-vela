@@ -36,6 +36,8 @@ The `vela-kernel` crate starts Vela's session boundary with durable creation, cl
 
 ## Non-goals
 
-This slice does not add automatic or model-generated summaries, structured close- or reopen-reason taxonomies, a duplicate mutable session index or session-side task membership index, listing filters, pagination, moving or detaching tasks, system/developer/tool roles, extensible actor identity, provider or model metadata, prompts, tool calls or results, permissions, attachments, turn edits or deletion, branching, compression, timestamps, token counts, a runtime interface, or async execution. Those require separate lifecycle events and acceptance tests rather than assumptions in persisted state.
+This slice does not add automatic or model-generated summaries, structured close- or reopen-reason taxonomies, a duplicate mutable session index or session-side task membership index, listing filters, pagination, moving or detaching tasks, system/developer/tool roles, extensible actor identity, provider or model metadata, prompts, tool calls or results, permissions, attachments, turn edits or deletion, branching, compression, timestamps, token counts, or async execution. Those require separate lifecycle events and acceptance tests rather than assumptions in persisted state.
+
+The separate [`single-turn assistant runtime`](assistant-runtime.md) composes this transcript boundary with a caller-supplied provider without changing session events.
 
 See [`event-log.md`](event-log.md) for the underlying append, durability, concurrency, and replay guarantees.
