@@ -39,6 +39,6 @@ The `vela-kernel` crate provides a deliberately small task lifecycle: starting, 
 
 ## Non-goals
 
-This slice does not add a structured result, failure, or cancellation taxonomy, artifacts, stack traces, retry policy, timestamps, actors, model messages, tools, child tasks, moving or detaching associations, a duplicate mutable session-side task index, pagination, async execution, cooperative runtime cancellation, or a runtime interface. Those require separate lifecycle events and acceptance tests rather than assumptions in the persisted state.
+This slice does not add a structured result, failure, or cancellation taxonomy, artifacts, stack traces, retry policy, timestamps, actors, model messages, tools, child tasks, moving or detaching associations, a duplicate mutable session-side task index, pagination, async execution, cooperative runtime cancellation, or task-integrated runtime execution. Those require separate lifecycle events and acceptance tests rather than assumptions in persisted state.
 
 See [`event-log.md`](event-log.md) for the underlying append, durability, concurrency, and replay guarantees.
