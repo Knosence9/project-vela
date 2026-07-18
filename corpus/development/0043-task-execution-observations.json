@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist typed task execution observations",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/500 by persisting validated attempt, diagnostic, correction, and verification observations in the existing task aggregate while preserving append order, optimistic concurrency, legacy replay, and terminal-state immutability.",
+    "acceptance_criteria": [
+      "Active tasks append validated typed observations as payload-version-1 events and replay them in persisted order.",
+      "Observation identifiers are unique per task, malformed persisted evidence is rejected explicitly, and legacy task histories replay with an empty observation list.",
+      "Concurrent distinct observations both persist, duplicate identifiers persist exactly once, and observation-versus-terminal races never append evidence after the terminal event.",
+      "Completed, failed, and cancelled tasks reject later observations without changing their streams.",
+      "Documentation, independent review, local verification, required hosted checks, and squash merge complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Defined the smallest typed execution-evidence contract in bounded issue 500.",
+      "outcome": "success",
+      "diagnostic": "The selected contract used four closed observation kinds, validated non-empty identifiers and text, append-only events in the existing task stream, per-task identifier uniqueness, and terminal freeze semantics; timestamps, mutable evidence, cross-task identifiers, and generalized telemetry remained out of scope.",
+      "patch": "Limited the slice to attempt, diagnostic, correction, and verification evidence projected by the task aggregate."
+    },
+    {
+      "summary": "Wrote focused observation acceptance tests before production support.",
+      "outcome": "failure",
+      "diagnostic": "The RED suite failed because the public observation types and TaskStore append and replay behavior did not yet exist.",
+      "patch": "Added scenarios for validation, all four kinds, ordered database replay, duplicate identifiers, terminal rejection, malformed and unsupported payloads, invalid history, concurrency, and legacy history."
+    },
+    {
+      "summary": "Implemented typed observations in the task aggregate and event stream.",
+      "outcome": "success",
+      "diagnostic": "The GREEN suite passed all focused tests while strict replay rejected malformed values, unknown kinds, duplicate persisted identifiers, and post-terminal observations.",
+      "patch": "Added validated observation value types, the task.observation_appended event, ordered projection, optimistic append retry, duplicate detection, terminal guards, and lifecycle documentation."
+    },
+    {
+      "summary": "Strengthened concurrency coverage during independent review.",
+      "outcome": "success",
+      "diagnostic": "Review identified missing race coverage rather than a production defect. Distinct-ID, duplicate-ID, observation-versus-completion, cancellation-freeze, and raw legacy-history cases brought the focused suite to 10 tests.",
+      "patch": "Added commit 3c052c5 with bounded concurrency and compatibility tests and reran the full pinned verification gate."
+    },
+    {
+      "summary": "Recovered a stalled required CodeRabbit check without changing product behavior.",
+      "outcome": "failure",
+      "diagnostic": "The Rust quality gate was green, but the required CodeRabbit status had not appeared for the latest commit after two explicit review requests, leaving pull request 501 blocked for roughly two days.",
+      "patch": "Converted the pull request to draft and immediately marked it ready again, which emitted a fresh review lifecycle event and started the missing required CodeRabbit status."
+    },
+    {
+      "summary": "Addressed CodeRabbit race-test findings and verified persisted outcomes.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that fallible TaskStore initialization inside barrier-controlled workers could strand peers and that API results alone did not prove losing race operations wrote no event.",
+      "patch": "Commit 50b9a1d opened stores before synchronization and reopened streams after duplicate-ID and completion races; focused tests passed, race tests passed 20 consecutive runs, just verify passed, and the review thread was resolved."
+    },
+    {
+      "summary": "Squash-merged and synchronized typed execution observations.",
+      "outcome": "success",
+      "diagnostic": "Pull request 501 merged as cc1dca454acf2b6e1595629d4f563dbf11202087 after Rust quality gate run 29642844452 and the required CodeRabbit status passed; issue 500 closed and local main fast-forwarded to the merge commit.",
+      "patch": "Kept squash auto-merge enabled, monitored both required statuses through merge, and synchronized local main before recording this episode."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela tasks now durably preserve ordered typed attempt, diagnostic, correction, and verification evidence while enforcing validated values, per-task identifier uniqueness, strict replay, optimistic concurrency, legacy compatibility, and immutable terminal histories.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test -p vela-kernel --test task_observations # RED: missing observation contract and behavior",
+        "status": "failed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test -p vela-kernel --test task_observations # GREEN: 10 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command bash -lc 'for i in $(seq 1 20); do cargo test -q -p vela-kernel --test task_observations racing_ || exit 1; done' # 20 consecutive runs of all 3 race tests passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify # formatting, workspace checks, 131 tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0043-*.json # valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # 43 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate run 29642844452 and required CodeRabbit status for pull request 501",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 501 squash merge cc1dca454acf2b6e1595629d4f563dbf11202087",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Execution evidence fits the existing task event stream when kinds are closed, values are validated, and ordering is inherited from stream versions.",
+    "Per-task observation identifiers provide practical retry deduplication without requiring a global evidence index or mutable records.",
+    "Terminal freeze must be enforced both at command time and during replay so stale writers and corrupt histories cannot place evidence after completion, failure, or cancellation.",
+    "Concurrency tests should reopen persisted state after racing operations because returned aggregates alone cannot prove that a losing operation appended no event.",
+    "Fallible setup belongs before barrier-controlled phases; otherwise one worker can panic while its peer waits forever.",
+    "A ready-for-review lifecycle retrigger can safely recover a missing pull-request app status when repeated bot commands do not start the required check, without manufacturing a code change."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/501"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
