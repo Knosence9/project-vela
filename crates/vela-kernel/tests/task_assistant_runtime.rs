@@ -1,4 +1,4 @@
-use std::{cell::RefCell, error::Error, fmt, rc::Rc};
+use std::{cell::RefCell, error::Error, fmt, path::PathBuf, rc::Rc};
 
 use tempfile::tempdir;
 use vela_kernel::{
@@ -7,8 +7,8 @@ use vela_kernel::{
         SessionClosure, SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole,
     },
     task::{
-        TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText, TaskOutput,
-        TaskStore, TaskStoreError,
+        TaskCancellation, TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind,
+        TaskObservationText, TaskOutput, TaskStore, TaskStoreError,
     },
 };
 
@@ -46,6 +46,29 @@ impl fmt::Display for FakeProviderFailure {
 }
 
 impl Error for FakeProviderFailure {}
+
+struct ClosingProvider {
+    path: PathBuf,
+    session_id: SessionId,
+    calls: Rc<RefCell<usize>>,
+}
+
+impl AssistantProvider for ClosingProvider {
+    fn complete(
+        &mut self,
+        _transcript: &[vela_kernel::session::SessionTurn],
+    ) -> Result<SessionTurnContent, ProviderError> {
+        *self.calls.borrow_mut() += 1;
+        SessionStore::open(&self.path)
+            .unwrap()
+            .close(
+                &self.session_id,
+                SessionClosure::new("closed during provider call").unwrap(),
+            )
+            .unwrap();
+        Ok(SessionTurnContent::new("cannot be appended").unwrap())
+    }
+}
 
 #[test]
 fn executes_an_associated_task_turn_and_persists_attempt_evidence() {
@@ -137,6 +160,22 @@ fn invalid_task_state_fails_before_transcript_write_or_provider_call() {
     tasks
         .complete(&completed, TaskOutput::new("done").unwrap())
         .unwrap();
+    let cancelled = TaskId::new("cancelled").unwrap();
+    tasks
+        .start(cancelled.clone(), TaskGoal::new("cancelled").unwrap())
+        .unwrap();
+    tasks.associate_session(&cancelled, &session_id).unwrap();
+    tasks
+        .cancel(&cancelled, TaskCancellation::new("not needed").unwrap())
+        .unwrap();
+    let failed = TaskId::new("failed").unwrap();
+    tasks
+        .start(failed.clone(), TaskGoal::new("failed").unwrap())
+        .unwrap();
+    tasks.associate_session(&failed, &session_id).unwrap();
+    tasks
+        .fail(&failed, TaskFailure::new("could not complete").unwrap())
+        .unwrap();
     let closed_session_task = TaskId::new("closed-session").unwrap();
     tasks
         .start(
@@ -179,6 +218,22 @@ fn invalid_task_state_fails_before_transcript_write_or_provider_call() {
             TaskObservationId::new("completed-attempt").unwrap(),
         ),
         Err(RuntimeError::Task(TaskStoreError::AlreadyCompleted { .. }))
+    ));
+    assert!(matches!(
+        runtime.execute_task_turn(
+            &cancelled,
+            SessionTurnContent::new("cancelled").unwrap(),
+            TaskObservationId::new("cancelled-attempt").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::AlreadyCancelled { .. }))
+    ));
+    assert!(matches!(
+        runtime.execute_task_turn(
+            &failed,
+            SessionTurnContent::new("failed").unwrap(),
+            TaskObservationId::new("failed-attempt").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::AlreadyFailed { .. }))
     ));
     assert!(matches!(
         runtime.execute_task_turn(
@@ -244,6 +299,66 @@ fn provider_failure_preserves_human_turn_without_task_observation() {
         ),
         Err(RuntimeError::Provider(_))
     ));
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 1);
+    assert_eq!(session.turns()[0].role(), SessionTurnRole::Human);
+    assert!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .observations()
+            .is_empty()
+    );
+}
+
+#[test]
+fn assistant_append_failure_preserves_only_the_human_turn_and_no_observation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Task runtime").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(
+            task_id.clone(),
+            TaskGoal::new("fail after provider").unwrap(),
+        )
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    drop(tasks);
+
+    let calls = Rc::new(RefCell::new(0));
+    let provider = ClosingProvider {
+        path: path.clone(),
+        session_id: session_id.clone(),
+        calls: Rc::clone(&calls),
+    };
+    let mut runtime = AssistantRuntime::open(&path, provider).unwrap();
+
+    assert!(matches!(
+        runtime.execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("durable question").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+        ),
+        Err(RuntimeError::Session(
+            vela_kernel::session::SessionStoreError::SessionClosed { .. }
+        ))
+    ));
+    assert_eq!(*calls.borrow(), 1);
     let session = SessionStore::open(&path)
         .unwrap()
         .load(&session_id)
