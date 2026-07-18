@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Execute one task associated assistant turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/514 by connecting the provider-neutral single-turn runtime to an active associated task and persisting successful assistant content as typed attempt evidence with explicit partial-commit semantics.",
+    "acceptance_criteria": [
+      "An active task associated with an open session executes one provider call, persists both transcript turns, and appends one caller-identified Attempt observation containing the assistant response.",
+      "Missing, terminal, unassociated, and closed-session preconditions fail before provider invocation or transcript mutation.",
+      "Provider, assistant-append, and observation failures preserve the documented durable prefix and append no misleading task evidence.",
+      "Independent review, hosted CodeRabbit review, required Rust quality gates, squash merge, and main synchronization complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Selected the smallest runtime-to-task integration boundary and recorded its contract in issue 514.",
+      "outcome": "success",
+      "diagnostic": "The settled single-turn runtime owned only transcript persistence, while tasks already supported immutable session association and typed attempt observations. The unresolved risk was ordering work across the external provider call and two durable aggregate streams.",
+      "patch": "Specified a preflight task check, durable human/provider/assistant sequence, post-success Attempt append, caller-owned observation ID, and explicit no-rollback semantics without adding tools, async execution, lifecycle automation, or a storage migration."
+    },
+    {
+      "summary": "Demonstrated RED with a task associated runtime integration target.",
+      "outcome": "failure",
+      "diagnostic": "The focused test target failed to compile with ten errors because AssistantRuntime had no execute_task_turn method, task aware RuntimeError variants, or TaskTurnOutcome.",
+      "patch": "Kept the failing tests as executable contract evidence before adding production behavior."
+    },
+    {
+      "summary": "Implemented task associated turn execution and durable attempt evidence.",
+      "outcome": "success",
+      "diagnostic": "AssistantRuntime now opens session and task stores over the same SQLite event log, rejects invalid task preconditions before invoking the provider, reuses the settled transcript sequence, then appends the assistant response as TaskObservationKind::Attempt. RuntimeError preserves task store and attempt-text sources, and TaskTurnOutcome returns both durable projections.",
+      "patch": "Changed crates/vela-kernel/src/runtime.rs, added task_assistant_runtime integration coverage, and documented ownership, ordering, compatibility, whitespace validation, partial commits, and non-goals. No persisted event payload changed."
+    },
+    {
+      "summary": "Closed the hosted review coverage gap without changing production behavior.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit identified that the initial tests covered Completed but not Cancelled or Failed preconditions, and reused only pre-provider closed-session coverage rather than forcing provider success followed by assistant persistence failure.",
+      "patch": "Commit 08d6e2e added Cancelled and Failed precondition cases plus a deterministic provider that closes the session during completion, proving one invocation, SessionClosed, one durable human turn, no assistant turn, and no task observation."
+    },
+    {
+      "summary": "Completed local and hosted verification and squash-merged the slice.",
+      "outcome": "success",
+      "diagnostic": "The focused suite passed all five tests; the pinned-Nix gate passed formatting, workspace checks, 140 tests, Clippy with warnings denied, SecretSpec integration, and diff checks. Independent Codex review found no blocking issue. CodeRabbit completed after its finding was fixed, and required Rust quality gate run 29651308489 passed.",
+      "patch": "Squash auto-merge produced b474d5bf40a4f065c64adc35d72844f8cd60adbb, closed issue 514, and local main fast-forwarded to the merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now execute one provider-neutral assistant turn for an active associated task and persist the successful response as typed attempt evidence, with tested durable-prefix behavior for every bounded failure stage.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test task_assistant_runtime # 5 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify # formatting, workspace checks, 140 tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command codex review --uncommitted # no blocking correctness findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29651308489 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/515",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 515 squash merge b474d5bf40a4f065c64adc35d72844f8cd60adbb",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A durable-prefix contract is simpler and more honest than implying rollback across an external provider call and separate aggregate streams.",
+    "Preflight task lifecycle and association checks prevent obviously invalid work, while the observation append must still revalidate because the task can change during provider execution.",
+    "Caller-owned observation IDs make post-provider duplicate failures deterministic and expose the exact boundary where transcript success can precede evidence failure.",
+    "Validation domains can differ even for the same text: session turns allow whitespace-only content while task observations reject it, so conversion failure needs an explicit sourced runtime error and documented commit semantics.",
+    "Review-path coverage should enumerate every terminal variant and force state changes during the provider call rather than assuming composition tests cover the assistant persistence boundary."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/runtime.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/515"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
