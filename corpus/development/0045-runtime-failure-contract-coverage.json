@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Harden single-turn runtime failure-contract coverage",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/510 by exercising the complete provider error source chain and the documented partial commit when provider success is followed by a closed-session assistant append.",
+    "acceptance_criteria": [
+      "The adapter-specific provider failure remains downcastable through the RuntimeError and ProviderError standard error source chain.",
+      "A provider that closes the session during completion is invoked exactly once, returns valid content, and causes the assistant append to report SessionClosed.",
+      "The provider-triggered closure preserves the durable human turn without synthesizing an assistant turn.",
+      "Independent review, local verification, required hosted checks, squash merge, and main synchronization complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Converted two non-blocking hosted review suggestions into one bounded follow-up issue.",
+      "outcome": "success",
+      "diagnostic": "The original runtime implementation documented both nested error sources and assistant-append partial commits, but PR 506 tested only the top-level provider message and did not force a storage-domain failure after provider success.",
+      "patch": "Created issue 510 with test-only scope and explicit non-goals for production APIs, persistence formats, task integration, retries, and concurrency coordination."
+    },
+    {
+      "summary": "Strengthened provider failure and assistant append failure coverage.",
+      "outcome": "success",
+      "diagnostic": "The complete source-chain assertion reached and downcast the adapter-specific FakeProviderFailure. A synchronous fake provider opened the same SQLite event log, closed the session during completion, and returned valid content; the runtime then reloaded the closed session and rejected the assistant append while preserving the human turn.",
+      "patch": "Updated crates/vela-kernel/tests/assistant_runtime.rs with the nested source assertion, a deterministic ClosingProvider fixture, and a partial-commit regression test; production code remained unchanged."
+    },
+    {
+      "summary": "Completed focused verification, the full quality gate, and independent pre-commit review.",
+      "outcome": "success",
+      "diagnostic": "The focused runtime suite passed all four tests. The full pinned-Nix gate passed formatting, workspace checks, all 135 tests, Clippy with warnings denied, SecretSpec integration, and diff checks. An independent Codex review found no actionable correctness, determinism, SQLite, scope, or test-quality defect.",
+      "patch": "Committed a714843 and pushed the reviewed one-file test change."
+    },
+    {
+      "summary": "Monitored hosted gates and squash-merged the coverage hardening.",
+      "outcome": "success",
+      "diagnostic": "Pull request 511 passed Rust quality gate run 29649989659. CodeRabbit could not produce another substantive review because its temporary fair-usage limit reported a 34-minute delay, but the repository's required CodeRabbit status still completed successfully; no review finding was fabricated. Squash auto-merge completed as 01249545cdc215644f966dfaa37987a192d3c156, issue 510 closed, and local main fast-forwarded to the merge.",
+      "patch": "Kept the test-only scope unchanged, relied on the completed independent pre-commit review plus required hosted statuses, and synchronized main before recording the episode."
+    }
+  ],
+  "outcome": {
+    "summary": "The single-turn runtime's nested provider error preservation and post-provider assistant-append partial commit are now directly regression-tested without changing production behavior or persisted formats.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test assistant_runtime # 4 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify # formatting, workspace checks, 135 tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command codex review --uncommitted # no actionable findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29649989659 and required CodeRabbit status at https://github.com/Knosence9/project-vela/pull/511",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 511 squash merge 01249545cdc215644f966dfaa37987a192d3c156",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A documented partial-commit branch deserves a deterministic test even when the production implementation is only a short composition of already-tested stores.",
+    "Opening a second synchronous store inside a fake provider is a direct way to model state changes during an external call without threads, sleeps, or timing assumptions.",
+    "Checking only an error message does not prove a wrapper preserves its adapter-specific source; traverse and downcast the complete standard error chain.",
+    "A passing required bot status is not evidence of a substantive review when the bot explicitly reports rate limiting; preserve that distinction and rely on a completed independent review rather than inventing findings.",
+    "Small review-hardening changes can remain test-only and avoid reopening settled runtime ownership or persistence decisions."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/tests/assistant_runtime.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/511"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
