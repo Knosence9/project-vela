@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Execute an explicit task correction turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/524 by adding a provider-neutral correction operation that relates one successful assistant response to an existing attempt while preserving explicit durable-prefix behavior across transcript and task streams.",
+    "acceptance_criteria": [
+      "An active associated task with an open session executes one provider call, persists both transcript turns, and appends one caller-identified Correction observation related to an earlier same-task Attempt.",
+      "Task, session, duplicate-ID, and parent-attempt preconditions fail before provider invocation or transcript mutation.",
+      "Provider, assistant-append, invalid correction text, and authoritative post-preflight task failures preserve the documented durable prefix without misleading correction evidence or provider retry.",
+      "Independent review, required local and hosted quality gates, squash merge, issue closure, and main synchronization complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Bounded the correction operation after parent-attempt relations became durable.",
+      "outcome": "success",
+      "diagnostic": "The runtime could already persist successful assistant output as Attempt evidence, and task observations could relate correction evidence to an earlier attempt. The missing boundary was an explicit operation that combined those capabilities without exposing a generic evidence-kind parameter or implying a cross-stream transaction.",
+      "patch": "Issue 524 specified caller-owned correction and parent-attempt IDs, active association and open-session preflight, the existing human-provider-assistant sequence, authoritative parented append, source-preserving errors, and no rollback or retry across durable side effects."
+    },
+    {
+      "summary": "Demonstrated RED with focused correction-runtime acceptance tests.",
+      "outcome": "failure",
+      "diagnostic": "The task_assistant_runtime integration target failed to compile because AssistantRuntime had no execute_task_correction_turn API and RuntimeError had no InvalidCorrectionText variant.",
+      "patch": "Retained the failing success, preflight, invalid-text, and race cases as executable contract evidence before changing production code."
+    },
+    {
+      "summary": "Implemented the explicit correction turn and shared aggregate validation.",
+      "outcome": "success",
+      "diagnostic": "AssistantRuntime now checks the active associated task, correction-ID uniqueness, and an earlier Attempt parent before transcript work; reuses the settled tool-free turn sequence; converts exact assistant content to correction text; and invokes the authoritative aggregate append once. RuntimeError preserves correction-text and store-error sources, while existing attempt-turn behavior remains unchanged.",
+      "patch": "Updated crates/vela-kernel/src/runtime.rs and crates/vela-kernel/src/task.rs, expanded task_assistant_runtime integration coverage, and documented operation ownership, ordering, compatibility, partial commits, errors, races, and non-goals. No persisted event schema changed."
+    },
+    {
+      "summary": "Closed a correction-specific acceptance-coverage gap before independent review.",
+      "outcome": "success",
+      "diagnostic": "A pre-commit acceptance check found that missing, terminal, unassociated, closed-session, provider-failure, and assistant-append coverage exercised only the older attempt operation or did not yet prove the corresponding correction contract.",
+      "patch": "Added correction_task_and_session_preconditions_fail_before_provider_invocation and correction_provider_and_assistant_failures_preserve_partial_commits, proving no provider or transcript work for preflight failures and exactly the documented human-only prefix with no Correction append for provider and assistant persistence failures."
+    },
+    {
+      "summary": "Completed local and hosted verification and squash-merged the slice.",
+      "outcome": "success",
+      "diagnostic": "The focused runtime suite passed all 11 tests. The pinned-Nix gate passed formatting, workspace checks, 150 tests, Clippy with warnings denied, SecretSpec integration, and diff checks. Rust quality gate run 29705387591 passed. CodeRabbit returned the required successful status while reporting a temporary review-volume limit rather than a correctness finding.",
+      "patch": "Squash auto-merge produced 245094ab85bac64ea36995675f6049864533eea0 from PR 525, closed issue 524, and synchronized local main with origin/main."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now execute an explicit task correction turn, preserve the durable transcript exactly once, and append source-preserving parented correction evidence only when authoritative task validation still succeeds.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test task_assistant_runtime # 11 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify # formatting, workspace checks, 150 tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command codex review --uncommitted # no blocking findings after correction-specific acceptance coverage was completed",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29705387591 and CodeRabbit status at https://github.com/Knosence9/project-vela/pull/525",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 525 squash merge 245094ab85bac64ea36995675f6049864533eea0",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A named correction operation is safer than a generic evidence-kind parameter because it fixes preflight rules, parent requirements, and durable ordering in one contract.",
+    "Preflight can prevent known-invalid provider work, but the task aggregate must revalidate at append because lifecycle and evidence can race while the provider is running.",
+    "External provider work and separate append-only streams require a durable-prefix contract: never imply rollback, silently retry generation, or erase transcript turns after a late evidence failure.",
+    "Validation domains remain intentionally different: whitespace-only assistant content is a valid transcript turn but invalid correction evidence, so conversion failure must preserve both turns and expose its source.",
+    "Acceptance tests for a new composed operation must invoke that operation at every failure boundary; coverage of the reused lower-level or predecessor path does not prove the new API contract.",
+    "A hosted review service rate limit is operational provenance, not evidence of either correctness or failure; merge policy should rely on the actual required status and independent executable gates."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/runtime.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/525"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
