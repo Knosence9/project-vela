@@ -30,6 +30,12 @@
       "patch": "Updated crates/vela-kernel/src/runtime.rs and crates/vela-kernel/src/task.rs, expanded task_assistant_runtime integration coverage, and documented operation ownership, ordering, compatibility, partial commits, errors, races, and non-goals. No persisted event schema changed."
     },
     {
+      "summary": "Removed a deterministic sanitizer false positive from the development record.",
+      "outcome": "failure",
+      "diagnostic": "Initial record validation rejected two harmless prose fields because a hyphenated ownership phrase contained the sanitizer's credential-prefix marker across a word boundary.",
+      "patch": "Rephrased the affected text as aggregate validation and store-error sources, then reran record validation successfully without weakening the sanitizer or omitting implementation evidence."
+    },
+    {
       "summary": "Closed a correction-specific acceptance-coverage gap before independent review.",
       "outcome": "success",
       "diagnostic": "A pre-commit acceptance check found that missing, terminal, unassociated, closed-session, provider-failure, and assistant-append coverage exercised only the older attempt operation or did not yet prove the corresponding correction contract.",
@@ -74,6 +80,7 @@
     "External provider work and separate append-only streams require a durable-prefix contract: never imply rollback, silently retry generation, or erase transcript turns after a late evidence failure.",
     "Validation domains remain intentionally different: whitespace-only assistant content is a valid transcript turn but invalid correction evidence, so conversion failure must preserve both turns and expose its source.",
     "Acceptance tests for a new composed operation must invoke that operation at every failure boundary; coverage of the reused lower-level or predecessor path does not prove the new API contract.",
+    "Substring-based secret sanitation can reject harmless prose that spans a word boundary; preserve the detector and rephrase corpus text rather than adding a broad exception.",
     "A hosted review service rate limit is operational provenance, not evidence of either correctness or failure; merge policy should rely on the actual required status and independent executable gates."
   ],
   "provenance": {
