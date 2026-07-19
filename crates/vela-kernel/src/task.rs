@@ -337,6 +337,34 @@ impl Task {
     pub fn observations(&self) -> &[TaskObservation] {
         &self.observations
     }
+
+    pub(crate) fn validate_observation_append(
+        &self,
+        observation_id: &TaskObservationId,
+        kind: TaskObservationKind,
+        parent_attempt_id: Option<&TaskObservationId>,
+    ) -> Result<(), TaskStoreError> {
+        if self.status != TaskStatus::Active {
+            return Err(terminal_state_error(&self.id, self.status));
+        }
+        if self
+            .observations
+            .iter()
+            .any(|observation| observation.id == *observation_id)
+        {
+            return Err(TaskStoreError::DuplicateObservation {
+                task_id: self.id.clone(),
+                observation_id: observation_id.clone(),
+            });
+        }
+        validate_observation_parent(
+            &self.id,
+            &self.observations,
+            observation_id,
+            kind,
+            parent_attempt_id,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -614,23 +642,7 @@ impl TaskStore {
                     task_id: id.clone(),
                 });
             };
-            if loaded.task.status != TaskStatus::Active {
-                return Err(terminal_state_error(id, loaded.task.status));
-            }
-            if loaded
-                .task
-                .observations
-                .iter()
-                .any(|observation| observation.id == observation_id)
-            {
-                return Err(TaskStoreError::DuplicateObservation {
-                    task_id: id.clone(),
-                    observation_id,
-                });
-            }
-            validate_observation_parent(
-                id,
-                &loaded.task.observations,
+            loaded.task.validate_observation_append(
                 &observation_id,
                 kind,
                 parent_attempt_id.as_ref(),

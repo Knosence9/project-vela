@@ -51,6 +51,7 @@ pub enum RuntimeError {
     Task(TaskStoreError),
     TaskNotAssociated { task_id: TaskId },
     InvalidAttemptText(TaskObservationTextError),
+    InvalidCorrectionText(TaskObservationTextError),
 }
 
 impl fmt::Display for RuntimeError {
@@ -65,6 +66,9 @@ impl fmt::Display for RuntimeError {
             Self::InvalidAttemptText(error) => {
                 write!(formatter, "assistant attempt observation error: {error}")
             }
+            Self::InvalidCorrectionText(error) => {
+                write!(formatter, "assistant correction observation error: {error}")
+            }
         }
     }
 }
@@ -76,6 +80,7 @@ impl Error for RuntimeError {
             Self::Provider(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvalidAttemptText(error) => Some(error),
+            Self::InvalidCorrectionText(error) => Some(error),
             Self::TaskNotAssociated { .. } => None,
         }
     }
@@ -149,6 +154,74 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
         human_content: SessionTurnContent,
         observation_id: TaskObservationId,
     ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (_, session_id) = self.load_active_associated_task(task_id)?;
+
+        let session = self.execute_turn(&session_id, human_content)?;
+        let assistant_content = session
+            .turns()
+            .last()
+            .expect("a successful assistant turn has a final turn")
+            .content();
+        let attempt_text = TaskObservationText::new(assistant_content.as_str())
+            .map_err(RuntimeError::InvalidAttemptText)?;
+        let task = self
+            .tasks
+            .append_observation(
+                task_id,
+                observation_id,
+                TaskObservationKind::Attempt,
+                attempt_text,
+            )
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
+    }
+
+    /// Executes one turn and records its response as a correction to an earlier attempt.
+    ///
+    /// Deterministic task evidence errors are rejected before transcript persistence. A racing
+    /// task change can still make the authoritative append fail after both turns commit.
+    pub fn execute_task_correction_turn(
+        &mut self,
+        task_id: &TaskId,
+        parent_attempt_id: &TaskObservationId,
+        human_content: SessionTurnContent,
+        correction_observation_id: TaskObservationId,
+    ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (task, session_id) = self.load_active_associated_task(task_id)?;
+        task.validate_observation_append(
+            &correction_observation_id,
+            TaskObservationKind::Correction,
+            Some(parent_attempt_id),
+        )
+        .map_err(RuntimeError::Task)?;
+
+        let session = self.execute_turn(&session_id, human_content)?;
+        let assistant_content = session
+            .turns()
+            .last()
+            .expect("a successful assistant turn has a final turn")
+            .content();
+        let correction_text = TaskObservationText::new(assistant_content.as_str())
+            .map_err(RuntimeError::InvalidCorrectionText)?;
+        let task = self
+            .tasks
+            .append_observation_for_attempt(
+                task_id,
+                correction_observation_id,
+                TaskObservationKind::Correction,
+                correction_text,
+                parent_attempt_id.clone(),
+            )
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
+    }
+
+    fn load_active_associated_task(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<(Task, SessionId), RuntimeError> {
         let task = self
             .tasks
             .load(task_id)
@@ -182,25 +255,6 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
                 .ok_or_else(|| RuntimeError::TaskNotAssociated {
                     task_id: task_id.clone(),
                 })?;
-
-        let session = self.execute_turn(&session_id, human_content)?;
-        let assistant_content = session
-            .turns()
-            .last()
-            .expect("a successful assistant turn has a final turn")
-            .content();
-        let attempt_text = TaskObservationText::new(assistant_content.as_str())
-            .map_err(RuntimeError::InvalidAttemptText)?;
-        let task = self
-            .tasks
-            .append_observation(
-                task_id,
-                observation_id,
-                TaskObservationKind::Attempt,
-                attempt_text,
-            )
-            .map_err(RuntimeError::Task)?;
-
-        Ok(TaskTurnOutcome { session, task })
+        Ok((task, session_id))
     }
 }
