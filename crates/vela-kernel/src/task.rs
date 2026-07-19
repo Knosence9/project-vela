@@ -14,6 +14,7 @@ const TASK_FAILED_EVENT_TYPE: &str = "task.failed";
 const TASK_SESSION_ASSOCIATED_EVENT_TYPE: &str = "task.session_associated";
 const TASK_OBSERVATION_APPENDED_EVENT_TYPE: &str = "task.observation_appended";
 const TASK_EVENT_PAYLOAD_VERSION: u32 = 1;
+const TASK_OBSERVATION_PAYLOAD_VERSION: u32 = 2;
 const TASK_COMPLETED_PAYLOAD_VERSION: u32 = 2;
 const TASK_CANCELLED_PAYLOAD_VERSION: u32 = 2;
 const TASK_FAILED_PAYLOAD_VERSION: u32 = 2;
@@ -138,6 +139,7 @@ pub struct TaskObservation {
     id: TaskObservationId,
     kind: TaskObservationKind,
     text: TaskObservationText,
+    parent_attempt_id: Option<TaskObservationId>,
 }
 
 impl TaskObservation {
@@ -151,6 +153,11 @@ impl TaskObservation {
 
     pub fn text(&self) -> &TaskObservationText {
         &self.text
+    }
+
+    /// The earlier attempt that this evidence describes, when grouped into an episode.
+    pub fn parent_attempt_id(&self) -> Option<&TaskObservationId> {
+        self.parent_attempt_id.as_ref()
     }
 }
 
@@ -366,6 +373,20 @@ pub enum TaskStoreError {
         task_id: TaskId,
         observation_id: TaskObservationId,
     },
+    AttemptCannotHaveParent {
+        task_id: TaskId,
+        observation_id: TaskObservationId,
+        parent_observation_id: TaskObservationId,
+    },
+    ParentObservationNotFound {
+        task_id: TaskId,
+        parent_observation_id: TaskObservationId,
+    },
+    ParentObservationNotAttempt {
+        task_id: TaskId,
+        parent_observation_id: TaskObservationId,
+        parent_kind: TaskObservationKind,
+    },
     Session(SessionStoreError),
     InvalidStreamId {
         stream_id: String,
@@ -411,6 +432,29 @@ impl fmt::Display for TaskStoreError {
                 formatter,
                 "task {task_id} already has observation {observation_id}"
             ),
+            Self::AttemptCannotHaveParent {
+                task_id,
+                observation_id,
+                parent_observation_id,
+            } => write!(
+                formatter,
+                "task {task_id} attempt {observation_id} cannot have parent observation {parent_observation_id}"
+            ),
+            Self::ParentObservationNotFound {
+                task_id,
+                parent_observation_id,
+            } => write!(
+                formatter,
+                "task {task_id} has no parent observation {parent_observation_id}"
+            ),
+            Self::ParentObservationNotAttempt {
+                task_id,
+                parent_observation_id,
+                parent_kind,
+            } => write!(
+                formatter,
+                "task {task_id} parent observation {parent_observation_id} has kind {parent_kind:?}, not attempt"
+            ),
             Self::Session(error) => write!(formatter, "task session-store error: {error}"),
             Self::InvalidStreamId { stream_id } => {
                 write!(formatter, "invalid task stream id {stream_id}")
@@ -440,6 +484,9 @@ impl std::error::Error for TaskStoreError {
             | Self::SessionClosed { .. }
             | Self::AlreadyAssociated { .. }
             | Self::DuplicateObservation { .. }
+            | Self::AttemptCannotHaveParent { .. }
+            | Self::ParentObservationNotFound { .. }
+            | Self::ParentObservationNotAttempt { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. } => None,
         }
@@ -538,6 +585,29 @@ impl TaskStore {
         kind: TaskObservationKind,
         text: TaskObservationText,
     ) -> Result<Task, TaskStoreError> {
+        self.append_observation_with_parent(id, observation_id, kind, text, None)
+    }
+
+    /// Appends non-attempt evidence related to one earlier attempt in the same task.
+    pub fn append_observation_for_attempt(
+        &mut self,
+        id: &TaskId,
+        observation_id: TaskObservationId,
+        kind: TaskObservationKind,
+        text: TaskObservationText,
+        parent_attempt_id: TaskObservationId,
+    ) -> Result<Task, TaskStoreError> {
+        self.append_observation_with_parent(id, observation_id, kind, text, Some(parent_attempt_id))
+    }
+
+    fn append_observation_with_parent(
+        &mut self,
+        id: &TaskId,
+        observation_id: TaskObservationId,
+        kind: TaskObservationKind,
+        text: TaskObservationText,
+        parent_attempt_id: Option<TaskObservationId>,
+    ) -> Result<Task, TaskStoreError> {
         loop {
             let Some(mut loaded) = self.load_versioned(id)? else {
                 return Err(TaskStoreError::NotFound {
@@ -558,6 +628,13 @@ impl TaskStore {
                     observation_id,
                 });
             }
+            validate_observation_parent(
+                id,
+                &loaded.task.observations,
+                &observation_id,
+                kind,
+                parent_attempt_id.as_ref(),
+            )?;
 
             match self.event_log.append(
                 &task_stream(id),
@@ -566,6 +643,7 @@ impl TaskStore {
                     id: observation_id.clone(),
                     kind,
                     text: text.clone(),
+                    parent_attempt_id: parent_attempt_id.clone(),
                 },
             ) {
                 Ok(_) => {
@@ -573,6 +651,7 @@ impl TaskStore {
                         id: observation_id,
                         kind,
                         text,
+                        parent_attempt_id,
                     });
                     return Ok(loaded.task);
                 }
@@ -783,14 +862,25 @@ impl TaskStore {
         };
         for event in &events[1..] {
             match event {
-                TaskEvent::ObservationAppended { id, kind, text }
-                    if task.status == TaskStatus::Active
-                        && !task.observations.iter().any(|item| item.id == *id) =>
+                TaskEvent::ObservationAppended {
+                    id,
+                    kind,
+                    text,
+                    parent_attempt_id,
+                } if task.status == TaskStatus::Active
+                    && !task.observations.iter().any(|item| item.id == *id)
+                    && observation_parent_is_valid(
+                        &task.observations,
+                        id,
+                        *kind,
+                        parent_attempt_id.as_ref(),
+                    ) =>
                 {
                     task.observations.push(TaskObservation {
                         id: id.clone(),
                         kind: *kind,
                         text: text.clone(),
+                        parent_attempt_id: parent_attempt_id.clone(),
                     });
                 }
                 TaskEvent::SessionAssociated {
@@ -835,6 +925,59 @@ struct VersionedTask {
     stream_version: u64,
 }
 
+fn observation_parent_is_valid(
+    observations: &[TaskObservation],
+    observation_id: &TaskObservationId,
+    kind: TaskObservationKind,
+    parent_attempt_id: Option<&TaskObservationId>,
+) -> bool {
+    if parent_attempt_id.is_some() && kind == TaskObservationKind::Attempt {
+        return false;
+    }
+    parent_attempt_id.is_none_or(|parent_id| {
+        parent_id != observation_id
+            && observations.iter().any(|observation| {
+                observation.id == *parent_id && observation.kind == TaskObservationKind::Attempt
+            })
+    })
+}
+
+fn validate_observation_parent(
+    task_id: &TaskId,
+    observations: &[TaskObservation],
+    observation_id: &TaskObservationId,
+    kind: TaskObservationKind,
+    parent_attempt_id: Option<&TaskObservationId>,
+) -> Result<(), TaskStoreError> {
+    let Some(parent_id) = parent_attempt_id else {
+        return Ok(());
+    };
+    if kind == TaskObservationKind::Attempt {
+        return Err(TaskStoreError::AttemptCannotHaveParent {
+            task_id: task_id.clone(),
+            observation_id: observation_id.clone(),
+            parent_observation_id: parent_id.clone(),
+        });
+    }
+    let Some(parent) = observations
+        .iter()
+        .find(|observation| observation.id == *parent_id)
+    else {
+        return Err(TaskStoreError::ParentObservationNotFound {
+            task_id: task_id.clone(),
+            parent_observation_id: parent_id.clone(),
+        });
+    };
+    if parent.kind != TaskObservationKind::Attempt {
+        return Err(TaskStoreError::ParentObservationNotAttempt {
+            task_id: task_id.clone(),
+            parent_observation_id: parent_id.clone(),
+            parent_kind: parent.kind,
+        });
+    }
+    Ok(())
+}
+
 fn terminal_state_error(id: &TaskId, status: TaskStatus) -> TaskStoreError {
     match status {
         TaskStatus::Completed => TaskStoreError::AlreadyCompleted {
@@ -877,6 +1020,7 @@ enum TaskEvent {
         id: TaskObservationId,
         kind: TaskObservationKind,
         text: TaskObservationText,
+        parent_attempt_id: Option<TaskObservationId>,
     },
 }
 
@@ -897,9 +1041,8 @@ impl Event for TaskEvent {
             Self::Completed { .. } => TASK_COMPLETED_PAYLOAD_VERSION,
             Self::Cancelled { .. } => TASK_CANCELLED_PAYLOAD_VERSION,
             Self::Failed { .. } => TASK_FAILED_PAYLOAD_VERSION,
-            Self::Started { .. }
-            | Self::SessionAssociated { .. }
-            | Self::ObservationAppended { .. } => TASK_EVENT_PAYLOAD_VERSION,
+            Self::ObservationAppended { .. } => TASK_OBSERVATION_PAYLOAD_VERSION,
+            Self::Started { .. } | Self::SessionAssociated { .. } => TASK_EVENT_PAYLOAD_VERSION,
         }
     }
 
@@ -918,9 +1061,11 @@ impl Event for TaskEvent {
                 payload_version,
                 TASK_EVENT_PAYLOAD_VERSION | TASK_FAILED_PAYLOAD_VERSION
             ),
-            TASK_SESSION_ASSOCIATED_EVENT_TYPE | TASK_OBSERVATION_APPENDED_EVENT_TYPE => {
-                payload_version == TASK_EVENT_PAYLOAD_VERSION
-            }
+            TASK_SESSION_ASSOCIATED_EVENT_TYPE => payload_version == TASK_EVENT_PAYLOAD_VERSION,
+            TASK_OBSERVATION_APPENDED_EVENT_TYPE => matches!(
+                payload_version,
+                TASK_EVENT_PAYLOAD_VERSION | TASK_OBSERVATION_PAYLOAD_VERSION
+            ),
             _ => false,
         };
         if !supported {
@@ -1027,30 +1172,61 @@ impl Event for TaskEvent {
         if event_type == TASK_OBSERVATION_APPENDED_EVENT_TYPE {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Payload {
+            struct LegacyPayload {
                 id: String,
                 kind: TaskObservationKind,
                 text: String,
             }
 
-            let payload: Payload =
-                serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Payload {
+                id: String,
+                kind: TaskObservationKind,
+                text: String,
+                parent_attempt_id: Option<String>,
+            }
+
+            let (id, kind, text, parent_attempt_id) = if payload_version
+                == TASK_EVENT_PAYLOAD_VERSION
+            {
+                let payload: LegacyPayload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                (payload.id, payload.kind, payload.text, None)
+            } else {
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                (
+                    payload.id,
+                    payload.kind,
+                    payload.text,
+                    payload.parent_attempt_id,
+                )
+            };
+            let id = TaskObservationId::new(id).map_err(|error| DecodeError::MalformedPayload {
+                message: error.to_string(),
+            })?;
+            let text =
+                TaskObservationText::new(text).map_err(|error| DecodeError::MalformedPayload {
                     message: error.to_string(),
                 })?;
-            let id = TaskObservationId::new(payload.id).map_err(|error| {
-                DecodeError::MalformedPayload {
+            let parent_attempt_id = parent_attempt_id
+                .map(TaskObservationId::new)
+                .transpose()
+                .map_err(|error| DecodeError::MalformedPayload {
                     message: error.to_string(),
-                }
-            })?;
-            let text = TaskObservationText::new(payload.text).map_err(|error| {
-                DecodeError::MalformedPayload {
-                    message: error.to_string(),
-                }
-            })?;
+                })?;
             return Ok(Self::ObservationAppended {
                 id,
-                kind: payload.kind,
+                kind,
                 text,
+                parent_attempt_id,
             });
         }
 

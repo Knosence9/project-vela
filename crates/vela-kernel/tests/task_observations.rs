@@ -70,6 +70,7 @@ fn persists_every_observation_kind_in_append_order_across_reopen() {
         assert_eq!(observation.id().as_str(), id);
         assert_eq!(observation.kind(), kind);
         assert_eq!(observation.text().as_str(), text);
+        assert_eq!(observation.parent_attempt_id(), None);
     }
     let persisted: (String, u32, Vec<u8>) = rusqlite::Connection::open(&path)
         .unwrap()
@@ -80,11 +81,170 @@ fn persists_every_observation_kind_in_append_order_across_reopen() {
         )
         .unwrap();
     assert_eq!(persisted.0, "task.observation_appended");
-    assert_eq!(persisted.1, 1);
+    assert_eq!(persisted.1, 2);
     assert_eq!(
         persisted.2,
-        br#"{"id":"attempt-1","kind":"attempt","text":"Tried the focused test"}"#
+        br#"{"id":"attempt-1","kind":"attempt","text":"Tried the focused test","parent_attempt_id":null}"#
     );
+}
+
+#[test]
+fn relates_non_attempt_observations_to_an_earlier_attempt_across_reopen() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("episode").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(
+            task_id.clone(),
+            TaskGoal::new("Explain one episode").unwrap(),
+        )
+        .unwrap();
+    store
+        .append_observation(
+            &task_id,
+            observation_id("attempt-1"),
+            TaskObservationKind::Attempt,
+            observation_text("Tried once"),
+        )
+        .unwrap();
+
+    for (id, kind) in [
+        ("diagnostic-1", TaskObservationKind::Diagnostic),
+        ("correction-1", TaskObservationKind::Correction),
+        ("verification-1", TaskObservationKind::Verification),
+    ] {
+        store
+            .append_observation_for_attempt(
+                &task_id,
+                observation_id(id),
+                kind,
+                observation_text(id),
+                observation_id("attempt-1"),
+            )
+            .unwrap();
+    }
+    drop(store);
+
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.observations().len(), 4);
+    assert_eq!(task.observations()[0].parent_attempt_id(), None);
+    for observation in &task.observations()[1..] {
+        assert_eq!(
+            observation
+                .parent_attempt_id()
+                .map(TaskObservationId::as_str),
+            Some("attempt-1")
+        );
+    }
+    let persisted: (u32, Vec<u8>) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_version, payload FROM events WHERE stream_id = 'task:episode' AND stream_version = 3",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted.0, 2);
+    assert_eq!(
+        persisted.1,
+        br#"{"id":"diagnostic-1","kind":"diagnostic","text":"diagnostic-1","parent_attempt_id":"attempt-1"}"#
+    );
+}
+
+#[test]
+fn rejects_invalid_parent_attempt_relations_without_appending() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("invalid-relations").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(
+            task_id.clone(),
+            TaskGoal::new("Reject invalid relations").unwrap(),
+        )
+        .unwrap();
+    store
+        .append_observation(
+            &task_id,
+            observation_id("diagnostic-1"),
+            TaskObservationKind::Diagnostic,
+            observation_text("Ungrouped diagnostic"),
+        )
+        .unwrap();
+
+    let missing = store
+        .append_observation_for_attempt(
+            &task_id,
+            observation_id("correction-missing"),
+            TaskObservationKind::Correction,
+            observation_text("No parent"),
+            observation_id("missing"),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        missing,
+        TaskStoreError::ParentObservationNotFound {
+            task_id: ref actual_task,
+            parent_observation_id: ref parent,
+        } if actual_task == &task_id && parent.as_str() == "missing"
+    ));
+
+    let non_attempt = store
+        .append_observation_for_attempt(
+            &task_id,
+            observation_id("correction-wrong-kind"),
+            TaskObservationKind::Correction,
+            observation_text("Wrong parent"),
+            observation_id("diagnostic-1"),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        non_attempt,
+        TaskStoreError::ParentObservationNotAttempt {
+            task_id: ref actual_task,
+            parent_observation_id: ref parent,
+            parent_kind: TaskObservationKind::Diagnostic,
+        } if actual_task == &task_id && parent.as_str() == "diagnostic-1"
+    ));
+
+    store
+        .append_observation(
+            &task_id,
+            observation_id("attempt-1"),
+            TaskObservationKind::Attempt,
+            observation_text("Actual attempt"),
+        )
+        .unwrap();
+    let parented_attempt = store
+        .append_observation_for_attempt(
+            &task_id,
+            observation_id("attempt-2"),
+            TaskObservationKind::Attempt,
+            observation_text("Nested attempt"),
+            observation_id("attempt-1"),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        parented_attempt,
+        TaskStoreError::AttemptCannotHaveParent {
+            task_id: ref actual_task,
+            observation_id: ref actual_observation,
+            parent_observation_id: ref parent,
+        } if actual_task == &task_id
+            && actual_observation.as_str() == "attempt-2"
+            && parent.as_str() == "attempt-1"
+    ));
+
+    let event_count: u64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(event_count, 3);
 }
 
 #[test]
@@ -443,7 +603,21 @@ fn malformed_observations_and_unsupported_kinds_are_replay_errors() {
 
     connection
         .execute(
-            "UPDATE events SET payload_version = 2 WHERE stream_id = 'task:corrupt-observation' AND stream_version = 2",
+            "UPDATE events SET payload = ?1 WHERE stream_id = 'task:corrupt-observation' AND stream_version = 2",
+            [br#"{"id":"evidence","kind":"diagnostic","text":"Evidence","parent_attempt_id":" "}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        TaskStore::open(&path).unwrap().load(&task_id).unwrap_err(),
+        TaskStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ref message,
+        }) if message == "task observation id must not be blank"
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload_version = 3 WHERE stream_id = 'task:corrupt-observation' AND stream_version = 2",
             [],
         )
         .unwrap();
@@ -451,7 +625,7 @@ fn malformed_observations_and_unsupported_kinds_are_replay_errors() {
         TaskStore::open(&path).unwrap().load(&task_id).unwrap_err(),
         TaskStoreError::Replay(ReplayError::UnsupportedEvent {
             ref event_type,
-            payload_version: 2,
+            payload_version: 3,
         }) if event_type == "task.observation_appended"
     ));
 }
@@ -485,6 +659,88 @@ fn duplicate_observation_ids_in_persisted_history_are_invalid() {
         TaskStore::open(&path).unwrap().load(&task_id).unwrap_err(),
         TaskStoreError::InvalidHistory { event_count: 3 }
     ));
+}
+
+#[test]
+fn version_one_observations_replay_as_ungrouped() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("version-one-observation").unwrap();
+    let store = TaskStore::open(&path).unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('task:version-one-observation', 1, 'task.started', 1, ?1)",
+            [br#"{"goal":"Replay old evidence"}"#.as_slice()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('task:version-one-observation', 2, 'task.observation_appended', 1, ?1)",
+            [br#"{"id":"old-diagnostic","kind":"diagnostic","text":"Old evidence"}"#.as_slice()],
+        )
+        .unwrap();
+
+    let task = store.load(&task_id).unwrap().unwrap();
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].id().as_str(), "old-diagnostic");
+    assert_eq!(task.observations()[0].parent_attempt_id(), None);
+}
+
+#[test]
+fn invalid_version_two_parent_relations_are_invalid_history() {
+    let cases: &[(&str, &[&[u8]])] = &[
+        (
+            "missing-parent-history",
+            &[br#"{"id":"diagnostic","kind":"diagnostic","text":"Evidence","parent_attempt_id":"missing"}"#],
+        ),
+        (
+            "parented-attempt-history",
+            &[br#"{"id":"attempt","kind":"attempt","text":"Try","parent_attempt_id":"missing"}"#],
+        ),
+        (
+            "non-attempt-parent-history",
+            &[
+                br#"{"id":"diagnostic","kind":"diagnostic","text":"Evidence","parent_attempt_id":null}"#,
+                br#"{"id":"correction","kind":"correction","text":"Fix","parent_attempt_id":"diagnostic"}"#,
+            ],
+        ),
+    ];
+
+    for (external_id, observations) in cases {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new(*external_id).unwrap();
+        let store = TaskStore::open(&path).unwrap();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO events VALUES (?1, 1, 'task.started', 1, ?2)",
+                rusqlite::params![
+                    format!("task:{external_id}"),
+                    br#"{"goal":"Reject corrupt relation"}"#.as_slice()
+                ],
+            )
+            .unwrap();
+        for (index, payload) in observations.iter().enumerate() {
+            connection
+                .execute(
+                    "INSERT INTO events VALUES (?1, ?2, 'task.observation_appended', 2, ?3)",
+                    rusqlite::params![
+                        format!("task:{external_id}"),
+                        i64::try_from(index).unwrap() + 2,
+                        payload,
+                    ],
+                )
+                .unwrap();
+        }
+
+        assert!(matches!(
+            store.load(&task_id).unwrap_err(),
+            TaskStoreError::InvalidHistory { event_count }
+                if event_count == observations.len() + 1
+        ));
+    }
 }
 
 #[test]
