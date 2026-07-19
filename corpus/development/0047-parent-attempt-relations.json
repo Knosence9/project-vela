@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Relate task evidence to parent attempts",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/519 by adding a backward-compatible optional parent-attempt relation directly to task observations, with validation owned by the task aggregate and no separate execution-episode aggregate.",
+    "acceptance_criteria": [
+      "Diagnostics, corrections, and verifications can reference one earlier attempt in the same task, and the relation survives reload.",
+      "Missing parents, non-attempt parents, and parented attempts are rejected before append and during replay of invalid version-two histories.",
+      "Existing ungrouped observations remain supported and payload-version-one observations replay without a parent or migration.",
+      "Independent review, hosted CodeRabbit review, required Rust quality gates, squash merge, and main synchronization complete successfully."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Resolved the architecture boundary and opened a bounded execution issue.",
+      "outcome": "success",
+      "diagnostic": "The kernel already persisted ordered typed observations but could not group diagnostics, corrections, or verifications with the attempt they described. A separate episode aggregate would add ownership and lifecycle machinery before it was needed.",
+      "patch": "Accepted task aggregate ownership in issue 518 and specified issue 519: add one optional parent attempt ID directly to observations, retain ungrouped evidence, validate append and replay, version the event payload, and defer automatic runtime evidence production."
+    },
+    {
+      "summary": "Demonstrated RED with parent-relation acceptance tests.",
+      "outcome": "failure",
+      "diagnostic": "The focused observation target failed to compile with ten errors because TaskObservation had no parent accessor, TaskStore had no related-observation append API, and TaskStoreError had no typed parent-relation variants.",
+      "patch": "Kept the failing persistence and rejection tests as executable contract evidence before changing production code."
+    },
+    {
+      "summary": "Implemented versioned parent-attempt persistence and validation.",
+      "outcome": "success",
+      "diagnostic": "New observation writes use payload version two with an optional parent_attempt_id. The existing append_observation API remains the ungrouped path, while append_observation_for_attempt validates that non-attempt evidence references an earlier same-task Attempt. Replay applies the same cardinality and kind rules; legacy version-one payloads decode as ungrouped.",
+      "patch": "Updated crates/vela-kernel/src/task.rs, expanded task_observations integration coverage for every relation kind and failure mode, and documented aggregate ownership, compatibility, errors, durable shape, and non-goals."
+    },
+    {
+      "summary": "Strengthened replay-validation evidence after independent review.",
+      "outcome": "success",
+      "diagnostic": "A read-only Codex review questioned whether the blank parent-ID fixture proved typed ID validation rather than generic JSON rejection. The Rust raw byte string was valid JSON, but the broad MalformedPayload match did not make that distinction visible.",
+      "patch": "Changed the test to assert the exact replay diagnostic, task observation id must not be blank, proving the payload reached TaskObservationId validation. The focused test and full gate passed afterward."
+    },
+    {
+      "summary": "Completed hosted verification, squash merge, and main synchronization.",
+      "outcome": "success",
+      "diagnostic": "The pinned-Nix gate passed formatting, workspace checks, 144 tests, Clippy with warnings denied, SecretSpec integration, and diff checks. Rust quality gate run 29672490185 passed. CodeRabbit passed all pre-merge checks and left one trivial DRY nitpick about the small append/replay validation helpers; it reported no blocking correctness finding.",
+      "patch": "Squash auto-merge produced 7663c23e57b7a37afa36a292ac5159c4a6fd19b8, closed issue 519, and local main fast-forwarded to the merge. The non-blocking helper-consolidation suggestion was recorded as maintainability evidence rather than expanded into speculative post-merge behavior work."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela task evidence can now form backward-compatible execution episodes by relating diagnostic, correction, and verification observations to one earlier attempt, while preserving ungrouped histories and rejecting invalid durable relations.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test -p vela-kernel --test task_observations # 14 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify # formatting, workspace checks, 144 tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command codex exec --sandbox read-only 'Review the current uncommitted git diff for issue #519. Requirements: optional parent-attempt relation directly on task observations; version-one observation events replay ungrouped; all new writes use version two; attempts cannot have parents; a parent must be an earlier attempt in the same task; validate append and replay; typed append errors; preserve the ungrouped API; docs and tests. Report only blocking or important correctness, compatibility, API, or test findings. Do not modify files.' # one test-specific concern addressed with an exact diagnostic assertion; no production blocker",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29672490185 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/520",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 520 squash merge 7663c23e57b7a37afa36a292ac5159c4a6fd19b8",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "An optional relation on the observation event owned by the task aggregate is enough to form coherent execution episodes without introducing a second aggregate or migration.",
+    "Preserving append_observation as the ungrouped API gives source compatibility and an explicit opt-in path for grouped evidence.",
+    "Event payload evolution should write only the new version while decoding the old version into a deliberate compatibility default.",
+    "Append and replay must enforce the same parent cardinality, ordering, and kind invariants so corrupt histories fail closed instead of producing ambiguous evidence.",
+    "A test that matches a broad malformed-payload category can hide which validation layer failed; asserting the exact typed diagnostic provides stronger evidence.",
+    "Small duplicated predicates can be acceptable inside a bounded slice, but review should record divergence risk so a future change can consolidate them when that work is independently justified."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/task.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/520"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
