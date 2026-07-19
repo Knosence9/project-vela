@@ -20,17 +20,21 @@ The `vela-kernel` crate provides a synchronous, provider-neutral boundary that e
 
 On success, the runtime returns a `TaskTurnOutcome` containing the durable `Session` and `Task` projections. After both transcript turns commit, it appends one `TaskObservationKind::Attempt` whose ID is the supplied ID and whose text is exactly the assistant content. Reopening either store reproduces the returned projections.
 
-The operation deliberately does not create a cross-stream transaction around an external provider call:
+`AssistantRuntime::execute_task_correction_turn` is the explicit correction-producing counterpart. The caller additionally supplies the ID of an earlier attempt in the same task. Before writing a transcript turn or invoking the provider, the runtime applies the same active/association checks and asks the task aggregate to reject a duplicate correction ID, missing parent, or non-attempt parent. It deliberately does not generalize the API to a caller-selected evidence kind: provider turns produce attempts through `execute_task_turn` or corrections through this operation; diagnostics and verifications remain store-level evidence.
+
+After preflight, correction execution uses the same durable human turn, one provider call, and durable assistant turn sequence. It then appends a `TaskObservationKind::Correction` with the caller-owned ID, exact assistant content, and supplied parent-attempt ID. Preflight is not a lock: if the task changes after preflight, the authoritative append reports the winning terminal state or observation error after both transcript turns have committed.
+
+The task-associated operations deliberately do not create a cross-stream transaction around an external provider call:
 
 - Provider or assistant-append failure follows the single-turn contract: the human turn remains durable and no task observation is appended.
-- Observation failure after assistant persistence returns `RuntimeError::Task` and preserves both transcript turns. The runtime neither retries nor rolls back the provider call. A duplicate caller-supplied observation ID is one deterministic example.
-- Session content permits whitespace-only text while task observation text does not. If a provider returns whitespace-only content, both transcript turns remain durable and `RuntimeError::InvalidAttemptText` reports why no attempt observation was appended.
-- Task-store and invalid-attempt-text failures are retained in the `std::error::Error::source` chain. `TaskNotAssociated` is a source-free runtime domain error.
+- Observation failure after assistant persistence returns `RuntimeError::Task` and preserves both transcript turns. The runtime neither retries nor rolls back the provider call. A duplicate caller-supplied observation ID is one deterministic example for attempt turns; correction turns reject known duplicates during preflight but can still encounter a racing duplicate at the authoritative append.
+- Session content permits whitespace-only text while task observation text does not. If a provider returns whitespace-only content, both transcript turns remain durable and `RuntimeError::InvalidAttemptText` or `RuntimeError::InvalidCorrectionText` reports why no evidence was appended.
+- Task-store and invalid-observation-text failures are retained in the `std::error::Error::source` chain. `TaskNotAssociated` is a source-free runtime domain error.
 
-`RuntimeError` is non-exhaustive. Wrapped session, provider, task-store, and attempt-text failures are exposed through `std::error::Error::source`.
+`RuntimeError` is non-exhaustive. Wrapped session, provider, task-store, and observation-text failures are exposed through `std::error::Error::source`.
 
 ## Non-goals
 
-This slice does not add asynchronous execution, streaming, cooperative cancellation, concurrent invocation coordination, automatic retries, system or developer prompts, provider/model metadata, credentials, tools, permissions, token accounting, automatic task creation, association, completion or failure, structured observation episodes, cross-aggregate transactions, or storage migration.
+This slice does not add asynchronous execution, streaming, cooperative cancellation, concurrent invocation coordination, automatic retries, system or developer prompts, provider/model metadata, credentials, tools, permissions, token accounting, automatic task creation, association, completion or failure, generic caller-selected evidence kinds, runtime diagnostic or verification turns, cross-aggregate transactions, or storage migration.
 
 See [`session-lifecycle.md`](session-lifecycle.md) for transcript persistence and [`event-log.md`](event-log.md) for durability guarantees.

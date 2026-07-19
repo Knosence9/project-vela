@@ -70,6 +70,24 @@ impl AssistantProvider for ClosingProvider {
     }
 }
 
+struct CompletingTaskProvider {
+    path: PathBuf,
+    task_id: TaskId,
+}
+
+impl AssistantProvider for CompletingTaskProvider {
+    fn complete(
+        &mut self,
+        _transcript: &[vela_kernel::session::SessionTurn],
+    ) -> Result<SessionTurnContent, ProviderError> {
+        TaskStore::open(&self.path)
+            .unwrap()
+            .complete(&self.task_id, TaskOutput::new("won the race").unwrap())
+            .unwrap();
+        Ok(SessionTurnContent::new("late correction").unwrap())
+    }
+}
+
 #[test]
 fn executes_an_associated_task_turn_and_persists_attempt_evidence() {
     let directory = tempdir().unwrap();
@@ -439,4 +457,533 @@ fn observation_failure_preserves_both_transcript_turns_and_exposes_task_source()
         .unwrap();
     assert_eq!(task.observations().len(), 1);
     assert_eq!(task.observations()[0].text().as_str(), "prior attempt");
+}
+
+#[test]
+fn executes_a_task_correction_turn_and_persists_parented_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Correction runtime").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(
+            task_id.clone(),
+            TaskGoal::new("improve the answer").unwrap(),
+        )
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    let parent_id = TaskObservationId::new("attempt-1").unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            parent_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("first answer").unwrap(),
+        )
+        .unwrap();
+    drop(tasks);
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let provider = FakeProvider {
+        calls: Rc::clone(&calls),
+        result: Ok(SessionTurnContent::new("corrected answer").unwrap()),
+    };
+    let mut runtime = AssistantRuntime::open(&path, provider).unwrap();
+
+    let outcome = runtime
+        .execute_task_correction_turn(
+            &task_id,
+            &parent_id,
+            SessionTurnContent::new("please correct that").unwrap(),
+            TaskObservationId::new("correction-1").unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        calls.borrow().as_slice(),
+        &[vec![(
+            SessionTurnRole::Human,
+            "please correct that".to_owned()
+        )]]
+    );
+    assert_eq!(outcome.session().turns().len(), 2);
+    let correction = &outcome.task().observations()[1];
+    assert_eq!(correction.id().as_str(), "correction-1");
+    assert_eq!(correction.kind(), TaskObservationKind::Correction);
+    assert_eq!(correction.text().as_str(), "corrected answer");
+    assert_eq!(correction.parent_attempt_id(), Some(&parent_id));
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        *outcome.session()
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        *outcome.task()
+    );
+}
+
+#[test]
+fn correction_preflight_rejects_invalid_evidence_without_transcript_or_provider_call() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Correction preflight").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("validate evidence").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    let parent_id = TaskObservationId::new("attempt-1").unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            parent_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("first answer").unwrap(),
+        )
+        .unwrap();
+    let diagnostic_id = TaskObservationId::new("diagnostic-1").unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            diagnostic_id.clone(),
+            TaskObservationKind::Diagnostic,
+            TaskObservationText::new("problem").unwrap(),
+        )
+        .unwrap();
+    let duplicate_id = TaskObservationId::new("duplicate").unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            duplicate_id.clone(),
+            TaskObservationKind::Diagnostic,
+            TaskObservationText::new("existing").unwrap(),
+        )
+        .unwrap();
+    drop(tasks);
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let provider = FakeProvider {
+        calls: Rc::clone(&calls),
+        result: Ok(SessionTurnContent::new("unused").unwrap()),
+    };
+    let mut runtime = AssistantRuntime::open(&path, provider).unwrap();
+
+    assert!(matches!(
+        runtime.execute_task_correction_turn(
+            &task_id,
+            &parent_id,
+            SessionTurnContent::new("duplicate").unwrap(),
+            duplicate_id,
+        ),
+        Err(RuntimeError::Task(
+            TaskStoreError::DuplicateObservation { .. }
+        ))
+    ));
+    assert!(matches!(
+        runtime.execute_task_correction_turn(
+            &task_id,
+            &TaskObservationId::new("missing").unwrap(),
+            SessionTurnContent::new("missing parent").unwrap(),
+            TaskObservationId::new("correction-2").unwrap(),
+        ),
+        Err(RuntimeError::Task(
+            TaskStoreError::ParentObservationNotFound { .. }
+        ))
+    ));
+    assert!(matches!(
+        runtime.execute_task_correction_turn(
+            &task_id,
+            &diagnostic_id,
+            SessionTurnContent::new("wrong parent kind").unwrap(),
+            TaskObservationId::new("correction-3").unwrap(),
+        ),
+        Err(RuntimeError::Task(
+            TaskStoreError::ParentObservationNotAttempt { .. }
+        ))
+    ));
+    assert!(calls.borrow().is_empty());
+    assert!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+}
+
+#[test]
+fn invalid_correction_text_preserves_transcript_and_exposes_source() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Invalid correction").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("correct safely").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    let parent_id = TaskObservationId::new("attempt-1").unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            parent_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("first answer").unwrap(),
+        )
+        .unwrap();
+    drop(tasks);
+
+    let provider = FakeProvider {
+        calls: Rc::new(RefCell::new(Vec::new())),
+        result: Ok(SessionTurnContent::new(" \n ").unwrap()),
+    };
+    let mut runtime = AssistantRuntime::open(&path, provider).unwrap();
+    let error = runtime
+        .execute_task_correction_turn(
+            &task_id,
+            &parent_id,
+            SessionTurnContent::new("correct this").unwrap(),
+            TaskObservationId::new("correction-1").unwrap(),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, RuntimeError::InvalidCorrectionText(_)));
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .is::<vela_kernel::task::TaskObservationTextError>()
+    );
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        2
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .observations()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn correction_append_race_preserves_transcript_and_reports_winning_terminal_state() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Correction race").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("race safely").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    let parent_id = TaskObservationId::new("attempt-1").unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            parent_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("first answer").unwrap(),
+        )
+        .unwrap();
+    drop(tasks);
+
+    let provider = CompletingTaskProvider {
+        path: path.clone(),
+        task_id: task_id.clone(),
+    };
+    let mut runtime = AssistantRuntime::open(&path, provider).unwrap();
+
+    assert!(matches!(
+        runtime.execute_task_correction_turn(
+            &task_id,
+            &parent_id,
+            SessionTurnContent::new("correct this").unwrap(),
+            TaskObservationId::new("correction-1").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::AlreadyCompleted { .. }))
+    ));
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        2
+    );
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.status(), vela_kernel::task::TaskStatus::Completed);
+}
+
+#[test]
+fn correction_task_and_session_preconditions_fail_before_provider_invocation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let open_session_id = SessionId::new("open-session").unwrap();
+    let closed_session_id = SessionId::new("closed-session").unwrap();
+    let mut sessions = SessionStore::open(&path).unwrap();
+    sessions
+        .create(
+            open_session_id.clone(),
+            SessionTitle::new("Open correction session").unwrap(),
+        )
+        .unwrap();
+    sessions
+        .create(
+            closed_session_id.clone(),
+            SessionTitle::new("Closed correction session").unwrap(),
+        )
+        .unwrap();
+
+    let completed_id = TaskId::new("completed").unwrap();
+    let unassociated_id = TaskId::new("unassociated").unwrap();
+    let closed_id = TaskId::new("closed").unwrap();
+    let completed_parent = TaskObservationId::new("completed-attempt").unwrap();
+    let unassociated_parent = TaskObservationId::new("unassociated-attempt").unwrap();
+    let closed_parent = TaskObservationId::new("closed-attempt").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    for (task_id, parent_id) in [
+        (&completed_id, &completed_parent),
+        (&unassociated_id, &unassociated_parent),
+        (&closed_id, &closed_parent),
+    ] {
+        tasks
+            .start(task_id.clone(), TaskGoal::new("correct safely").unwrap())
+            .unwrap();
+        tasks
+            .append_observation(
+                task_id,
+                parent_id.clone(),
+                TaskObservationKind::Attempt,
+                TaskObservationText::new("first answer").unwrap(),
+            )
+            .unwrap();
+    }
+    tasks
+        .associate_session(&completed_id, &open_session_id)
+        .unwrap();
+    tasks
+        .complete(&completed_id, TaskOutput::new("done").unwrap())
+        .unwrap();
+    tasks
+        .associate_session(&closed_id, &closed_session_id)
+        .unwrap();
+    drop(tasks);
+    sessions
+        .close(
+            &closed_session_id,
+            SessionClosure::new("closed before correction").unwrap(),
+        )
+        .unwrap();
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let provider = FakeProvider {
+        calls: Rc::clone(&calls),
+        result: Ok(SessionTurnContent::new("unused").unwrap()),
+    };
+    let mut runtime = AssistantRuntime::open(&path, provider).unwrap();
+
+    assert!(matches!(
+        runtime.execute_task_correction_turn(
+            &TaskId::new("missing").unwrap(),
+            &TaskObservationId::new("missing-attempt").unwrap(),
+            SessionTurnContent::new("missing").unwrap(),
+            TaskObservationId::new("missing-correction").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::NotFound { .. }))
+    ));
+    assert!(matches!(
+        runtime.execute_task_correction_turn(
+            &completed_id,
+            &completed_parent,
+            SessionTurnContent::new("completed").unwrap(),
+            TaskObservationId::new("completed-correction").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::AlreadyCompleted { .. }))
+    ));
+    assert!(matches!(
+        runtime.execute_task_correction_turn(
+            &unassociated_id,
+            &unassociated_parent,
+            SessionTurnContent::new("unassociated").unwrap(),
+            TaskObservationId::new("unassociated-correction").unwrap(),
+        ),
+        Err(RuntimeError::TaskNotAssociated { .. })
+    ));
+    assert!(matches!(
+        runtime.execute_task_correction_turn(
+            &closed_id,
+            &closed_parent,
+            SessionTurnContent::new("closed").unwrap(),
+            TaskObservationId::new("closed-correction").unwrap(),
+        ),
+        Err(RuntimeError::Session(
+            vela_kernel::session::SessionStoreError::SessionClosed { .. }
+        ))
+    ));
+    assert!(calls.borrow().is_empty());
+    assert!(
+        sessions
+            .load(&open_session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+    assert!(
+        sessions
+            .load(&closed_session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+}
+
+#[test]
+fn correction_provider_and_assistant_failures_preserve_partial_commits() {
+    for close_during_provider in [false, true] {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("vela.sqlite3");
+        let session_id = SessionId::new("session-1").unwrap();
+        let task_id = TaskId::new("task-1").unwrap();
+        SessionStore::open(&path)
+            .unwrap()
+            .create(
+                session_id.clone(),
+                SessionTitle::new("Correction failure").unwrap(),
+            )
+            .unwrap();
+        let mut tasks = TaskStore::open(&path).unwrap();
+        tasks
+            .start(task_id.clone(), TaskGoal::new("correct safely").unwrap())
+            .unwrap();
+        tasks.associate_session(&task_id, &session_id).unwrap();
+        let parent_id = TaskObservationId::new("attempt-1").unwrap();
+        tasks
+            .append_observation(
+                &task_id,
+                parent_id.clone(),
+                TaskObservationKind::Attempt,
+                TaskObservationText::new("first answer").unwrap(),
+            )
+            .unwrap();
+        drop(tasks);
+
+        let error = if close_during_provider {
+            let provider = ClosingProvider {
+                path: path.clone(),
+                session_id: session_id.clone(),
+                calls: Rc::new(RefCell::new(0)),
+            };
+            AssistantRuntime::open(&path, provider)
+                .unwrap()
+                .execute_task_correction_turn(
+                    &task_id,
+                    &parent_id,
+                    SessionTurnContent::new("correct this").unwrap(),
+                    TaskObservationId::new("correction-1").unwrap(),
+                )
+                .unwrap_err()
+        } else {
+            let provider = FakeProvider {
+                calls: Rc::new(RefCell::new(Vec::new())),
+                result: Err(FakeProviderFailure),
+            };
+            AssistantRuntime::open(&path, provider)
+                .unwrap()
+                .execute_task_correction_turn(
+                    &task_id,
+                    &parent_id,
+                    SessionTurnContent::new("correct this").unwrap(),
+                    TaskObservationId::new("correction-1").unwrap(),
+                )
+                .unwrap_err()
+        };
+
+        if close_during_provider {
+            assert!(matches!(
+                error,
+                RuntimeError::Session(
+                    vela_kernel::session::SessionStoreError::SessionClosed { .. }
+                )
+            ));
+        } else {
+            assert!(matches!(error, RuntimeError::Provider(_)));
+        }
+        let session = SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.turns().len(), 1);
+        assert_eq!(session.turns()[0].role(), SessionTurnRole::Human);
+        assert_eq!(
+            TaskStore::open(&path)
+                .unwrap()
+                .load(&task_id)
+                .unwrap()
+                .unwrap()
+                .observations()
+                .len(),
+            1
+        );
+    }
 }
