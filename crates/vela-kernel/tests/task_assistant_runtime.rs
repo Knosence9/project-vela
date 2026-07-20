@@ -88,6 +88,30 @@ impl AssistantProvider for CompletingTaskProvider {
     }
 }
 
+struct AppendingAttemptProvider {
+    path: PathBuf,
+    task_id: TaskId,
+    observation_id: TaskObservationId,
+}
+
+impl AssistantProvider for AppendingAttemptProvider {
+    fn complete(
+        &mut self,
+        _transcript: &[vela_kernel::session::SessionTurn],
+    ) -> Result<SessionTurnContent, ProviderError> {
+        TaskStore::open(&self.path)
+            .unwrap()
+            .append_observation(
+                &self.task_id,
+                self.observation_id.clone(),
+                TaskObservationKind::Attempt,
+                TaskObservationText::new("racing attempt").unwrap(),
+            )
+            .unwrap();
+        Ok(SessionTurnContent::new("late final answer").unwrap())
+    }
+}
+
 #[test]
 fn executes_an_associated_task_turn_and_persists_attempt_evidence() {
     let directory = tempdir().unwrap();
@@ -266,6 +290,56 @@ fn invalid_task_state_fails_before_transcript_write_or_provider_call() {
             &closed_session_task,
             SessionTurnContent::new("closed").unwrap(),
             TaskObservationId::new("closed-attempt").unwrap(),
+        ),
+        Err(RuntimeError::Session(
+            vela_kernel::session::SessionStoreError::SessionClosed { .. }
+        ))
+    ));
+    assert!(matches!(
+        runtime.complete_task_turn(
+            &missing,
+            SessionTurnContent::new("missing completion").unwrap(),
+            TaskObservationId::new("missing-final-attempt").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::NotFound { .. }))
+    ));
+    assert!(matches!(
+        runtime.complete_task_turn(
+            &completed,
+            SessionTurnContent::new("completed completion").unwrap(),
+            TaskObservationId::new("completed-final-attempt").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::AlreadyCompleted { .. }))
+    ));
+    assert!(matches!(
+        runtime.complete_task_turn(
+            &cancelled,
+            SessionTurnContent::new("cancelled completion").unwrap(),
+            TaskObservationId::new("cancelled-final-attempt").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::AlreadyCancelled { .. }))
+    ));
+    assert!(matches!(
+        runtime.complete_task_turn(
+            &failed,
+            SessionTurnContent::new("failed completion").unwrap(),
+            TaskObservationId::new("failed-final-attempt").unwrap(),
+        ),
+        Err(RuntimeError::Task(TaskStoreError::AlreadyFailed { .. }))
+    ));
+    assert!(matches!(
+        runtime.complete_task_turn(
+            &unassociated,
+            SessionTurnContent::new("unassociated completion").unwrap(),
+            TaskObservationId::new("unassociated-final-attempt").unwrap(),
+        ),
+        Err(RuntimeError::TaskNotAssociated { .. })
+    ));
+    assert!(matches!(
+        runtime.complete_task_turn(
+            &closed_session_task,
+            SessionTurnContent::new("closed completion").unwrap(),
+            TaskObservationId::new("closed-final-attempt").unwrap(),
         ),
         Err(RuntimeError::Session(
             vela_kernel::session::SessionStoreError::SessionClosed { .. }
@@ -986,4 +1060,409 @@ fn correction_provider_and_assistant_failures_preserve_partial_commits() {
             1
         );
     }
+}
+
+#[test]
+fn completes_a_task_turn_with_the_response_as_attempt_and_output() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    let mut sessions = SessionStore::open(&path).unwrap();
+    sessions
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Completion runtime").unwrap(),
+        )
+        .unwrap();
+    for (role, content) in [
+        (SessionTurnRole::Human, "earlier question"),
+        (SessionTurnRole::Assistant, "earlier answer"),
+    ] {
+        sessions
+            .append_turn(&session_id, role, SessionTurnContent::new(content).unwrap())
+            .unwrap();
+    }
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("finish the answer").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    drop(tasks);
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let provider = FakeProvider {
+        calls: Rc::clone(&calls),
+        result: Ok(SessionTurnContent::new("final grounded answer").unwrap()),
+    };
+    let outcome = AssistantRuntime::open(&path, provider)
+        .unwrap()
+        .complete_task_turn(
+            &task_id,
+            SessionTurnContent::new("please finalize").unwrap(),
+            TaskObservationId::new("final-attempt").unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        calls.borrow().as_slice(),
+        &[vec![
+            (SessionTurnRole::Human, "earlier question".to_owned()),
+            (SessionTurnRole::Assistant, "earlier answer".to_owned()),
+            (SessionTurnRole::Human, "please finalize".to_owned()),
+        ]]
+    );
+    assert_eq!(outcome.session().turns().len(), 4);
+    assert_eq!(
+        outcome.task().status(),
+        vela_kernel::task::TaskStatus::Completed
+    );
+    assert_eq!(
+        outcome.task().output().unwrap().as_str(),
+        "final grounded answer"
+    );
+    assert_eq!(outcome.task().observations().len(), 1);
+    assert_eq!(
+        outcome.task().observations()[0].kind(),
+        TaskObservationKind::Attempt
+    );
+    assert_eq!(
+        outcome.task().observations()[0].text().as_str(),
+        "final grounded answer"
+    );
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        *outcome.session()
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        *outcome.task()
+    );
+}
+
+#[test]
+fn completion_preflight_rejects_duplicate_attempt_before_side_effects() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Completion preflight").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("finish safely").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    let duplicate_id = TaskObservationId::new("duplicate").unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            duplicate_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("existing answer").unwrap(),
+        )
+        .unwrap();
+    drop(tasks);
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let provider = FakeProvider {
+        calls: Rc::clone(&calls),
+        result: Ok(SessionTurnContent::new("unused").unwrap()),
+    };
+    let error = AssistantRuntime::open(&path, provider)
+        .unwrap()
+        .complete_task_turn(
+            &task_id,
+            SessionTurnContent::new("do not write").unwrap(),
+            duplicate_id,
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::Task(TaskStoreError::DuplicateObservation { .. })
+    ));
+    assert!(calls.borrow().is_empty());
+    assert!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+}
+
+#[test]
+fn completion_provider_and_assistant_failures_write_no_task_result() {
+    for close_during_provider in [false, true] {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("vela.sqlite3");
+        let session_id = SessionId::new("session-1").unwrap();
+        let task_id = TaskId::new("task-1").unwrap();
+        SessionStore::open(&path)
+            .unwrap()
+            .create(
+                session_id.clone(),
+                SessionTitle::new("Completion failure").unwrap(),
+            )
+            .unwrap();
+        let mut tasks = TaskStore::open(&path).unwrap();
+        tasks
+            .start(task_id.clone(), TaskGoal::new("finish safely").unwrap())
+            .unwrap();
+        tasks.associate_session(&task_id, &session_id).unwrap();
+        drop(tasks);
+
+        let error = if close_during_provider {
+            AssistantRuntime::open(
+                &path,
+                ClosingProvider {
+                    path: path.clone(),
+                    session_id: session_id.clone(),
+                    calls: Rc::new(RefCell::new(0)),
+                },
+            )
+            .unwrap()
+            .complete_task_turn(
+                &task_id,
+                SessionTurnContent::new("final request").unwrap(),
+                TaskObservationId::new("attempt-1").unwrap(),
+            )
+            .unwrap_err()
+        } else {
+            AssistantRuntime::open(
+                &path,
+                FakeProvider {
+                    calls: Rc::new(RefCell::new(Vec::new())),
+                    result: Err(FakeProviderFailure),
+                },
+            )
+            .unwrap()
+            .complete_task_turn(
+                &task_id,
+                SessionTurnContent::new("final request").unwrap(),
+                TaskObservationId::new("attempt-1").unwrap(),
+            )
+            .unwrap_err()
+        };
+
+        if close_during_provider {
+            assert!(matches!(
+                error,
+                RuntimeError::Session(
+                    vela_kernel::session::SessionStoreError::SessionClosed { .. }
+                )
+            ));
+        } else {
+            assert!(matches!(error, RuntimeError::Provider(_)));
+        }
+        let session = SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.turns().len(), 1);
+        assert_eq!(session.turns()[0].role(), SessionTurnRole::Human);
+        let task = TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap();
+        assert!(task.observations().is_empty());
+        assert_eq!(task.status(), vela_kernel::task::TaskStatus::Active);
+        assert!(task.output().is_none());
+    }
+}
+
+#[test]
+fn invalid_completion_response_preserves_transcript_without_task_result() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Invalid completion").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("finish safely").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    drop(tasks);
+
+    let error = AssistantRuntime::open(
+        &path,
+        FakeProvider {
+            calls: Rc::new(RefCell::new(Vec::new())),
+            result: Ok(SessionTurnContent::new(" \n ").unwrap()),
+        },
+    )
+    .unwrap()
+    .complete_task_turn(
+        &task_id,
+        SessionTurnContent::new("final request").unwrap(),
+        TaskObservationId::new("attempt-1").unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, RuntimeError::InvalidAttemptText(_)));
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        2
+    );
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert!(task.observations().is_empty());
+    assert_eq!(task.status(), vela_kernel::task::TaskStatus::Active);
+}
+
+#[test]
+fn completion_failure_after_attempt_preserves_attempt_and_winning_state() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Completion race").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("race safely").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    drop(tasks);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER complete_after_attempt
+             AFTER INSERT ON events
+             WHEN NEW.stream_id = 'task:task-1'
+              AND NEW.event_type = 'task.observation_appended'
+             BEGIN
+               INSERT INTO events
+                 (stream_id, stream_version, event_type, payload_version, payload)
+               VALUES
+                 (NEW.stream_id, NEW.stream_version + 1, 'task.completed', 2,
+                  CAST('{\"output\":\"winning output\"}' AS BLOB));
+             END;",
+        )
+        .unwrap();
+    let provider = FakeProvider {
+        calls: Rc::new(RefCell::new(Vec::new())),
+        result: Ok(SessionTurnContent::new("late final answer").unwrap()),
+    };
+
+    let error = AssistantRuntime::open(&path, provider)
+        .unwrap()
+        .complete_task_turn(
+            &task_id,
+            SessionTurnContent::new("final request").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::Task(TaskStoreError::AlreadyCompleted { .. })
+    ));
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "late final answer");
+    assert_eq!(task.output().unwrap().as_str(), "winning output");
+}
+
+#[test]
+fn completion_attempt_race_preserves_both_turns_without_runtime_completion() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    let observation_id = TaskObservationId::new("attempt-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Attempt race").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("race safely").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+    drop(tasks);
+
+    let provider = AppendingAttemptProvider {
+        path: path.clone(),
+        task_id: task_id.clone(),
+        observation_id: observation_id.clone(),
+    };
+    let error = AssistantRuntime::open(&path, provider)
+        .unwrap()
+        .complete_task_turn(
+            &task_id,
+            SessionTurnContent::new("final request").unwrap(),
+            observation_id,
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::Task(TaskStoreError::DuplicateObservation { .. })
+    ));
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        2
+    );
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.status(), vela_kernel::task::TaskStatus::Active);
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "racing attempt");
+    assert!(task.output().is_none());
 }

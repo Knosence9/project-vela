@@ -24,6 +24,10 @@ On success, the runtime returns a `TaskTurnOutcome` containing the durable `Sess
 
 After preflight, correction execution uses the same durable human turn, one provider call, and durable assistant turn sequence. It then appends a `TaskObservationKind::Correction` with the caller-owned ID, exact assistant content, and supplied parent-attempt ID. Preflight is not a lock: if the task changes after preflight, the authoritative append reports the winning terminal state or observation error after both transcript turns have committed.
 
+`AssistantRuntime::complete_task_turn` is the explicit caller-requested completion boundary. The caller supplies the final human content and an attempt observation ID; the runtime owns the ordering, but it does not decide autonomously that the task is complete. It preflights the active associated task, uniqueness of the attempt ID, and session writability before invoking the provider. It then commits the human and assistant turns, validates the assistant text as both attempt evidence and task output, appends an `Attempt`, and completes the task with exactly the same text. The returned `TaskTurnOutcome` contains the durable transcript and completed task projections. This model response is task output, not `Verification`; verification remains independently observed store-level evidence.
+
+Completion preserves its ordered partial commits. Provider or assistant-append failure writes no attempt or completion. Invalid attempt/output text or an authoritative attempt-append failure preserves both transcript turns but writes no completion. If completion loses a race after the attempt commits, the attempt remains durable and `RuntimeError::Task` exposes the authoritative terminal state. Preflight is not a lock, no provider call is retried, and no cross-stream rollback is attempted.
+
 The task-associated operations deliberately do not create a cross-stream transaction around an external provider call:
 
 - Provider or assistant-append failure follows the single-turn contract: the human turn remains durable and no task observation is appended.
