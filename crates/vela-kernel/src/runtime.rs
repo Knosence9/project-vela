@@ -1,12 +1,12 @@
 use std::{error::Error, fmt, path::Path};
 
 use crate::session::{
-    Session, SessionId, SessionStore, SessionStoreError, SessionTurn, SessionTurnContent,
-    SessionTurnRole,
+    Session, SessionId, SessionStatus, SessionStore, SessionStoreError, SessionTurn,
+    SessionTurnContent, SessionTurnRole,
 };
 use crate::task::{
     Task, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText,
-    TaskObservationTextError, TaskStatus, TaskStore, TaskStoreError,
+    TaskObservationTextError, TaskOutput, TaskOutputError, TaskStatus, TaskStore, TaskStoreError,
 };
 
 /// A synchronous, provider-neutral source for one assistant response.
@@ -51,6 +51,7 @@ pub enum RuntimeError {
     Task(TaskStoreError),
     TaskNotAssociated { task_id: TaskId },
     InvalidAttemptText(TaskObservationTextError),
+    InvalidTaskOutput(TaskOutputError),
     InvalidCorrectionText(TaskObservationTextError),
 }
 
@@ -66,6 +67,9 @@ impl fmt::Display for RuntimeError {
             Self::InvalidAttemptText(error) => {
                 write!(formatter, "assistant attempt observation error: {error}")
             }
+            Self::InvalidTaskOutput(error) => {
+                write!(formatter, "assistant task output error: {error}")
+            }
             Self::InvalidCorrectionText(error) => {
                 write!(formatter, "assistant correction observation error: {error}")
             }
@@ -80,6 +84,7 @@ impl Error for RuntimeError {
             Self::Provider(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvalidAttemptText(error) => Some(error),
+            Self::InvalidTaskOutput(error) => Some(error),
             Self::InvalidCorrectionText(error) => Some(error),
             Self::TaskNotAssociated { .. } => None,
         }
@@ -216,6 +221,71 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
             .map_err(RuntimeError::Task)?;
 
         Ok(TaskTurnOutcome { session, task })
+    }
+
+    /// Executes a caller-requested final turn, records its response as an attempt, and completes
+    /// the task with that same response.
+    ///
+    /// Deterministic task, observation, and session constraints are checked before the provider
+    /// call. Transcript turns, the attempt, and completion then commit in that order, so a later
+    /// failure preserves every earlier commit. The response is task output, not verification.
+    pub fn complete_task_turn(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+    ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (task, session_id) = self.load_active_associated_task(task_id)?;
+        task.validate_observation_append(
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+        )
+        .map_err(RuntimeError::Task)?;
+        self.ensure_session_writable(&session_id)?;
+
+        let session = self.execute_turn(&session_id, human_content)?;
+        let assistant_content = session
+            .turns()
+            .last()
+            .expect("a successful assistant turn has a final turn")
+            .content();
+        let attempt_text = TaskObservationText::new(assistant_content.as_str())
+            .map_err(RuntimeError::InvalidAttemptText)?;
+        let output =
+            TaskOutput::new(assistant_content.as_str()).map_err(RuntimeError::InvalidTaskOutput)?;
+        self.tasks
+            .append_observation(
+                task_id,
+                attempt_observation_id,
+                TaskObservationKind::Attempt,
+                attempt_text,
+            )
+            .map_err(RuntimeError::Task)?;
+        let task = self
+            .tasks
+            .complete(task_id, output)
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
+    }
+
+    fn ensure_session_writable(&self, session_id: &SessionId) -> Result<(), RuntimeError> {
+        let session = self
+            .sessions
+            .load(session_id)
+            .map_err(RuntimeError::Session)?
+            .ok_or_else(|| {
+                RuntimeError::Session(SessionStoreError::NotFound {
+                    session_id: session_id.clone(),
+                })
+            })?;
+        if session.status() == SessionStatus::Closed {
+            return Err(RuntimeError::Session(SessionStoreError::SessionClosed {
+                session_id: session_id.clone(),
+            }));
+        }
+        Ok(())
     }
 
     fn load_active_associated_task(
