@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Execute an explicit task failure turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/534 by adding a caller-requested provider-neutral failure operation that persists the final transcript, records the model response only as attempt evidence, and fails the task with a separately validated caller-owned diagnostic.",
+    "acceptance_criteria": [
+      "An active task associated with an open session executes one provider call, persists both final transcript turns, appends one caller-identified Attempt, and fails with the exact caller diagnostic.",
+      "Known task, association, session, and duplicate-attempt failures reject before transcript or provider side effects, while append-time races remain authoritative.",
+      "Provider, assistant-append, evidence-validation, attempt-append, and terminal-failure errors preserve the documented durable prefix without retry or cross-stream rollback.",
+      "Existing attempt, correction, and completion operations remain unchanged, documentation distinguishes model output from caller-owned diagnostics, and all local and hosted gates pass before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Resolved failure ownership before implementation.",
+      "outcome": "success",
+      "diagnostic": "Automatically treating provider text as a failure diagnostic would have granted the model terminal classification authority. The selected contract instead requires a validated TaskFailure from the caller and classifies the assistant response only as an Attempt.",
+      "patch": "Decision issue 533 selected the explicit failure turn and execution issue 534 fixed the operation, caller-owned attempt ID and diagnostic, preflight boundary, ordered partial commits, append-time authority, compatibility requirements, and non-goals."
+    },
+    {
+      "summary": "Established RED with failure-specific runtime acceptance tests.",
+      "outcome": "failure",
+      "diagnostic": "The focused task assistant runtime target failed to compile because AssistantRuntime had no fail_task_turn operation.",
+      "patch": "Kept success, task and session preflight, duplicate evidence, provider and assistant append, invalid response, attempt race, and terminal race cases as executable acceptance evidence before production implementation."
+    },
+    {
+      "summary": "Implemented ordered caller-owned failure orchestration.",
+      "outcome": "success",
+      "diagnostic": "The runtime now loads an active associated task, preflights the attempt ID and session, executes the durable turn sequence, validates the assistant text as Attempt evidence, appends that attempt, and finally fails with the supplied TaskFailure. No event schema or replay behavior changed.",
+      "patch": "Updated crates/vela-kernel/src/runtime.rs and documented ownership, ordering, partial commits, races, evidence classification, and non-goals in the runtime and task lifecycle guides."
+    },
+    {
+      "summary": "Corrected the closed-session precondition fixture.",
+      "outcome": "failure",
+      "diagnostic": "The first focused GREEN run had 23 passing tests and one fixture failure because the test closed its session before associating the task, so setup correctly rejected the association before the runtime operation was exercised.",
+      "patch": "Associated the task while the session was open, then closed the session before invoking fail_task_turn, matching the intended preflight scenario without changing production code."
+    },
+    {
+      "summary": "Verified durable prefixes and races locally.",
+      "outcome": "success",
+      "diagnostic": "The focused runtime target passed 24 tests. Ten consecutive runs of the failure-related subset each passed all 10 selected tests. Pinned just verify passed formatting, workspace checks and tests, Clippy with warnings denied, SecretSpec integration, and diff checks.",
+      "patch": "Retained operation-level coverage for exact diagnostic replay, evidence classification, no-side-effect preflight, human-only provider and assistant failures, transcript-only invalid or racing attempts, and attempt-preserving terminal races."
+    },
+    {
+      "summary": "Passed hosted review and squash-merged the slice.",
+      "outcome": "success",
+      "diagnostic": "Rust quality gate run 29795487254 passed. CodeRabbit completed one review with no actionable correctness finding and only a trivial optional future extraction note; its required status passed. Shared cross-repository activity showed one other newly reviewed pull request in the preceding hour, so opening this review remained within the two-review limit.",
+      "patch": "Squash auto-merge produced 05129136455d721228b5a714cb15170c4815f29e from pull request 535, closed issue 534, and synchronized local main with origin/main."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now execute an explicit caller-requested final failure turn, preserve each durable transcript and evidence prefix under errors, and fail only with caller-owned validated diagnostic data while keeping provider output classified solely as an Attempt.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test task_assistant_runtime # 24 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify # formatting, workspace checks and tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "Ten repeated pinned focused runs of failure-related runtime tests # 10 tests passed per run",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of the complete pre-commit diff # no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29795487254 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/535",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 535 squash merge 05129136455d721228b5a714cb15170c4815f29e",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Terminal failure intent and diagnostic ownership belong to the caller; provider output remains attempt evidence even when produced during a final failure turn.",
+    "Validated value types can reject invalid terminal details before a runtime operation is constructible, while runtime preflight handles task, observation, association, and session state.",
+    "Ordered cross-stream work needs explicit durable-prefix guarantees: the human turn, assistant turn, attempt, and terminal failure may each be the last successful commit.",
+    "Preflight reduces avoidable provider work but cannot replace authoritative append-time checks after an external call.",
+    "A test fixture must establish an association before closing its session when the behavior under test is runtime writability preflight rather than association validation.",
+    "Optional duplication cleanup should not be mixed into a bounded behavior slice when current sibling methods intentionally expose distinct validation and terminal-ordering needs."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/runtime.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/535"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
