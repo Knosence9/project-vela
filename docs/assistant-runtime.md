@@ -28,6 +28,10 @@ After preflight, correction execution uses the same durable human turn, one prov
 
 Completion preserves its ordered partial commits. Provider or assistant-append failure writes no attempt or completion. Invalid attempt/output text or an authoritative attempt-append failure preserves both transcript turns but writes no completion. If completion loses a race after the attempt commits, the attempt remains durable and `RuntimeError::Task` exposes the authoritative terminal state. Preflight is not a lock, no provider call is retried, and no cross-stream rollback is attempted.
 
+`AssistantRuntime::fail_task_turn` is the symmetric caller-requested failure boundary. The caller supplies validated `TaskFailure` data in addition to the final human content and attempt ID, so invalid or whitespace-only diagnostics cannot enter the operation. The runtime preflights the same task, observation, and session constraints, commits both transcript turns, appends the provider response only as an `Attempt`, and then fails the task with the exact caller-owned diagnostic. Model text is never reclassified as `Diagnostic` or `Verification` evidence.
+
+Failure execution preserves the same ordered durable prefixes. Provider or assistant-append failure writes no attempt or terminal failure. Invalid attempt text and authoritative attempt-append errors preserve both transcript turns without failing the task. If the terminal failure loses a race after the attempt commits, that attempt remains durable and the winning terminal state is returned as `RuntimeError::Task`. No provider call is retried and no cross-stream rollback is attempted.
+
 The task-associated operations deliberately do not create a cross-stream transaction around an external provider call:
 
 - Provider or assistant-append failure follows the single-turn contract: the human turn remains durable and no task observation is appended.
