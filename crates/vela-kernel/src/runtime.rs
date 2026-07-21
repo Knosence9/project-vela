@@ -5,7 +5,7 @@ use crate::session::{
     SessionTurnContent, SessionTurnRole,
 };
 use crate::task::{
-    Task, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText,
+    Task, TaskFailure, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText,
     TaskObservationTextError, TaskOutput, TaskOutputError, TaskStatus, TaskStore, TaskStoreError,
 };
 
@@ -265,6 +265,52 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
         let task = self
             .tasks
             .complete(task_id, output)
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
+    }
+
+    /// Executes a caller-requested final turn, records its response as an attempt, and fails the
+    /// task with the caller-owned diagnostic.
+    ///
+    /// Deterministic task, observation, diagnostic, and session constraints are checked before
+    /// the provider call. Transcript turns, the attempt, and failure then commit in that order, so
+    /// a later failure preserves every earlier commit. Provider output is attempt evidence only.
+    pub fn fail_task_turn(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        failure: TaskFailure,
+    ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (task, session_id) = self.load_active_associated_task(task_id)?;
+        task.validate_observation_append(
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+        )
+        .map_err(RuntimeError::Task)?;
+        self.ensure_session_writable(&session_id)?;
+
+        let session = self.execute_turn(&session_id, human_content)?;
+        let assistant_content = session
+            .turns()
+            .last()
+            .expect("a successful assistant turn has a final turn")
+            .content();
+        let attempt_text = TaskObservationText::new(assistant_content.as_str())
+            .map_err(RuntimeError::InvalidAttemptText)?;
+        self.tasks
+            .append_observation(
+                task_id,
+                attempt_observation_id,
+                TaskObservationKind::Attempt,
+                attempt_text,
+            )
+            .map_err(RuntimeError::Task)?;
+        let task = self
+            .tasks
+            .fail(task_id, failure)
             .map_err(RuntimeError::Task)?;
 
         Ok(TaskTurnOutcome { session, task })
