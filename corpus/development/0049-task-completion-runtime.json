@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Execute an explicit task completion turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/531 by adding a caller-requested provider-neutral completion operation that persists the final transcript, records the model response as attempt evidence, and completes the task with the same output without treating model output as verification.",
+    "acceptance_criteria": [
+      "An active task associated with an open session executes one provider call, persists both final transcript turns, appends one caller-identified Attempt, and completes with the exact same non-empty assistant text as TaskOutput.",
+      "Known task, association, session, and duplicate-attempt failures reject before transcript or provider side effects, while append-time races remain authoritative.",
+      "Provider, assistant-append, evidence-validation, attempt-append, and completion failures preserve the documented durable prefix without retry or cross-stream rollback.",
+      "Existing attempt and correction operations remain unchanged, documentation distinguishes model output from verification, and all local and hosted gates pass before squash merge."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Settled ownership and evidence semantics before implementation.",
+      "outcome": "success",
+      "diagnostic": "Automatic completion or model-produced verification would have crossed an unresolved runtime ownership boundary. The approved contract instead makes the caller decide when a final turn is requested and classifies the assistant response as task output plus Attempt evidence, never deterministic Verification.",
+      "patch": "Decision issue 530 fixed the public operation, caller-owned attempt ID, preflight boundary, ordered partial commits, append-time authority, compatibility requirements, and non-goals before execution issue 531 was opened."
+    },
+    {
+      "summary": "Established RED with completion-specific integration tests.",
+      "outcome": "failure",
+      "diagnostic": "The focused task assistant runtime target did not compile because AssistantRuntime had no complete_task_turn operation or output-validation error variant.",
+      "patch": "Kept the failing success, transcript, preflight, provider, assistant-append, invalid-response, attempt-race, and completion-race cases as executable acceptance evidence before production implementation."
+    },
+    {
+      "summary": "Implemented ordered completion orchestration without a schema migration.",
+      "outcome": "success",
+      "diagnostic": "The runtime now loads an active associated task, validates the caller attempt ID, preflights session writability, reuses the existing durable turn sequence, validates exact assistant content as both observation text and task output, appends the Attempt, and finally completes the task. RuntimeError preserves both validation sources and authoritative task store failures.",
+      "patch": "Updated crates/vela-kernel/src/runtime.rs, added completion acceptance coverage to task_assistant_runtime.rs, and documented ownership, ordering, partial commits, races, output semantics, and verification non-goals. Persisted event schemas and replay behavior were unchanged."
+    },
+    {
+      "summary": "Verified durable-prefix and race behavior independently.",
+      "outcome": "success",
+      "diagnostic": "Review of the four-file diff found no blocking correctness issue. Focused tests proved successful reopen, complete provider transcript, deterministic preflight, human-only provider and assistant-append failures, transcript-only invalid or racing attempt failures, and attempt-preserving completion races. A repeated focused race test also remained stable.",
+      "patch": "Retained explicit operation-level tests rather than relying on lower-level store coverage, and kept documentation aligned with each observable commit boundary."
+    },
+    {
+      "summary": "Passed local and hosted gates and squash-merged the slice.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify passed formatting, workspace checks and tests, Clippy with warnings denied, SecretSpec integration, and diff checks. Rust quality gate run 29786505548 passed. CodeRabbit was initially adaptively rate limited; after the shared cross-repository review budget allowed another PR, its completed review reported no actionable comments and set the required status successful.",
+      "patch": "Squash auto-merge produced 5c684d3ed235329018f8e5f3601bbac205200bc8 from PR 532, closed issue 531, and synchronized local main with origin/main."
+    },
+    {
+      "summary": "Sanitized and validated the accumulated corpus episode.",
+      "outcome": "success",
+      "diagnostic": "The first schema-v1 validation found two secret-marker false positives where ordinary compound wording crossed a prohibited substring boundary. Rewording those diagnostics preserved their meaning without weakening sanitation. The record validator then accepted the artifact, complete corpus inspection reported 49 valid and zero invalid records, and pinned verification passed with the record included.",
+      "patch": "Added this sanitized positive record with decision rationale, RED and GREEN attempts, durable-prefix diagnostics, hosted review and merge provenance, lessons, and explicit artifact-validation evidence to the corpus accumulation branch without opening an immediate one-record pull request."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now execute an explicit caller-requested final task turn, preserve every durable transcript and evidence prefix under failure, and complete only after the same assistant response has been recorded as attempt evidence without misclassifying it as verification.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test task_assistant_runtime # 17 passed, 0 failed",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command just verify # formatting, workspace checks and tests, Clippy, SecretSpec, and diff gates passed",
+        "status": "passed"
+      },
+      {
+        "command": "Independent read-only review of origin/main...b28edd9 plus completion acceptance contract # no blocking findings",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29786505548 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/532",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 532 squash merge 5c684d3ed235329018f8e5f3601bbac205200bc8",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0049-* # valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "/run/current-system/sw/bin/nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # 49 valid, 0 invalid",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A caller-requested completion operation avoids granting the model authority to decide that a task is finished while still providing one coherent runtime boundary.",
+    "Model output can be both an Attempt and TaskOutput, but it is not deterministic Verification; evidence kinds must preserve who observed and owns the claim.",
+    "Preflight prevents known-invalid provider work, but every later task append must remain authoritative because task state and observation IDs can race during external generation.",
+    "Ordered cross-stream work needs an explicit durable-prefix contract rather than rollback language: human turn, assistant turn, attempt, and completion may each be the final durable step before an error.",
+    "Validation after transcript persistence is intentional when transcript content is broader than task evidence or output content; invalid conversion must not erase an already completed conversation turn.",
+    "Shared review budgets require inspecting successful cross-repository review activity, waiting for capacity, and avoiding speculative pushes solely to retrigger automation."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/runtime.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/532"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
