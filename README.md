@@ -142,6 +142,7 @@ The first milestone is the **evidence loop**:
 12. Discover every persisted task in deterministic order without a separate index. ✅
 13. Persist ordered human and assistant conversation turns within open sessions. ✅
 14. Persist ordered typed task execution observations while tasks are active. ✅
+15. Establish an explicit per-invocation permission boundary for in-process tool adapters. ✅
 
 ## Project documents
 
@@ -154,6 +155,7 @@ The first milestone is the **evidence loop**:
 - [`docs/event-log.md`](docs/event-log.md) — typed append/replay behavior and stable errors
 - [`docs/task-lifecycle.md`](docs/task-lifecycle.md) — persisted task start/completion/cancellation/load behavior
 - [`docs/session-lifecycle.md`](docs/session-lifecycle.md) — persisted session lifecycle behavior
+- [`docs/tool-permissions.md`](docs/tool-permissions.md) — in-process tool invocation and permission behavior
 - [`docs/adr/`](docs/adr/) — architecture decision records
 
 ## Contributing
