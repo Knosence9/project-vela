@@ -2144,6 +2144,137 @@ fn cancellation_preflight_rejects_duplicate_attempt_before_side_effects() {
 }
 
 #[test]
+fn cancellation_task_and_session_preconditions_fail_before_provider_invocation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let open_session_id = SessionId::new("open-session").unwrap();
+    let closed_session_id = SessionId::new("closed-session").unwrap();
+    let mut sessions = SessionStore::open(&path).unwrap();
+    for session_id in [&open_session_id, &closed_session_id] {
+        sessions
+            .create(
+                session_id.clone(),
+                SessionTitle::new("Cancellation precondition").unwrap(),
+            )
+            .unwrap();
+    }
+
+    let completed_id = TaskId::new("completed").unwrap();
+    let cancelled_id = TaskId::new("cancelled").unwrap();
+    let failed_id = TaskId::new("failed").unwrap();
+    let unassociated_id = TaskId::new("unassociated").unwrap();
+    let closed_id = TaskId::new("closed").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    for task_id in [
+        &completed_id,
+        &cancelled_id,
+        &failed_id,
+        &unassociated_id,
+        &closed_id,
+    ] {
+        tasks
+            .start(task_id.clone(), TaskGoal::new("cancel safely").unwrap())
+            .unwrap();
+    }
+    for task_id in [&completed_id, &cancelled_id, &failed_id] {
+        tasks.associate_session(task_id, &open_session_id).unwrap();
+    }
+    tasks
+        .complete(&completed_id, TaskOutput::new("done").unwrap())
+        .unwrap();
+    tasks
+        .cancel(
+            &cancelled_id,
+            TaskCancellation::new("already cancelled").unwrap(),
+        )
+        .unwrap();
+    tasks
+        .fail(&failed_id, TaskFailure::new("already failed").unwrap())
+        .unwrap();
+    tasks
+        .associate_session(&closed_id, &closed_session_id)
+        .unwrap();
+    drop(tasks);
+    sessions
+        .close(
+            &closed_session_id,
+            SessionClosure::new("already closed").unwrap(),
+        )
+        .unwrap();
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = AssistantRuntime::open(
+        &path,
+        FakeProvider {
+            calls: Rc::clone(&calls),
+            result: Ok(SessionTurnContent::new("unused").unwrap()),
+        },
+    )
+    .unwrap();
+    macro_rules! assert_preflight {
+        ($task_id:expr, $attempt_id:literal, $pattern:pat) => {
+            assert!(matches!(
+                runtime.cancel_task_turn(
+                    &$task_id,
+                    SessionTurnContent::new("do not write").unwrap(),
+                    TaskObservationId::new($attempt_id).unwrap(),
+                    TaskCancellation::new("caller reason").unwrap(),
+                ),
+                Err($pattern)
+            ));
+        };
+    }
+    assert_preflight!(
+        TaskId::new("missing").unwrap(),
+        "missing-attempt",
+        RuntimeError::Task(TaskStoreError::NotFound { .. })
+    );
+    assert_preflight!(
+        completed_id,
+        "completed-attempt",
+        RuntimeError::Task(TaskStoreError::AlreadyCompleted { .. })
+    );
+    assert_preflight!(
+        cancelled_id,
+        "cancelled-attempt",
+        RuntimeError::Task(TaskStoreError::AlreadyCancelled { .. })
+    );
+    assert_preflight!(
+        failed_id,
+        "failed-attempt",
+        RuntimeError::Task(TaskStoreError::AlreadyFailed { .. })
+    );
+    assert_preflight!(
+        unassociated_id,
+        "unassociated-attempt",
+        RuntimeError::TaskNotAssociated { .. }
+    );
+    assert_preflight!(
+        closed_id,
+        "closed-attempt",
+        RuntimeError::Session(vela_kernel::session::SessionStoreError::SessionClosed { .. })
+    );
+
+    assert!(calls.borrow().is_empty());
+    assert!(
+        sessions
+            .load(&open_session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+    assert!(
+        sessions
+            .load(&closed_session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+}
+
+#[test]
 fn invalid_cancellation_response_preserves_transcript_without_task_result() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
@@ -2315,6 +2446,65 @@ fn cancellation_provider_failure_writes_only_the_human_turn() {
         .unwrap();
     assert!(task.observations().is_empty());
     assert_eq!(task.status(), vela_kernel::task::TaskStatus::Active);
+}
+
+#[test]
+fn cancellation_assistant_append_failure_writes_only_the_human_turn() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("session-1").unwrap();
+    let task_id = TaskId::new("task-1").unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .create(
+            session_id.clone(),
+            SessionTitle::new("Cancellation assistant failure").unwrap(),
+        )
+        .unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("cancel safely").unwrap())
+        .unwrap();
+    tasks.associate_session(&task_id, &session_id).unwrap();
+
+    let calls = Rc::new(RefCell::new(0));
+    let error = AssistantRuntime::open(
+        &path,
+        ClosingProvider {
+            path: path.clone(),
+            session_id: session_id.clone(),
+            calls: Rc::clone(&calls),
+        },
+    )
+    .unwrap()
+    .cancel_task_turn(
+        &task_id,
+        SessionTurnContent::new("final request").unwrap(),
+        TaskObservationId::new("attempt-1").unwrap(),
+        TaskCancellation::new("caller reason").unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::Session(vela_kernel::session::SessionStoreError::SessionClosed { .. })
+    ));
+    assert_eq!(*calls.borrow(), 1);
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 1);
+    assert_eq!(session.turns()[0].role(), SessionTurnRole::Human);
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert!(task.observations().is_empty());
+    assert_eq!(task.status(), vela_kernel::task::TaskStatus::Active);
+    assert!(task.cancellation().is_none());
 }
 
 #[test]
