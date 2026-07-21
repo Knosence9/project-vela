@@ -5,8 +5,9 @@ use crate::session::{
     SessionTurnContent, SessionTurnRole,
 };
 use crate::task::{
-    Task, TaskFailure, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText,
-    TaskObservationTextError, TaskOutput, TaskOutputError, TaskStatus, TaskStore, TaskStoreError,
+    Task, TaskCancellation, TaskFailure, TaskId, TaskObservationId, TaskObservationKind,
+    TaskObservationText, TaskObservationTextError, TaskOutput, TaskOutputError, TaskStatus,
+    TaskStore, TaskStoreError,
 };
 
 /// A synchronous, provider-neutral source for one assistant response.
@@ -311,6 +312,53 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
         let task = self
             .tasks
             .fail(task_id, failure)
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
+    }
+
+    /// Executes a caller-requested final turn, records its response as an attempt, and cancels the
+    /// task with the caller-owned reason.
+    ///
+    /// This terminal transition does not interrupt in-flight work. Deterministic task,
+    /// observation, and session constraints are checked before the provider call. Transcript
+    /// turns, the attempt, and cancellation then commit in that order, preserving earlier commits
+    /// if a later operation fails.
+    pub fn cancel_task_turn(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        cancellation: TaskCancellation,
+    ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (task, session_id) = self.load_active_associated_task(task_id)?;
+        task.validate_observation_append(
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+        )
+        .map_err(RuntimeError::Task)?;
+        self.ensure_session_writable(&session_id)?;
+
+        let session = self.execute_turn(&session_id, human_content)?;
+        let assistant_content = session
+            .turns()
+            .last()
+            .expect("a successful assistant turn has a final turn")
+            .content();
+        let attempt_text = TaskObservationText::new(assistant_content.as_str())
+            .map_err(RuntimeError::InvalidAttemptText)?;
+        self.tasks
+            .append_observation(
+                task_id,
+                attempt_observation_id,
+                TaskObservationKind::Attempt,
+                attempt_text,
+            )
+            .map_err(RuntimeError::Task)?;
+        let task = self
+            .tasks
+            .cancel(task_id, cancellation)
             .map_err(RuntimeError::Task)?;
 
         Ok(TaskTurnOutcome { session, task })

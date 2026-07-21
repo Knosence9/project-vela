@@ -32,6 +32,10 @@ Completion preserves its ordered partial commits. Provider or assistant-append f
 
 Failure execution preserves the same ordered durable prefixes. Provider or assistant-append failure writes no attempt or terminal failure. Invalid attempt text and authoritative attempt-append errors preserve both transcript turns without failing the task. If the terminal failure loses a race after the attempt commits, that attempt remains durable and the winning terminal state is returned as `RuntimeError::Task`. No provider call is retried and no cross-stream rollback is attempted.
 
+`AssistantRuntime::cancel_task_turn` is the caller-requested cancellation counterpart. The caller supplies validated `TaskCancellation` data along with the final human content and attempt ID. The runtime preflights the active associated task, attempt uniqueness, and writable session, then commits both transcript turns, the provider response as an `Attempt`, and the exact caller-owned cancellation reason in that order. Model text is not the cancellation reason and is not reclassified as another evidence kind.
+
+Cancellation preserves the same ordered durable prefixes and race behavior as failure. Provider or assistant-append failure writes no attempt or cancellation; invalid attempt text and authoritative observation errors preserve the transcript without cancelling; and a terminal race after the attempt preserves that attempt plus the winning state. This operation records terminal intent after a final turn—it does not interrupt a provider call or provide cooperative in-flight cancellation.
+
 The task-associated operations deliberately do not create a cross-stream transaction around an external provider call:
 
 - Provider or assistant-append failure follows the single-turn contract: the human turn remains durable and no task observation is appended.
