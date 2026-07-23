@@ -1,6 +1,6 @@
 # Tool invocation and permission boundary
 
-The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. This boundary establishes ownership and ordering only; Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
+The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, or wrap it with metadata-only durable evidence through `invoke_tool_durable`. Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
 
 ## Ownership
 
@@ -36,12 +36,33 @@ The kernel does not retry. A caller-requested retry is a new invocation with a n
 
 Authorization itself occurs before the adapter can produce a tool effect. After an allowed adapter starts, it may partially affect external state before returning `ToolError`. The kernel reports the error without retry or rollback; the adapter owns idempotency and any compensation protocol.
 
-## Durability and compatibility
+## Durable invocation evidence
 
-This protocol is deliberately non-durable. It opens no store and writes no event, session turn, task observation, permission grant, invocation intent, result, or error. A later approved runtime slice may introduce dedicated durable invocation evidence, but existing evidence kinds are not repurposed by implication and model output is not deterministic verification.
+`invoke_tool` remains non-durable and API-compatible. `invoke_tool_durable` is an additive wrapper using `ToolInvocationStore` and a caller-supplied, non-blank `ToolInvocationId`. Each ID owns an independent `tool-invocation:<id>` event stream; this first boundary has no task or session association.
 
-Existing event payloads and replay, session/task stores, `AssistantProvider`, and `AssistantRuntime` remain unchanged.
+The wrapper writes this ordered prefix:
+
+1. `tool.invocation_intended`, containing only `ToolId` and declared `ToolEffect`, before authorization;
+2. exactly one of `tool.invocation_denied`, `tool.invocation_succeeded`, or `tool.invocation_failed` after the in-memory result is known.
+
+There is no durable “allowed” event. Intent is committed first, then the existing invocation protocol authorizes once and either skips or calls the adapter once. A duplicate invocation ID fails before authorization or execution.
+
+`ToolInvocationStore::load` replays a valid stream as `Pending`, `Denied`, `Succeeded`, or `Failed`. Valid history is exactly one intent followed by at most one terminal event. Terminal-first, repeated-intent, repeated-terminal, and post-terminal histories fail closed. An absent stream loads as absent.
+
+### Retention boundary
+
+The event payload deliberately excludes exact input, exact output, adapter error text, permission-policy details, credentials, and other potentially sensitive or high-volume values. Terminal payloads are empty. Exact output and source-preserving invocation errors remain available only to the immediate caller.
+
+This is a storage contract, not a configurable redaction implementation: richer payload capture requires a separate approved size, schema-version, and redaction boundary. Operators must still protect tool IDs, effect declarations, stream IDs, and the SQLite database as operational metadata.
+
+### Crash and append semantics
+
+An intent-only `Pending` stream means authorization and/or adapter execution may have been attempted. It is intentionally ambiguous and must never trigger automatic resume or retry. In particular, an external effect may have completed before a crash prevented the terminal append.
+
+If the terminal append fails after authorization or execution, `DurableToolInvocationError::TerminalPersistence` returns both the persistence error and the exact in-memory invocation result. The wrapper does not retry, roll back, or hide a successful output or sourced adapter failure. Callers must treat the durable stream as pending and resolve ambiguity outside this protocol.
+
+Existing event families, session/task replay, `AssistantProvider`, and `AssistantRuntime` remain unchanged.
 
 ## Non-goals
 
-This slice does not add provider tool-call parsing, runtime orchestration, automatic or model-owned permission, permission persistence, reusable grants, registry/discovery, JSON Schema publication, real filesystem/network/process/credential tools, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, deterministic verification ingestion, event migration, or identity/personality policy.
+This slice does not add provider tool-call parsing, runtime orchestration, automatic or model-owned permission, persisted allow grants, reusable grants, registry/discovery, JSON Schema publication, real filesystem/network/process/credential tools, task/session association, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.
