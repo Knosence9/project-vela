@@ -131,6 +131,99 @@ fn invocation_ids_are_non_blank_stable_values() {
 }
 
 #[test]
+fn invocations_list_in_id_order_with_latest_status_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = ToolInvocationStore::open(&path).unwrap();
+    assert!(store.list().unwrap().is_empty());
+
+    let mut successful_tool = FakeTool::succeeding(json!({"secret": "not persisted"}));
+    invoke_tool_durable(
+        &mut store,
+        invocation_id("charlie"),
+        &mut successful_tool,
+        &mut FakeAuthorizer::new(PermissionDecision::Allow),
+        &json!(null),
+    )
+    .unwrap();
+    let mut denied_tool = FakeTool::succeeding(json!(null));
+    invoke_tool_durable(
+        &mut store,
+        invocation_id("alpha"),
+        &mut denied_tool,
+        &mut FakeAuthorizer::new(PermissionDecision::Deny),
+        &json!(null),
+    )
+    .unwrap_err();
+    let mut failed_tool = FakeTool::failing();
+    invoke_tool_durable(
+        &mut store,
+        invocation_id("delta"),
+        &mut failed_tool,
+        &mut FakeAuthorizer::new(PermissionDecision::Allow),
+        &json!(null),
+    )
+    .unwrap_err();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO events VALUES ('tool-invocation:bravo', 1, 'tool.invocation_intended', 1, X'7B22746F6F6C5F6964223A22746573742E6563686F222C22656666656374223A2270757265227D');
+             INSERT INTO events VALUES ('task:alpha', 1, 'task.started', 1, X'7B22676F616C223A2269676E6F7265227D');
+             INSERT INTO events VALUES ('session:charlie', 1, 'session.created', 1, X'7B227469746C65223A2269676E6F7265227D');",
+        )
+        .unwrap();
+    let event_count_before: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+
+    let invocations = ToolInvocationStore::open(&path).unwrap().list().unwrap();
+
+    let actual: Vec<_> = invocations
+        .iter()
+        .map(|invocation| (invocation.id().as_str(), invocation.status()))
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            ("alpha", ToolInvocationStatus::Denied),
+            ("bravo", ToolInvocationStatus::Pending),
+            ("charlie", ToolInvocationStatus::Succeeded),
+            ("delta", ToolInvocationStatus::Failed),
+        ]
+    );
+    let event_count_after: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(event_count_after, event_count_before);
+}
+
+#[test]
+fn listing_rejects_a_malformed_owning_stream_id() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    ToolInvocationStore::open(&path).unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events VALUES ('wrong-prefix', 1, 'tool.invocation_intended', 1, X'7B22746F6F6C5F6964223A22746573742E6563686F222C22656666656374223A2270757265227D')",
+            [],
+        )
+        .unwrap();
+
+    let error = ToolInvocationStore::open(&path)
+        .unwrap()
+        .list()
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ToolInvocationStoreError::InvalidStreamId { stream_id } if stream_id == "wrong-prefix"
+    ));
+}
+
+#[test]
 fn denial_is_persisted_after_intent_without_calling_the_tool() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -430,6 +523,19 @@ fn malformed_intent_metadata_is_a_source_preserving_replay_error() {
         })
     ));
     assert!(error.source().is_some());
+
+    let list_error = ToolInvocationStore::open(&path)
+        .unwrap()
+        .list()
+        .unwrap_err();
+    assert!(matches!(
+        list_error,
+        ToolInvocationStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            ..
+        })
+    ));
+    assert!(list_error.source().is_some());
 }
 
 #[test]
