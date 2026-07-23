@@ -12,6 +12,7 @@ const TOOL_INVOCATION_DENIED_EVENT_TYPE: &str = "tool.invocation_denied";
 const TOOL_INVOCATION_SUCCEEDED_EVENT_TYPE: &str = "tool.invocation_succeeded";
 const TOOL_INVOCATION_FAILED_EVENT_TYPE: &str = "tool.invocation_failed";
 const TOOL_INVOCATION_EVENT_PAYLOAD_VERSION: u32 = 1;
+const TOOL_INVOCATION_STREAM_PREFIX: &str = "tool-invocation:";
 
 /// An opaque, non-blank stable identifier for one tool adapter.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
@@ -267,6 +268,7 @@ pub enum ToolInvocationStoreError {
     EventLog(EventLogError),
     Replay(ReplayError),
     AlreadyExists { invocation_id: ToolInvocationId },
+    InvalidStreamId { stream_id: String },
     InvalidHistory { event_count: usize },
 }
 
@@ -277,6 +279,9 @@ impl fmt::Display for ToolInvocationStoreError {
             Self::Replay(error) => write!(formatter, "tool invocation replay error: {error}"),
             Self::AlreadyExists { invocation_id } => {
                 write!(formatter, "tool invocation {invocation_id} already exists")
+            }
+            Self::InvalidStreamId { stream_id } => {
+                write!(formatter, "invalid tool invocation stream id {stream_id}")
             }
             Self::InvalidHistory { event_count } => write!(
                 formatter,
@@ -291,7 +296,9 @@ impl Error for ToolInvocationStoreError {
         match self {
             Self::EventLog(error) => Some(error),
             Self::Replay(error) => Some(error),
-            Self::AlreadyExists { .. } | Self::InvalidHistory { .. } => None,
+            Self::AlreadyExists { .. }
+            | Self::InvalidStreamId { .. }
+            | Self::InvalidHistory { .. } => None,
         }
     }
 }
@@ -317,6 +324,35 @@ impl ToolInvocationStore {
             .replay::<ToolInvocationEvent>(&tool_invocation_stream(id))
             .map_err(ToolInvocationStoreError::Replay)?;
         project_tool_invocation(id, events)
+    }
+
+    /// Replays every persisted tool invocation in ascending invocation-ID order.
+    pub fn list(&self) -> Result<Vec<ToolInvocation>, ToolInvocationStoreError> {
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type::<ToolInvocationEvent>(
+                TOOL_INVOCATION_INTENDED_EVENT_TYPE,
+            )
+            .map_err(ToolInvocationStoreError::Replay)?;
+        let mut invocations = Vec::with_capacity(streams.len());
+
+        for (stream_id, events) in streams {
+            let Some(external_id) = stream_id.strip_prefix(TOOL_INVOCATION_STREAM_PREFIX) else {
+                return Err(ToolInvocationStoreError::InvalidStreamId { stream_id });
+            };
+            let id = ToolInvocationId::new(external_id).map_err(|_| {
+                ToolInvocationStoreError::InvalidStreamId {
+                    stream_id: stream_id.clone(),
+                }
+            })?;
+            let Some(invocation) = project_tool_invocation(&id, events)? else {
+                return Err(ToolInvocationStoreError::InvalidHistory { event_count: 0 });
+            };
+            invocations.push(invocation);
+        }
+
+        invocations.sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
+        Ok(invocations)
     }
 
     fn record_intent(
@@ -432,7 +468,7 @@ pub fn invoke_tool_durable<T: Tool, A: ToolAuthorizer>(
 }
 
 fn tool_invocation_stream(id: &ToolInvocationId) -> StreamId {
-    StreamId::new(format!("tool-invocation:{id}"))
+    StreamId::new(format!("{TOOL_INVOCATION_STREAM_PREFIX}{id}"))
         .expect("a prefixed tool invocation stream is never empty")
 }
 

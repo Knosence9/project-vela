@@ -49,6 +49,8 @@ There is no durable “allowed” event. Intent is committed first, then the exi
 
 `ToolInvocationStore::load` replays a valid stream as `Pending`, `Denied`, `Succeeded`, or `Failed`. Valid history is exactly one intent followed by at most one terminal event. Terminal-first, repeated-intent, repeated-terminal, and post-terminal histories fail closed. An absent stream loads as absent.
 
+`ToolInvocationStore::list` discovers invocation streams from their existing intent events, replays every invocation from one consistent SQLite read snapshot, and returns them in ascending `ToolInvocationId` order. Pending and all terminal statuses are included. Empty stores return an empty list, unrelated event streams are excluded, reopening does not change the result, and listing appends no events or mutable index. A malformed owning stream ID returns `ToolInvocationStoreError::InvalidStreamId`; malformed payloads and histories retain their replay/store errors.
+
 ### Retention boundary
 
 The event payload deliberately excludes exact input, exact output, adapter error text, permission-policy details, credentials, and other potentially sensitive or high-volume values. Terminal payloads are empty. Exact output and source-preserving invocation errors remain available only to the immediate caller.

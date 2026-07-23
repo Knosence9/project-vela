@@ -144,6 +144,7 @@ The first milestone is the **evidence loop**:
 14. Persist ordered typed task execution observations while tasks are active. ✅
 15. Establish an explicit per-invocation permission boundary for in-process tool adapters. ✅
 16. Persist metadata-only tool invocation intent and terminal outcomes with fail-closed replay. ✅
+17. Discover every persisted tool invocation in deterministic order without a separate index. ✅
 
 ## Project documents
 
