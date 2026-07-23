@@ -6,12 +6,14 @@ use serde_json::Value;
 use crate::event_log::{
     DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
 };
+use crate::task::{TaskId, TaskStatus, TaskStore, TaskStoreError, task_stream};
 
 const TOOL_INVOCATION_INTENDED_EVENT_TYPE: &str = "tool.invocation_intended";
 const TOOL_INVOCATION_DENIED_EVENT_TYPE: &str = "tool.invocation_denied";
 const TOOL_INVOCATION_SUCCEEDED_EVENT_TYPE: &str = "tool.invocation_succeeded";
 const TOOL_INVOCATION_FAILED_EVENT_TYPE: &str = "tool.invocation_failed";
 const TOOL_INVOCATION_EVENT_PAYLOAD_VERSION: u32 = 1;
+const TOOL_INVOCATION_ASSOCIATED_PAYLOAD_VERSION: u32 = 2;
 const TOOL_INVOCATION_STREAM_PREFIX: &str = "tool-invocation:";
 
 /// An opaque, non-blank stable identifier for one tool adapter.
@@ -242,6 +244,7 @@ pub struct ToolInvocation {
     tool_id: ToolId,
     effect: ToolEffect,
     status: ToolInvocationStatus,
+    task_id: Option<TaskId>,
 }
 
 impl ToolInvocation {
@@ -260,6 +263,11 @@ impl ToolInvocation {
     pub fn status(&self) -> ToolInvocationStatus {
         self.status
     }
+
+    /// The task fixed in this invocation's intent, when it was task-associated.
+    pub fn task_id(&self) -> Option<&TaskId> {
+        self.task_id.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -267,7 +275,11 @@ impl ToolInvocation {
 pub enum ToolInvocationStoreError {
     EventLog(EventLogError),
     Replay(ReplayError),
+    Task(TaskStoreError),
     AlreadyExists { invocation_id: ToolInvocationId },
+    TaskNotFound { task_id: TaskId },
+    TaskNotActive { task_id: TaskId, status: TaskStatus },
+    TaskChanged { task_id: TaskId },
     InvalidStreamId { stream_id: String },
     InvalidHistory { event_count: usize },
 }
@@ -277,8 +289,16 @@ impl fmt::Display for ToolInvocationStoreError {
         match self {
             Self::EventLog(error) => write!(formatter, "tool invocation event-log error: {error}"),
             Self::Replay(error) => write!(formatter, "tool invocation replay error: {error}"),
+            Self::Task(error) => write!(formatter, "tool invocation task-store error: {error}"),
             Self::AlreadyExists { invocation_id } => {
                 write!(formatter, "tool invocation {invocation_id} already exists")
+            }
+            Self::TaskNotFound { task_id } => write!(formatter, "task {task_id} was not found"),
+            Self::TaskNotActive { task_id, status } => {
+                write!(formatter, "task {task_id} is not active: {status:?}")
+            }
+            Self::TaskChanged { task_id } => {
+                write!(formatter, "task {task_id} changed before invocation intent")
             }
             Self::InvalidStreamId { stream_id } => {
                 write!(formatter, "invalid tool invocation stream id {stream_id}")
@@ -296,7 +316,11 @@ impl Error for ToolInvocationStoreError {
         match self {
             Self::EventLog(error) => Some(error),
             Self::Replay(error) => Some(error),
+            Self::Task(error) => Some(error),
             Self::AlreadyExists { .. }
+            | Self::TaskNotFound { .. }
+            | Self::TaskNotActive { .. }
+            | Self::TaskChanged { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. } => None,
         }
@@ -306,13 +330,15 @@ impl Error for ToolInvocationStoreError {
 /// A synchronous metadata-only invocation store backed by the typed event log.
 pub struct ToolInvocationStore {
     event_log: EventLog,
+    tasks: TaskStore,
 }
 
 impl ToolInvocationStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ToolInvocationStoreError> {
-        EventLog::open(path)
-            .map(|event_log| Self { event_log })
-            .map_err(ToolInvocationStoreError::EventLog)
+        let path = path.as_ref();
+        let event_log = EventLog::open(path).map_err(ToolInvocationStoreError::EventLog)?;
+        let tasks = TaskStore::open(path).map_err(ToolInvocationStoreError::Task)?;
+        Ok(Self { event_log, tasks })
     }
 
     pub fn load(
@@ -373,6 +399,69 @@ impl ToolInvocationStore {
                 current: Some(_),
             }) => Err(ToolInvocationStoreError::AlreadyExists {
                 invocation_id: id.clone(),
+            }),
+            Err(error) => Err(ToolInvocationStoreError::EventLog(error)),
+        }
+    }
+
+    fn record_task_intent(
+        &mut self,
+        task_id: &TaskId,
+        id: &ToolInvocationId,
+        tool_id: ToolId,
+        effect: ToolEffect,
+    ) -> Result<(), ToolInvocationStoreError> {
+        let Some((task, task_version)) = self
+            .tasks
+            .load_with_version(task_id)
+            .map_err(ToolInvocationStoreError::Task)?
+        else {
+            return Err(ToolInvocationStoreError::TaskNotFound {
+                task_id: task_id.clone(),
+            });
+        };
+        if task.status() != TaskStatus::Active {
+            return Err(ToolInvocationStoreError::TaskNotActive {
+                task_id: task_id.clone(),
+                status: task.status(),
+            });
+        }
+
+        self.record_task_intent_at_version(task_id, task_version, id, tool_id, effect)
+    }
+
+    fn record_task_intent_at_version(
+        &mut self,
+        task_id: &TaskId,
+        task_version: u64,
+        id: &ToolInvocationId,
+        tool_id: ToolId,
+        effect: ToolEffect,
+    ) -> Result<(), ToolInvocationStoreError> {
+        let event = ToolInvocationEvent::TaskIntended {
+            tool_id,
+            effect,
+            task_id: task_id.clone(),
+        };
+        match self.event_log.append_if_stream_unchanged(
+            &tool_invocation_stream(id),
+            ExpectedVersion::NoStream,
+            &task_stream(task_id),
+            ExpectedVersion::Exact(task_version),
+            &event,
+        ) {
+            Ok(_) => Ok(()),
+            Err(EventLogError::WrongExpectedVersion {
+                expected: ExpectedVersion::NoStream,
+                current: Some(_),
+            }) => Err(ToolInvocationStoreError::AlreadyExists {
+                invocation_id: id.clone(),
+            }),
+            Err(EventLogError::WrongExpectedVersion {
+                expected: ExpectedVersion::Exact(_),
+                ..
+            }) => Err(ToolInvocationStoreError::TaskChanged {
+                task_id: task_id.clone(),
             }),
             Err(error) => Err(ToolInvocationStoreError::EventLog(error)),
         }
@@ -454,14 +543,41 @@ pub fn invoke_tool_durable<T: Tool, A: ToolAuthorizer>(
     store
         .record_intent(&invocation_id, tool.id().clone(), tool.effect())
         .map_err(DurableToolInvocationError::Store)?;
+    finish_durable_invocation(store, &invocation_id, tool, authorizer, input)
+}
 
+/// Persists task-associated intent, then invokes once using the existing permission protocol.
+///
+/// The task must exist and remain active until intent commits. Task validation and intent
+/// persistence failures occur before authorization or adapter execution and are never retried.
+pub fn invoke_tool_for_task_durable<T: Tool, A: ToolAuthorizer>(
+    store: &mut ToolInvocationStore,
+    task_id: &TaskId,
+    invocation_id: ToolInvocationId,
+    tool: &mut T,
+    authorizer: &mut A,
+    input: &Value,
+) -> Result<Value, DurableToolInvocationError> {
+    store
+        .record_task_intent(task_id, &invocation_id, tool.id().clone(), tool.effect())
+        .map_err(DurableToolInvocationError::Store)?;
+    finish_durable_invocation(store, &invocation_id, tool, authorizer, input)
+}
+
+fn finish_durable_invocation<T: Tool, A: ToolAuthorizer>(
+    store: &mut ToolInvocationStore,
+    invocation_id: &ToolInvocationId,
+    tool: &mut T,
+    authorizer: &mut A,
+    input: &Value,
+) -> Result<Value, DurableToolInvocationError> {
     let result = invoke_tool(tool, authorizer, input);
     let status = match &result {
         Ok(_) => ToolInvocationStatus::Succeeded,
         Err(ToolInvocationError::Denied { .. }) => ToolInvocationStatus::Denied,
         Err(ToolInvocationError::Tool { .. }) => ToolInvocationStatus::Failed,
     };
-    if let Err(error) = store.record_outcome(&invocation_id, status) {
+    if let Err(error) = store.record_outcome(invocation_id, status) {
         return Err(DurableToolInvocationError::TerminalPersistence { result, error });
     }
     result.map_err(DurableToolInvocationError::Invocation)
@@ -476,29 +592,25 @@ fn project_tool_invocation(
     id: &ToolInvocationId,
     events: Vec<ToolInvocationEvent>,
 ) -> Result<Option<ToolInvocation>, ToolInvocationStoreError> {
-    let Some(ToolInvocationEvent::Intended { tool_id, effect }) = events.first() else {
-        return if events.is_empty() {
-            Ok(None)
-        } else {
-            Err(ToolInvocationStoreError::InvalidHistory {
-                event_count: events.len(),
-            })
-        };
+    let Some(first) = events.first() else {
+        return Ok(None);
+    };
+    let Some((tool_id, effect, task_id)) = first.intent_metadata() else {
+        return Err(ToolInvocationStoreError::InvalidHistory {
+            event_count: events.len(),
+        });
     };
     let status = match events.as_slice() {
-        [ToolInvocationEvent::Intended { .. }] => ToolInvocationStatus::Pending,
-        [
-            ToolInvocationEvent::Intended { .. },
-            ToolInvocationEvent::Denied {},
-        ] => ToolInvocationStatus::Denied,
-        [
-            ToolInvocationEvent::Intended { .. },
-            ToolInvocationEvent::Succeeded {},
-        ] => ToolInvocationStatus::Succeeded,
-        [
-            ToolInvocationEvent::Intended { .. },
-            ToolInvocationEvent::Failed {},
-        ] => ToolInvocationStatus::Failed,
+        [intent] if intent.intent_metadata().is_some() => ToolInvocationStatus::Pending,
+        [intent, ToolInvocationEvent::Denied {}] if intent.intent_metadata().is_some() => {
+            ToolInvocationStatus::Denied
+        }
+        [intent, ToolInvocationEvent::Succeeded {}] if intent.intent_metadata().is_some() => {
+            ToolInvocationStatus::Succeeded
+        }
+        [intent, ToolInvocationEvent::Failed {}] if intent.intent_metadata().is_some() => {
+            ToolInvocationStatus::Failed
+        }
         _ => {
             return Err(ToolInvocationStoreError::InvalidHistory {
                 event_count: events.len(),
@@ -508,18 +620,41 @@ fn project_tool_invocation(
     Ok(Some(ToolInvocation {
         id: id.clone(),
         tool_id: tool_id.clone(),
-        effect: *effect,
+        effect,
         status,
+        task_id: task_id.cloned(),
     }))
 }
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum ToolInvocationEvent {
-    Intended { tool_id: ToolId, effect: ToolEffect },
+    Intended {
+        tool_id: ToolId,
+        effect: ToolEffect,
+    },
+    TaskIntended {
+        tool_id: ToolId,
+        effect: ToolEffect,
+        task_id: TaskId,
+    },
     Denied {},
     Succeeded {},
     Failed {},
+}
+
+impl ToolInvocationEvent {
+    fn intent_metadata(&self) -> Option<(&ToolId, ToolEffect, Option<&TaskId>)> {
+        match self {
+            Self::Intended { tool_id, effect } => Some((tool_id, *effect, None)),
+            Self::TaskIntended {
+                tool_id,
+                effect,
+                task_id,
+            } => Some((tool_id, *effect, Some(task_id))),
+            Self::Denied {} | Self::Succeeded {} | Self::Failed {} => None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -531,12 +666,22 @@ struct IntendedPayload {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct TaskIntendedPayload {
+    tool_id: String,
+    effect: ToolEffect,
+    task_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EmptyPayload {}
 
 impl Event for ToolInvocationEvent {
     fn event_type(&self) -> &'static str {
         match self {
-            Self::Intended { .. } => TOOL_INVOCATION_INTENDED_EVENT_TYPE,
+            Self::Intended { .. } | Self::TaskIntended { .. } => {
+                TOOL_INVOCATION_INTENDED_EVENT_TYPE
+            }
             Self::Denied {} => TOOL_INVOCATION_DENIED_EVENT_TYPE,
             Self::Succeeded {} => TOOL_INVOCATION_SUCCEEDED_EVENT_TYPE,
             Self::Failed {} => TOOL_INVOCATION_FAILED_EVENT_TYPE,
@@ -544,10 +689,45 @@ impl Event for ToolInvocationEvent {
     }
 
     fn payload_version(&self) -> u32 {
-        TOOL_INVOCATION_EVENT_PAYLOAD_VERSION
+        match self {
+            Self::TaskIntended { .. } => TOOL_INVOCATION_ASSOCIATED_PAYLOAD_VERSION,
+            Self::Intended { .. } | Self::Denied {} | Self::Succeeded {} | Self::Failed {} => {
+                TOOL_INVOCATION_EVENT_PAYLOAD_VERSION
+            }
+        }
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
+        if event_type == TOOL_INVOCATION_INTENDED_EVENT_TYPE {
+            return match payload_version {
+                TOOL_INVOCATION_EVENT_PAYLOAD_VERSION => {
+                    let decoded: IntendedPayload = decode_payload(payload)?;
+                    let tool_id = decode_tool_id(decoded.tool_id)?;
+                    Ok(Self::Intended {
+                        tool_id,
+                        effect: decoded.effect,
+                    })
+                }
+                TOOL_INVOCATION_ASSOCIATED_PAYLOAD_VERSION => {
+                    let decoded: TaskIntendedPayload = decode_payload(payload)?;
+                    let tool_id = decode_tool_id(decoded.tool_id)?;
+                    let task_id = TaskId::new(decoded.task_id).map_err(|error| {
+                        DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        }
+                    })?;
+                    Ok(Self::TaskIntended {
+                        tool_id,
+                        effect: decoded.effect,
+                        task_id,
+                    })
+                }
+                _ => Err(DecodeError::UnsupportedEvent {
+                    event_type: event_type.to_owned(),
+                    payload_version,
+                }),
+            };
+        }
         if payload_version != TOOL_INVOCATION_EVENT_PAYLOAD_VERSION {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
@@ -555,18 +735,6 @@ impl Event for ToolInvocationEvent {
             });
         }
         match event_type {
-            TOOL_INVOCATION_INTENDED_EVENT_TYPE => {
-                let decoded: IntendedPayload = decode_payload(payload)?;
-                let tool_id = ToolId::new(decoded.tool_id).map_err(|error| {
-                    DecodeError::MalformedPayload {
-                        message: error.to_string(),
-                    }
-                })?;
-                Ok(Self::Intended {
-                    tool_id,
-                    effect: decoded.effect,
-                })
-            }
             TOOL_INVOCATION_DENIED_EVENT_TYPE => {
                 let _: EmptyPayload = decode_payload(payload)?;
                 Ok(Self::Denied {})
@@ -587,8 +755,54 @@ impl Event for ToolInvocationEvent {
     }
 }
 
+fn decode_tool_id(value: String) -> Result<ToolId, DecodeError> {
+    ToolId::new(value).map_err(|error| DecodeError::MalformedPayload {
+        message: error.to_string(),
+    })
+}
+
 fn decode_payload<T: for<'de> Deserialize<'de>>(payload: &[u8]) -> Result<T, DecodeError> {
     serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
         message: error.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::task::{TaskGoal, TaskOutput};
+
+    #[test]
+    fn task_change_after_validation_rejects_intent_without_retry() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new("task-1").unwrap();
+        let mut tasks = TaskStore::open(&path).unwrap();
+        tasks
+            .start(task_id.clone(), TaskGoal::new("exercise tool").unwrap())
+            .unwrap();
+        let mut store = ToolInvocationStore::open(&path).unwrap();
+
+        tasks
+            .complete(&task_id, TaskOutput::new("done").unwrap())
+            .unwrap();
+        let invocation_id = ToolInvocationId::new("raced").unwrap();
+        let error = store
+            .record_task_intent_at_version(
+                &task_id,
+                1,
+                &invocation_id,
+                ToolId::new("test.echo").unwrap(),
+                ToolEffect::Pure,
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ToolInvocationStoreError::TaskChanged { task_id: changed } if changed == task_id
+        ));
+        assert!(store.load(&invocation_id).unwrap().is_none());
+    }
 }
