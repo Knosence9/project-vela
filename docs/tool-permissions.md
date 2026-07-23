@@ -1,6 +1,6 @@
 # Tool invocation and permission boundary
 
-The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, or wrap it with metadata-only durable evidence through `invoke_tool_durable`. Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
+The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, wrap it with metadata-only durable evidence through `invoke_tool_durable`, or immutably attribute that evidence to an active task through `invoke_tool_for_task_durable`. Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
 
 ## Ownership
 
@@ -38,14 +38,18 @@ Authorization itself occurs before the adapter can produce a tool effect. After 
 
 ## Durable invocation evidence
 
-`invoke_tool` remains non-durable and API-compatible. `invoke_tool_durable` is an additive wrapper using `ToolInvocationStore` and a caller-supplied, non-blank `ToolInvocationId`. Each ID owns an independent `tool-invocation:<id>` event stream; this first boundary has no task or session association.
+`invoke_tool` remains non-durable and API-compatible. `invoke_tool_durable` is an additive wrapper using `ToolInvocationStore` and a caller-supplied, non-blank `ToolInvocationId`. Each ID owns an independent `tool-invocation:<id>` event stream. `invoke_tool_for_task_durable` adds an immutable task association while leaving the unassociated wrapper unchanged.
 
 The wrapper writes this ordered prefix:
 
-1. `tool.invocation_intended`, containing only `ToolId` and declared `ToolEffect`, before authorization;
+1. `tool.invocation_intended`, containing `ToolId`, declared `ToolEffect`, and an optional immutable `TaskId`, before authorization;
 2. exactly one of `tool.invocation_denied`, `tool.invocation_succeeded`, or `tool.invocation_failed` after the in-memory result is known.
 
 There is no durable “allowed” event. Intent is committed first, then the existing invocation protocol authorizes once and either skips or calls the adapter once. A duplicate invocation ID fails before authorization or execution.
+
+For a task-associated invocation, the target task must exist and be active. The store validates its current stream version and atomically appends intent only while that exact version remains current. Missing and terminal tasks fail with typed pre-execution errors. Any concurrent task mutation—including an observation or terminal transition—returns `ToolInvocationStoreError::TaskChanged`; Vela does not retry validation, authorization, or adapter execution. Once intent commits, later task transitions do not alter the association or invocation lifecycle.
+
+Unassociated version-1 intent payloads replay with no task ID. Associated intents use additive payload version 2 and require one valid task ID. `ToolInvocation::task_id` projects either shape through both `load` and `list`. Association is stored only on the invocation stream: there is no task-side mutable index or task-filtered query. Callers can filter the deterministic global list when needed. Task-level attribution deliberately precedes attempt-level correlation because a provider tool call can occur before an assistant attempt observation exists.
 
 `ToolInvocationStore::load` replays a valid stream as `Pending`, `Denied`, `Succeeded`, or `Failed`. Valid history is exactly one intent followed by at most one terminal event. Terminal-first, repeated-intent, repeated-terminal, and post-terminal histories fail closed. An absent stream loads as absent.
 
@@ -53,7 +57,7 @@ There is no durable “allowed” event. Intent is committed first, then the exi
 
 ### Retention boundary
 
-The event payload deliberately excludes exact input, exact output, adapter error text, permission-policy details, credentials, and other potentially sensitive or high-volume values. Terminal payloads are empty. Exact output and source-preserving invocation errors remain available only to the immediate caller.
+The event payload deliberately excludes exact input, exact output, adapter error text, permission-policy details, credentials, and other potentially sensitive or high-volume values. It retains only invocation/task/tool identities, declared effect, and terminal status. Terminal payloads are empty. Exact output and source-preserving invocation errors remain available only to the immediate caller.
 
 This is a storage contract, not a configurable redaction implementation: richer payload capture requires a separate approved size, schema-version, and redaction boundary. Operators must still protect tool IDs, effect declarations, stream IDs, and the SQLite database as operational metadata.
 
@@ -67,4 +71,4 @@ Existing event families, session/task replay, `AssistantProvider`, and `Assistan
 
 ## Non-goals
 
-This slice does not add provider tool-call parsing, runtime orchestration, automatic or model-owned permission, persisted allow grants, reusable grants, registry/discovery, JSON Schema publication, real filesystem/network/process/credential tools, task/session association, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.
+This slice does not add provider tool-call parsing, runtime orchestration, automatic or model-owned permission, persisted allow grants, reusable grants, registry/discovery, JSON Schema publication, real filesystem/network/process/credential tools, session or attempt association, task-filtered discovery, a task-side invocation index, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.

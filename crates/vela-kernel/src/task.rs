@@ -772,6 +772,14 @@ impl TaskStore {
             .map(|loaded| loaded.map(|loaded| loaded.task))
     }
 
+    pub(crate) fn load_with_version(
+        &self,
+        id: &TaskId,
+    ) -> Result<Option<(Task, u64)>, TaskStoreError> {
+        self.load_versioned(id)
+            .map(|loaded| loaded.map(|loaded| (loaded.task, loaded.stream_version)))
+    }
+
     /// Replays every persisted task in ascending ID order.
     pub fn list(&self) -> Result<Vec<Task>, TaskStoreError> {
         let streams = self
@@ -1005,7 +1013,7 @@ fn terminal_state_error(id: &TaskId, status: TaskStatus) -> TaskStoreError {
     }
 }
 
-fn task_stream(id: &TaskId) -> StreamId {
+pub(crate) fn task_stream(id: &TaskId) -> StreamId {
     StreamId::new(format!("task:{id}")).expect("a prefixed task stream is never empty")
 }
 
