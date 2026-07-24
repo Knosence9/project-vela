@@ -178,6 +178,32 @@ impl Error for ToolRegistryInvocationError {
     }
 }
 
+/// An unknown adapter identity or existing durable invocation-protocol failure.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum DurableToolRegistryInvocationError {
+    NotFound { tool_id: ToolId },
+    Invocation(DurableToolInvocationError),
+}
+
+impl fmt::Display for DurableToolRegistryInvocationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound { tool_id } => write!(formatter, "tool {tool_id} is not registered"),
+            Self::Invocation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for DurableToolRegistryInvocationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::NotFound { .. } => None,
+            Self::Invocation(error) => Some(error),
+        }
+    }
+}
+
 /// An in-memory, process-local owner and deterministic directory of tool adapters.
 #[derive(Default)]
 pub struct ToolRegistry {
@@ -225,6 +251,32 @@ impl ToolRegistry {
                 })?;
         invoke_tool(tool.as_mut(), authorizer, input)
             .map_err(ToolRegistryInvocationError::Invocation)
+    }
+
+    /// Resolves one adapter before delegating to durable task-associated invocation.
+    pub fn invoke_for_task_durable<A: ToolAuthorizer>(
+        &mut self,
+        store: &mut ToolInvocationStore,
+        task_id: &TaskId,
+        invocation_id: ToolInvocationId,
+        tool_id: &ToolId,
+        authorizer: &mut A,
+        input: &Value,
+    ) -> Result<Value, DurableToolRegistryInvocationError> {
+        let tool = self.tools.get_mut(tool_id).ok_or_else(|| {
+            DurableToolRegistryInvocationError::NotFound {
+                tool_id: tool_id.clone(),
+            }
+        })?;
+        invoke_tool_for_task_durable(
+            store,
+            task_id,
+            invocation_id,
+            tool.as_mut(),
+            authorizer,
+            input,
+        )
+        .map_err(DurableToolRegistryInvocationError::Invocation)
     }
 }
 
@@ -645,7 +697,7 @@ impl Error for DurableToolInvocationError {
 /// Persists intent, delegates to [`invoke_tool`], and then persists metadata-only outcome.
 ///
 /// The operation never retries. An intent-only stream is ambiguous and must not be resumed.
-pub fn invoke_tool_durable<T: Tool, A: ToolAuthorizer>(
+pub fn invoke_tool_durable<T: Tool + ?Sized, A: ToolAuthorizer>(
     store: &mut ToolInvocationStore,
     invocation_id: ToolInvocationId,
     tool: &mut T,
@@ -662,7 +714,7 @@ pub fn invoke_tool_durable<T: Tool, A: ToolAuthorizer>(
 ///
 /// The task must exist and remain active until intent commits. Task validation and intent
 /// persistence failures occur before authorization or adapter execution and are never retried.
-pub fn invoke_tool_for_task_durable<T: Tool, A: ToolAuthorizer>(
+pub fn invoke_tool_for_task_durable<T: Tool + ?Sized, A: ToolAuthorizer>(
     store: &mut ToolInvocationStore,
     task_id: &TaskId,
     invocation_id: ToolInvocationId,
@@ -676,7 +728,7 @@ pub fn invoke_tool_for_task_durable<T: Tool, A: ToolAuthorizer>(
     finish_durable_invocation(store, &invocation_id, tool, authorizer, input)
 }
 
-fn finish_durable_invocation<T: Tool, A: ToolAuthorizer>(
+fn finish_durable_invocation<T: Tool + ?Sized, A: ToolAuthorizer>(
     store: &mut ToolInvocationStore,
     invocation_id: &ToolInvocationId,
     tool: &mut T,
