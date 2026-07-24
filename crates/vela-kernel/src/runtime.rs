@@ -1,5 +1,7 @@
 use std::{error::Error, fmt, path::Path};
 
+use serde_json::Value;
+
 use crate::session::{
     Session, SessionId, SessionStatus, SessionStore, SessionStoreError, SessionTurn,
     SessionTurnContent, SessionTurnRole,
@@ -9,12 +11,129 @@ use crate::task::{
     TaskObservationText, TaskObservationTextError, TaskOutput, TaskOutputError, TaskStatus,
     TaskStore, TaskStoreError,
 };
+use crate::tool::{
+    DurableToolRegistryInvocationError, ToolAuthorizer, ToolId, ToolInvocationId,
+    ToolInvocationStore, ToolMetadata, ToolRegistry,
+};
 
 /// A synchronous, provider-neutral source for one assistant response.
 pub trait AssistantProvider {
     /// Produces one assistant turn from the complete durable conversation.
     fn complete(&mut self, transcript: &[SessionTurn])
     -> Result<SessionTurnContent, ProviderError>;
+}
+
+/// A synchronous provider that may request at most one tool invocation.
+///
+/// Registry metadata is descriptive only. A provider cannot authorize an invocation or choose
+/// its trusted durable identity.
+pub trait ToolAssistantProvider {
+    fn complete_with_tools(
+        &mut self,
+        transcript: &[SessionTurn],
+        tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError>;
+}
+
+/// One provider response at the bounded tool-step boundary.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ProviderToolResponse {
+    Final(SessionTurnContent),
+    ToolRequest { tool_id: ToolId, input: Value },
+}
+
+/// Whether the caller has a final response or must explicitly continue with the provider.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolStepContinuation {
+    Complete,
+    ProviderRequired,
+}
+
+/// The in-memory result of one successful provider tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ProviderToolStepOutcome {
+    Final {
+        content: SessionTurnContent,
+        continuation: ToolStepContinuation,
+    },
+    ToolCompleted {
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+    },
+}
+
+/// A provider failure or the existing durable registry invocation failure.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ProviderToolStepError {
+    Provider(ProviderError),
+    Invocation(DurableToolRegistryInvocationError),
+}
+
+impl fmt::Display for ProviderToolStepError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Provider(error) => write!(formatter, "assistant provider error: {error}"),
+            Self::Invocation(error) => write!(formatter, "assistant tool step error: {error}"),
+        }
+    }
+}
+
+impl Error for ProviderToolStepError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Provider(error) => Some(error),
+            Self::Invocation(error) => Some(error),
+        }
+    }
+}
+
+/// Calls a tool-capable provider once and dispatches at most one durable task tool invocation.
+///
+/// This operation never persists provider content, exact tool input/output, or a continuation
+/// transcript. It never retries or calls the provider a second time. The caller owns the trusted
+/// invocation identity, task identity, registry, durable store, and one-invocation authorizer.
+pub fn execute_provider_tool_step<P: ToolAssistantProvider, A: ToolAuthorizer>(
+    provider: &mut P,
+    transcript: &[SessionTurn],
+    registry: &mut ToolRegistry,
+    store: &mut ToolInvocationStore,
+    task_id: &TaskId,
+    invocation_id: ToolInvocationId,
+    authorizer: &mut A,
+) -> Result<ProviderToolStepOutcome, ProviderToolStepError> {
+    let response = provider
+        .complete_with_tools(transcript, &registry.metadata())
+        .map_err(ProviderToolStepError::Provider)?;
+
+    match response {
+        ProviderToolResponse::Final(content) => Ok(ProviderToolStepOutcome::Final {
+            content,
+            continuation: ToolStepContinuation::Complete,
+        }),
+        ProviderToolResponse::ToolRequest { tool_id, input } => {
+            let output = registry
+                .invoke_for_task_durable(
+                    store,
+                    task_id,
+                    invocation_id,
+                    &tool_id,
+                    authorizer,
+                    &input,
+                )
+                .map_err(ProviderToolStepError::Invocation)?;
+            Ok(ProviderToolStepOutcome::ToolCompleted {
+                tool_id,
+                input,
+                output,
+                continuation: ToolStepContinuation::ProviderRequired,
+            })
+        }
+    }
 }
 
 /// A provider failure that preserves the provider-specific error as its source.
