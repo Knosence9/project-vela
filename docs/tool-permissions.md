@@ -1,10 +1,10 @@
 # Tool invocation and permission boundary
 
-The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, wrap it with metadata-only durable evidence through `invoke_tool_durable`, or immutably attribute that evidence to an active task through `invoke_tool_for_task_durable`. Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
+The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, register and resolve adapters through `ToolRegistry`, wrap an invocation with metadata-only durable evidence through `invoke_tool_durable`, or immutably attribute that evidence to an active task through `invoke_tool_for_task_durable`. Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
 
 ## Ownership
 
-- The kernel owns `ToolId`, `ToolEffect`, `ToolRequest`, `PermissionDecision`, `ToolAuthorizer`, `Tool`, `ToolError`, `ToolInvocationError`, and `invoke_tool`.
+- The kernel owns `ToolId`, `ToolEffect`, `ToolRequest`, `PermissionDecision`, `ToolAuthorizer`, `Tool`, `ToolRegistry`, registry/invocation errors, and the invocation functions.
 - Extensions own concrete `Tool` adapters, input/output schema validation, honest effect declarations, timeout behavior, idempotency, and any external resources they access.
 - Callers own `ToolAuthorizer` policy. A model cannot authorize itself, and the kernel supplies no implicit allow policy.
 
@@ -35,6 +35,14 @@ Every invocation, including `Pure`, is presented to the caller-owned authorizer.
 The kernel does not retry. A caller-requested retry is a new invocation with a new permission decision. Execution is synchronous; callers and adapters own timeout behavior until a separately approved asynchronous cancellation boundary exists.
 
 Authorization itself occurs before the adapter can produce a tool effect. After an allowed adapter starts, it may partially affect external state before returning `ToolError`. The kernel reports the error without retry or rollback; the adapter owns idempotency and any compensation protocol.
+
+## In-memory registry
+
+`ToolRegistry` is a process-local owner and deterministic directory for extension-provided adapters. Registration uses each adapter's existing stable `ToolId`; duplicate IDs return `ToolRegistryError::DuplicateId` without replacing or invoking the original or duplicate adapter. There is deliberately no removal, replacement, alias, reload, or persistence policy.
+
+`ToolRegistry::metadata` returns cloned `ToolMetadata` entries in ascending ID order, independent of registration order. Metadata contains only the adapter ID and declared maximum effect. Enumeration does not authorize or invoke an adapter.
+
+`ToolRegistry::invoke` resolves a caller-supplied ID and delegates to the existing `invoke_tool` protocol. An unknown ID returns `ToolRegistryInvocationError::NotFound` before authorization. Permission denial and sourced adapter failures remain available through `ToolRegistryInvocationError::Invocation`; registry dispatch adds no retry, grant, or alternative authorization path.
 
 ## Durable invocation evidence
 
@@ -71,4 +79,4 @@ Existing event families, session/task replay, `AssistantProvider`, and `Assistan
 
 ## Non-goals
 
-This slice does not add provider tool-call parsing, runtime orchestration, automatic or model-owned permission, persisted allow grants, reusable grants, registry/discovery, JSON Schema publication, real filesystem/network/process/credential tools, session or attempt association, task-filtered discovery, a task-side invocation index, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.
+This slice does not add provider tool-call parsing, runtime orchestration, automatic or model-owned permission, persisted allow grants, reusable grants, registry persistence/removal/replacement/reload, JSON Schema publication, real filesystem/network/process/credential tools, session or attempt association, task-filtered discovery, a task-side invocation index, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.
