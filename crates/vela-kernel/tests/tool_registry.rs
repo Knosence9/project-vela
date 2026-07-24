@@ -1,9 +1,15 @@
 use std::{cell::Cell, error::Error, fmt, rc::Rc};
 
 use serde_json::{Value, json};
-use vela_kernel::tool::{
-    PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolRegistry,
-    ToolRegistryError, ToolRegistryInvocationError, ToolRequest,
+use tempfile::tempdir;
+use vela_kernel::{
+    task::{TaskGoal, TaskId, TaskStore},
+    tool::{
+        DurableToolInvocationError, DurableToolRegistryInvocationError, PermissionDecision, Tool,
+        ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId, ToolInvocationStatus,
+        ToolInvocationStore, ToolInvocationStoreError, ToolRegistry, ToolRegistryError,
+        ToolRegistryInvocationError, ToolRequest,
+    },
 };
 
 #[derive(Debug)]
@@ -273,4 +279,185 @@ fn unknown_id_fails_before_authorization() {
         ToolRegistryInvocationError::NotFound { ref tool_id } if tool_id == &missing
     ));
     assert_eq!(authorizer.calls, 0);
+}
+
+#[test]
+fn registry_dispatches_a_known_tool_through_durable_task_invocation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("task-1").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            task_id.clone(),
+            TaskGoal::new("use registered tool").unwrap(),
+        )
+        .unwrap();
+    let invocation_id = ToolInvocationId::new("call-1").unwrap();
+    let tool_id = ToolId::new("tool.echo").unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(FakeTool::new(
+            tool_id.as_str(),
+            ToolEffect::ExternalRead,
+            calls.clone(),
+        ))
+        .unwrap();
+    let mut store = ToolInvocationStore::open(&path).unwrap();
+    let mut authorizer = RecordingAuthorizer::new(PermissionDecision::Allow);
+    let input = json!({"exact": "value"});
+
+    let output = registry
+        .invoke_for_task_durable(
+            &mut store,
+            &task_id,
+            invocation_id.clone(),
+            &tool_id,
+            &mut authorizer,
+            &input,
+        )
+        .unwrap();
+
+    assert_eq!(output, input);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(authorizer.calls, 1);
+    let invocation = store.load(&invocation_id).unwrap().unwrap();
+    assert_eq!(invocation.tool_id(), &tool_id);
+    assert_eq!(invocation.task_id(), Some(&task_id));
+    assert_eq!(invocation.status(), ToolInvocationStatus::Succeeded);
+
+    let mut duplicate_authorizer = RecordingAuthorizer::new(PermissionDecision::Allow);
+    let duplicate = registry
+        .invoke_for_task_durable(
+            &mut store,
+            &task_id,
+            invocation_id,
+            &tool_id,
+            &mut duplicate_authorizer,
+            &json!(null),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        duplicate,
+        DurableToolRegistryInvocationError::Invocation(DurableToolInvocationError::Store(
+            ToolInvocationStoreError::AlreadyExists { .. }
+        ))
+    ));
+    assert_eq!(duplicate_authorizer.calls, 0);
+    assert_eq!(calls.get(), 1);
+
+    let denied_id = ToolInvocationId::new("denied-call").unwrap();
+    let mut deny = RecordingAuthorizer::new(PermissionDecision::Deny);
+    let denied = registry
+        .invoke_for_task_durable(
+            &mut store,
+            &task_id,
+            denied_id.clone(),
+            &tool_id,
+            &mut deny,
+            &json!(null),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        denied,
+        DurableToolRegistryInvocationError::Invocation(DurableToolInvocationError::Invocation(_))
+    ));
+    assert_eq!(deny.calls, 1);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(
+        store.load(&denied_id).unwrap().unwrap().status(),
+        ToolInvocationStatus::Denied
+    );
+}
+
+#[test]
+fn unknown_durable_registry_id_fails_before_intent_or_authorization() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let invocation_id = ToolInvocationId::new("unknown-call").unwrap();
+    let missing = ToolId::new("tool.missing").unwrap();
+    let mut registry = ToolRegistry::new();
+    let mut store = ToolInvocationStore::open(&path).unwrap();
+    let mut authorizer = RecordingAuthorizer::new(PermissionDecision::Allow);
+
+    let error = registry
+        .invoke_for_task_durable(
+            &mut store,
+            &TaskId::new("missing-task").unwrap(),
+            invocation_id.clone(),
+            &missing,
+            &mut authorizer,
+            &json!({"secret": "not persisted"}),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        DurableToolRegistryInvocationError::NotFound { ref tool_id } if tool_id == &missing
+    ));
+    assert_eq!(authorizer.calls, 0);
+    assert!(store.load(&invocation_id).unwrap().is_none());
+}
+
+#[test]
+fn durable_registry_dispatch_preserves_existing_pre_execution_and_invocation_failures() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let tool_id = ToolId::new("tool.failing").unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(FakeTool::failing(tool_id.as_str(), calls.clone()))
+        .unwrap();
+    let mut store = ToolInvocationStore::open(&path).unwrap();
+    let mut authorizer = RecordingAuthorizer::new(PermissionDecision::Allow);
+
+    let task_error = registry
+        .invoke_for_task_durable(
+            &mut store,
+            &TaskId::new("missing").unwrap(),
+            ToolInvocationId::new("missing-task-call").unwrap(),
+            &tool_id,
+            &mut authorizer,
+            &json!(null),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        task_error,
+        DurableToolRegistryInvocationError::Invocation(DurableToolInvocationError::Store(
+            ToolInvocationStoreError::TaskNotFound { .. }
+        ))
+    ));
+    assert_eq!(authorizer.calls, 0);
+    assert_eq!(calls.get(), 0);
+
+    let task_id = TaskId::new("task-1").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            task_id.clone(),
+            TaskGoal::new("fail registered tool").unwrap(),
+        )
+        .unwrap();
+    let failure = registry
+        .invoke_for_task_durable(
+            &mut store,
+            &task_id,
+            ToolInvocationId::new("failed-call").unwrap(),
+            &tool_id,
+            &mut authorizer,
+            &json!(null),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        failure,
+        DurableToolRegistryInvocationError::Invocation(DurableToolInvocationError::Invocation(_))
+    ));
+    assert_eq!(
+        failure.source().unwrap().source().unwrap().to_string(),
+        "tool tool.failing failed: registry fake failed"
+    );
+    assert_eq!(authorizer.calls, 1);
+    assert_eq!(calls.get(), 1);
 }

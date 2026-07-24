@@ -1,6 +1,6 @@
 # Tool invocation and permission boundary
 
-The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, register and resolve adapters through `ToolRegistry`, wrap an invocation with metadata-only durable evidence through `invoke_tool_durable`, or immutably attribute that evidence to an active task through `invoke_tool_for_task_durable`. Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
+The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, register and resolve adapters through `ToolRegistry`, wrap an invocation with metadata-only durable evidence through `invoke_tool_durable`, immutably attribute that evidence to an active task through `invoke_tool_for_task_durable`, or compose registry lookup with that task-associated path through `ToolRegistry::invoke_for_task_durable`. Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
 
 ## Ownership
 
@@ -43,6 +43,8 @@ Authorization itself occurs before the adapter can produce a tool effect. After 
 `ToolRegistry::metadata` returns cloned `ToolMetadata` entries in ascending ID order, independent of registration order. Metadata contains only the adapter ID and declared maximum effect. Enumeration does not authorize or invoke an adapter.
 
 `ToolRegistry::invoke` resolves a caller-supplied ID and delegates to the existing `invoke_tool` protocol. An unknown ID returns `ToolRegistryInvocationError::NotFound` before authorization. Permission denial and sourced adapter failures remain available through `ToolRegistryInvocationError::Invocation`; registry dispatch adds no retry, grant, or alternative authorization path.
+
+`ToolRegistry::invoke_for_task_durable` resolves a caller-supplied ID before delegating to the existing `invoke_tool_for_task_durable` protocol. An unknown ID returns `DurableToolRegistryInvocationError::NotFound` before task validation, durable intent, authorization, or adapter execution. Known adapters retain the existing task preconditions, duplicate-invocation protection, immutable attribution, permission ordering, metadata-only retention, terminal-persistence behavior, and exact in-memory result. Durable failures are wrapped without replacing their source chain. Registry dispatch adds no second persistence or execution protocol.
 
 ## Durable invocation evidence
 

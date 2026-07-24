@@ -147,6 +147,7 @@ The first milestone is the **evidence loop**:
 17. Discover every persisted tool invocation in deterministic order without a separate index. ✅
 18. Immutably attribute durable tool invocation evidence to active tasks. ✅
 19. Register, discover, and invoke in-process tool adapters by stable ID. ✅
+20. Dispatch registered adapters by stable ID through durable task-associated invocation. ✅
 
 ## Project documents
 
