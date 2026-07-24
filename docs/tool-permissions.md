@@ -1,6 +1,6 @@
 # Tool invocation and permission boundary
 
-The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, register and resolve adapters through `ToolRegistry`, wrap an invocation with metadata-only durable evidence through `invoke_tool_durable`, immutably attribute that evidence to an active task through `invoke_tool_for_task_durable`, or compose registry lookup with that task-associated path through `ToolRegistry::invoke_for_task_durable`. Vela does not yet ship a real tool or connect tools to `AssistantRuntime`.
+The `vela-kernel` crate defines a synchronous, provider-neutral protocol for authorizing one in-process tool adapter invocation. Callers may use it without persistence through `invoke_tool`, register and resolve adapters through `ToolRegistry`, wrap an invocation with metadata-only durable evidence through `invoke_tool_durable`, immutably attribute that evidence to an active task through `invoke_tool_for_task_durable`, compose registry lookup with that task-associated path through `ToolRegistry::invoke_for_task_durable`, or execute one provider-requested tool step through `execute_provider_tool_step`. Vela does not yet ship a real tool or an automatic provider/tool loop.
 
 ## Ownership
 
@@ -35,6 +35,16 @@ Every invocation, including `Pure`, is presented to the caller-owned authorizer.
 The kernel does not retry. A caller-requested retry is a new invocation with a new permission decision. Execution is synchronous; callers and adapters own timeout behavior until a separately approved asynchronous cancellation boundary exists.
 
 Authorization itself occurs before the adapter can produce a tool effect. After an allowed adapter starts, it may partially affect external state before returning `ToolError`. The kernel reports the error without retry or rollback; the adapter owns idempotency and any compensation protocol.
+
+## Bounded provider tool step
+
+`ToolAssistantProvider` is additive and leaves the tool-free `AssistantProvider` and `AssistantRuntime` methods unchanged. It receives the caller-supplied transcript plus deterministic metadata for currently registered tools and returns either final assistant content or one `ToolId` and exact JSON input. Provider-supplied request identifiers are outside this contract and are never trusted as durable invocation identity.
+
+`execute_provider_tool_step` calls the provider exactly once. Final content is returned with `ToolStepContinuation::Complete`; the operation does not validate the task, authorize a tool, or write invocation evidence on this path. A tool request is resolved and delegated exactly once to `ToolRegistry::invoke_for_task_durable`. Its exact in-memory request identity, input, and output are returned with `ToolStepContinuation::ProviderRequired`, making a later provider call an explicit caller-owned operation rather than an automatic loop.
+
+The caller owns the non-blank `ToolInvocationId`, `TaskId`, registry, invocation store, and per-invocation `ToolAuthorizer`. A model cannot mint trusted invocation identity, authorize itself, or reuse a grant. Provider failure occurs before registry lookup and durable intent. Unknown tools, missing or terminal tasks, duplicate invocation IDs, denial, adapter failure, and terminal-persistence ambiguity retain the existing sourced and typed registry/invocation errors. There is no retry, rollback, resume, or second provider call.
+
+Provider content, exact tool input/output, and adapter error text remain in memory only. The operation writes no session turns or separate provider request/result events; a tool request retains only the existing metadata-only invocation stream. A pending stream remains ambiguous and fail-closed after interruption.
 
 ## In-memory registry
 
@@ -77,8 +87,8 @@ An intent-only `Pending` stream means authorization and/or adapter execution may
 
 If the terminal append fails after authorization or execution, `DurableToolInvocationError::TerminalPersistence` returns both the persistence error and the exact in-memory invocation result. The wrapper does not retry, roll back, or hide a successful output or sourced adapter failure. Callers must treat the durable stream as pending and resolve ambiguity outside this protocol.
 
-Existing event families, session/task replay, `AssistantProvider`, and `AssistantRuntime` remain unchanged.
+Existing event families, session/task replay, the tool-free `AssistantProvider`, and `AssistantRuntime` remain unchanged.
 
 ## Non-goals
 
-This slice does not add provider tool-call parsing, runtime orchestration, automatic or model-owned permission, persisted allow grants, reusable grants, registry persistence/removal/replacement/reload, JSON Schema publication, real filesystem/network/process/credential tools, session or attempt association, task-filtered discovery, a task-side invocation index, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.
+This slice does not add a concrete provider integration, automatic multi-step provider/tool loop, tool-result transcript role, automatic or model-owned permission, persisted allow grants, reusable grants, registry persistence/removal/replacement/reload, JSON Schema publication, real filesystem/network/process/credential tools, session or attempt association, task-filtered discovery, a task-side invocation index, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.
