@@ -45,8 +45,18 @@ The task-associated operations deliberately do not create a cross-stream transac
 
 `RuntimeError` is non-exhaustive. Wrapped session, provider, task-store, and observation-text failures are exposed through `std::error::Error::source`.
 
+## Initial tool-capable task turns
+
+`ToolAssistantRuntime<P>` is an additive bridge from the provider/tool protocol to durable task and session state. It opens session, task, and tool-invocation stores over one SQLite database and owns a `ToolAssistantProvider`; existing `AssistantRuntime`, tool-free methods, and low-level provider-tool step functions are unchanged.
+
+`execute_task_turn` requires an active associated task, a unique caller-owned Attempt observation ID, a writable session, a fresh caller-owned tool invocation ID, a registry, and one caller-owned authorizer. It checks the deterministic task/session/identity constraints before side effects, appends the human turn, and calls the provider exactly once with the resulting durable transcript and deterministic registry metadata.
+
+A final provider response commits an assistant turn and then an Attempt containing that exact content. The returned final outcome contains the durable session and task projections. A successful tool request instead dispatches once through the existing task-associated durable registry path and returns the durable human-only session plus exact in-memory input/output with `ProviderRequired`. It writes no assistant turn or Attempt. `ToolTaskTurnOutcome::continuation` returns a borrowed continuation bound to the originating task, and `ToolAssistantRuntime::continue_provider_step` verifies that task remains active and reuses the same provider instance for one explicit low-level continuation when it implements both tool-provider traits. The continuation operation still does not persist final content or an Attempt; that persistence remains a later bounded slice.
+
+Failures preserve the ordered prefix. Provider failure leaves the human turn; invocation denial/failure leaves the human turn plus the invocation protocol's authoritative metadata-only prefix; assistant append failure leaves the human turn; invalid Attempt text or an authoritative task append failure leaves both transcript turns. No provider or tool call is retried, no cross-stream rollback occurs, and exact tool values are not persisted.
+
 ## Non-goals
 
-This slice does not add asynchronous execution, streaming, cooperative cancellation, concurrent invocation coordination, automatic retries, system or developer prompts, provider/model metadata, credentials, tools, permissions, token accounting, automatic task creation, association, completion or failure, generic caller-selected evidence kinds, runtime diagnostic or verification turns, cross-aggregate transactions, or storage migration.
+This slice does not add asynchronous execution, streaming, cooperative cancellation, concurrent invocation coordination, automatic retries or tool continuations, system or developer prompts, provider/model metadata, credentials, concrete external tools, model-owned permissions, token accounting, automatic task creation, association, completion or failure, generic caller-selected evidence kinds, runtime diagnostic or verification turns, cross-aggregate transactions, or storage migration.
 
 See [`session-lifecycle.md`](session-lifecycle.md) for transcript persistence and [`event-log.md`](event-log.md) for durability guarantees.
