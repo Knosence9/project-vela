@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "List durable tool invocation evidence",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/546 by discovering and replaying every durable tool invocation in deterministic ID order without a mutable index.",
+    "acceptance_criteria": [
+      "Empty stores return an empty list and pending plus every terminal status are included.",
+      "Results are sorted by stable invocation ID and remain identical after reopening.",
+      "Unrelated streams are excluded and listing appends no events.",
+      "Malformed owning stream IDs, payloads, and histories fail closed through typed errors."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for deterministic invocation discovery.",
+      "outcome": "failure",
+      "diagnostic": "The focused durable invocation target failed because ToolInvocationStore had no list method and ToolInvocationStoreError had no InvalidStreamId variant.",
+      "patch": "Kept tests for empty stores, ordering, every status, reopening, unrelated streams, no writes, malformed IDs, and replay failures before implementation."
+    },
+    {
+      "summary": "Implemented marker-based snapshot discovery and replay.",
+      "outcome": "success",
+      "diagnostic": "The store discovers streams from existing intent events in one consistent SQLite read snapshot, validates the owned stream prefix and external ID, reuses projection replay, and sorts by invocation ID.",
+      "patch": "Added ToolInvocationStore::list, centralized the stream prefix, introduced typed InvalidStreamId handling, and documented deterministic audit behavior without a separate index."
+    },
+    {
+      "summary": "Verified and merged the bounded listing slice.",
+      "outcome": "success",
+      "diagnostic": "Eleven focused tests and pinned just verify passed. Independent pre-commit review found no blocker. Rust quality gate run 30037011978 passed. CodeRabbit's automatic review reported no actionable comments; a later manual resume returned only Review finished after review had paused.",
+      "patch": "Pull request 547 squash-merged as 68e0f914b37be030e1ccd79949786771ab0cd674 and closed issue 546."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can deterministically enumerate all durable tool invocation projections from authoritative event evidence without maintaining a second mutable index.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test durable_tool_invocations # 11 passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit diff review # no blocking findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30037011978 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/547", "status": "passed"},
+      {"command": "Pull request 547 squash merge 68e0f914b37be030e1ccd79949786771ab0cd674", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Existing event types can serve as discovery markers, avoiding a second index that could diverge from authoritative streams.",
+    "Discovery should replay through the same projection logic as point loads so invariants do not split.",
+    "Deterministic sorting belongs at the public query boundary rather than relying on database row order.",
+    "Owning stream identifiers must be validated instead of silently skipping malformed durable evidence."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/tool.rs", "url": "https://github.com/Knosence9/project-vela/pull/547"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

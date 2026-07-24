@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Enforce a per-invocation tool permission boundary",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/541 by defining a provider-neutral in-process tool protocol that requires caller-owned authorization before every adapter execution.",
+    "acceptance_criteria": [
+      "Stable non-blank tool IDs and explicit maximum effects are visible to the authorizer with the exact JSON input.",
+      "Denial prevents adapter execution, allowance invokes once, and adapter failures retain their source chain.",
+      "The kernel supplies no implicit grants, retries, real external tools, provider integration, or persistence.",
+      "Focused tests, pinned verification, independent review, hosted gates, and squash merge succeed."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Selected a minimal caller-owned authorization contract.",
+      "outcome": "success",
+      "diagnostic": "A model-owned or reusable grant would have crossed unresolved safety policy. The bounded contract authorizes one exact tool ID, declared effect, and input before one synchronous invocation.",
+      "patch": "Decision issue 540 separated permission enforcement from concrete adapters, persistence, retries, timeouts, sandboxing, and runtime orchestration before execution issue 541."
+    },
+    {
+      "summary": "Established RED with pure in-memory permission tests.",
+      "outcome": "failure",
+      "diagnostic": "The focused integration target failed with unresolved imports because vela_kernel had no tool module or permission protocol.",
+      "patch": "Kept tests for blank IDs, exact request visibility, denial before execution, exact successful output, one-shot failure, and source preservation before implementation."
+    },
+    {
+      "summary": "Implemented the synchronous tool and authorization protocol.",
+      "outcome": "success",
+      "diagnostic": "The kernel now owns ToolId, ToolEffect, ToolRequest, PermissionDecision, ToolAuthorizer, Tool, invoke_tool, and typed errors. Every effect including Pure is authorized; denial short-circuits and allowed adapters run once without retry or rollback.",
+      "patch": "Added crates/vela-kernel/src/tool.rs, exported it from lib.rs, added tool_permissions.rs integration coverage, and documented ownership, partial-effect limits, and non-goals."
+    },
+    {
+      "summary": "Passed independent and hosted review, then merged.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify and four focused tests passed. Rust quality gate run 29826695513 succeeded, and CodeRabbit reported no actionable comments with all pre-merge checks passing.",
+      "patch": "Pull request 542 squash-merged as 471c0cd6b195c3fab1db17d9abfaf8ddd37a7392 and closed issue 541."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now has an explicit caller-owned permission checkpoint for every in-process tool invocation, with denial before effects and source-preserving one-shot execution failures.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_permissions # 4 passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29826695513 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/542", "status": "passed"},
+      {"command": "Pull request 542 squash merge 471c0cd6b195c3fab1db17d9abfaf8ddd37a7392", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Permission belongs to caller-owned policy, not the model or adapter being authorized.",
+    "The authorizer must see the exact ID, maximum effect, and input for the one invocation it decides.",
+    "Denial must occur before adapter execution; after allowance, partial external effects cannot be rolled back by a synchronous kernel wrapper.",
+    "A no-retry contract avoids duplicating unknown external effects and leaves retries as new caller decisions."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/tool.rs", "url": "https://github.com/Knosence9/project-vela/pull/542"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
