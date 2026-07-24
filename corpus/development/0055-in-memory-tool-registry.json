@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Register in-memory tool adapters",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/551 by adding a process-local registry that owns adapters, discovers permission metadata deterministically, and dispatches by stable tool ID.",
+    "acceptance_criteria": [
+      "Registration owns adapters and rejects duplicate IDs without replacing either adapter.",
+      "Metadata enumeration is deterministic by stable ID and produces no invocation effects.",
+      "Known IDs delegate through the existing permission protocol and unknown IDs fail before authorization.",
+      "No reload, removal, replacement, persistence, concrete adapter, or second authorization path is introduced."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Scoped the smallest registry ownership boundary.",
+      "outcome": "success",
+      "diagnostic": "Runtime tool orchestration was premature while extension-provided adapters had no kernel-owned directory. Reload and persistent lifecycle policy were also unnecessary for initial process-local dispatch.",
+      "patch": "Execution issue 551 fixed stable-ID registration, deterministic metadata, and permission-checked lookup while deferring runtime parsing and extension lifecycle policy."
+    },
+    {
+      "summary": "Established RED with registry integration tests.",
+      "outcome": "failure",
+      "diagnostic": "The focused target failed with unresolved imports because ToolRegistry, ToolMetadata, and typed registry errors did not exist.",
+      "patch": "Kept tests for ID ordering, all effect classes, duplicate rejection, original-adapter preservation, allow, deny, sourced failure, and unknown-ID short circuiting."
+    },
+    {
+      "summary": "Implemented deterministic process-local adapter ownership.",
+      "outcome": "success",
+      "diagnostic": "A BTreeMap owns boxed adapters by ToolId. Registration rejects duplicates, metadata clones only stable permission fields in sorted order, and invocation resolves before delegating to invoke_tool.",
+      "patch": "Added the minimal registry, metadata, and error APIs in tool.rs; added focused integration coverage and documented explicit lifecycle non-goals."
+    },
+    {
+      "summary": "Verified the slice and merged despite unavailable automated review capacity.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify, registry tests, and rustdoc with warnings denied passed, and independent pre-commit review found no actionable issue. Rust quality gate run 30055540137 succeeded. CodeRabbit reported an adaptive review limit rather than line review.",
+      "patch": "Pull request 552 squash-merged as 6ae809d7803e660b4ed272d352d18e9147fa962b and closed issue 551."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now own, enumerate, and permission-dispatch extension-provided in-memory tool adapters by stable ID without introducing lifecycle or persistence policy.",
+    "verified": true,
+    "verification": [
+      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test tool_registry", "status": "passed"},
+      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "RUSTDOCFLAGS=-D warnings cargo doc --locked -p vela-kernel --no-deps", "status": "passed"},
+      {"command": "Independent pre-commit review # no actionable findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30055540137", "status": "passed"},
+      {"command": "Pull request 552 squash merge 6ae809d7803e660b4ed272d352d18e9147fa962b", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A deterministic in-memory registry is enough to establish adapter ownership before extension reload or persistence policy exists.",
+    "Duplicate registration should fail without replacement so identity ownership cannot change silently.",
+    "Metadata discovery must not invoke adapters or bypass the per-invocation permission path.",
+    "Using one existing invocation function avoids creating a registry-specific authorization protocol."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/tool.rs", "url": "https://github.com/Knosence9/project-vela/pull/552"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

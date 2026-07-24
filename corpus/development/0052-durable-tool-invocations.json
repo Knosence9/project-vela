@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist metadata-only tool invocation outcomes",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/544 by wrapping the existing permission protocol with durable intent and terminal evidence while retaining only non-sensitive metadata.",
+    "acceptance_criteria": [
+      "A unique invocation stream records intent before authorization and exactly one denied, succeeded, or failed terminal outcome afterward.",
+      "Replay fails closed on malformed or impossible histories and duplicate IDs fail before authorization or execution.",
+      "Exact input, output, errors, policy details, and credentials are never persisted.",
+      "Terminal append failure returns the exact in-memory result and leaves an ambiguous pending stream without retry."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Fixed retention and crash semantics before implementation.",
+      "outcome": "success",
+      "diagnostic": "Persisting full inputs or outputs would create a sensitive unbounded retention surface, while retrying an intent-only stream could duplicate an external effect.",
+      "patch": "Issue 544 constrained evidence to invocation and tool identities, declared effect, and terminal status; pending streams remain ambiguous and are never automatically resumed."
+    },
+    {
+      "summary": "Established RED with durable invocation integration tests.",
+      "outcome": "failure",
+      "diagnostic": "The focused target failed on missing durable store, invocation identity, projection, status, wrapper, and error APIs.",
+      "patch": "Retained coverage for IDs, event ordering, denial, success, adapter failure, duplicate protection, malformed replay, source chains, and terminal persistence failure."
+    },
+    {
+      "summary": "Implemented metadata-only event streams around the existing protocol.",
+      "outcome": "success",
+      "diagnostic": "Intent commits before authorization; invoke_tool remains the only permission and adapter path; a metadata-only terminal event follows the exact in-memory result. Replay accepts only one intent and at most one terminal event.",
+      "patch": "Added ToolInvocationStore, invocation projections and statuses, versioned events, durable error structure, and invoke_tool_durable without changing the original non-durable API."
+    },
+    {
+      "summary": "Hardened ambiguous-pending verification during independent review.",
+      "outcome": "success",
+      "diagnostic": "Review identified that the terminal-append failure fixture should prove the durable intent prefix remains visible instead of only matching an error variant.",
+      "patch": "Strengthened the fixture to reopen and assert the pending projection while preserving the exact in-memory result in TerminalPersistence. Nine focused tests and pinned verification then passed."
+    },
+    {
+      "summary": "Passed the hosted Rust gate and merged after review automation was limited.",
+      "outcome": "success",
+      "diagnostic": "Rust quality gate run 30035099600 succeeded. CodeRabbit reported an adaptive review limit rather than producing line review; the independently reviewed, locally verified one-commit slice still satisfied repository merge requirements.",
+      "patch": "Pull request 545 squash-merged as 679d906037f7281022f6161af3e16bd1c584dc2a and closed issue 544."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can durably audit metadata-only tool intent and terminal state without retaining exact payloads or retrying ambiguous external work.",
+    "verified": true,
+    "verification": [
+      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test durable_tool_invocations # 9 passed", "status": "passed"},
+      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "/run/current-system/sw/bin/nix develop --command cargo doc --locked -p vela-kernel --no-deps", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30035099600", "status": "passed"},
+      {"command": "Pull request 545 squash merge 679d906037f7281022f6161af3e16bd1c584dc2a", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Durable intent must precede authorization so every attempted effect has an audit prefix.",
+    "Metadata-only evidence minimizes retention risk while exact results remain available to the immediate caller.",
+    "An intent-only stream is ambiguous after a crash and must not trigger automatic retry.",
+    "Terminal persistence errors should preserve both the durable ambiguity and the exact in-memory result."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/tool.rs", "url": "https://github.com/Knosence9/project-vela/pull/545"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Dispatch registered tools durably for active tasks",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/554 by composing stable-ID registry lookup with the existing task associated durable invocation protocol.",
+    "acceptance_criteria": [
+      "Unknown IDs fail before durable intent, task validation, authorization, or adapter execution.",
+      "Known IDs delegate exactly once to the existing task associated durable path.",
+      "Task preconditions, duplicate protection, permission decisions, metadata-only retention, outcomes, exact successful output, and source chains remain unchanged.",
+      "No provider parsing, runtime orchestration, concrete adapter, retry, or second persistence protocol is added."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Chose composition before provider tool-call orchestration.",
+      "outcome": "success",
+      "diagnostic": "Provider parsing would have joined two caller-side mechanisms before registry dispatch and durable task evidence shared a single entry point.",
+      "patch": "Decision issue 553 selected registry lookup followed by the existing durable task invocation protocol; execution issue 554 fixed unknown-ID ordering, error preservation, and non-goals."
+    },
+    {
+      "summary": "Established RED with durable registry acceptance tests.",
+      "outcome": "failure",
+      "diagnostic": "The registry integration target failed because the durable dispatch method and its typed wrapper error did not exist.",
+      "patch": "Kept cases for known allow and deny, adapter failure, missing and inactive tasks, duplicate invocation IDs, exact output, source chains, and unknown IDs with no durable or authorization side effects."
+    },
+    {
+      "summary": "Implemented the minimal registry composition.",
+      "outcome": "success",
+      "diagnostic": "ToolRegistry resolves a mutable adapter first and returns typed NotFound when absent. Known adapters are passed as trait objects to invoke_tool_for_task_durable, preserving one implementation of validation, persistence, authorization, execution, and terminal handling.",
+      "patch": "Added DurableToolRegistryInvocationError and ToolRegistry::invoke_for_task_durable, relaxed the existing wrapper to accept unsized Tool trait objects, expanded registry tests, and documented the composed ordering."
+    },
+    {
+      "summary": "Verified, reviewed independently, and merged the composition slice.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify, focused registry and task association tests, and rustdoc with warnings denied passed. Independent pre-commit review found no actionable issue. Rust quality gate run 30058584544 succeeded; CodeRabbit reported adaptive review limiting instead of a new line review.",
+      "patch": "Pull request 555 squash-merged as 9f69fabaa27886973766d9306ee497b380532a43 and closed issue 554."
+    }
+  ],
+  "outcome": {
+    "summary": "Registered adapters can now be resolved by stable ID and executed through the established durable active-task permission protocol without duplicate orchestration logic.",
+    "verified": true,
+    "verification": [
+      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test tool_registry", "status": "passed"},
+      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test tool_task_association", "status": "passed"},
+      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "RUSTDOCFLAGS=-D warnings cargo doc --locked -p vela-kernel --no-deps", "status": "passed"},
+      {"command": "Independent pre-commit review # no actionable findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30058584544", "status": "passed"},
+      {"command": "Pull request 555 squash merge 9f69fabaa27886973766d9306ee497b380532a43", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Resolve unknown adapter IDs before creating durable intent so nonexistent tools leave no audit stream that resembles attempted execution.",
+    "Composition should delegate to the established durable path rather than duplicate task, permission, retention, or crash semantics.",
+    "Trait-object support can be the only generic change needed to connect registry ownership with an existing adapter protocol.",
+    "Provider parsing and runtime loops should follow only after registry dispatch and durable task execution form one stable callable boundary."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/tool.rs", "url": "https://github.com/Knosence9/project-vela/pull/555"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

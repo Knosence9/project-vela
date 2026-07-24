@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Associate durable tool invocations with active tasks",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/549 by immutably attributing durable tool invocation intent to an active task without changing legacy invocation histories.",
+    "acceptance_criteria": [
+      "A task associated wrapper validates that the task exists and is active before authorization or adapter execution.",
+      "Intent commits only if the exact validated task stream version remains current, with no retry on a race.",
+      "The task ID survives load, list, reopen, and later task completion while version-one unassociated histories remain compatible.",
+      "Retention remains metadata-only and existing unassociated invocation behavior stays unchanged."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Selected task level attribution before attempt correlation.",
+      "outcome": "success",
+      "diagnostic": "Provider tool activity can occur before an assistant attempt observation exists. Requiring attempt correlation would therefore impose ordering that the current runtime cannot guarantee.",
+      "patch": "Decision issue 548 chose optional immutable TaskId attribution on invocation intent and deferred task side indexes, attempt relations, runtime orchestration, and richer retention."
+    },
+    {
+      "summary": "Established RED with task association integration tests.",
+      "outcome": "failure",
+      "diagnostic": "The focused target failed because the task associated wrapper, task projection accessor, and typed missing, inactive, and changed-task errors did not exist.",
+      "patch": "Retained tests for successful persistence, legacy replay, every terminal task state, missing tasks, duplicates, concurrent changes, reopen, list, and later task completion."
+    },
+    {
+      "summary": "Implemented guarded version-two intent persistence.",
+      "outcome": "success",
+      "diagnostic": "The store loads the active task and version, then atomically appends invocation intent only while that task stream is unchanged. Version-two intent carries TaskId; version-one intent replays with no association.",
+      "patch": "Added invoke_tool_for_task_durable, optional task projection, additive event decoding, typed pre-execution errors, and shared terminal handling for associated and unassociated wrappers."
+    },
+    {
+      "summary": "Reviewed connection-count feedback without expanding scope.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit noted one extra SQLite connection as a trivial scalability consideration, not a correctness defect. Reworking store ownership would have changed a broader persistence architecture without evidence of a current problem.",
+      "patch": "Recorded the connection observation as future maintainability evidence and retained the simple bounded composition. Independent review found no blocker and pinned verification passed."
+    },
+    {
+      "summary": "Passed hosted gates and merged.",
+      "outcome": "success",
+      "diagnostic": "Rust quality gate run 30053888051 succeeded. CodeRabbit passed the required status with only the non-blocking connection nitpick.",
+      "patch": "Pull request 550 squash-merged as e007c0a2192919cc9fd31f87a3f6cc697f02172d and closed issue 549."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable tool evidence can now be immutably attributed to an active task with race-safe intent persistence and backward-compatible replay.",
+    "verified": true,
+    "verification": [
+      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit diff review # no blocking findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30053888051 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/550", "status": "passed"},
+      {"command": "Pull request 550 squash merge e007c0a2192919cc9fd31f87a3f6cc697f02172d", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Task level attribution is useful before attempt-level correlation because tool activity may precede attempt evidence.",
+    "Validation plus conditional append closes the race between reading task status and committing invocation intent.",
+    "A task change should fail before authorization and execution rather than trigger an implicit retry.",
+    "Additive payload versions can preserve legacy unassociated histories while all new associated writes use one strict shape.",
+    "Non-blocking scalability notes should not force speculative store-ownership refactors inside a behavior slice."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/tool.rs", "url": "https://github.com/Knosence9/project-vela/pull/550"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
