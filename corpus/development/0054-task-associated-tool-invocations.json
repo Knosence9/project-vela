@@ -46,7 +46,7 @@
     "summary": "Durable tool evidence can now be immutably attributed to an active task with race-safe intent persistence and backward-compatible replay.",
     "verified": true,
     "verification": [
-      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
       {"command": "Independent pre-commit diff review # no blocking findings", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30053888051 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/550", "status": "passed"},
       {"command": "Pull request 550 squash merge e007c0a2192919cc9fd31f87a3f6cc697f02172d", "status": "passed"}

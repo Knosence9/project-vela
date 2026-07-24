@@ -40,8 +40,8 @@
     "summary": "Vela now has an explicit caller-owned permission checkpoint for every in-process tool invocation, with denial before effects and source-preserving one-shot execution failures.",
     "verified": true,
     "verification": [
-      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test tool_permissions # 4 passed", "status": "passed"},
-      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_permissions # 4 passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/29826695513 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/542", "status": "passed"},
       {"command": "Pull request 542 squash merge 471c0cd6b195c3fab1db17d9abfaf8ddd37a7392", "status": "passed"}
     ]

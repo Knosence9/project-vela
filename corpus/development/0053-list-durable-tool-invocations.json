@@ -34,8 +34,8 @@
     "summary": "Vela can deterministically enumerate all durable tool invocation projections from authoritative event evidence without maintaining a second mutable index.",
     "verified": true,
     "verification": [
-      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test durable_tool_invocations # 11 passed", "status": "passed"},
-      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test durable_tool_invocations # 11 passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
       {"command": "Independent pre-commit diff review # no blocking findings", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30037011978 and CodeRabbit review at https://github.com/Knosence9/project-vela/pull/547", "status": "passed"},
       {"command": "Pull request 547 squash merge 68e0f914b37be030e1ccd79949786771ab0cd674", "status": "passed"}

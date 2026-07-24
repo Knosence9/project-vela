@@ -40,9 +40,9 @@
     "summary": "Registered adapters can now be resolved by stable ID and executed through the established durable active-task permission protocol without duplicate orchestration logic.",
     "verified": true,
     "verification": [
-      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test tool_registry", "status": "passed"},
-      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test tool_task_association", "status": "passed"},
-      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_registry", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_task_association", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
       {"command": "RUSTDOCFLAGS=-D warnings cargo doc --locked -p vela-kernel --no-deps", "status": "passed"},
       {"command": "Independent pre-commit review # no actionable findings", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30058584544", "status": "passed"},

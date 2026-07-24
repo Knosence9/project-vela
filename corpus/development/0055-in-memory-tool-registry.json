@@ -40,8 +40,8 @@
     "summary": "Vela can now own, enumerate, and permission-dispatch extension-provided in-memory tool adapters by stable ID without introducing lifecycle or persistence policy.",
     "verified": true,
     "verification": [
-      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test tool_registry", "status": "passed"},
-      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_registry", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
       {"command": "RUSTDOCFLAGS=-D warnings cargo doc --locked -p vela-kernel --no-deps", "status": "passed"},
       {"command": "Independent pre-commit review # no actionable findings", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30055540137", "status": "passed"},

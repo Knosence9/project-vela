@@ -46,9 +46,9 @@
     "summary": "Vela can durably audit metadata-only tool intent and terminal state without retaining exact payloads or retrying ambiguous external work.",
     "verified": true,
     "verification": [
-      {"command": "/run/current-system/sw/bin/nix develop --command cargo test --locked -p vela-kernel --test durable_tool_invocations # 9 passed", "status": "passed"},
-      {"command": "/run/current-system/sw/bin/nix develop --command just verify", "status": "passed"},
-      {"command": "/run/current-system/sw/bin/nix develop --command cargo doc --locked -p vela-kernel --no-deps", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test durable_tool_invocations # 9 passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo doc --locked -p vela-kernel --no-deps", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30035099600", "status": "passed"},
       {"command": "Pull request 545 squash merge 679d906037f7281022f6161af3e16bd1c584dc2a", "status": "passed"}
     ]
