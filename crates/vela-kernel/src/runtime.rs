@@ -35,6 +35,18 @@ pub trait ToolAssistantProvider {
     ) -> Result<ProviderToolResponse, ProviderError>;
 }
 
+/// A synchronous provider continuation after one successful in-memory tool result.
+///
+/// This additive boundary does not grant permission, choose durable invocation identity, or
+/// persist the exact tool result.
+pub trait ToolAssistantContinuationProvider {
+    fn complete_after_tool(
+        &mut self,
+        continuation: ProviderToolContinuation<'_>,
+        tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError>;
+}
+
 /// One provider response at the bounded tool-step boundary.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -64,6 +76,71 @@ pub enum ProviderToolStepOutcome {
         output: Value,
         continuation: ToolStepContinuation,
     },
+}
+
+impl ProviderToolStepOutcome {
+    /// Borrows the exact in-memory result needed for an explicit provider continuation.
+    pub fn tool_result(&self) -> Option<ProviderToolResult<'_>> {
+        match self {
+            Self::ToolCompleted {
+                tool_id,
+                input,
+                output,
+                ..
+            } => Some(ProviderToolResult {
+                tool_id,
+                input,
+                output,
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed exact tool result supplied only to an explicit provider continuation.
+#[derive(Clone, Copy, Debug)]
+pub struct ProviderToolResult<'a> {
+    tool_id: &'a ToolId,
+    input: &'a Value,
+    output: &'a Value,
+}
+
+impl<'a> ProviderToolResult<'a> {
+    pub fn tool_id(self) -> &'a ToolId {
+        self.tool_id
+    }
+
+    pub fn input(self) -> &'a Value {
+        self.input
+    }
+
+    pub fn output(self) -> &'a Value {
+        self.output
+    }
+}
+
+/// Caller-supplied provider context for one explicit continuation.
+#[derive(Clone, Copy, Debug)]
+pub struct ProviderToolContinuation<'a> {
+    transcript: &'a [SessionTurn],
+    prior_result: ProviderToolResult<'a>,
+}
+
+impl<'a> ProviderToolContinuation<'a> {
+    pub fn new(transcript: &'a [SessionTurn], prior_result: ProviderToolResult<'a>) -> Self {
+        Self {
+            transcript,
+            prior_result,
+        }
+    }
+
+    pub fn transcript(self) -> &'a [SessionTurn] {
+        self.transcript
+    }
+
+    pub fn prior_result(self) -> ProviderToolResult<'a> {
+        self.prior_result
+    }
 }
 
 /// A provider failure or the existing durable registry invocation failure.
@@ -110,6 +187,52 @@ pub fn execute_provider_tool_step<P: ToolAssistantProvider, A: ToolAuthorizer>(
         .complete_with_tools(transcript, &registry.metadata())
         .map_err(ProviderToolStepError::Provider)?;
 
+    dispatch_provider_tool_response(
+        response,
+        registry,
+        store,
+        task_id,
+        invocation_id,
+        authorizer,
+    )
+}
+
+/// Calls a continuation provider once with one prior tool result and dispatches at most one new
+/// durable task tool invocation.
+///
+/// Every continuation is caller-owned and explicit. This operation does not persist the prior
+/// result, retry, or call the provider a second time.
+pub fn continue_provider_tool_step<P: ToolAssistantContinuationProvider, A: ToolAuthorizer>(
+    provider: &mut P,
+    continuation: ProviderToolContinuation<'_>,
+    registry: &mut ToolRegistry,
+    store: &mut ToolInvocationStore,
+    task_id: &TaskId,
+    invocation_id: ToolInvocationId,
+    authorizer: &mut A,
+) -> Result<ProviderToolStepOutcome, ProviderToolStepError> {
+    let response = provider
+        .complete_after_tool(continuation, &registry.metadata())
+        .map_err(ProviderToolStepError::Provider)?;
+
+    dispatch_provider_tool_response(
+        response,
+        registry,
+        store,
+        task_id,
+        invocation_id,
+        authorizer,
+    )
+}
+
+fn dispatch_provider_tool_response<A: ToolAuthorizer>(
+    response: ProviderToolResponse,
+    registry: &mut ToolRegistry,
+    store: &mut ToolInvocationStore,
+    task_id: &TaskId,
+    invocation_id: ToolInvocationId,
+    authorizer: &mut A,
+) -> Result<ProviderToolStepOutcome, ProviderToolStepError> {
     match response {
         ProviderToolResponse::Final(content) => Ok(ProviderToolStepOutcome::Final {
             content,
