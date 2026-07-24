@@ -146,6 +146,7 @@ The first milestone is the **evidence loop**:
 16. Persist metadata-only tool invocation intent and terminal outcomes with fail-closed replay. ✅
 17. Discover every persisted tool invocation in deterministic order without a separate index. ✅
 18. Immutably attribute durable tool invocation evidence to active tasks. ✅
+19. Register, discover, and invoke in-process tool adapters by stable ID. ✅
 
 ## Project documents
 

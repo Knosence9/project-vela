@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, path::Path};
+use std::{collections::BTreeMap, error::Error, fmt, path::Path};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,7 +17,7 @@ const TOOL_INVOCATION_ASSOCIATED_PAYLOAD_VERSION: u32 = 2;
 const TOOL_INVOCATION_STREAM_PREFIX: &str = "tool-invocation:";
 
 /// An opaque, non-blank stable identifier for one tool adapter.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct ToolId(String);
 
@@ -116,6 +116,118 @@ pub trait Tool {
     fn invoke(&mut self, input: &Value) -> Result<Value, ToolError>;
 }
 
+/// Stable permission metadata for one registered adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolMetadata {
+    id: ToolId,
+    effect: ToolEffect,
+}
+
+impl ToolMetadata {
+    pub fn id(&self) -> &ToolId {
+        &self.id
+    }
+
+    pub fn effect(&self) -> ToolEffect {
+        self.effect
+    }
+}
+
+/// A duplicate adapter identity rejected during registration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ToolRegistryError {
+    DuplicateId { tool_id: ToolId },
+}
+
+impl fmt::Display for ToolRegistryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateId { tool_id } => {
+                write!(formatter, "tool {tool_id} is already registered")
+            }
+        }
+    }
+}
+
+impl Error for ToolRegistryError {}
+
+/// An unknown adapter identity or existing invocation-protocol failure.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolRegistryInvocationError {
+    NotFound { tool_id: ToolId },
+    Invocation(ToolInvocationError),
+}
+
+impl fmt::Display for ToolRegistryInvocationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound { tool_id } => write!(formatter, "tool {tool_id} is not registered"),
+            Self::Invocation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for ToolRegistryInvocationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::NotFound { .. } => None,
+            Self::Invocation(error) => Some(error),
+        }
+    }
+}
+
+/// An in-memory, process-local owner and deterministic directory of tool adapters.
+#[derive(Default)]
+pub struct ToolRegistry {
+    tools: BTreeMap<ToolId, Box<dyn Tool>>,
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers one adapter without replacing an adapter that owns the same ID.
+    pub fn register<T: Tool + 'static>(&mut self, tool: T) -> Result<(), ToolRegistryError> {
+        let tool_id = tool.id().clone();
+        if self.tools.contains_key(&tool_id) {
+            return Err(ToolRegistryError::DuplicateId { tool_id });
+        }
+        self.tools.insert(tool_id, Box::new(tool));
+        Ok(())
+    }
+
+    /// Returns metadata in ascending stable-ID order.
+    pub fn metadata(&self) -> Vec<ToolMetadata> {
+        self.tools
+            .iter()
+            .map(|(id, tool)| ToolMetadata {
+                id: id.clone(),
+                effect: tool.effect(),
+            })
+            .collect()
+    }
+
+    /// Resolves one adapter, then delegates to the existing per-invocation permission protocol.
+    pub fn invoke<A: ToolAuthorizer>(
+        &mut self,
+        tool_id: &ToolId,
+        authorizer: &mut A,
+        input: &Value,
+    ) -> Result<Value, ToolRegistryInvocationError> {
+        let tool =
+            self.tools
+                .get_mut(tool_id)
+                .ok_or_else(|| ToolRegistryInvocationError::NotFound {
+                    tool_id: tool_id.clone(),
+                })?;
+        invoke_tool(tool.as_mut(), authorizer, input)
+            .map_err(ToolRegistryInvocationError::Invocation)
+    }
+}
+
 /// An adapter failure that preserves the extension-specific error as its source.
 #[derive(Debug)]
 pub struct ToolError {
@@ -171,7 +283,7 @@ impl Error for ToolInvocationError {
 }
 
 /// Authorizes and invokes one tool adapter without persistence, retry, or rollback.
-pub fn invoke_tool<T: Tool, A: ToolAuthorizer>(
+pub fn invoke_tool<T: Tool + ?Sized, A: ToolAuthorizer>(
     tool: &mut T,
     authorizer: &mut A,
     input: &Value,
