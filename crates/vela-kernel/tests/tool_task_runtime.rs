@@ -106,6 +106,32 @@ impl Tool for EchoTool {
     }
 }
 
+#[derive(Clone, Debug)]
+struct FakeToolFailure;
+impl fmt::Display for FakeToolFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("adapter unavailable")
+    }
+}
+impl Error for FakeToolFailure {}
+
+struct FailingTool {
+    id: ToolId,
+    calls: Rc<RefCell<usize>>,
+}
+impl Tool for FailingTool {
+    fn id(&self) -> &ToolId {
+        &self.id
+    }
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::Pure
+    }
+    fn invoke(&mut self, _input: &Value) -> Result<Value, ToolError> {
+        *self.calls.borrow_mut() += 1;
+        Err(ToolError::new(FakeToolFailure))
+    }
+}
+
 struct Allow {
     calls: usize,
 }
@@ -113,6 +139,85 @@ impl ToolAuthorizer for Allow {
     fn authorize(&mut self, _request: ToolRequest<'_>) -> PermissionDecision {
         self.calls += 1;
         PermissionDecision::Allow
+    }
+}
+
+struct Decide {
+    decision: PermissionDecision,
+    calls: usize,
+}
+impl ToolAuthorizer for Decide {
+    fn authorize(&mut self, _request: ToolRequest<'_>) -> PermissionDecision {
+        self.calls += 1;
+        self.decision
+    }
+}
+
+struct BlockTerminalAppend {
+    path: std::path::PathBuf,
+    calls: usize,
+}
+impl ToolAuthorizer for BlockTerminalAppend {
+    fn authorize(&mut self, _request: ToolRequest<'_>) -> PermissionDecision {
+        self.calls += 1;
+        rusqlite::Connection::open(&self.path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_runtime_tool_terminal
+                 BEFORE INSERT ON events
+                 WHEN NEW.stream_id = 'tool-invocation:blocked-terminal'
+                      AND NEW.stream_version = 2
+                 BEGIN
+                     SELECT RAISE(ABORT, 'terminal append blocked');
+                 END;",
+            )
+            .unwrap();
+        PermissionDecision::Allow
+    }
+}
+
+enum ProviderMutation {
+    CloseSession(SessionId),
+    AppendAttempt(TaskId, TaskObservationId),
+}
+
+struct MutatingProvider {
+    path: std::path::PathBuf,
+    mutation: ProviderMutation,
+    calls: Rc<RefCell<usize>>,
+}
+impl ToolAssistantProvider for MutatingProvider {
+    fn complete_with_tools(
+        &mut self,
+        _transcript: &[vela_kernel::session::SessionTurn],
+        _tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError> {
+        *self.calls.borrow_mut() += 1;
+        match &self.mutation {
+            ProviderMutation::CloseSession(session_id) => {
+                SessionStore::open(&self.path)
+                    .unwrap()
+                    .close(
+                        session_id,
+                        SessionClosure::new("closed during provider call").unwrap(),
+                    )
+                    .unwrap();
+            }
+            ProviderMutation::AppendAttempt(task_id, observation_id) => {
+                TaskStore::open(&self.path)
+                    .unwrap()
+                    .append_observation(
+                        task_id,
+                        observation_id.clone(),
+                        TaskObservationKind::Attempt,
+                        vela_kernel::task::TaskObservationText::new("winning attempt").unwrap(),
+                    )
+                    .unwrap();
+            }
+        }
+        Ok(ProviderToolResponse::Final(
+            SessionTurnContent::new("runtime answer").unwrap(),
+        ))
     }
 }
 
@@ -635,4 +740,262 @@ fn provider_failure_preserves_only_the_human_turn() {
             .observations()
             .is_empty()
     );
+}
+
+fn requesting_provider(tool_id: ToolId) -> Provider {
+    Provider {
+        calls: Rc::new(RefCell::new(Vec::new())),
+        response: Some(Ok(ProviderToolResponse::ToolRequest {
+            tool_id,
+            input: json!({"private": "not durable"}),
+        })),
+    }
+}
+
+#[test]
+fn denial_preserves_human_turn_and_denied_invocation_prefix() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let tool_id = ToolId::new("tool.echo").unwrap();
+    let calls = Rc::new(RefCell::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: tool_id.clone(),
+            calls: calls.clone(),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, requesting_provider(tool_id)).unwrap();
+    let invocation_id = ToolInvocationId::new("denied").unwrap();
+    let mut authorizer = Decide {
+        decision: PermissionDecision::Deny,
+        calls: 0,
+    };
+
+    assert!(matches!(
+        runtime.execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("durable human").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+            invocation_id.clone(),
+            &mut registry,
+            &mut authorizer
+        ),
+        Err(ToolTaskRuntimeError::Invocation(_))
+    ));
+    assert_eq!((authorizer.calls, *calls.borrow()), (1, 0));
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        1
+    );
+    assert_eq!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&invocation_id)
+            .unwrap()
+            .unwrap()
+            .status(),
+        ToolInvocationStatus::Denied
+    );
+}
+
+#[test]
+fn adapter_failure_preserves_human_turn_and_failed_invocation_prefix() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let tool_id = ToolId::new("tool.fail").unwrap();
+    let calls = Rc::new(RefCell::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(FailingTool {
+            id: tool_id.clone(),
+            calls: calls.clone(),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, requesting_provider(tool_id)).unwrap();
+    let invocation_id = ToolInvocationId::new("failed").unwrap();
+    let mut authorizer = Allow { calls: 0 };
+
+    let error = runtime
+        .execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("durable human").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+            invocation_id.clone(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap_err();
+    assert!(matches!(error, ToolTaskRuntimeError::Invocation(_)));
+    let mut source = error.source().unwrap();
+    while let Some(next) = source.source() {
+        source = next;
+    }
+    assert_eq!(source.to_string(), "adapter unavailable");
+    assert_eq!((authorizer.calls, *calls.borrow()), (1, 1));
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        1
+    );
+    assert_eq!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&invocation_id)
+            .unwrap()
+            .unwrap()
+            .status(),
+        ToolInvocationStatus::Failed
+    );
+}
+
+#[test]
+fn terminal_invocation_append_failure_preserves_human_and_pending_intent() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let tool_id = ToolId::new("tool.echo").unwrap();
+    let calls = Rc::new(RefCell::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: tool_id.clone(),
+            calls: calls.clone(),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, requesting_provider(tool_id)).unwrap();
+    let invocation_id = ToolInvocationId::new("blocked-terminal").unwrap();
+    let mut authorizer = BlockTerminalAppend {
+        path: path.clone(),
+        calls: 0,
+    };
+
+    assert!(matches!(
+        runtime.execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("durable human").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+            invocation_id.clone(),
+            &mut registry,
+            &mut authorizer
+        ),
+        Err(ToolTaskRuntimeError::Invocation(_))
+    ));
+    assert_eq!((authorizer.calls, *calls.borrow()), (1, 1));
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        1
+    );
+    assert_eq!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&invocation_id)
+            .unwrap()
+            .unwrap()
+            .status(),
+        ToolInvocationStatus::Pending
+    );
+}
+
+#[test]
+fn assistant_append_race_preserves_only_human_turn() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let calls = Rc::new(RefCell::new(0));
+    let provider = MutatingProvider {
+        path: path.clone(),
+        mutation: ProviderMutation::CloseSession(session_id.clone()),
+        calls: calls.clone(),
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+
+    assert!(matches!(
+        runtime.execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("durable human").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+            ToolInvocationId::new("unused").unwrap(),
+            &mut ToolRegistry::new(),
+            &mut Allow { calls: 0 }
+        ),
+        Err(ToolTaskRuntimeError::Session(_))
+    ));
+    assert_eq!(*calls.borrow(), 1);
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn attempt_append_race_preserves_both_turns_and_winning_attempt() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let observation_id = TaskObservationId::new("attempt-1").unwrap();
+    let calls = Rc::new(RefCell::new(0));
+    let provider = MutatingProvider {
+        path: path.clone(),
+        mutation: ProviderMutation::AppendAttempt(task_id.clone(), observation_id.clone()),
+        calls: calls.clone(),
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+
+    assert!(matches!(
+        runtime.execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("durable human").unwrap(),
+            observation_id,
+            ToolInvocationId::new("unused").unwrap(),
+            &mut ToolRegistry::new(),
+            &mut Allow { calls: 0 }
+        ),
+        Err(ToolTaskRuntimeError::Task(
+            TaskStoreError::DuplicateObservation { .. }
+        ))
+    ));
+    assert_eq!(*calls.borrow(), 1);
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        2
+    );
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "winning attempt");
 }
