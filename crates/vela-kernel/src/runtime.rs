@@ -342,6 +342,7 @@ pub enum ToolTaskRuntimeError {
     Task(TaskStoreError),
     InvocationStore(ToolInvocationStoreError),
     TaskNotAssociated { task_id: TaskId },
+    StaleContinuationTranscript { task_id: TaskId },
     InvalidAttemptText(TaskObservationTextError),
     Provider(ProviderError),
     Invocation(DurableToolRegistryInvocationError),
@@ -358,6 +359,10 @@ impl fmt::Display for ToolTaskRuntimeError {
             Self::TaskNotAssociated { task_id } => {
                 write!(formatter, "task {task_id} is not associated with a session")
             }
+            Self::StaleContinuationTranscript { task_id } => write!(
+                formatter,
+                "task {task_id} continuation transcript is no longer current"
+            ),
             Self::InvalidAttemptText(error) => {
                 write!(formatter, "tool task attempt observation error: {error}")
             }
@@ -376,7 +381,7 @@ impl Error for ToolTaskRuntimeError {
             Self::InvalidAttemptText(error) => Some(error),
             Self::Provider(error) => Some(error),
             Self::Invocation(error) => Some(error),
-            Self::TaskNotAssociated { .. } => None,
+            Self::TaskNotAssociated { .. } | Self::StaleContinuationTranscript { .. } => None,
         }
     }
 }
@@ -555,6 +560,138 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
 }
 
 impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
+    /// Continues one task-bound provider step and durably bridges its result into the same turn.
+    ///
+    /// The caller retains control of every step, observation identity, invocation identity,
+    /// registry, and authorization decision. A final response commits an assistant turn followed
+    /// by an Attempt. Another completed tool request remains exact only in memory and requires a
+    /// subsequent explicit continuation.
+    pub fn continue_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        continuation: ToolTaskContinuation<'_>,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskTurnOutcome, ToolTaskRuntimeError> {
+        let task = self.load_active_task(continuation.task_id)?;
+        let session_id =
+            task.session_id()
+                .cloned()
+                .ok_or_else(|| ToolTaskRuntimeError::TaskNotAssociated {
+                    task_id: continuation.task_id.clone(),
+                })?;
+        let session = self
+            .sessions
+            .load(&session_id)
+            .map_err(ToolTaskRuntimeError::Session)?
+            .ok_or_else(|| {
+                ToolTaskRuntimeError::Session(SessionStoreError::NotFound {
+                    session_id: session_id.clone(),
+                })
+            })?;
+        if session.status() == SessionStatus::Closed {
+            return Err(ToolTaskRuntimeError::Session(
+                SessionStoreError::SessionClosed {
+                    session_id: session_id.clone(),
+                },
+            ));
+        }
+        if session.turns() != continuation.provider.transcript() {
+            return Err(ToolTaskRuntimeError::StaleContinuationTranscript {
+                task_id: continuation.task_id.clone(),
+            });
+        }
+        task.validate_observation_append(
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+        )
+        .map_err(ToolTaskRuntimeError::Task)?;
+        self.ensure_invocation_available(&invocation_id)?;
+
+        let response = self
+            .provider
+            .complete_after_tool(continuation.provider, &registry.metadata())
+            .map_err(ToolTaskRuntimeError::Provider)?;
+        let current_session = self
+            .sessions
+            .load(&session_id)
+            .map_err(ToolTaskRuntimeError::Session)?
+            .ok_or_else(|| {
+                ToolTaskRuntimeError::Session(SessionStoreError::NotFound {
+                    session_id: session_id.clone(),
+                })
+            })?;
+        if current_session.status() == SessionStatus::Closed {
+            return Err(ToolTaskRuntimeError::Session(
+                SessionStoreError::SessionClosed {
+                    session_id: session_id.clone(),
+                },
+            ));
+        }
+        if current_session.turns() != continuation.provider.transcript() {
+            return Err(ToolTaskRuntimeError::StaleContinuationTranscript {
+                task_id: continuation.task_id.clone(),
+            });
+        }
+        let step = dispatch_provider_tool_response(
+            response,
+            registry,
+            &mut self.invocations,
+            continuation.task_id,
+            invocation_id,
+            authorizer,
+        )
+        .map_err(|error| match error {
+            ProviderToolStepError::Provider(error) => ToolTaskRuntimeError::Provider(error),
+            ProviderToolStepError::Invocation(error) => ToolTaskRuntimeError::Invocation(error),
+        })?;
+
+        match step {
+            ProviderToolStepOutcome::Final { content, .. } => {
+                let attempt_text = content.as_str().to_owned();
+                let session = self
+                    .sessions
+                    .append_turn_if_current_transcript(
+                        &session_id,
+                        continuation.provider.transcript(),
+                        SessionTurnRole::Assistant,
+                        content,
+                    )
+                    .map_err(ToolTaskRuntimeError::Session)?
+                    .ok_or_else(|| ToolTaskRuntimeError::StaleContinuationTranscript {
+                        task_id: continuation.task_id.clone(),
+                    })?;
+                let attempt_text = TaskObservationText::new(attempt_text)
+                    .map_err(ToolTaskRuntimeError::InvalidAttemptText)?;
+                let task = self
+                    .tasks
+                    .append_observation(
+                        continuation.task_id,
+                        attempt_observation_id,
+                        TaskObservationKind::Attempt,
+                        attempt_text,
+                    )
+                    .map_err(ToolTaskRuntimeError::Task)?;
+                Ok(ToolTaskTurnOutcome::Final { session, task })
+            }
+            ProviderToolStepOutcome::ToolCompleted {
+                tool_id,
+                input,
+                output,
+                continuation: next,
+            } => Ok(ToolTaskTurnOutcome::ToolCompleted {
+                session,
+                task_id: continuation.task_id.clone(),
+                tool_id,
+                input,
+                output,
+                continuation: next,
+            }),
+        }
+    }
+
     /// Explicitly continues with the same provider instance without persisting a session turn.
     pub fn continue_provider_step<A: ToolAuthorizer>(
         &mut self,

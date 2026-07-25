@@ -441,6 +441,45 @@ impl SessionStore {
         }
     }
 
+    pub(crate) fn append_turn_if_current_transcript(
+        &mut self,
+        id: &SessionId,
+        expected_transcript: &[SessionTurn],
+        role: SessionTurnRole,
+        content: SessionTurnContent,
+    ) -> Result<Option<Session>, SessionStoreError> {
+        loop {
+            let Some(mut loaded) = self.load_versioned(id)? else {
+                return Err(SessionStoreError::NotFound {
+                    session_id: id.clone(),
+                });
+            };
+            if loaded.session.status == SessionStatus::Closed {
+                return Err(SessionStoreError::SessionClosed {
+                    session_id: id.clone(),
+                });
+            }
+            if loaded.session.turns != expected_transcript {
+                return Ok(None);
+            }
+            match self.event_log.append(
+                &session_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                &SessionEvent::TurnAppended {
+                    role,
+                    content: content.clone(),
+                },
+            ) {
+                Ok(_) => {
+                    loaded.session.turns.push(SessionTurn { role, content });
+                    return Ok(Some(loaded.session));
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(SessionStoreError::EventLog(error)),
+            }
+        }
+    }
+
     pub fn append_turn(
         &mut self,
         id: &SessionId,
