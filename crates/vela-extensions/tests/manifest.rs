@@ -136,6 +136,72 @@ fn discovers_extension_manifests_in_sorted_path_order() {
 
 #[cfg(unix)]
 #[test]
+fn discovery_rejects_the_first_exact_duplicate_id_with_deterministic_paths() {
+    let root = tempdir().expect("temporary extension root");
+    let first_path = root.path().join("alpha/extension.yaml");
+    let duplicate_path = root.path().join("middle/extension.yaml");
+    write_manifest(root.path().join("zeta/extension.yaml"), "shared.tool");
+    write_manifest(duplicate_path.clone(), "shared.tool");
+    write_manifest(first_path.clone(), "shared.tool");
+
+    let error = discover_extensions(root.path()).expect_err("duplicate ID is rejected");
+
+    assert!(matches!(
+        error,
+        ExtensionDiscoveryError::DuplicateId {
+            ref id,
+            first_path: ref actual_first_path,
+            duplicate_path: ref actual_duplicate_path,
+        } if id == "shared.tool"
+            && actual_first_path == &first_path
+            && actual_duplicate_path == &duplicate_path
+    ));
+    assert!(error.source().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn duplicate_id_diagnostics_escape_untrusted_id_content() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(
+        root.path().join("alpha/extension.yaml"),
+        "\"shared\\n.tool\"",
+    );
+    write_manifest(
+        root.path().join("zeta/extension.yaml"),
+        "\"shared\\n.tool\"",
+    );
+
+    let error = discover_extensions(root.path()).expect_err("duplicate ID is rejected");
+
+    assert!(
+        error
+            .to_string()
+            .starts_with("duplicate extension ID \"shared\\n.tool\" in ")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_preserves_case_and_whitespace_when_comparing_ids() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("alpha/extension.yaml"), "shared.tool");
+    write_manifest(root.path().join("middle/extension.yaml"), "Shared.Tool");
+    write_manifest(root.path().join("zeta/extension.yaml"), "'shared.tool '");
+
+    let discovered = discover_extensions(root.path()).expect("distinct exact IDs");
+
+    assert_eq!(
+        discovered
+            .iter()
+            .map(|extension| extension.manifest().id())
+            .collect::<Vec<_>>(),
+        ["shared.tool", "Shared.Tool", "shared.tool "]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn discovery_is_shallow_and_ignores_unrelated_entries() {
     let root = tempdir().expect("temporary extension root");
     write_manifest(root.path().join("valid/extension.yaml"), "valid.tool");

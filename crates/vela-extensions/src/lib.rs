@@ -4,6 +4,7 @@
 //! ownership of path selection, discovery, lifecycle, execution, and policy.
 
 use std::{
+    collections::BTreeMap,
     error::Error,
     fmt, fs, io,
     io::Read,
@@ -167,6 +168,7 @@ fn discover_extensions_platform(
     children.sort_by(|left, right| left.to_bytes().cmp(right.to_bytes()));
 
     let mut discovered = Vec::new();
+    let mut paths_by_id: BTreeMap<String, PathBuf> = BTreeMap::new();
     for child_name in children {
         let child_path = root.join(OsStr::from_bytes(child_name.to_bytes()));
         let child_fd = match openat(
@@ -220,6 +222,14 @@ fn discover_extensions_platform(
                 source,
             }
         })?;
+        if let Some(first_path) = paths_by_id.get(manifest.id()) {
+            return Err(ExtensionDiscoveryError::DuplicateId {
+                id: manifest.id().to_owned(),
+                first_path: first_path.clone(),
+                duplicate_path: path,
+            });
+        }
+        paths_by_id.insert(manifest.id().to_owned(), path.clone());
         discovered.push(DiscoveredExtension { path, manifest });
     }
     Ok(discovered)
@@ -312,7 +322,7 @@ impl Error for ExtensionManifestError {
     }
 }
 
-/// A deterministic extension-root enumeration or candidate validation failure.
+/// A deterministic extension-root enumeration, candidate validation, or identity failure.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ExtensionDiscoveryError {
@@ -323,6 +333,11 @@ pub enum ExtensionDiscoveryError {
     Manifest {
         path: PathBuf,
         source: ExtensionManifestError,
+    },
+    DuplicateId {
+        id: String,
+        first_path: PathBuf,
+        duplicate_path: PathBuf,
     },
 }
 
@@ -343,6 +358,16 @@ impl fmt::Display for ExtensionDiscoveryError {
                     path.display()
                 )
             }
+            Self::DuplicateId {
+                id,
+                first_path,
+                duplicate_path,
+            } => write!(
+                formatter,
+                "duplicate extension ID {id:?} in {} and {}",
+                first_path.display(),
+                duplicate_path.display()
+            ),
         }
     }
 }
@@ -352,6 +377,7 @@ impl Error for ExtensionDiscoveryError {
         match self {
             Self::ReadRoot { source, .. } => Some(source),
             Self::Manifest { source, .. } => Some(source),
+            Self::DuplicateId { .. } => None,
         }
     }
 }
