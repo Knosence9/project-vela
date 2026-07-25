@@ -6,8 +6,8 @@ use vela_kernel::{
     runtime::{
         ProviderError, ProviderToolContinuation, ProviderToolResponse, ProviderToolStepOutcome,
         ToolAssistantContinuationProvider, ToolAssistantProvider, ToolAssistantRuntime,
-        ToolTaskCancellationOutcome, ToolTaskCompletionOutcome, ToolTaskFailureOutcome,
-        ToolTaskRuntimeError, ToolTaskTurnOutcome,
+        ToolTaskCancellationOutcome, ToolTaskCompletionOutcome, ToolTaskCorrectionOutcome,
+        ToolTaskFailureOutcome, ToolTaskRuntimeError, ToolTaskTurnOutcome,
     },
     session::{
         SessionClosure, SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole,
@@ -496,6 +496,53 @@ fn completion_final_response_persists_attempt_and_completes_task() {
 }
 
 #[test]
+fn correction_final_response_persists_linked_correction_without_attempt() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let parent_attempt_id = TaskObservationId::new("parent-attempt").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .append_observation(
+            &task_id,
+            parent_attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            vela_kernel::task::TaskObservationText::new("earlier attempt").unwrap(),
+        )
+        .unwrap();
+    let provider = Provider {
+        calls: Rc::new(RefCell::new(Vec::new())),
+        response: Some(Ok(ProviderToolResponse::Final(
+            SessionTurnContent::new("corrected answer").unwrap(),
+        ))),
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+
+    let outcome = runtime
+        .execute_task_correction_turn(
+            &task_id,
+            &parent_attempt_id,
+            SessionTurnContent::new("correct the answer").unwrap(),
+            TaskObservationId::new("correction-1").unwrap(),
+            ToolInvocationId::new("unused-correction-invocation").unwrap(),
+            &mut ToolRegistry::new(),
+            &mut Allow { calls: 0 },
+        )
+        .unwrap();
+
+    let ToolTaskCorrectionOutcome::Final { session, task } = outcome else {
+        panic!("expected final correction turn")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(task.status(), TaskStatus::Active);
+    assert_eq!(task.observations().len(), 2);
+    let correction = &task.observations()[1];
+    assert_eq!(correction.kind(), TaskObservationKind::Correction);
+    assert_eq!(correction.text().as_str(), "corrected answer");
+    assert_eq!(correction.parent_attempt_id(), Some(&parent_attempt_id));
+}
+
+#[test]
 fn failure_final_response_persists_attempt_and_fails_task() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
@@ -890,6 +937,72 @@ fn completion_continuation_persists_final_response_and_completes_task() {
             .unwrap(),
         task
     );
+}
+
+#[test]
+fn correction_continuation_retains_parent_and_persists_linked_correction() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let parent_attempt_id = TaskObservationId::new("parent-attempt").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .append_observation(
+            &task_id,
+            parent_attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            vela_kernel::task::TaskObservationText::new("earlier attempt").unwrap(),
+        )
+        .unwrap();
+    let provider = StatefulProvider {
+        initial_calls: Rc::new(RefCell::new(0)),
+        continuation_calls: Rc::new(RefCell::new(0)),
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+
+    let first = runtime
+        .execute_task_correction_turn(
+            &task_id,
+            &parent_attempt_id,
+            SessionTurnContent::new("correct with a tool").unwrap(),
+            TaskObservationId::new("unused-initial-correction").unwrap(),
+            ToolInvocationId::new("correction-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    assert_eq!(
+        first.continuation().unwrap().parent_attempt_id(),
+        &parent_attempt_id
+    );
+    let outcome = runtime
+        .continue_correction_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("continued-correction").unwrap(),
+            ToolInvocationId::new("unused-correction-final").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let ToolTaskCorrectionOutcome::Final { session, task } = outcome else {
+        panic!("expected final correction continuation")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(task.status(), TaskStatus::Active);
+    assert_eq!(task.observations().len(), 2);
+    let correction = &task.observations()[1];
+    assert_eq!(correction.kind(), TaskObservationKind::Correction);
+    assert_eq!(correction.text().as_str(), "continued final");
+    assert_eq!(correction.parent_attempt_id(), Some(&parent_attempt_id));
 }
 
 #[test]
@@ -1516,6 +1629,53 @@ fn task_continuation_provider_failure_preserves_the_existing_prefix() {
             .unwrap()
             .observations()
             .is_empty()
+    );
+}
+
+#[test]
+fn correction_preflight_rejects_invalid_lineage_before_transcript_and_provider() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let provider = Provider {
+        calls: calls.clone(),
+        response: Some(Ok(ProviderToolResponse::Final(
+            SessionTurnContent::new("unused").unwrap(),
+        ))),
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let invocation_id = ToolInvocationId::new("unused-correction").unwrap();
+
+    let error = runtime
+        .execute_task_correction_turn(
+            &task_id,
+            &TaskObservationId::new("missing-parent").unwrap(),
+            SessionTurnContent::new("not persisted").unwrap(),
+            TaskObservationId::new("correction").unwrap(),
+            invocation_id.clone(),
+            &mut ToolRegistry::new(),
+            &mut Allow { calls: 0 },
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, ToolTaskRuntimeError::Task(_)));
+    assert!(calls.borrow().is_empty());
+    assert!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&invocation_id)
+            .unwrap()
+            .is_none()
     );
 }
 
