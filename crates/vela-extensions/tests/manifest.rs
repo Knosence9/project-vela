@@ -226,6 +226,27 @@ fn discovery_ignores_fifo_manifest_candidates_without_blocking() {
     assert!(discovered.is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn discovery_reports_an_unreadable_child_directory_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().expect("temporary extension root");
+    let child = root.path().join("blocked");
+    fs::create_dir(&child).expect("create blocked child");
+    fs::set_permissions(&child, fs::Permissions::from_mode(0o000)).expect("block child reads");
+
+    let result = discover_extensions(root.path());
+
+    fs::set_permissions(&child, fs::Permissions::from_mode(0o700)).expect("restore child access");
+    let error = result.expect_err("unreadable child is reported");
+    assert!(matches!(
+        error,
+        ExtensionDiscoveryError::ReadRoot { ref path, .. } if path == &child
+    ));
+    assert!(error.source().is_some());
+}
+
 #[test]
 fn discovery_preserves_root_enumeration_errors() {
     let root = tempdir().expect("temporary extension root");

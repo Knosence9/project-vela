@@ -168,6 +168,7 @@ fn discover_extensions_platform(
 
     let mut discovered = Vec::new();
     for child_name in children {
+        let child_path = root.join(OsStr::from_bytes(child_name.to_bytes()));
         let child_fd = match openat(
             &root_fd,
             &child_name,
@@ -180,14 +181,12 @@ fn discover_extensions_platform(
             }
             Err(source) => {
                 return Err(ExtensionDiscoveryError::ReadRoot {
-                    path: root.to_path_buf(),
+                    path: child_path,
                     source: io::Error::from(source),
                 });
             }
         };
-        let path = root
-            .join(OsStr::from_bytes(child_name.to_bytes()))
-            .join("extension.yaml");
+        let path = child_path.join("extension.yaml");
         let manifest_fd = match openat(
             &child_fd,
             c"extension.yaml",

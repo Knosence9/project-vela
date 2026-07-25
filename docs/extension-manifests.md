@@ -27,7 +27,7 @@ description: Searches local project files
 
 Discovery currently requires a Unix target, where root, child-directory, and manifest opens can remain anchored to directory descriptors and reject symlink traversal. Other targets fail closed with a source-preserving `ReadRoot` error instead of reopening enumerated paths by name.
 
-Each result contains the validated manifest and its source path. An unreadable root or directory-entry failure returns a typed, source-preserving root error. An invalid candidate returns a typed, source-preserving manifest error with its path. Discovery fails as a whole rather than returning the valid prefix before an error.
+Each result contains the validated manifest and its source path. An unreadable root or directory-entry failure returns a typed, source-preserving root error with the failing directory path. An invalid candidate returns a typed, source-preserving manifest error with its path. Discovery fails as a whole rather than returning the valid prefix before an error.
 
 ## Ownership and trust boundary
 
