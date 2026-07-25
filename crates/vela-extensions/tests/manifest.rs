@@ -2,7 +2,8 @@ use std::{error::Error, fs};
 
 use tempfile::tempdir;
 use vela_extensions::{
-    ExtensionKind, ExtensionManifest, ExtensionManifestError, MAX_MANIFEST_BYTES,
+    ExtensionDiscoveryError, ExtensionKind, ExtensionManifest, ExtensionManifestError,
+    MAX_MANIFEST_BYTES, discover_extensions,
 };
 
 #[test]
@@ -105,6 +106,189 @@ fn bounds_manifest_input_before_parsing() {
         .expect("write oversized manifest crossing a UTF-8 boundary");
     let error = ExtensionManifest::load(path).expect_err("UTF-8 boundary oversize is rejected");
     assert!(matches!(error, ExtensionManifestError::TooLarge { .. }));
+}
+
+#[cfg(unix)]
+#[test]
+fn discovers_extension_manifests_in_sorted_path_order() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("zeta/extension.yaml"), "zeta.tool");
+    write_manifest(root.path().join("alpha/extension.yaml"), "alpha.tool");
+
+    let discovered = discover_extensions(root.path()).expect("discover extensions");
+
+    assert_eq!(
+        discovered
+            .iter()
+            .map(|extension| extension.manifest().id())
+            .collect::<Vec<_>>(),
+        ["alpha.tool", "zeta.tool"]
+    );
+    assert_eq!(
+        discovered[0].path(),
+        root.path().join("alpha/extension.yaml")
+    );
+    assert_eq!(
+        discovered[1].path(),
+        root.path().join("zeta/extension.yaml")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_is_shallow_and_ignores_unrelated_entries() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("valid/extension.yaml"), "valid.tool");
+    write_manifest(root.path().join("extension.yaml"), "root.tool");
+    write_manifest(
+        root.path().join("nested/deeper/extension.yaml"),
+        "nested.tool",
+    );
+    fs::write(root.path().join("notes.txt"), "not a manifest").expect("write unrelated file");
+    fs::create_dir(root.path().join("empty")).expect("create empty extension directory");
+
+    let discovered = discover_extensions(root.path()).expect("discover extensions");
+
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].manifest().id(), "valid.tool");
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_reports_the_first_sorted_invalid_manifest_with_its_path() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("zeta/extension.yaml"), "zeta.tool");
+    let invalid_path = root.path().join("alpha/extension.yaml");
+    fs::create_dir_all(invalid_path.parent().expect("manifest parent"))
+        .expect("create extension directory");
+    fs::write(&invalid_path, "manifest_version: nope").expect("write invalid manifest");
+
+    let error = discover_extensions(root.path()).expect_err("invalid discovery");
+
+    assert!(matches!(
+        error,
+        ExtensionDiscoveryError::Manifest { ref path, .. } if path == &invalid_path
+    ));
+    assert!(error.source().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_rejects_symlinked_candidates_without_following_targets() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("temporary extension root");
+    let outside = tempdir().expect("external directory");
+    let external_manifest = outside.path().join("external.yaml");
+    write_manifest(external_manifest.clone(), "external.tool");
+    let linked_candidate = root.path().join("alpha/extension.yaml");
+    fs::create_dir_all(linked_candidate.parent().expect("manifest parent"))
+        .expect("create extension directory");
+    symlink(&external_manifest, &linked_candidate).expect("link external manifest");
+
+    let error = discover_extensions(root.path()).expect_err("external symlink is rejected");
+
+    assert!(matches!(
+        error,
+        ExtensionDiscoveryError::Manifest { ref path, .. } if path == &linked_candidate
+    ));
+    assert!(error.source().is_some());
+
+    let dangling_root = tempdir().expect("temporary extension root");
+    let dangling_candidate = dangling_root.path().join("alpha/extension.yaml");
+    fs::create_dir_all(dangling_candidate.parent().expect("manifest parent"))
+        .expect("create extension directory");
+    symlink("missing.yaml", &dangling_candidate).expect("create dangling symlink");
+
+    let error =
+        discover_extensions(dangling_root.path()).expect_err("dangling symlink is rejected");
+
+    assert!(matches!(
+        error,
+        ExtensionDiscoveryError::Manifest { ref path, .. } if path == &dangling_candidate
+    ));
+    assert!(error.source().is_some());
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+#[test]
+fn discovery_ignores_fifo_manifest_candidates_without_blocking() {
+    use rustix::fs::{Mode, mkfifoat};
+
+    let root = tempdir().expect("temporary extension root");
+    let child = root.path().join("fifo");
+    fs::create_dir(&child).expect("create extension directory");
+    let child = fs::File::open(child).expect("open extension directory");
+    mkfifoat(&child, c"extension.yaml", Mode::RUSR | Mode::WUSR).expect("create manifest fifo");
+
+    let discovered = discover_extensions(root.path()).expect("ignore non-file candidate");
+
+    assert!(discovered.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_reports_an_unreadable_child_directory_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().expect("temporary extension root");
+    let child = root.path().join("blocked");
+    fs::create_dir(&child).expect("create blocked child");
+    fs::set_permissions(&child, fs::Permissions::from_mode(0o000)).expect("block child reads");
+
+    let result = discover_extensions(root.path());
+
+    fs::set_permissions(&child, fs::Permissions::from_mode(0o700)).expect("restore child access");
+    let error = result.expect_err("unreadable child is reported");
+    assert!(matches!(
+        error,
+        ExtensionDiscoveryError::ReadRoot { ref path, .. } if path == &child
+    ));
+    assert!(error.source().is_some());
+}
+
+#[test]
+fn discovery_preserves_root_enumeration_errors() {
+    let root = tempdir().expect("temporary extension root");
+    let missing = root.path().join("missing");
+
+    let error = discover_extensions(&missing).expect_err("missing extension root");
+
+    assert!(matches!(
+        error,
+        ExtensionDiscoveryError::ReadRoot { ref path, .. } if path == &missing
+    ));
+    assert!(error.source().is_some());
+}
+
+#[cfg(not(unix))]
+#[test]
+fn discovery_fails_closed_when_descriptor_anchored_traversal_is_unavailable() {
+    let root = tempdir().expect("temporary extension root");
+
+    let error = discover_extensions(root.path()).expect_err("unsupported secure discovery");
+
+    assert!(matches!(
+        &error,
+        ExtensionDiscoveryError::ReadRoot { path, .. } if path == root.path()
+    ));
+    let source = error
+        .source()
+        .and_then(|source| source.downcast_ref::<std::io::Error>());
+    assert_eq!(
+        source.map(std::io::Error::kind),
+        Some(std::io::ErrorKind::Unsupported)
+    );
+}
+
+fn write_manifest(path: std::path::PathBuf, id: &str) {
+    fs::create_dir_all(path.parent().expect("manifest parent"))
+        .expect("create extension directory");
+    fs::write(
+        path,
+        format!("manifest_version: 1\nid: {id}\nkind: tool\nentrypoint: run\n"),
+    )
+    .expect("write manifest");
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {

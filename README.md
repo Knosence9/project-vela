@@ -157,6 +157,7 @@ The first milestone is the **evidence loop**:
 27. Cancel tasks explicitly through bounded provider/tool turns and continuations. ✅
 28. Persist linked corrections through bounded provider/tool turns and continuations. ✅
 29. Validate versioned tool, skill, and workflow extension manifests without activating them. ✅
+30. Discover validated manifests deterministically from one caller-selected extension root. ✅
 
 ## Project documents
 

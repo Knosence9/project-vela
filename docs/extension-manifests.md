@@ -21,10 +21,18 @@ description: Searches local project files
 
 `ExtensionManifest::load` reads at most 64 KiB plus one boundary byte before parsing. It accepts a manifest whose encoded size is exactly 64 KiB and returns a deterministic `TooLarge` error for the first byte beyond that limit. It also returns typed errors for unreadable files, malformed or structurally invalid YAML, unsupported versions, unsupported kinds, and blank required strings. Read and parser failures remain available through `std::error::Error::source`.
 
+## Shallow discovery
+
+`discover_extensions(root)` inspects only `root/*/extension.yaml`. It ignores manifests directly in `root`, deeper nested manifests, unrelated files, and immediate child directories without a manifest. Candidate paths are sorted lexicographically before loading, so both successful results and the first validation failure are deterministic. Manifest symlinks are rejected without following their targets, including dangling symlinks.
+
+Discovery currently requires a Unix target, where root, child-directory, and manifest opens can remain anchored to directory descriptors and reject symlink traversal. Other targets fail closed with a source-preserving `ReadRoot` error instead of reopening enumerated paths by name.
+
+Each result contains the validated manifest and its source path. An unreadable root or directory-entry failure returns a typed, source-preserving root error with the failing directory path. An invalid candidate returns a typed, source-preserving manifest error with its path. Discovery fails as a whole rather than returning the valid prefix before an error.
+
 ## Ownership and trust boundary
 
-The caller chooses the path. Successful parsing does not discover neighboring files, register a capability, grant permission, import code, execute an entrypoint, or persist state. A future loader must treat manifest declarations as untrusted metadata and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
+The caller chooses each manifest path or the one extension root. Successful parsing or discovery does not consult configuration, register a capability, grant permission, import code, execute an entrypoint, or persist state. A future loader must treat manifest declarations as untrusted metadata and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
 
 ## Non-goals
 
-This boundary does not provide directory scanning, duplicate detection across manifests, registries, dependencies, enable/disable state, lifecycle hooks, activation, reload, filesystem watching, execution, tool authorization, sandboxing, persistence, or migration.
+This boundary does not provide recursive or multi-root scanning, duplicate detection across manifests, registries, dependencies, enable/disable state, lifecycle hooks, activation, reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration.
