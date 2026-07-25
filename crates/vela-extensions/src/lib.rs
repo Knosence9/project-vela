@@ -75,6 +75,7 @@ impl ExtensionManifest {
         }
         validate_non_blank("id", &raw.id)?;
         validate_non_blank("entrypoint", &raw.entrypoint)?;
+        validate_entrypoint(&raw.entrypoint)?;
         let kind = match raw.kind.as_str() {
             "tool" => ExtensionKind::Tool,
             "skill" => ExtensionKind::Skill,
@@ -256,6 +257,58 @@ fn validate_non_blank(field: &'static str, value: &str) -> Result<(), ExtensionM
     }
 }
 
+fn validate_entrypoint(entrypoint: &str) -> Result<(), ExtensionManifestError> {
+    let has_invalid_component = entrypoint.split('/').any(|component| {
+        component.trim().is_empty()
+            || matches!(component, "." | "..")
+            || component.ends_with([' ', '.'])
+            || component.chars().any(|character| {
+                character.is_ascii_control()
+                    || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\')
+            })
+            || is_windows_reserved_name(component)
+    });
+
+    if entrypoint.starts_with('/') || has_invalid_component {
+        Err(ExtensionManifestError::InvalidEntrypoint)
+    } else {
+        Ok(())
+    }
+}
+
+fn is_windows_reserved_name(component: &str) -> bool {
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or(component)
+        .trim_end_matches([' ', '.']);
+    if ["CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved))
+    {
+        return true;
+    }
+
+    let mut characters = stem.chars();
+    let prefix = (
+        characters
+            .next()
+            .map(|character| character.to_ascii_uppercase()),
+        characters
+            .next()
+            .map(|character| character.to_ascii_uppercase()),
+        characters
+            .next()
+            .map(|character| character.to_ascii_uppercase()),
+    );
+    let suffix = characters.next();
+    matches!(
+        prefix,
+        (Some('C'), Some('O'), Some('M')) | (Some('L'), Some('P'), Some('T'))
+    ) && matches!(suffix, Some('1'..='9' | '¹' | '²' | '³'))
+        && characters.next().is_none()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawExtensionManifest {
@@ -276,6 +329,7 @@ pub enum ExtensionManifestError {
     UnsupportedVersion { version: u64 },
     UnsupportedKind { kind: String },
     BlankField { field: &'static str },
+    InvalidEntrypoint,
 }
 
 impl fmt::Display for ExtensionManifestError {
@@ -305,6 +359,10 @@ impl fmt::Display for ExtensionManifestError {
                     "extension manifest field {field} must not be blank"
                 )
             }
+            Self::InvalidEntrypoint => write!(
+                formatter,
+                "extension manifest field entrypoint must be a portable relative path"
+            ),
         }
     }
 }
@@ -317,7 +375,8 @@ impl Error for ExtensionManifestError {
             Self::TooLarge { .. }
             | Self::UnsupportedVersion { .. }
             | Self::UnsupportedKind { .. }
-            | Self::BlankField { .. } => None,
+            | Self::BlankField { .. }
+            | Self::InvalidEntrypoint => None,
         }
     }
 }

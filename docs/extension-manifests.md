@@ -15,11 +15,11 @@ description: Searches local project files
 - `manifest_version` must be `1`.
 - `id` is a stable caller-authored identifier containing at least one non-whitespace character. Surrounding whitespace is preserved.
 - `kind` is exactly `tool`, `skill`, or `workflow`, matching the capability vocabulary in the project plans.
-- `entrypoint` is an opaque string containing at least one non-whitespace character. Parsing does not resolve or execute it.
+- `entrypoint` is a portable lexical path relative to the extension directory. It uses `/` separators and contains one or more non-blank normal components. Absolute paths, empty components, `.` or `..` components, ASCII control characters, Windows-reserved characters or device names, and components ending in a space or dot are rejected. These rules also reject Windows drive-prefixed and backslash-separated forms. The authored value is otherwise preserved.
 - `description` is optional and preserved without reinterpretation.
 - Unknown fields are rejected so misspellings and unsupported semantics do not silently enter the runtime contract.
 
-`ExtensionManifest::load` reads at most 64 KiB plus one boundary byte before parsing. It accepts a manifest whose encoded size is exactly 64 KiB and returns a deterministic `TooLarge` error for the first byte beyond that limit. It also returns typed errors for unreadable files, malformed or structurally invalid YAML, unsupported versions, unsupported kinds, and blank required strings. Read and parser failures remain available through `std::error::Error::source`.
+`ExtensionManifest::load` reads at most 64 KiB plus one boundary byte before parsing. It accepts a manifest whose encoded size is exactly 64 KiB and returns a deterministic `TooLarge` error for the first byte beyond that limit. It also returns typed errors for unreadable files, malformed or structurally invalid YAML, unsupported versions, unsupported kinds, blank required strings, and invalid entrypoint paths. Read and parser failures remain available through `std::error::Error::source`.
 
 ## Shallow discovery
 
@@ -33,7 +33,7 @@ One discovered root is an exact-ID namespace. After validating candidates in sor
 
 ## Ownership and trust boundary
 
-The caller chooses each manifest path or the one extension root. Successful parsing or discovery does not consult configuration, register a capability, grant permission, import code, execute an entrypoint, or persist state. A future loader must treat manifest declarations as untrusted metadata and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
+The caller chooses each manifest path or the one extension root. Successful parsing or discovery does not consult configuration, inspect or resolve an entrypoint on the filesystem, register a capability, grant permission, import code, execute an entrypoint, or persist state. Lexical entrypoint validation is not a filesystem sandbox: a future loader must open targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
 
 ## Non-goals
 

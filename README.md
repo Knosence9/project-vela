@@ -159,6 +159,7 @@ The first milestone is the **evidence loop**:
 29. Validate versioned tool, skill, and workflow extension manifests without activating them. ✅
 30. Discover validated manifests deterministically from one caller-selected extension root. ✅
 31. Reject exact duplicate capability IDs within one discovered extension root. ✅
+32. Validate portable extension-local entrypoint references without resolving or activating them. ✅
 
 ## Project documents
 
