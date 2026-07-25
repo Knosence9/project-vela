@@ -202,6 +202,74 @@ fn discovers_extension_manifests_in_sorted_path_order() {
 
 #[cfg(unix)]
 #[test]
+fn discovery_accepts_a_nested_regular_file_entrypoint_without_reading_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().expect("temporary extension root");
+    let manifest_path = root.path().join("alpha/extension.yaml");
+    let entrypoint_path = root.path().join("alpha/bin/run");
+    write_manifest_with_entrypoint(&manifest_path, "alpha.tool", "bin/run");
+    fs::create_dir_all(root.path().join("alpha/bin")).expect("create entrypoint directory");
+    fs::write(&entrypoint_path, "not executed").expect("write entrypoint");
+    fs::set_permissions(&entrypoint_path, fs::Permissions::from_mode(0o111))
+        .expect("remove entrypoint read permission");
+
+    let discovered = discover_extensions(root.path()).expect("regular entrypoint target");
+
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].manifest().entrypoint(), "bin/run");
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_rejects_missing_symlinked_and_non_regular_entrypoint_targets() {
+    use std::os::unix::fs::symlink;
+
+    for (case, entrypoint) in [
+        ("missing", "missing"),
+        ("symlink", "linked"),
+        ("intermediate-symlink", "linked-directory/run"),
+        ("directory", "directory"),
+    ] {
+        let root = tempdir().expect("temporary extension root");
+        let manifest_path = root.path().join("alpha/extension.yaml");
+        write_manifest_with_entrypoint(&manifest_path, "alpha.tool", entrypoint);
+        match case {
+            "symlink" => {
+                fs::write(root.path().join("alpha/outside"), "target").expect("write target");
+                symlink("outside", root.path().join("alpha/linked")).expect("link entrypoint");
+            }
+            "intermediate-symlink" => {
+                fs::create_dir(root.path().join("alpha/real-directory"))
+                    .expect("create real directory");
+                fs::write(root.path().join("alpha/real-directory/run"), "target")
+                    .expect("write nested target");
+                symlink("real-directory", root.path().join("alpha/linked-directory"))
+                    .expect("link entrypoint directory");
+            }
+            "directory" => {
+                fs::create_dir(root.path().join("alpha/directory"))
+                    .expect("create entrypoint directory");
+            }
+            _ => {}
+        }
+
+        let error = discover_extensions(root.path()).expect_err("unsafe entrypoint target");
+
+        assert!(matches!(
+            error,
+            ExtensionDiscoveryError::Entrypoint {
+                ref path,
+                entrypoint: ref actual_entrypoint,
+                ..
+            } if path == &manifest_path && actual_entrypoint == entrypoint
+        ));
+        assert!(error.source().is_some());
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn discovery_rejects_the_first_exact_duplicate_id_with_deterministic_paths() {
     let root = tempdir().expect("temporary extension root");
     let first_path = root.path().join("alpha/extension.yaml");
@@ -414,11 +482,20 @@ fn discovery_fails_closed_when_descriptor_anchored_traversal_is_unavailable() {
 }
 
 fn write_manifest(path: std::path::PathBuf, id: &str) {
+    write_manifest_with_entrypoint(&path, id, "run");
+    fs::write(
+        path.parent().expect("manifest parent").join("run"),
+        "not executed",
+    )
+    .expect("write entrypoint");
+}
+
+fn write_manifest_with_entrypoint(path: &std::path::Path, id: &str, entrypoint: &str) {
     fs::create_dir_all(path.parent().expect("manifest parent"))
         .expect("create extension directory");
     fs::write(
         path,
-        format!("manifest_version: 1\nid: {id}\nkind: tool\nentrypoint: run\n"),
+        format!("manifest_version: 1\nid: {id}\nkind: tool\nentrypoint: {entrypoint}\n"),
     )
     .expect("write manifest");
 }

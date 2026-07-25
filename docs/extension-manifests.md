@@ -1,6 +1,6 @@
 # Extension manifests
 
-The `vela-extensions` crate owns the first non-executing contract for describing modular Vela capabilities. It parses and validates one caller-selected YAML manifest at a time; a valid manifest is metadata, not permission to load or run code.
+The `vela-extensions` crate owns the first non-executing contract for describing modular Vela capabilities. It parses and validates one caller-selected YAML manifest at a time; a valid manifest is metadata, not permission to load or run code. Shallow discovery additionally validates each package's declared entrypoint target without reading or activating it.
 
 ## Version 1 shape
 
@@ -25,7 +25,7 @@ description: Searches local project files
 
 `discover_extensions(root)` inspects only `root/*/extension.yaml`. It ignores manifests directly in `root`, deeper nested manifests, unrelated files, and immediate child directories without a manifest. Candidate paths are sorted lexicographically before loading, so both successful results and the first validation failure are deterministic. Manifest symlinks are rejected without following their targets, including dangling symlinks.
 
-Discovery currently requires a Unix target, where root, child-directory, and manifest opens can remain anchored to directory descriptors and reject symlink traversal. Other targets fail closed with a source-preserving `ReadRoot` error instead of reopening enumerated paths by name.
+Discovery currently requires a Unix target, where root, child-directory, manifest, and entrypoint traversal can remain anchored to directory descriptors and reject symlink traversal. After loading each manifest, discovery opens every intermediate entrypoint component relative to the already-open extension-directory descriptor, requires those components to be directories, and inspects the final component descriptor-relatively without following it. The final target must be a regular file; this check requires no read permission and reads no target content. Missing targets, symlinks at any component, and non-regular final targets fail discovery with a typed error containing the manifest path and authored entrypoint; the underlying I/O error remains available through `std::error::Error::source`. Other targets fail closed with a source-preserving `ReadRoot` error instead of reopening enumerated paths by name.
 
 Each result contains the validated manifest and its source path. An unreadable root or directory-entry failure returns a typed, source-preserving root error with the failing directory path. An invalid candidate returns a typed, source-preserving manifest error with its path. Discovery fails as a whole rather than returning the valid prefix before an error.
 
@@ -33,7 +33,7 @@ One discovered root is an exact-ID namespace. After validating candidates in sor
 
 ## Ownership and trust boundary
 
-The caller chooses each manifest path or the one extension root. Successful parsing or discovery does not consult configuration, inspect or resolve an entrypoint on the filesystem, register a capability, grant permission, import code, execute an entrypoint, or persist state. Lexical entrypoint validation is not a filesystem sandbox: a future loader must open targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
+The caller chooses each manifest path or the one extension root. Successful standalone parsing does not consult configuration or inspect an entrypoint on the filesystem. Discovery validates that the entrypoint target is an extension-local regular file at discovery time, but successful parsing or discovery does not register a capability, grant permission, import code, execute an entrypoint, read target content, or persist state. Discovery is not an activation lease: a future loader must reopen targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes again, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
 
 ## Non-goals
 
