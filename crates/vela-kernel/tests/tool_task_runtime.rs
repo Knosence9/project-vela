@@ -89,6 +89,132 @@ impl ToolAssistantContinuationProvider for StatefulProvider {
     }
 }
 
+struct ChainedProvider {
+    continuation_calls: Rc<RefCell<usize>>,
+}
+
+impl ToolAssistantProvider for ChainedProvider {
+    fn complete_with_tools(
+        &mut self,
+        _transcript: &[vela_kernel::session::SessionTurn],
+        _tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError> {
+        Ok(ProviderToolResponse::ToolRequest {
+            tool_id: ToolId::new("tool.echo").unwrap(),
+            input: json!({"secret": "first-input"}),
+        })
+    }
+}
+
+impl ToolAssistantContinuationProvider for ChainedProvider {
+    fn complete_after_tool(
+        &mut self,
+        continuation: ProviderToolContinuation<'_>,
+        _tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError> {
+        let call = *self.continuation_calls.borrow();
+        *self.continuation_calls.borrow_mut() += 1;
+        match call {
+            0 => {
+                assert_eq!(
+                    continuation.prior_result().output(),
+                    &json!({"echo": {"secret": "first-input"}})
+                );
+                Ok(ProviderToolResponse::ToolRequest {
+                    tool_id: ToolId::new("tool.echo").unwrap(),
+                    input: json!({"secret": "second-input"}),
+                })
+            }
+            1 => {
+                assert_eq!(
+                    continuation.prior_result().output(),
+                    &json!({"echo": {"secret": "second-input"}})
+                );
+                Ok(ProviderToolResponse::Final(
+                    SessionTurnContent::new("chain complete").unwrap(),
+                ))
+            }
+            _ => panic!("continuation provider called more than twice"),
+        }
+    }
+}
+
+struct FailingContinuationProvider {
+    calls: Rc<RefCell<usize>>,
+}
+
+impl ToolAssistantProvider for FailingContinuationProvider {
+    fn complete_with_tools(
+        &mut self,
+        _transcript: &[vela_kernel::session::SessionTurn],
+        _tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError> {
+        Ok(ProviderToolResponse::ToolRequest {
+            tool_id: ToolId::new("tool.echo").unwrap(),
+            input: json!({"step": 1}),
+        })
+    }
+}
+
+impl ToolAssistantContinuationProvider for FailingContinuationProvider {
+    fn complete_after_tool(
+        &mut self,
+        _continuation: ProviderToolContinuation<'_>,
+        _tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError> {
+        *self.calls.borrow_mut() += 1;
+        Err(ProviderError::new(FakeProviderFailure))
+    }
+}
+
+struct RacingContinuationProvider {
+    path: std::path::PathBuf,
+    session_id: SessionId,
+    calls: Rc<RefCell<usize>>,
+    request_tool: bool,
+}
+
+impl ToolAssistantProvider for RacingContinuationProvider {
+    fn complete_with_tools(
+        &mut self,
+        _transcript: &[vela_kernel::session::SessionTurn],
+        _tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError> {
+        Ok(ProviderToolResponse::ToolRequest {
+            tool_id: ToolId::new("tool.echo").unwrap(),
+            input: json!({"step": 1}),
+        })
+    }
+}
+
+impl ToolAssistantContinuationProvider for RacingContinuationProvider {
+    fn complete_after_tool(
+        &mut self,
+        _continuation: ProviderToolContinuation<'_>,
+        _tools: &[ToolMetadata],
+    ) -> Result<ProviderToolResponse, ProviderError> {
+        *self.calls.borrow_mut() += 1;
+        SessionStore::open(&self.path)
+            .unwrap()
+            .append_turn(
+                &self.session_id,
+                SessionTurnRole::Human,
+                SessionTurnContent::new("racing turn").unwrap(),
+            )
+            .unwrap();
+        if self.request_tool {
+            Ok(ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"stale": true}),
+            })
+        } else {
+            Ok(ProviderToolResponse::Final(
+                SessionTurnContent::new("stale final").unwrap(),
+            ))
+        }
+    }
+}
+
 struct EchoTool {
     id: ToolId,
     calls: Rc<RefCell<usize>>,
@@ -469,6 +595,417 @@ fn explicit_continuation_reuses_the_same_provider_instance() {
     assert_eq!(
         (*initial_calls.borrow(), *continuation_calls.borrow()),
         (1, 1)
+    );
+}
+
+#[test]
+fn task_continuation_persists_final_response_and_attempt() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let initial_calls = Rc::new(RefCell::new(0));
+    let continuation_calls = Rc::new(RefCell::new(0));
+    let provider = StatefulProvider {
+        initial_calls: initial_calls.clone(),
+        continuation_calls: continuation_calls.clone(),
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+    let first = runtime
+        .execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("start").unwrap(),
+            TaskObservationId::new("unused-initial-attempt").unwrap(),
+            ToolInvocationId::new("invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let final_outcome = runtime
+        .continue_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("continued-attempt").unwrap(),
+            ToolInvocationId::new("unused-final-invocation").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let ToolTaskTurnOutcome::Final { session, task } = final_outcome else {
+        panic!("expected persisted final continuation")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(session.turns().len(), 2);
+    assert_eq!(session.turns()[1].role(), SessionTurnRole::Assistant);
+    assert_eq!(session.turns()[1].content().as_str(), "continued final");
+    assert_eq!(task.id(), &task_id);
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].id().as_str(), "continued-attempt");
+    assert_eq!(task.observations()[0].text().as_str(), "continued final");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
+    assert_eq!(
+        (*initial_calls.borrow(), *continuation_calls.borrow()),
+        (1, 1)
+    );
+}
+
+#[test]
+fn task_continuation_dispatches_another_tool_without_persisting_exact_values() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let continuation_calls = Rc::new(RefCell::new(0));
+    let provider = ChainedProvider {
+        continuation_calls: continuation_calls.clone(),
+    };
+    let tool_calls = Rc::new(RefCell::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: tool_calls.clone(),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+    let first = runtime
+        .execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("start chain").unwrap(),
+            TaskObservationId::new("unused-initial-attempt").unwrap(),
+            ToolInvocationId::new("chain-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let second = runtime
+        .continue_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("unused-second-attempt").unwrap(),
+            ToolInvocationId::new("chain-invocation-2").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    let second_result = second.tool_result().unwrap();
+    assert_eq!(second_result.input(), &json!({"secret": "second-input"}));
+    assert_eq!(
+        second_result.output(),
+        &json!({"echo": {"secret": "second-input"}})
+    );
+    let durable_session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(durable_session.turns().len(), 1);
+    assert!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .observations()
+            .is_empty()
+    );
+    let retained: Vec<Vec<u8>> = rusqlite::Connection::open(&path)
+        .unwrap()
+        .prepare("SELECT payload FROM events WHERE stream_id = ?1 ORDER BY stream_version")
+        .unwrap()
+        .query_map(("tool-invocation:chain-invocation-2",), |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    const SECRET: &[u8] = b"second-input";
+    assert!(
+        retained
+            .iter()
+            .all(|payload| !payload.windows(SECRET.len()).any(|window| window == SECRET))
+    );
+
+    let final_outcome = runtime
+        .continue_task_turn(
+            second.continuation().unwrap(),
+            TaskObservationId::new("chain-attempt").unwrap(),
+            ToolInvocationId::new("unused-chain-final").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    assert!(matches!(
+        final_outcome,
+        ToolTaskTurnOutcome::Final { ref session, ref task }
+            if session.turns().len() == 2 && task.observations().len() == 1
+    ));
+    assert_eq!((*continuation_calls.borrow(), *tool_calls.borrow()), (2, 2));
+}
+
+#[test]
+fn task_continuation_rejects_a_transcript_race_after_provider() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let calls = Rc::new(RefCell::new(0));
+    let provider = RacingContinuationProvider {
+        path: path.clone(),
+        session_id: session_id.clone(),
+        calls: calls.clone(),
+        request_tool: false,
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+    let first = runtime
+        .execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("start").unwrap(),
+            TaskObservationId::new("unused-initial-attempt").unwrap(),
+            ToolInvocationId::new("race-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let error = runtime
+        .continue_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("race-attempt").unwrap(),
+            ToolInvocationId::new("unused-race-final").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ToolTaskRuntimeError::StaleContinuationTranscript { .. }
+    ));
+    assert_eq!(*calls.borrow(), 1);
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 2);
+    assert_eq!(session.turns()[1].content().as_str(), "racing turn");
+    assert!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .observations()
+            .is_empty()
+    );
+}
+
+#[test]
+fn task_continuation_rejects_a_tool_request_from_a_racing_transcript() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let calls = Rc::new(RefCell::new(0));
+    let provider = RacingContinuationProvider {
+        path: path.clone(),
+        session_id,
+        calls: calls.clone(),
+        request_tool: true,
+    };
+    let tool_calls = Rc::new(RefCell::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: tool_calls.clone(),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+    let first = runtime
+        .execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("start").unwrap(),
+            TaskObservationId::new("unused-initial-attempt").unwrap(),
+            ToolInvocationId::new("tool-race-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let error = runtime
+        .continue_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("tool-race-attempt").unwrap(),
+            ToolInvocationId::new("tool-race-invocation-2").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ToolTaskRuntimeError::StaleContinuationTranscript { .. }
+    ));
+    assert_eq!((*calls.borrow(), *tool_calls.borrow()), (1, 1));
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("tool-race-invocation-2").unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn task_continuation_rejects_stale_transcript_before_provider() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let initial_calls = Rc::new(RefCell::new(0));
+    let continuation_calls = Rc::new(RefCell::new(0));
+    let provider = StatefulProvider {
+        initial_calls,
+        continuation_calls: continuation_calls.clone(),
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+    let first = runtime
+        .execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("start").unwrap(),
+            TaskObservationId::new("unused-initial-attempt").unwrap(),
+            ToolInvocationId::new("stale-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .append_turn(
+            &session_id,
+            SessionTurnRole::Human,
+            SessionTurnContent::new("racing turn").unwrap(),
+        )
+        .unwrap();
+
+    let error = runtime
+        .continue_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("stale-attempt").unwrap(),
+            ToolInvocationId::new("stale-invocation-2").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ToolTaskRuntimeError::StaleContinuationTranscript { .. }
+    ));
+    assert_eq!(*continuation_calls.borrow(), 0);
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("stale-invocation-2").unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn task_continuation_provider_failure_preserves_the_existing_prefix() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let calls = Rc::new(RefCell::new(0));
+    let provider = FailingContinuationProvider {
+        calls: calls.clone(),
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+    let first = runtime
+        .execute_task_turn(
+            &task_id,
+            SessionTurnContent::new("durable human").unwrap(),
+            TaskObservationId::new("unused-initial-attempt").unwrap(),
+            ToolInvocationId::new("failure-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let error = runtime
+        .continue_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("failure-attempt").unwrap(),
+            ToolInvocationId::new("unused-provider-failure").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap_err();
+    assert!(matches!(error, ToolTaskRuntimeError::Provider(_)));
+    assert_eq!(*calls.borrow(), 1);
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .len(),
+        1
+    );
+    assert!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .observations()
+            .is_empty()
     );
 }
 
