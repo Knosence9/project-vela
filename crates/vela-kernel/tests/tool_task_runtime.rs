@@ -914,7 +914,7 @@ fn failure_continuation_retains_diagnostic_and_fails_task() {
 fn failure_intent_survives_multiple_explicit_tool_steps() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
-    let (_, task_id) = setup(&path);
+    let (session_id, task_id) = setup(&path);
     let continuation_calls = Rc::new(RefCell::new(0));
     let provider = ChainedProvider {
         continuation_calls: continuation_calls.clone(),
@@ -963,13 +963,29 @@ fn failure_intent_survives_multiple_explicit_tool_steps() {
         )
         .unwrap();
 
-    let ToolTaskFailureOutcome::Final { task, .. } = final_outcome else {
+    let ToolTaskFailureOutcome::Final { session, task } = final_outcome else {
         panic!("expected final failure chain")
     };
     assert_eq!(*continuation_calls.borrow(), 2);
     assert_eq!(task.status(), TaskStatus::Failed);
     assert_eq!(task.failure().unwrap().as_str(), "retained diagnostic");
     assert_eq!(task.observations()[0].text().as_str(), "chain complete");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
 }
 
 #[test]
