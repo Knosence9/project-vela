@@ -12,10 +12,10 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+use std::{ffi::OsStr, os::fd::AsFd, os::unix::ffi::OsStrExt};
 
 #[cfg(unix)]
-use rustix::fs::{Dir, Mode, OFlags, open, openat};
+use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, open, openat, statat};
 use serde::Deserialize;
 
 const SUPPORTED_MANIFEST_VERSION: u64 = 1;
@@ -223,6 +223,13 @@ fn discover_extensions_platform(
                 source,
             }
         })?;
+        validate_entrypoint_target(&child_fd, manifest.entrypoint()).map_err(|source| {
+            ExtensionDiscoveryError::Entrypoint {
+                path: path.clone(),
+                entrypoint: manifest.entrypoint().to_owned(),
+                source,
+            }
+        })?;
         if let Some(first_path) = paths_by_id.get(manifest.id()) {
             return Err(ExtensionDiscoveryError::DuplicateId {
                 id: manifest.id().to_owned(),
@@ -234,6 +241,42 @@ fn discover_extensions_platform(
         discovered.push(DiscoveredExtension { path, manifest });
     }
     Ok(discovered)
+}
+
+#[cfg(unix)]
+fn validate_entrypoint_target(directory: &impl AsFd, entrypoint: &str) -> io::Result<()> {
+    let mut current_directory = None;
+    let mut components = entrypoint.split('/').peekable();
+
+    while let Some(component) = components.next() {
+        let parent = current_directory
+            .as_ref()
+            .map_or_else(|| directory.as_fd(), AsFd::as_fd);
+        if components.peek().is_none() {
+            let metadata =
+                statat(parent, component, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
+            return if FileType::from_raw_mode(metadata.st_mode) == FileType::RegularFile {
+                Ok(())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "extension entrypoint target is not a regular file",
+                ))
+            };
+        }
+
+        current_directory = Some(
+            openat(
+                parent,
+                component,
+                OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                Mode::empty(),
+            )
+            .map_err(io::Error::from)?,
+        );
+    }
+
+    unreachable!("validated entrypoints contain a component")
 }
 
 #[cfg(not(unix))]
@@ -393,6 +436,11 @@ pub enum ExtensionDiscoveryError {
         path: PathBuf,
         source: ExtensionManifestError,
     },
+    Entrypoint {
+        path: PathBuf,
+        entrypoint: String,
+        source: io::Error,
+    },
     DuplicateId {
         id: String,
         first_path: PathBuf,
@@ -417,6 +465,15 @@ impl fmt::Display for ExtensionDiscoveryError {
                     path.display()
                 )
             }
+            Self::Entrypoint {
+                path,
+                entrypoint,
+                source,
+            } => write!(
+                formatter,
+                "invalid extension entrypoint {entrypoint:?} declared by {}: {source}",
+                path.display()
+            ),
             Self::DuplicateId {
                 id,
                 first_path,
@@ -436,6 +493,7 @@ impl Error for ExtensionDiscoveryError {
         match self {
             Self::ReadRoot { source, .. } => Some(source),
             Self::Manifest { source, .. } => Some(source),
+            Self::Entrypoint { source, .. } => Some(source),
             Self::DuplicateId { .. } => None,
         }
     }
