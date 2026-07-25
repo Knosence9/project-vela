@@ -12,8 +12,8 @@ use crate::task::{
     TaskStore, TaskStoreError,
 };
 use crate::tool::{
-    DurableToolRegistryInvocationError, ToolAuthorizer, ToolId, ToolInvocationId,
-    ToolInvocationStore, ToolMetadata, ToolRegistry,
+    DurableToolInvocationError, DurableToolRegistryInvocationError, ToolAuthorizer, ToolId,
+    ToolInvocationId, ToolInvocationStore, ToolInvocationStoreError, ToolMetadata, ToolRegistry,
 };
 
 /// A synchronous, provider-neutral source for one assistant response.
@@ -256,6 +256,328 @@ fn dispatch_provider_tool_response<A: ToolAuthorizer>(
                 continuation: ToolStepContinuation::ProviderRequired,
             })
         }
+    }
+}
+
+/// The durable result of one initial tool-capable task turn.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolTaskTurnOutcome {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+    },
+}
+
+impl ToolTaskTurnOutcome {
+    /// Borrows the exact in-memory result needed for an explicit provider continuation.
+    pub fn tool_result(&self) -> Option<ProviderToolResult<'_>> {
+        match self {
+            Self::ToolCompleted {
+                tool_id,
+                input,
+                output,
+                ..
+            } => Some(ProviderToolResult {
+                tool_id,
+                input,
+                output,
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+
+    /// Borrows the durable transcript and exact result for an explicit continuation.
+    pub fn continuation(&self) -> Option<ToolTaskContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                tool_id,
+                input,
+                output,
+                ..
+            } => Some(ToolTaskContinuation {
+                task_id,
+                provider: ProviderToolContinuation::new(
+                    session.turns(),
+                    ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                ),
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed continuation bound to the task that owns the initial tool step.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolTaskContinuation<'a> {
+    task_id: &'a TaskId,
+    provider: ProviderToolContinuation<'a>,
+}
+
+impl ToolTaskContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+}
+
+/// A failure while bridging one initial provider-tool step into a durable task turn.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolTaskRuntimeError {
+    Session(SessionStoreError),
+    Task(TaskStoreError),
+    InvocationStore(ToolInvocationStoreError),
+    TaskNotAssociated { task_id: TaskId },
+    InvalidAttemptText(TaskObservationTextError),
+    Provider(ProviderError),
+    Invocation(DurableToolRegistryInvocationError),
+}
+
+impl fmt::Display for ToolTaskRuntimeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Session(error) => write!(formatter, "tool task runtime session error: {error}"),
+            Self::Task(error) => write!(formatter, "tool task runtime task error: {error}"),
+            Self::InvocationStore(error) => {
+                write!(formatter, "tool invocation store error: {error}")
+            }
+            Self::TaskNotAssociated { task_id } => {
+                write!(formatter, "task {task_id} is not associated with a session")
+            }
+            Self::InvalidAttemptText(error) => {
+                write!(formatter, "tool task attempt observation error: {error}")
+            }
+            Self::Provider(error) => write!(formatter, "assistant provider error: {error}"),
+            Self::Invocation(error) => write!(formatter, "assistant tool step error: {error}"),
+        }
+    }
+}
+
+impl Error for ToolTaskRuntimeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Session(error) => Some(error),
+            Self::Task(error) => Some(error),
+            Self::InvocationStore(error) => Some(error),
+            Self::InvalidAttemptText(error) => Some(error),
+            Self::Provider(error) => Some(error),
+            Self::Invocation(error) => Some(error),
+            Self::TaskNotAssociated { .. } => None,
+        }
+    }
+}
+
+/// Synchronous orchestration for one initial tool-capable task turn.
+pub struct ToolAssistantRuntime<P> {
+    sessions: SessionStore,
+    tasks: TaskStore,
+    invocations: ToolInvocationStore,
+    provider: P,
+}
+
+impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
+    pub fn open(path: impl AsRef<Path>, provider: P) -> Result<Self, ToolTaskRuntimeError> {
+        let path = path.as_ref();
+        Ok(Self {
+            sessions: SessionStore::open(path).map_err(ToolTaskRuntimeError::Session)?,
+            tasks: TaskStore::open(path).map_err(ToolTaskRuntimeError::Task)?,
+            invocations: ToolInvocationStore::open(path)
+                .map_err(ToolTaskRuntimeError::InvocationStore)?,
+            provider,
+        })
+    }
+
+    /// Appends one human turn and executes exactly one provider/tool step.
+    ///
+    /// Final content is persisted as an assistant turn and Attempt. A completed tool request
+    /// remains in memory and requires an explicit caller-owned provider continuation.
+    pub fn execute_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskTurnOutcome, ToolTaskRuntimeError> {
+        let task = self.load_active_task(task_id)?;
+        let session_id =
+            task.session_id()
+                .cloned()
+                .ok_or_else(|| ToolTaskRuntimeError::TaskNotAssociated {
+                    task_id: task_id.clone(),
+                })?;
+        task.validate_observation_append(
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+        )
+        .map_err(ToolTaskRuntimeError::Task)?;
+        self.ensure_session_writable(&session_id)?;
+        self.ensure_invocation_available(&invocation_id)?;
+
+        let session = self
+            .sessions
+            .append_turn(&session_id, SessionTurnRole::Human, human_content)
+            .map_err(ToolTaskRuntimeError::Session)?;
+        let step = execute_provider_tool_step(
+            &mut self.provider,
+            session.turns(),
+            registry,
+            &mut self.invocations,
+            task_id,
+            invocation_id,
+            authorizer,
+        )
+        .map_err(|error| match error {
+            ProviderToolStepError::Provider(error) => ToolTaskRuntimeError::Provider(error),
+            ProviderToolStepError::Invocation(error) => ToolTaskRuntimeError::Invocation(error),
+        })?;
+
+        match step {
+            ProviderToolStepOutcome::Final { content, .. } => {
+                let attempt_text = content.as_str().to_owned();
+                let session = self
+                    .sessions
+                    .append_turn(&session_id, SessionTurnRole::Assistant, content)
+                    .map_err(ToolTaskRuntimeError::Session)?;
+                let attempt_text = TaskObservationText::new(attempt_text)
+                    .map_err(ToolTaskRuntimeError::InvalidAttemptText)?;
+                let task = self
+                    .tasks
+                    .append_observation(
+                        task_id,
+                        attempt_observation_id,
+                        TaskObservationKind::Attempt,
+                        attempt_text,
+                    )
+                    .map_err(ToolTaskRuntimeError::Task)?;
+                Ok(ToolTaskTurnOutcome::Final { session, task })
+            }
+            ProviderToolStepOutcome::ToolCompleted {
+                tool_id,
+                input,
+                output,
+                continuation,
+            } => Ok(ToolTaskTurnOutcome::ToolCompleted {
+                session,
+                task_id: task_id.clone(),
+                tool_id,
+                input,
+                output,
+                continuation,
+            }),
+        }
+    }
+
+    fn load_active_task(&self, task_id: &TaskId) -> Result<Task, ToolTaskRuntimeError> {
+        let task = self
+            .tasks
+            .load(task_id)
+            .map_err(ToolTaskRuntimeError::Task)?
+            .ok_or_else(|| {
+                ToolTaskRuntimeError::Task(TaskStoreError::NotFound {
+                    task_id: task_id.clone(),
+                })
+            })?;
+        match task.status() {
+            TaskStatus::Active => Ok(task),
+            TaskStatus::Completed => Err(ToolTaskRuntimeError::Task(
+                TaskStoreError::AlreadyCompleted {
+                    task_id: task_id.clone(),
+                },
+            )),
+            TaskStatus::Cancelled => Err(ToolTaskRuntimeError::Task(
+                TaskStoreError::AlreadyCancelled {
+                    task_id: task_id.clone(),
+                },
+            )),
+            TaskStatus::Failed => Err(ToolTaskRuntimeError::Task(TaskStoreError::AlreadyFailed {
+                task_id: task_id.clone(),
+            })),
+        }
+    }
+
+    fn ensure_session_writable(&self, session_id: &SessionId) -> Result<(), ToolTaskRuntimeError> {
+        let session = self
+            .sessions
+            .load(session_id)
+            .map_err(ToolTaskRuntimeError::Session)?
+            .ok_or_else(|| {
+                ToolTaskRuntimeError::Session(SessionStoreError::NotFound {
+                    session_id: session_id.clone(),
+                })
+            })?;
+        if session.status() == SessionStatus::Closed {
+            return Err(ToolTaskRuntimeError::Session(
+                SessionStoreError::SessionClosed {
+                    session_id: session_id.clone(),
+                },
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_invocation_available(
+        &self,
+        invocation_id: &ToolInvocationId,
+    ) -> Result<(), ToolTaskRuntimeError> {
+        if self
+            .invocations
+            .load(invocation_id)
+            .map_err(ToolTaskRuntimeError::InvocationStore)?
+            .is_some()
+        {
+            return Err(ToolTaskRuntimeError::Invocation(
+                DurableToolRegistryInvocationError::Invocation(DurableToolInvocationError::Store(
+                    ToolInvocationStoreError::AlreadyExists {
+                        invocation_id: invocation_id.clone(),
+                    },
+                )),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
+    /// Explicitly continues with the same provider instance without persisting a session turn.
+    pub fn continue_provider_step<A: ToolAuthorizer>(
+        &mut self,
+        continuation: ToolTaskContinuation<'_>,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ProviderToolStepOutcome, ToolTaskRuntimeError> {
+        self.load_active_task(continuation.task_id)?;
+        self.ensure_invocation_available(&invocation_id)?;
+        continue_provider_tool_step(
+            &mut self.provider,
+            continuation.provider,
+            registry,
+            &mut self.invocations,
+            continuation.task_id,
+            invocation_id,
+            authorizer,
+        )
+        .map_err(|error| match error {
+            ProviderToolStepError::Provider(error) => ToolTaskRuntimeError::Provider(error),
+            ProviderToolStepError::Invocation(error) => ToolTaskRuntimeError::Invocation(error),
+        })
     }
 }
 

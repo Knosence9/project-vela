@@ -149,6 +149,8 @@ The first milestone is the **evidence loop**:
 19. Register, discover, and invoke in-process tool adapters by stable ID. ✅
 20. Dispatch registered adapters by stable ID through durable task-associated invocation. ✅
 21. Execute one provider-requested tool step with caller-owned identity and permission. ✅
+22. Continue explicitly after one successful provider tool step. ✅
+23. Start a durable task turn through one bounded provider/tool step. ✅
 
 ## Project documents
 
