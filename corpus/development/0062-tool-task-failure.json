@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Fail provider-tool task turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/577 by retaining a caller-owned failure diagnostic across bounded provider/tool task turns while keeping final provider text as Attempt evidence only.",
+    "acceptance_criteria": [
+      "Expose failure-specific initial and continuation operations that retain the validated caller diagnostic.",
+      "Keep tool responses non-terminal and require explicit progression with fresh caller-owned identity and authorization.",
+      "On a final response, persist assistant content and an exact Attempt before failing the task with the original diagnostic.",
+      "Test reopened projections, chained tool progression, ordered partial commits, and authoritative terminal races."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for initial and continued failure turns.",
+      "outcome": "failure",
+      "diagnostic": "ToolAssistantRuntime lacked failure-specific outcomes and operations capable of retaining a caller-owned diagnostic through provider/tool continuations.",
+      "patch": "Added focused failing tests for direct final failure, one-tool continuation, and chained explicit tool steps."
+    },
+    {
+      "summary": "Implemented typed failure orchestration.",
+      "outcome": "success",
+      "diagnostic": "Failure-specific outcomes preserve the exact caller diagnostic while delegating each bounded provider/tool step to the existing attempt-only runtime path.",
+      "patch": "Added failure outcomes and continuations, initial and continuation methods, persistence tests, documentation, and milestone status."
+    },
+    {
+      "summary": "Strengthened chained persistence evidence from substantive review.",
+      "outcome": "success",
+      "diagnostic": "The chained final test asserted returned state but did not independently reopen and compare the durable session and failed task projections.",
+      "patch": "Reloaded and compared both final projections after the multi-step failure continuation."
+    },
+    {
+      "summary": "Verified exact head and merged after review cooldowns.",
+      "outcome": "success",
+      "diagnostic": "Focused failure tests, pinned verification, and independent review passed. Rust quality gate run 30149736539 succeeded, and substantive CodeRabbit review completed on exact head with zero unresolved threads after rate-limited false greens.",
+      "patch": "Pull request 578 squash-merged as b2318a926af1fb4cfec29f9dc3043f952e291e57 and closed issue 577."
+    }
+  ],
+  "outcome": {
+    "summary": "Provider-tool task turns can now retain caller-owned failure intent and diagnostics across explicit tool steps, then durably fail after recording final provider content only as Attempt evidence.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_task_runtime # focused failure tests passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # no final actionable findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30149736539 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/578", "status": "passed"},
+      {"command": "Pull request 578 squash merge b2318a926af1fb4cfec29f9dc3043f952e291e57", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Failure diagnostics remain caller-owned terminal data; provider output is execution evidence and must not be promoted into the diagnostic.",
+    "Typed continuations preserve failure intent across multiple bounded tool steps without duplicating dispatch logic.",
+    "Reopen assertions are especially important for terminal paths assembled from several explicit calls.",
+    "A successful quality gate cannot compensate for a false-green rate-limited review."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/578"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

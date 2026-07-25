@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Complete provider-tool task turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/574 by preserving caller-owned completion intent across bounded provider/tool task turns and committing final provider content as both Attempt evidence and task output.",
+    "acceptance_criteria": [
+      "Expose completion-specific initial and continuation operations that cannot lose terminal intent through generic continuations.",
+      "Keep each tool response non-terminal and require explicit caller-controlled progression with fresh identity and authorization.",
+      "On a final response, persist assistant content, an exact Attempt, and task completion with the same validated output in order.",
+      "Document and test durable projections, ordered partial commits, races, and multi-tool completion behavior."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for initial and continued completion turns.",
+      "outcome": "failure",
+      "diagnostic": "ToolAssistantRuntime had attempt-only task turns but no completion outcome, operation, or terminal-intent-preserving continuation.",
+      "patch": "Added focused failing tests for final completion, completion after a tool step, and completion after multiple explicit tool steps."
+    },
+    {
+      "summary": "Implemented typed completion orchestration.",
+      "outcome": "success",
+      "diagnostic": "Dedicated completion outcomes retain completion intent while reusing the bounded attempt-only provider/tool path; finalization appends the provider response as Attempt evidence and output-bearing completion.",
+      "patch": "Added completion-specific outcomes and continuations, initial and continuation operations, integration coverage, and runtime documentation."
+    },
+    {
+      "summary": "Strengthened persistence assertions from substantive review.",
+      "outcome": "success",
+      "diagnostic": "Review found that returned completion projections were checked without consistently proving reopened session and task state on every final and continuation path.",
+      "patch": "Reloaded and compared durable session and completed task projections in all three completion paths, including both continuation cases."
+    },
+    {
+      "summary": "Verified exact head and merged after review cooldowns.",
+      "outcome": "success",
+      "diagnostic": "Pinned verification and independent review passed. Rust quality gate run 30146004486 succeeded, and substantive CodeRabbit review completed for exact head with zero unresolved threads after false-green rate-limited attempts.",
+      "patch": "Pull request 575 squash-merged as 3057a33da9740ee24ad66648e594f99345a21ef8 and closed issue 574."
+    }
+  ],
+  "outcome": {
+    "summary": "Provider-tool task turns can now retain caller-owned completion intent across explicit tool steps and durably complete with final provider content as both Attempt evidence and task output.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_task_runtime # focused completion tests passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # no final actionable findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30146004486 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/575", "status": "passed"},
+      {"command": "Pull request 575 squash merge 3057a33da9740ee24ad66648e594f99345a21ef8", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Terminal intent belongs in a dedicated continuation type so generic attempt progression cannot silently discard completion semantics.",
+    "Final provider text can serve as both Attempt evidence and completion output only after each domain value validates independently.",
+    "Returned projections do not replace reopen assertions when the contract promises durable state.",
+    "Rate-limited green review statuses must remain merge blockers until an exact-head substantive review finishes."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/575"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
