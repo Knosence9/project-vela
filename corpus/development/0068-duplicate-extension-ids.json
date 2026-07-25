@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject duplicate discovered extension IDs",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/596 by making one discovered extension root an unambiguous exact-ID namespace.",
+    "acceptance_criteria": [
+      "Reject the next manifest whose ID exactly equals an earlier ID in sorted discovery order.",
+      "Report the preserved ID plus deterministic first and duplicate manifest paths in a typed error.",
+      "Keep case, whitespace, and authored ID content significant without normalization.",
+      "Fail discovery as a whole and retain metadata-only behavior."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for duplicate identity conflicts.",
+      "outcome": "failure",
+      "diagnostic": "Discovery returned multiple manifests claiming the same stable ID, leaving later registry lookup ambiguous.",
+      "patch": "Added tests for deterministic first and duplicate paths, case and whitespace distinctions, escaped untrusted diagnostics, and source-free typed errors."
+    },
+    {
+      "summary": "Implemented exact duplicate rejection during sorted discovery.",
+      "outcome": "success",
+      "diagnostic": "Tracking the first path by preserved ID resolves namespace ambiguity without introducing normalization or cross-root precedence policy.",
+      "patch": "Added a BTreeMap-backed first-path check, DuplicateId error fields and display behavior, docs, and README milestone evidence."
+    },
+    {
+      "summary": "Verified and merged the bounded identity slice.",
+      "outcome": "success",
+      "diagnostic": "Focused tests, pinned verification, exact-head CI, substantive review, and unresolved-thread checks completed successfully.",
+      "patch": "Pull request 597 squash-merged as cd66d41424fcca367fd9883d007aef4d27593a7a and closed issue 596."
+    }
+  ],
+  "outcome": {
+    "summary": "Each discovered root now has deterministic exact-ID uniqueness while preserving caller-authored spelling and keeping cross-root policy out of scope.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30170375757 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/597", "status": "passed"},
+      {"command": "Pull request 597 squash merge cd66d41424fcca367fd9883d007aef4d27593a7a", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Stable IDs require uniqueness before constructing a deterministic registry.",
+    "Exact comparison is a smaller contract than normalization and avoids silently rewriting caller identity.",
+    "Sorted discovery makes both conflict selection and diagnostics reproducible.",
+    "Untrusted identifiers must be escaped when rendered in diagnostics."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/597"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
