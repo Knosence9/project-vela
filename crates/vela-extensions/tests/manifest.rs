@@ -38,6 +38,72 @@ fn accepts_each_supported_kind() {
 }
 
 #[test]
+fn accepts_portable_relative_entrypoints() {
+    for entrypoint in ["SKILL.md", "bin/search.wasm", "workflows/review.yaml"] {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("extension.yaml");
+        fs::write(
+            &path,
+            format!(
+                "manifest_version: 1\nid: test.entrypoint\nkind: tool\nentrypoint: {entrypoint}\n"
+            ),
+        )
+        .expect("write manifest");
+
+        let manifest = ExtensionManifest::load(path).expect("portable relative entrypoint");
+        assert_eq!(manifest.entrypoint(), entrypoint);
+    }
+}
+
+#[test]
+fn rejects_non_portable_entrypoints() {
+    for entrypoint in [
+        "/usr/bin/search",
+        "C:/tools/search.exe",
+        "bin//search",
+        "./search",
+        "bin/../search",
+        "bin/ /search",
+        "bin/.. /search",
+        "bin/. ./search",
+        "bin/search:prod",
+        "bin/search*beta",
+        "bin/search?beta",
+        "bin/search.",
+        "bin/search ",
+        "bin/CON.txt",
+        "bin/CON .txt",
+        "bin/LPT1 .md",
+        "bin/conout$.log",
+        "bin/COM¹.txt",
+        r"bin\search",
+        "bin/search\0hidden",
+    ] {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("extension.yaml");
+        let yaml_entrypoint = serde_norway::to_string(entrypoint).expect("encode entrypoint");
+        fs::write(
+            &path,
+            format!(
+                "manifest_version: 1\nid: test.entrypoint\nkind: tool\nentrypoint: {yaml_entrypoint}"
+            ),
+        )
+        .expect("write manifest");
+
+        let error = ExtensionManifest::load(path).expect_err("invalid entrypoint");
+        assert!(
+            matches!(error, ExtensionManifestError::InvalidEntrypoint),
+            "unexpected error for {entrypoint:?}: {error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "extension manifest field entrypoint must be a portable relative path"
+        );
+        assert!(error.source().is_none());
+    }
+}
+
+#[test]
 fn rejects_unsupported_versions() {
     let error = ExtensionManifest::load(fixture("unsupported-version.yaml"))
         .expect_err("unsupported version");
