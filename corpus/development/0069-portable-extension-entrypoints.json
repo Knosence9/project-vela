@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Validate portable relative extension entrypoints",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/598 by rejecting host-absolute, traversal-shaped, and non-portable entrypoint metadata before filesystem lookup.",
+    "acceptance_criteria": [
+      "Accept one or more normal forward-slash relative path components and preserve the authored value.",
+      "Reject absolute, empty, dot, parent, backslash, control-character, and platform-reserved forms.",
+      "Return one deterministic typed entrypoint error without inspecting the filesystem.",
+      "Document that lexical validation is not an activation or filesystem sandbox."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for portable entrypoint metadata.",
+      "outcome": "failure",
+      "diagnostic": "The manifest loader accepted every non-blank entrypoint, including absolute paths, parent traversal, backslashes, reserved names, and malformed components.",
+      "patch": "Added table-driven accepted and rejected path tests covering Unix, Windows, control-character, and component-boundary cases."
+    },
+    {
+      "summary": "Implemented lexical portable-path validation.",
+      "outcome": "success",
+      "diagnostic": "A platform-independent component validator rejects unsafe metadata early while deferring actual containment and file-type checks to discovery or loading.",
+      "patch": "Added validate_entrypoint, InvalidEntrypoint, Windows-reserved component checks, documentation, and milestone evidence without filesystem access."
+    },
+    {
+      "summary": "Verified and merged the lexical boundary.",
+      "outcome": "success",
+      "diagnostic": "Focused tests, full pinned verification, exact-head CI, substantive review, and unresolved-thread checks all passed.",
+      "patch": "Pull request 599 squash-merged as d4a00664d18095bb34d8d125997cc15c1ea56350 and closed issue 598."
+    }
+  ],
+  "outcome": {
+    "summary": "Version-one manifests now preserve valid portable relative entrypoints and reject unsafe or platform-specific path shapes before discovery or activation.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30172736071 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/599", "status": "passed"},
+      {"command": "Pull request 599 squash merge d4a00664d18095bb34d8d125997cc15c1ea56350", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Portable lexical validation should happen before platform filesystem semantics can diverge.",
+    "Relative syntax alone does not prove containment; descriptor-anchored target validation remains necessary.",
+    "Preserving valid authored values keeps metadata identity separate from validation policy.",
+    "One typed public error can keep the boundary stable while tests cover detailed rejection shapes."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/599"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

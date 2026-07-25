@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Discover extension manifests deterministically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/594 by discovering validated manifests from one caller-selected extension root without activating capabilities.",
+    "acceptance_criteria": [
+      "Inspect only immediate child extension.yaml candidates and ignore unrelated or deeper entries.",
+      "Return validated manifests in lexicographic path order and fail without a partial result.",
+      "Preserve root and candidate failures as typed errors with the failing path and source.",
+      "Reject symlinked candidates and fail closed where descriptor-anchored traversal is unavailable."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for shallow sorted discovery.",
+      "outcome": "failure",
+      "diagnostic": "The manifest crate could load one selected file but had no root discovery API, discovered-extension type, or discovery error contract.",
+      "patch": "Added integration tests for sorted candidates, shallow scope, ignored entries, source-preserving failures, symlink rejection, and unsupported-platform behavior."
+    },
+    {
+      "summary": "Implemented descriptor-anchored non-executing discovery.",
+      "outcome": "success",
+      "diagnostic": "Unix directory descriptors and no-follow opens provide deterministic package enumeration without trusting path re-resolution or activating entrypoints.",
+      "patch": "Added DiscoveredExtension, discover_extensions, typed errors, bounded reader reuse, Unix rustix traversal, documentation, and milestone evidence."
+    },
+    {
+      "summary": "Corrected the path attached to child-directory enumeration failures.",
+      "outcome": "success",
+      "diagnostic": "Substantive review found that a non-ignorable child open failure reported only the root, hiding the child that actually failed.",
+      "patch": "Added RED coverage for an unreadable child and reported the descriptor-relative child path while preserving the I/O source."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now discovers one extension root shallowly and deterministically, returning validated metadata or one typed all-or-nothing failure without activation.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30167785495", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review and zero unresolved threads at https://github.com/Knosence9/project-vela/pull/595", "status": "passed"},
+      {"command": "Pull request 595 squash merge d8e60d735c053982f17a6f5f8c02c885cf32b6f1", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Caller-owned shallow roots avoid hidden configuration and recursive scanning semantics.",
+    "Descriptor-relative traversal and no-follow opens keep discovery inside the selected package boundary.",
+    "Typed filesystem diagnostics should identify the narrowest path that actually failed.",
+    "Discovery remains metadata validation and grants no permission to activate an entrypoint."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/595"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

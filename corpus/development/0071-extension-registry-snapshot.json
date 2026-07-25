@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Build immutable discovered extension registry snapshots",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/602 by owning one all-or-nothing discovery result behind deterministic enumeration and exact-ID lookup.",
+    "acceptance_criteria": [
+      "Construct a registry only after complete successful descriptor-anchored discovery.",
+      "Resolve exact caller-authored IDs without normalization, authorization, or activation.",
+      "Enumerate borrowed entries in manifest-path order rather than ID order.",
+      "Keep snapshots immutable and require explicit rediscovery to observe filesystem changes."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for immutable registry ownership.",
+      "outcome": "failure",
+      "diagnostic": "Discovery returned a vector but exposed no explicit snapshot owner, stable exact-ID lookup, or refresh semantics.",
+      "patch": "Added tests for exact lookup, path-ordered enumeration, empty roots, unchanged discovery errors, and immutability across later filesystem changes."
+    },
+    {
+      "summary": "Implemented the smallest non-activating registry snapshot.",
+      "outcome": "success",
+      "diagnostic": "Owning the discovered vector plus an ID-to-index map separates deterministic discovery order from identity lookup without adding mutable lifecycle policy.",
+      "patch": "Added ExtensionRegistry::discover, get, extensions, snapshot documentation, and README milestone evidence."
+    },
+    {
+      "summary": "Resolved a documentation contradiction found by substantive review.",
+      "outcome": "success",
+      "diagnostic": "The initial non-goals still excluded all registries even though the same document now specified a single-root immutable registry.",
+      "patch": "Narrowed the non-goal to mutable registries and verified the corrected exact head before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now owns immutable, explicit-refresh extension registry snapshots with exact-ID lookup and deterministic path-order inspection, while activation remains outside the boundary.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30178028631 and substantive incremental CodeRabbit review at https://github.com/Knosence9/project-vela/pull/603", "status": "passed"},
+      {"command": "Pull request 603 squash merge 6c2a63ccebef8a281b8628ba9e7977b77d513ec2", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Registry ownership can be introduced independently of capability activation and lifecycle policy.",
+    "Identity lookup order and deterministic inspection order are distinct contracts and should remain separate.",
+    "Immutable snapshots make filesystem refresh explicit and auditable.",
+    "Documentation non-goals must be revised when a previously excluded boundary becomes implemented."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/603"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Validate discovered extension entrypoint targets",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/600 by proving that discovered entrypoints are extension-local regular files without reading or activating them.",
+    "acceptance_criteria": [
+      "Traverse each entrypoint relative to the already-open extension-directory descriptor on Unix.",
+      "Reject symlinks at every component, require intermediate directories, and require a regular final file.",
+      "Return a typed target error containing the manifest path, authored entrypoint, and I/O source.",
+      "Leave standalone manifest loading lexical and keep target content, activation, and permissions out of scope."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for discovered package target validation.",
+      "outcome": "failure",
+      "diagnostic": "Lexically valid manifests could discover missing, symlinked, or directory entrypoints because discovery did not inspect the declared target.",
+      "patch": "Added Unix tests for nested regular files, unreadable-but-inspectable files, missing targets, final and intermediate symlinks, and non-regular targets."
+    },
+    {
+      "summary": "Implemented descriptor-relative target checks.",
+      "outcome": "success",
+      "diagnostic": "Opening intermediate components relative to the retained package descriptor and statting the final component without following links prevents path escape during discovery.",
+      "patch": "Added validate_entrypoint_target, component-relative opens, regular-file checks, typed source-preserving errors, docs, and README milestone evidence."
+    },
+    {
+      "summary": "Verified and merged the non-activating filesystem boundary.",
+      "outcome": "success",
+      "diagnostic": "Focused adversarial tests, pinned verification, exact-head CI, substantive review, and unresolved-thread checks completed successfully.",
+      "patch": "Pull request 601 squash-merged as d5a6a21c4de0b3701d1fb2d849f695f3cd868ad0 and closed issue 600."
+    }
+  ],
+  "outcome": {
+    "summary": "Unix discovery now fails closed unless every declared entrypoint is an extension-local non-symlink regular file, without reading target content or granting activation authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30174799508 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/601", "status": "passed"},
+      {"command": "Pull request 601 squash merge d5a6a21c4de0b3701d1fb2d849f695f3cd868ad0", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Lexical path checks and descriptor-anchored filesystem checks solve different parts of containment.",
+    "Symlink rejection must cover intermediate components as well as the final target.",
+    "File-type inspection does not require reading or executing target content.",
+    "Discovery-time validation is still not an activation lease; a future loader must reopen and revalidate safely."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/601"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
