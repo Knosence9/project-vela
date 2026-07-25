@@ -334,6 +334,64 @@ impl ToolTaskContinuation<'_> {
     }
 }
 
+/// The durable result of one caller-requested completion-oriented provider/tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolTaskCompletionOutcome {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+    },
+}
+
+impl ToolTaskCompletionOutcome {
+    /// Borrows a continuation that preserves caller-requested completion intent.
+    pub fn continuation(&self) -> Option<ToolTaskCompletionContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                tool_id,
+                input,
+                output,
+                ..
+            } => Some(ToolTaskCompletionContinuation {
+                task_id,
+                provider: ProviderToolContinuation::new(
+                    session.turns(),
+                    ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                ),
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed provider/tool continuation that can only resume completion-oriented operations.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolTaskCompletionContinuation<'a> {
+    task_id: &'a TaskId,
+    provider: ProviderToolContinuation<'a>,
+}
+
+impl ToolTaskCompletionContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+}
+
 /// A failure while bridging one initial provider-tool step into a durable task turn.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -344,6 +402,7 @@ pub enum ToolTaskRuntimeError {
     TaskNotAssociated { task_id: TaskId },
     StaleContinuationTranscript { task_id: TaskId },
     InvalidAttemptText(TaskObservationTextError),
+    InvalidTaskOutput(TaskOutputError),
     Provider(ProviderError),
     Invocation(DurableToolRegistryInvocationError),
 }
@@ -366,6 +425,9 @@ impl fmt::Display for ToolTaskRuntimeError {
             Self::InvalidAttemptText(error) => {
                 write!(formatter, "tool task attempt observation error: {error}")
             }
+            Self::InvalidTaskOutput(error) => {
+                write!(formatter, "tool task output error: {error}")
+            }
             Self::Provider(error) => write!(formatter, "assistant provider error: {error}"),
             Self::Invocation(error) => write!(formatter, "assistant tool step error: {error}"),
         }
@@ -379,6 +441,7 @@ impl Error for ToolTaskRuntimeError {
             Self::Task(error) => Some(error),
             Self::InvocationStore(error) => Some(error),
             Self::InvalidAttemptText(error) => Some(error),
+            Self::InvalidTaskOutput(error) => Some(error),
             Self::Provider(error) => Some(error),
             Self::Invocation(error) => Some(error),
             Self::TaskNotAssociated { .. } | Self::StaleContinuationTranscript { .. } => None,
@@ -481,6 +544,67 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
             } => Ok(ToolTaskTurnOutcome::ToolCompleted {
                 session,
                 task_id: task_id.clone(),
+                tool_id,
+                input,
+                output,
+                continuation,
+            }),
+        }
+    }
+
+    /// Executes one caller-requested completion turn through a bounded provider/tool step.
+    ///
+    /// A tool request remains non-terminal and requires an explicit completion continuation. A
+    /// final response commits the assistant turn, an Attempt, and completion in that order.
+    pub fn complete_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskCompletionOutcome, ToolTaskRuntimeError> {
+        let outcome = self.execute_task_turn(
+            task_id,
+            human_content,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        self.complete_final_outcome(outcome)
+    }
+
+    fn complete_final_outcome(
+        &mut self,
+        outcome: ToolTaskTurnOutcome,
+    ) -> Result<ToolTaskCompletionOutcome, ToolTaskRuntimeError> {
+        match outcome {
+            ToolTaskTurnOutcome::Final { session, task } => {
+                let content = session
+                    .turns()
+                    .last()
+                    .expect("a final tool task outcome has an assistant turn")
+                    .content();
+                let output = TaskOutput::new(content.as_str())
+                    .map_err(ToolTaskRuntimeError::InvalidTaskOutput)?;
+                let task = self
+                    .tasks
+                    .complete(task.id(), output)
+                    .map_err(ToolTaskRuntimeError::Task)?;
+                Ok(ToolTaskCompletionOutcome::Final { session, task })
+            }
+            ToolTaskTurnOutcome::ToolCompleted {
+                session,
+                task_id,
+                tool_id,
+                input,
+                output,
+                continuation,
+            } => Ok(ToolTaskCompletionOutcome::ToolCompleted {
+                session,
+                task_id,
                 tool_id,
                 input,
                 output,
@@ -690,6 +814,32 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
                 continuation: next,
             }),
         }
+    }
+
+    /// Continues a caller-requested completion turn with the same provider instance.
+    ///
+    /// Another tool request remains non-terminal. A final response preserves the continuation's
+    /// guarded assistant append, then records the Attempt and completes the task.
+    pub fn continue_completion_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        continuation: ToolTaskCompletionContinuation<'_>,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskCompletionOutcome, ToolTaskRuntimeError> {
+        let continuation = ToolTaskContinuation {
+            task_id: continuation.task_id,
+            provider: continuation.provider,
+        };
+        let outcome = self.continue_task_turn(
+            continuation,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        self.complete_final_outcome(outcome)
     }
 
     /// Explicitly continues with the same provider instance without persisting a session turn.

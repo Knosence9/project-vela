@@ -6,12 +6,15 @@ use vela_kernel::{
     runtime::{
         ProviderError, ProviderToolContinuation, ProviderToolResponse, ProviderToolStepOutcome,
         ToolAssistantContinuationProvider, ToolAssistantProvider, ToolAssistantRuntime,
-        ToolTaskRuntimeError, ToolTaskTurnOutcome,
+        ToolTaskCompletionOutcome, ToolTaskRuntimeError, ToolTaskTurnOutcome,
     },
     session::{
         SessionClosure, SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole,
     },
-    task::{TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStore, TaskStoreError},
+    task::{
+        TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStatus, TaskStore,
+        TaskStoreError,
+    },
     tool::{
         PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId,
         ToolInvocationStatus, ToolInvocationStore, ToolMetadata, ToolRegistry, ToolRequest,
@@ -442,6 +445,56 @@ fn final_response_persists_assistant_turn_and_attempt() {
 }
 
 #[test]
+fn completion_final_response_persists_attempt_and_completes_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let provider = Provider {
+        calls: Rc::new(RefCell::new(Vec::new())),
+        response: Some(Ok(ProviderToolResponse::Final(
+            SessionTurnContent::new("completed answer").unwrap(),
+        ))),
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+
+    let outcome = runtime
+        .complete_task_turn(
+            &task_id,
+            SessionTurnContent::new("finish the task").unwrap(),
+            TaskObservationId::new("completion-attempt").unwrap(),
+            ToolInvocationId::new("unused-completion-invocation").unwrap(),
+            &mut ToolRegistry::new(),
+            &mut Allow { calls: 0 },
+        )
+        .unwrap();
+
+    let ToolTaskCompletionOutcome::Final { session, task } = outcome else {
+        panic!("expected final completion turn")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(task.status(), TaskStatus::Completed);
+    assert_eq!(task.output().unwrap().as_str(), "completed answer");
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "completed answer");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
+}
+
+#[test]
 fn tool_response_persists_human_turn_and_metadata_only_invocation() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
@@ -669,6 +722,144 @@ fn task_continuation_persists_final_response_and_attempt() {
     assert_eq!(
         (*initial_calls.borrow(), *continuation_calls.borrow()),
         (1, 1)
+    );
+}
+
+#[test]
+fn completion_continuation_persists_final_response_and_completes_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let provider = StatefulProvider {
+        initial_calls: Rc::new(RefCell::new(0)),
+        continuation_calls: Rc::new(RefCell::new(0)),
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+
+    let first = runtime
+        .complete_task_turn(
+            &task_id,
+            SessionTurnContent::new("finish with a tool").unwrap(),
+            TaskObservationId::new("unused-initial-attempt").unwrap(),
+            ToolInvocationId::new("completion-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    let outcome = runtime
+        .continue_completion_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("continued-completion-attempt").unwrap(),
+            ToolInvocationId::new("unused-completion-final").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let ToolTaskCompletionOutcome::Final { session, task } = outcome else {
+        panic!("expected final completion continuation")
+    };
+    assert_eq!(task.status(), TaskStatus::Completed);
+    assert_eq!(task.output().unwrap().as_str(), "continued final");
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "continued final");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
+}
+
+#[test]
+fn completion_intent_survives_multiple_explicit_tool_steps() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let continuation_calls = Rc::new(RefCell::new(0));
+    let provider = ChainedProvider {
+        continuation_calls: continuation_calls.clone(),
+    };
+    let tool_calls = Rc::new(RefCell::new(0));
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: tool_calls.clone(),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+
+    let first = runtime
+        .complete_task_turn(
+            &task_id,
+            SessionTurnContent::new("finish the chain").unwrap(),
+            TaskObservationId::new("unused-first-attempt").unwrap(),
+            ToolInvocationId::new("completion-chain-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    let second = runtime
+        .continue_completion_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("unused-second-attempt").unwrap(),
+            ToolInvocationId::new("completion-chain-2").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    let final_outcome = runtime
+        .continue_completion_task_turn(
+            second.continuation().unwrap(),
+            TaskObservationId::new("completion-chain-attempt").unwrap(),
+            ToolInvocationId::new("unused-completion-chain-final").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let ToolTaskCompletionOutcome::Final { session, task } = final_outcome else {
+        panic!("expected completed multi-tool turn")
+    };
+    assert_eq!(task.status(), TaskStatus::Completed);
+    assert_eq!(task.output().unwrap().as_str(), "chain complete");
+    assert_eq!((*continuation_calls.borrow(), *tool_calls.borrow()), (2, 2));
+    assert_eq!(authorizer.calls, 2);
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
     );
 }
 
