@@ -458,6 +458,72 @@ impl ToolTaskFailureContinuation<'_> {
     }
 }
 
+/// The durable result of one caller-requested cancellation-oriented provider/tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolTaskCancellationOutcome {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        cancellation: TaskCancellation,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+    },
+}
+
+impl ToolTaskCancellationOutcome {
+    /// Borrows a continuation that preserves caller-requested cancellation intent and reason.
+    pub fn continuation(&self) -> Option<ToolTaskCancellationContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                cancellation,
+                tool_id,
+                input,
+                output,
+                ..
+            } => Some(ToolTaskCancellationContinuation {
+                task_id,
+                cancellation,
+                provider: ProviderToolContinuation::new(
+                    session.turns(),
+                    ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                ),
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed provider/tool continuation that can only resume cancellation-oriented operations.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolTaskCancellationContinuation<'a> {
+    task_id: &'a TaskId,
+    cancellation: &'a TaskCancellation,
+    provider: ProviderToolContinuation<'a>,
+}
+
+impl ToolTaskCancellationContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+
+    pub fn cancellation(&self) -> &TaskCancellation {
+        self.cancellation
+    }
+}
+
 /// A failure while bridging one initial provider-tool step into a durable task turn.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -741,6 +807,68 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
         }
     }
 
+    /// Executes one caller-requested cancellation turn through a bounded provider/tool step.
+    ///
+    /// Provider content is Attempt evidence only; the caller-owned reason cancels the task after
+    /// a final response. A tool request remains non-terminal and requires an explicit
+    /// cancellation continuation. This records a decision and does not interrupt in-flight work.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "cancellation adds one caller-owned reason to the symmetric task-turn inputs"
+    )]
+    pub fn cancel_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        cancellation: TaskCancellation,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskCancellationOutcome, ToolTaskRuntimeError> {
+        let outcome = self.execute_task_turn(
+            task_id,
+            human_content,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        self.cancel_final_outcome(outcome, cancellation)
+    }
+
+    fn cancel_final_outcome(
+        &mut self,
+        outcome: ToolTaskTurnOutcome,
+        cancellation: TaskCancellation,
+    ) -> Result<ToolTaskCancellationOutcome, ToolTaskRuntimeError> {
+        match outcome {
+            ToolTaskTurnOutcome::Final { session, task } => {
+                let task = self
+                    .tasks
+                    .cancel(task.id(), cancellation)
+                    .map_err(ToolTaskRuntimeError::Task)?;
+                Ok(ToolTaskCancellationOutcome::Final { session, task })
+            }
+            ToolTaskTurnOutcome::ToolCompleted {
+                session,
+                task_id,
+                tool_id,
+                input,
+                output,
+                continuation,
+            } => Ok(ToolTaskCancellationOutcome::ToolCompleted {
+                session,
+                task_id,
+                cancellation,
+                tool_id,
+                input,
+                output,
+                continuation,
+            }),
+        }
+    }
+
     fn load_active_task(&self, task_id: &TaskId) -> Result<Task, ToolTaskRuntimeError> {
         let task = self
             .tasks
@@ -992,6 +1120,30 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
             authorizer,
         )?;
         self.fail_final_outcome(outcome, failure)
+    }
+
+    /// Continues a caller-requested cancellation turn with the same provider and reason.
+    pub fn continue_cancellation_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        continuation: ToolTaskCancellationContinuation<'_>,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskCancellationOutcome, ToolTaskRuntimeError> {
+        let cancellation = continuation.cancellation.clone();
+        let continuation = ToolTaskContinuation {
+            task_id: continuation.task_id,
+            provider: continuation.provider,
+        };
+        let outcome = self.continue_task_turn(
+            continuation,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        self.cancel_final_outcome(outcome, cancellation)
     }
 
     /// Explicitly continues with the same provider instance without persisting a session turn.
