@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Deduplicate final observation persistence",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/587 by centralizing final observation validation and parent-aware persistence without changing provider-tool runtime behavior.",
+    "acceptance_criteria": [
+      "Extract one private helper for final TaskObservationText validation and parent-aware append dispatch.",
+      "Reuse the helper from initial and continuation observation bridges.",
+      "Preserve Attempt and Correction error mapping, parent linkage, task storage error sources, ordered commits, and public APIs.",
+      "Introduce no new behavior or dependency."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Used merged characterization coverage as the refactor safety net.",
+      "outcome": "success",
+      "diagnostic": "The substantive review of pull request 586 found byte-equivalent final-observation validation and append dispatch in initial and continuation bridges.",
+      "patch": "Confirmed the full tool-task runtime integration suite covered root Attempts, parent-linked Corrections, error mapping, and persistence before editing."
+    },
+    {
+      "summary": "Extracted shared final-observation persistence.",
+      "outcome": "success",
+      "diagnostic": "One private helper can validate provider text, map errors by observation kind, and choose root or parent-linked task storage append semantics.",
+      "patch": "Added persist_final_observation and replaced both duplicated blocks while preserving call order and error conversion."
+    },
+    {
+      "summary": "Verified behavior neutrality and recovered remote gates.",
+      "outcome": "success",
+      "diagnostic": "The first GitHub Actions attempts failed before creating a job and CodeRabbit was rate limited; no code-level failure existed. The same exact head later received successful Rust quality and substantive no-finding review results.",
+      "patch": "Kept the exact head unchanged, reran the remote quality gate after runner recovery, resumed review once after cooldown, and left auto-merge disabled until both gates completed."
+    },
+    {
+      "summary": "Merged the focused refactor.",
+      "outcome": "success",
+      "diagnostic": "All 30 tool-task runtime tests, pinned verification, independent review, Rust quality gate run 30158206803, and CodeRabbit review passed with no actionable findings.",
+      "patch": "Pull request 588 squash-merged as a38656a560ca7dde7f5086bb4ce28c3ea1e1fa85 and closed issue 587."
+    }
+  ],
+  "outcome": {
+    "summary": "Initial and continuation provider-tool bridges now share one final-observation validation and persistence helper while retaining existing Attempt, Correction, lineage, and error behavior.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-kernel --test tool_task_runtime --locked # 30 passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # no correctness findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30158206803 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/588", "status": "passed"},
+      {"command": "Pull request 588 squash merge a38656a560ca7dde7f5086bb4ce28c3ea1e1fa85", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Behavior-neutral refactors can use established characterization coverage instead of inventing artificial failing behavior tests.",
+    "Observation-kind error mapping and parent-aware append dispatch form one cohesive private persistence responsibility.",
+    "Remote runner failures before job creation are infrastructure diagnostics, not evidence for speculative code changes.",
+    "Preserving an exact verified head allows remote gates to recover without review churn."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/588"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

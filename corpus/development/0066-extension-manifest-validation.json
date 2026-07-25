@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Validate versioned capability manifests",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/590 by introducing a non-executing, versioned extension-manifest boundary for caller-selected tool, skill, and workflow metadata.",
+    "acceptance_criteria": [
+      "Add a workspace crate that parses one caller-selected YAML manifest with version, stable ID, kind, entrypoint, and optional description.",
+      "Support exactly tool, skill, and workflow kinds and reject malformed or unsupported input with deterministic typed errors.",
+      "Preserve parser failures as error sources and reject blank required fields and unknown fields.",
+      "Document that validated manifests remain untrusted metadata and cannot activate or execute capabilities."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established fixture-backed RED for the manifest contract.",
+      "outcome": "failure",
+      "diagnostic": "The workspace had no extension crate or manifest types, so focused integration tests could not compile.",
+      "patch": "Added tests and fixtures for valid metadata, all supported kinds, malformed YAML, unsupported versions and kinds, and blank required fields."
+    },
+    {
+      "summary": "Implemented the smallest non-executing manifest boundary.",
+      "outcome": "success",
+      "diagnostic": "One-file parsing with a closed version and kind set provides deterministic metadata validation without registry, activation, lifecycle, permission, or persistence behavior.",
+      "patch": "Added vela-extensions, typed source-preserving errors, strict deserialization, accessors, documentation, and workspace milestone wiring."
+    },
+    {
+      "summary": "Refactored YAML bindings and hardened the input boundary.",
+      "outcome": "success",
+      "diagnostic": "The initial implementation used deprecated YAML bindings, and substantive review found that reading an entire untrusted manifest before validation could exhaust memory.",
+      "patch": "Moved to maintained serde_norway bindings, then added a 64 KiB encoded-byte limit, typed TooLarge error, exact-boundary and first-oversized tests, and multibyte boundary coverage."
+    },
+    {
+      "summary": "Verified exact head and merged after incremental review capacity returned.",
+      "outcome": "success",
+      "diagnostic": "Focused tests, pinned verification, and independent review passed. Rust quality gate run 30161180895 succeeded. The exact-head incremental review was initially rate limited, then completed after cooldown with no new actionable comments and zero unresolved threads.",
+      "patch": "Pull request 591 squash-merged as 9ecc404bcfe5add22854376979b46b0bf1518dce and closed issue 590."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now validates bounded version-one YAML metadata for caller-selected tool, skill, and workflow extensions while keeping parsing separate from capability trust, activation, and execution.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --locked # focused manifest and size-boundary tests passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # no final actionable findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30161180895 and substantive incremental CodeRabbit review at https://github.com/Knosence9/project-vela/pull/591", "status": "passed"},
+      {"command": "Pull request 591 squash merge 9ecc404bcfe5add22854376979b46b0bf1518dce", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Parsing and structural validation do not grant trust or permission to activate a capability.",
+    "A closed version and kind set keeps the first manifest boundary deterministic and leaves registries and lifecycle behavior for later slices.",
+    "Input limits for untrusted text must be enforced while reading bytes, before allocation growth and UTF-8 decoding.",
+    "CodeRabbit incremental confirmation is required after a substantive fix even when the previous finding thread is resolved."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/591"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
