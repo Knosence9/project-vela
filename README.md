@@ -156,6 +156,7 @@ The first milestone is the **evidence loop**:
 26. Fail tasks explicitly through bounded provider/tool turns and continuations. ✅
 27. Cancel tasks explicitly through bounded provider/tool turns and continuations. ✅
 28. Persist linked corrections through bounded provider/tool turns and continuations. ✅
+29. Validate versioned tool, skill, and workflow extension manifests without activating them. ✅
 
 ## Project documents
 
@@ -169,6 +170,7 @@ The first milestone is the **evidence loop**:
 - [`docs/task-lifecycle.md`](docs/task-lifecycle.md) — persisted task start/completion/cancellation/load behavior
 - [`docs/session-lifecycle.md`](docs/session-lifecycle.md) — persisted session lifecycle behavior
 - [`docs/tool-permissions.md`](docs/tool-permissions.md) — in-process tool permission and durable invocation-evidence behavior
+- [`docs/extension-manifests.md`](docs/extension-manifests.md) — versioned capability metadata and its non-executing trust boundary
 - [`docs/adr/`](docs/adr/) — architecture decision records
 
 ## Contributing
