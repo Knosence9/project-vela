@@ -152,6 +152,7 @@ The first milestone is the **evidence loop**:
 22. Continue explicitly after one successful provider tool step. ✅
 23. Start a durable task turn through one bounded provider/tool step. ✅
 24. Persist explicit provider/tool continuations within the originating durable task turn. ✅
+25. Complete tasks explicitly through bounded provider/tool turns and continuations. ✅
 
 ## Project documents
 
