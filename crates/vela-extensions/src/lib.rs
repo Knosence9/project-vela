@@ -3,11 +3,14 @@
 //! Manifests describe capabilities but do not activate or authorize them. Callers retain
 //! ownership of path selection, discovery, lifecycle, execution, and policy.
 
-use std::{error::Error, fmt, fs, io, path::Path};
+use std::{error::Error, fmt, fs, io, io::Read, path::Path};
 
 use serde::Deserialize;
 
 const SUPPORTED_MANIFEST_VERSION: u64 = 1;
+
+/// Maximum accepted encoded manifest size.
+pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 /// A capability class understood by version-one manifests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,9 +34,22 @@ impl ExtensionManifest {
     /// Loads and validates one caller-selected YAML manifest.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ExtensionManifestError> {
         let path = path.as_ref();
+        let mut contents = Vec::new();
+        fs::File::open(path)
+            .map_err(|source| ExtensionManifestError::Read { source })?
+            .take(MAX_MANIFEST_BYTES + 1)
+            .read_to_end(&mut contents)
+            .map_err(|source| ExtensionManifestError::Read { source })?;
+        if contents.len() > MAX_MANIFEST_BYTES as usize {
+            return Err(ExtensionManifestError::TooLarge {
+                max_bytes: MAX_MANIFEST_BYTES,
+            });
+        }
         let contents =
-            fs::read_to_string(path).map_err(|source| ExtensionManifestError::Read { source })?;
-        let raw: RawExtensionManifest = serde_norway::from_str(&contents)
+            std::str::from_utf8(&contents).map_err(|source| ExtensionManifestError::Read {
+                source: io::Error::new(io::ErrorKind::InvalidData, source),
+            })?;
+        let raw: RawExtensionManifest = serde_norway::from_str(contents)
             .map_err(|source| ExtensionManifestError::Parse { source })?;
 
         if raw.manifest_version != SUPPORTED_MANIFEST_VERSION {
@@ -103,6 +119,7 @@ struct RawExtensionManifest {
 #[non_exhaustive]
 pub enum ExtensionManifestError {
     Read { source: io::Error },
+    TooLarge { max_bytes: u64 },
     Parse { source: serde_norway::Error },
     UnsupportedVersion { version: u64 },
     UnsupportedKind { kind: String },
@@ -114,6 +131,9 @@ impl fmt::Display for ExtensionManifestError {
         match self {
             Self::Read { source } => {
                 write!(formatter, "could not read extension manifest: {source}")
+            }
+            Self::TooLarge { max_bytes } => {
+                write!(formatter, "extension manifest exceeds {max_bytes} bytes")
             }
             Self::Parse { source } => {
                 write!(formatter, "invalid extension manifest YAML: {source}")
@@ -142,7 +162,8 @@ impl Error for ExtensionManifestError {
         match self {
             Self::Read { source } => Some(source),
             Self::Parse { source } => Some(source),
-            Self::UnsupportedVersion { .. }
+            Self::TooLarge { .. }
+            | Self::UnsupportedVersion { .. }
             | Self::UnsupportedKind { .. }
             | Self::BlankField { .. } => None,
         }

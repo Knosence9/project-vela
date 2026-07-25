@@ -1,7 +1,9 @@
 use std::{error::Error, fs};
 
 use tempfile::tempdir;
-use vela_extensions::{ExtensionKind, ExtensionManifest, ExtensionManifestError};
+use vela_extensions::{
+    ExtensionKind, ExtensionManifest, ExtensionManifestError, MAX_MANIFEST_BYTES,
+};
 
 #[test]
 fn loads_a_valid_version_one_manifest() {
@@ -77,6 +79,32 @@ fn preserves_yaml_parser_errors_as_sources() {
 
     assert!(matches!(error, ExtensionManifestError::Parse { .. }));
     assert!(error.source().is_some());
+}
+
+#[test]
+fn bounds_manifest_input_before_parsing() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("extension.yaml");
+    let prefix =
+        "manifest_version: 1\nid: test.boundary\nkind: tool\nentrypoint: run\ndescription: ";
+    let maximum = usize::try_from(MAX_MANIFEST_BYTES).expect("manifest limit fits usize");
+    let padding = "x".repeat(maximum - prefix.len());
+
+    fs::write(&path, format!("{prefix}{padding}")).expect("write maximum-size manifest");
+    ExtensionManifest::load(&path).expect("maximum-size manifest is accepted");
+
+    fs::write(&path, format!("{prefix}{padding}x")).expect("write oversized manifest");
+    let error = ExtensionManifest::load(&path).expect_err("first oversized byte is rejected");
+    assert!(matches!(
+        error,
+        ExtensionManifestError::TooLarge { max_bytes } if max_bytes == MAX_MANIFEST_BYTES
+    ));
+    assert!(error.source().is_none());
+
+    fs::write(&path, format!("{prefix}{padding}é"))
+        .expect("write oversized manifest crossing a UTF-8 boundary");
+    let error = ExtensionManifest::load(path).expect_err("UTF-8 boundary oversize is rejected");
+    assert!(matches!(error, ExtensionManifestError::TooLarge { .. }));
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {

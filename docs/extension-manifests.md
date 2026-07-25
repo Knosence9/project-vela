@@ -19,7 +19,7 @@ description: Searches local project files
 - `description` is optional and preserved without reinterpretation.
 - Unknown fields are rejected so misspellings and unsupported semantics do not silently enter the runtime contract.
 
-`ExtensionManifest::load` returns typed errors for unreadable files, malformed or structurally invalid YAML, unsupported versions, unsupported kinds, and blank required strings. Read and parser failures remain available through `std::error::Error::source`.
+`ExtensionManifest::load` reads at most 64 KiB plus one boundary byte before parsing. It accepts a manifest whose encoded size is exactly 64 KiB and returns a deterministic `TooLarge` error for the first byte beyond that limit. It also returns typed errors for unreadable files, malformed or structurally invalid YAML, unsupported versions, unsupported kinds, and blank required strings. Read and parser failures remain available through `std::error::Error::source`.
 
 ## Ownership and trust boundary
 
