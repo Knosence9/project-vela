@@ -6,14 +6,15 @@ use vela_kernel::{
     runtime::{
         ProviderError, ProviderToolContinuation, ProviderToolResponse, ProviderToolStepOutcome,
         ToolAssistantContinuationProvider, ToolAssistantProvider, ToolAssistantRuntime,
-        ToolTaskCompletionOutcome, ToolTaskRuntimeError, ToolTaskTurnOutcome,
+        ToolTaskCompletionOutcome, ToolTaskFailureOutcome, ToolTaskRuntimeError,
+        ToolTaskTurnOutcome,
     },
     session::{
         SessionClosure, SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole,
     },
     task::{
-        TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStatus, TaskStore,
-        TaskStoreError,
+        TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStatus,
+        TaskStore, TaskStoreError,
     },
     tool::{
         PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId,
@@ -495,6 +496,57 @@ fn completion_final_response_persists_attempt_and_completes_task() {
 }
 
 #[test]
+fn failure_final_response_persists_attempt_and_fails_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let provider = Provider {
+        calls: Rc::new(RefCell::new(Vec::new())),
+        response: Some(Ok(ProviderToolResponse::Final(
+            SessionTurnContent::new("attempt evidence").unwrap(),
+        ))),
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+
+    let outcome = runtime
+        .fail_task_turn(
+            &task_id,
+            SessionTurnContent::new("try the task").unwrap(),
+            TaskObservationId::new("failure-attempt").unwrap(),
+            TaskFailure::new("caller diagnostic").unwrap(),
+            ToolInvocationId::new("unused-failure-invocation").unwrap(),
+            &mut ToolRegistry::new(),
+            &mut Allow { calls: 0 },
+        )
+        .unwrap();
+
+    let ToolTaskFailureOutcome::Final { session, task } = outcome else {
+        panic!("expected final failure turn")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(task.status(), TaskStatus::Failed);
+    assert_eq!(task.failure().unwrap().as_str(), "caller diagnostic");
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "attempt evidence");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
+}
+
+#[test]
 fn tool_response_persists_human_turn_and_metadata_only_invocation() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
@@ -771,6 +823,153 @@ fn completion_continuation_persists_final_response_and_completes_task() {
     assert_eq!(task.output().unwrap().as_str(), "continued final");
     assert_eq!(task.observations().len(), 1);
     assert_eq!(task.observations()[0].text().as_str(), "continued final");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
+}
+
+#[test]
+fn failure_continuation_retains_diagnostic_and_fails_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let provider = StatefulProvider {
+        initial_calls: Rc::new(RefCell::new(0)),
+        continuation_calls: Rc::new(RefCell::new(0)),
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+
+    let first = runtime
+        .fail_task_turn(
+            &task_id,
+            SessionTurnContent::new("try with a tool").unwrap(),
+            TaskObservationId::new("unused-initial-failure-attempt").unwrap(),
+            TaskFailure::new("caller diagnostic").unwrap(),
+            ToolInvocationId::new("failure-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    assert_eq!(
+        first.continuation().unwrap().failure().as_str(),
+        "caller diagnostic"
+    );
+    let outcome = runtime
+        .continue_failure_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("continued-failure-attempt").unwrap(),
+            ToolInvocationId::new("unused-failure-final").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let ToolTaskFailureOutcome::Final { session, task } = outcome else {
+        panic!("expected final failure continuation")
+    };
+    assert_eq!(task.status(), TaskStatus::Failed);
+    assert_eq!(task.failure().unwrap().as_str(), "caller diagnostic");
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "continued final");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
+}
+
+#[test]
+fn failure_intent_survives_multiple_explicit_tool_steps() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let continuation_calls = Rc::new(RefCell::new(0));
+    let provider = ChainedProvider {
+        continuation_calls: continuation_calls.clone(),
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+
+    let first = runtime
+        .fail_task_turn(
+            &task_id,
+            SessionTurnContent::new("try the chain").unwrap(),
+            TaskObservationId::new("unused-first-failure-attempt").unwrap(),
+            TaskFailure::new("retained diagnostic").unwrap(),
+            ToolInvocationId::new("failure-chain-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    let second = runtime
+        .continue_failure_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("unused-second-failure-attempt").unwrap(),
+            ToolInvocationId::new("failure-chain-2").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    assert_eq!(
+        second.continuation().unwrap().failure().as_str(),
+        "retained diagnostic"
+    );
+    let final_outcome = runtime
+        .continue_failure_task_turn(
+            second.continuation().unwrap(),
+            TaskObservationId::new("failure-chain-attempt").unwrap(),
+            ToolInvocationId::new("unused-failure-chain-final").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let ToolTaskFailureOutcome::Final { session, task } = final_outcome else {
+        panic!("expected final failure chain")
+    };
+    assert_eq!(*continuation_calls.borrow(), 2);
+    assert_eq!(task.status(), TaskStatus::Failed);
+    assert_eq!(task.failure().unwrap().as_str(), "retained diagnostic");
+    assert_eq!(task.observations()[0].text().as_str(), "chain complete");
     assert_eq!(
         SessionStore::open(&path)
             .unwrap()
