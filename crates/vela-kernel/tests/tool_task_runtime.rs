@@ -153,24 +153,32 @@ impl ToolAuthorizer for Decide {
     }
 }
 
+const BLOCKED_INVOCATION_ID: &str = "blocked-terminal";
+
 struct BlockTerminalAppend {
     path: std::path::PathBuf,
+    invocation_id: ToolInvocationId,
     calls: usize,
 }
 impl ToolAuthorizer for BlockTerminalAppend {
     fn authorize(&mut self, _request: ToolRequest<'_>) -> PermissionDecision {
         self.calls += 1;
+        let stream_id = format!("tool-invocation:{}", self.invocation_id);
         rusqlite::Connection::open(&self.path)
             .unwrap()
-            .execute_batch(
+            .execute_batch(&format!(
                 "CREATE TRIGGER reject_runtime_tool_terminal
                  BEFORE INSERT ON events
-                 WHEN NEW.stream_id = 'tool-invocation:blocked-terminal'
-                      AND NEW.stream_version = 2
+                 WHEN NEW.stream_id = '{stream_id}'
+                      AND NEW.event_type IN (
+                          'tool.invocation_denied',
+                          'tool.invocation_succeeded',
+                          'tool.invocation_failed'
+                      )
                  BEGIN
                      SELECT RAISE(ABORT, 'terminal append blocked');
-                 END;",
-            )
+                 END;"
+            ))
             .unwrap();
         PermissionDecision::Allow
     }
@@ -404,11 +412,12 @@ fn tool_response_persists_human_turn_and_metadata_only_invocation() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert!(retained.iter().all(|payload| {
-        !payload
-            .windows(17)
-            .any(|window| window == b"memory-only-input")
-    }));
+    const SECRET: &[u8] = b"memory-only-input";
+    assert!(
+        retained
+            .iter()
+            .all(|payload| !payload.windows(SECRET.len()).any(|window| window == SECRET))
+    );
 }
 
 #[test]
@@ -877,9 +886,10 @@ fn terminal_invocation_append_failure_preserves_human_and_pending_intent() {
         })
         .unwrap();
     let mut runtime = ToolAssistantRuntime::open(&path, requesting_provider(tool_id)).unwrap();
-    let invocation_id = ToolInvocationId::new("blocked-terminal").unwrap();
+    let invocation_id = ToolInvocationId::new(BLOCKED_INVOCATION_ID).unwrap();
     let mut authorizer = BlockTerminalAppend {
         path: path.clone(),
+        invocation_id: invocation_id.clone(),
         calls: 0,
     };
 
