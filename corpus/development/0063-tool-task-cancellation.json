@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Cancel provider-tool task turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/580 by retaining a caller-owned cancellation reason across bounded provider/tool task turns and explicitly recording cancellation without claiming to interrupt in-flight work.",
+    "acceptance_criteria": [
+      "Expose cancellation-specific initial and continuation operations that retain the validated caller reason.",
+      "Keep tool responses non-terminal and require explicit caller progression with fresh identity and authorization.",
+      "On a final response, persist assistant content and an exact Attempt before cancelling the task with the original reason.",
+      "Document that this terminal boundary records a decision and does not provide cooperative interruption of provider or tool work."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for initial and continued cancellation turns.",
+      "outcome": "failure",
+      "diagnostic": "ToolAssistantRuntime lacked cancellation-specific outcomes, operations, and a continuation capable of preserving caller-owned cancellation intent.",
+      "patch": "Added focused failing tests for direct final cancellation and cancellation after an explicit tool continuation."
+    },
+    {
+      "summary": "Implemented typed cancellation orchestration.",
+      "outcome": "success",
+      "diagnostic": "Cancellation-specific outcomes retain the caller reason while reusing the bounded attempt-only provider/tool path; finalization records provider text as Attempt evidence before cancelling the task.",
+      "patch": "Added cancellation outcomes and continuations, initial and continuation methods, durable projection tests, documentation, and milestone status."
+    },
+    {
+      "summary": "Refactored around the established symmetric terminal boundary.",
+      "outcome": "success",
+      "diagnostic": "Completion and failure already established a small terminal-finalization pattern, so cancellation required no new loop, retry, permission, or storage mechanism.",
+      "patch": "Kept dispatch and continuation logic shared, isolated only cancellation intent and final state application, and documented the non-interrupting contract."
+    },
+    {
+      "summary": "Verified exact head and merged after the review cooldown.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify and independent review passed. Rust quality gate run 30152645001 succeeded. The initial CodeRabbit status was a false-green rate limit; after cooldown, one deliberate exact-head review completed with no actionable findings and zero review threads.",
+      "patch": "Pull request 581 squash-merged as c2be9c3fe3cd23f398c973bbd46131e281760edc and closed issue 580."
+    }
+  ],
+  "outcome": {
+    "summary": "Provider-tool task turns can now retain caller-owned cancellation intent across explicit tool steps and durably record cancellation after final Attempt evidence without implying in-flight interruption.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_task_runtime cancellation_", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # no blocking findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30152645001 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/581", "status": "passed"},
+      {"command": "Pull request 581 squash merge c2be9c3fe3cd23f398c973bbd46131e281760edc", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A cancellation state transition and cooperative interruption are separate capabilities; documentation must not conflate them.",
+    "Caller-owned cancellation reasons belong in typed continuations while provider output remains Attempt evidence.",
+    "Symmetric terminal orchestration can stay simple by reusing one bounded runtime path and varying only retained intent and finalization.",
+    "When a review status is rate limited, preserve exact head and resume once after cooldown rather than racing auto-merge."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/581"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
