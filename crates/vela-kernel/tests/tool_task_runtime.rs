@@ -6,15 +6,15 @@ use vela_kernel::{
     runtime::{
         ProviderError, ProviderToolContinuation, ProviderToolResponse, ProviderToolStepOutcome,
         ToolAssistantContinuationProvider, ToolAssistantProvider, ToolAssistantRuntime,
-        ToolTaskCompletionOutcome, ToolTaskFailureOutcome, ToolTaskRuntimeError,
-        ToolTaskTurnOutcome,
+        ToolTaskCancellationOutcome, ToolTaskCompletionOutcome, ToolTaskFailureOutcome,
+        ToolTaskRuntimeError, ToolTaskTurnOutcome,
     },
     session::{
         SessionClosure, SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole,
     },
     task::{
-        TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStatus,
-        TaskStore, TaskStoreError,
+        TaskCancellation, TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind,
+        TaskStatus, TaskStore, TaskStoreError,
     },
     tool::{
         PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId,
@@ -547,6 +547,57 @@ fn failure_final_response_persists_attempt_and_fails_task() {
 }
 
 #[test]
+fn cancellation_final_response_persists_attempt_and_cancels_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let provider = Provider {
+        calls: Rc::new(RefCell::new(Vec::new())),
+        response: Some(Ok(ProviderToolResponse::Final(
+            SessionTurnContent::new("attempt evidence").unwrap(),
+        ))),
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+
+    let outcome = runtime
+        .cancel_task_turn(
+            &task_id,
+            SessionTurnContent::new("stop the task").unwrap(),
+            TaskObservationId::new("cancellation-attempt").unwrap(),
+            TaskCancellation::new("caller reason").unwrap(),
+            ToolInvocationId::new("unused-cancellation-invocation").unwrap(),
+            &mut ToolRegistry::new(),
+            &mut Allow { calls: 0 },
+        )
+        .unwrap();
+
+    let ToolTaskCancellationOutcome::Final { session, task } = outcome else {
+        panic!("expected final cancellation turn")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(task.status(), TaskStatus::Cancelled);
+    assert_eq!(task.cancellation().unwrap().as_str(), "caller reason");
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "attempt evidence");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
+}
+
+#[test]
 fn tool_response_persists_human_turn_and_metadata_only_invocation() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
@@ -890,6 +941,75 @@ fn failure_continuation_retains_diagnostic_and_fails_task() {
     };
     assert_eq!(task.status(), TaskStatus::Failed);
     assert_eq!(task.failure().unwrap().as_str(), "caller diagnostic");
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "continued final");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
+}
+
+#[test]
+fn cancellation_continuation_retains_reason_and_cancels_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id) = setup(&path);
+    let provider = StatefulProvider {
+        initial_calls: Rc::new(RefCell::new(0)),
+        continuation_calls: Rc::new(RefCell::new(0)),
+    };
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(EchoTool {
+            id: ToolId::new("tool.echo").unwrap(),
+            calls: Rc::new(RefCell::new(0)),
+        })
+        .unwrap();
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut authorizer = Allow { calls: 0 };
+
+    let first = runtime
+        .cancel_task_turn(
+            &task_id,
+            SessionTurnContent::new("stop after the tool").unwrap(),
+            TaskObservationId::new("unused-initial-cancellation-attempt").unwrap(),
+            TaskCancellation::new("caller reason").unwrap(),
+            ToolInvocationId::new("cancellation-invocation-1").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+    assert_eq!(
+        first.continuation().unwrap().cancellation().as_str(),
+        "caller reason"
+    );
+    let outcome = runtime
+        .continue_cancellation_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("continued-cancellation-attempt").unwrap(),
+            ToolInvocationId::new("unused-cancellation-final").unwrap(),
+            &mut registry,
+            &mut authorizer,
+        )
+        .unwrap();
+
+    let ToolTaskCancellationOutcome::Final { session, task } = outcome else {
+        panic!("expected final cancellation continuation")
+    };
+    assert_eq!(task.status(), TaskStatus::Cancelled);
+    assert_eq!(task.cancellation().unwrap().as_str(), "caller reason");
     assert_eq!(task.observations().len(), 1);
     assert_eq!(task.observations()[0].text().as_str(), "continued final");
     assert_eq!(

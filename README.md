@@ -154,6 +154,7 @@ The first milestone is the **evidence loop**:
 24. Persist explicit provider/tool continuations within the originating durable task turn. ✅
 25. Complete tasks explicitly through bounded provider/tool turns and continuations. ✅
 26. Fail tasks explicitly through bounded provider/tool turns and continuations. ✅
+27. Cancel tasks explicitly through bounded provider/tool turns and continuations. ✅
 
 ## Project documents
 
