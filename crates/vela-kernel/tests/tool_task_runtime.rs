@@ -779,6 +779,14 @@ fn completion_continuation_persists_final_response_and_completes_task() {
             .unwrap(),
         session
     );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
+    );
 }
 
 #[test]
@@ -844,6 +852,14 @@ fn completion_intent_survives_multiple_explicit_tool_steps() {
             .unwrap()
             .unwrap(),
         session
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
     );
 }
 
