@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Correct provider-tool task turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/585 by preserving caller-owned correction lineage across bounded provider/tool task turns and persisting final provider text as linked Correction evidence only.",
+    "acceptance_criteria": [
+      "Expose correction-specific initial and continuation operations with typed outcomes.",
+      "Retain the caller-owned parent Attempt identity across non-terminal tool steps.",
+      "Persist final provider content as an exact linked Correction without adding an Attempt or changing task lifecycle state.",
+      "Preserve existing transcript, identity, lineage, permission, partial-commit, and race semantics."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for direct and continued correction turns.",
+      "outcome": "failure",
+      "diagnostic": "ToolAssistantRuntime lacked correction-specific outcomes and operations capable of retaining parent Attempt lineage through provider/tool continuations.",
+      "patch": "Added focused failing tests for direct correction finalization, correction after a tool step, and invalid parent lineage."
+    },
+    {
+      "summary": "Implemented typed correction orchestration.",
+      "outcome": "success",
+      "diagnostic": "Correction-specific continuations retain the parent Attempt identity while reusing the bounded observation runtime path; finalization appends linked Correction evidence only.",
+      "patch": "Added correction outcomes, continuations, initial and continuation methods, durable integration coverage, and runtime documentation."
+    },
+    {
+      "summary": "Generalized the observation bridge without changing behavior.",
+      "outcome": "success",
+      "diagnostic": "Attempt and Correction turns shared provider/tool sequencing, but final observation persistence still contained duplicate initial and continuation blocks.",
+      "patch": "Generalized the private observation execution bridge; recorded the remaining final-persistence duplication as follow-up issue 587 after substantive review."
+    },
+    {
+      "summary": "Verified exact head and merged after review capacity returned.",
+      "outcome": "success",
+      "diagnostic": "Focused correction tests, pinned verification, and independent review passed. Rust quality gate run 30156238786 succeeded; after a false-green rate limit, substantive CodeRabbit review completed on exact head and the non-blocking duplication finding was durably tracked.",
+      "patch": "Pull request 586 squash-merged as 57d1bfcb81c33d926ebacd5915ba3a9b984e157b and closed issue 585."
+    }
+  ],
+  "outcome": {
+    "summary": "Provider-tool task turns now retain caller-owned correction lineage across explicit tool steps and durably append final provider content as linked Correction evidence without adding Attempts or lifecycle transitions.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-kernel --test tool_task_runtime correction_ --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # no blocking findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30156238786 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/586", "status": "passed"},
+      {"command": "Pull request 586 squash merge 57d1bfcb81c33d926ebacd5915ba3a9b984e157b", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Correction lineage is caller-owned terminal intent and belongs in a typed continuation rather than provider output.",
+    "Final correction text is evidence linked to an existing Attempt; it must not create a new Attempt or imply a lifecycle transition.",
+    "A valid non-blocking review finding should become a bounded durable follow-up instead of expanding an already complete behavior slice.",
+    "A rate-limited green review status is not substantive review evidence."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/586"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
