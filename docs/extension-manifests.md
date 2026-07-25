@@ -29,10 +29,12 @@ Discovery currently requires a Unix target, where root, child-directory, and man
 
 Each result contains the validated manifest and its source path. An unreadable root or directory-entry failure returns a typed, source-preserving root error with the failing directory path. An invalid candidate returns a typed, source-preserving manifest error with its path. Discovery fails as a whole rather than returning the valid prefix before an error.
 
+One discovered root is an exact-ID namespace. After validating candidates in sorted path order, discovery rejects an ID that exactly equals one from an earlier manifest. The typed duplicate error contains the preserved ID, the first manifest path, and the duplicate manifest path; it has no underlying source. Comparison does not trim, case-fold, normalize, or otherwise reinterpret IDs, so IDs that differ only by case or surrounding whitespace remain distinct. The first sorted path is always the original and the next equal ID is always the reported duplicate.
+
 ## Ownership and trust boundary
 
 The caller chooses each manifest path or the one extension root. Successful parsing or discovery does not consult configuration, register a capability, grant permission, import code, execute an entrypoint, or persist state. A future loader must treat manifest declarations as untrusted metadata and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, duplicate detection across manifests, registries, dependencies, enable/disable state, lifecycle hooks, activation, reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, registries, dependencies, enable/disable state, lifecycle hooks, activation, reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration.
