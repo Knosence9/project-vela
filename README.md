@@ -155,6 +155,7 @@ The first milestone is the **evidence loop**:
 25. Complete tasks explicitly through bounded provider/tool turns and continuations. ✅
 26. Fail tasks explicitly through bounded provider/tool turns and continuations. ✅
 27. Cancel tasks explicitly through bounded provider/tool turns and continuations. ✅
+28. Persist linked corrections through bounded provider/tool turns and continuations. ✅
 
 ## Project documents
 

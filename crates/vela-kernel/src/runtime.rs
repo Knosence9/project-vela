@@ -334,6 +334,72 @@ impl ToolTaskContinuation<'_> {
     }
 }
 
+/// The durable result of one correction-oriented provider/tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolTaskCorrectionOutcome {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        parent_attempt_id: TaskObservationId,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+    },
+}
+
+impl ToolTaskCorrectionOutcome {
+    /// Borrows a continuation that preserves caller-owned correction lineage.
+    pub fn continuation(&self) -> Option<ToolTaskCorrectionContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                parent_attempt_id,
+                tool_id,
+                input,
+                output,
+                ..
+            } => Some(ToolTaskCorrectionContinuation {
+                task_id,
+                parent_attempt_id,
+                provider: ProviderToolContinuation::new(
+                    session.turns(),
+                    ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                ),
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed provider/tool continuation that can only resume correction-oriented operations.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolTaskCorrectionContinuation<'a> {
+    task_id: &'a TaskId,
+    parent_attempt_id: &'a TaskObservationId,
+    provider: ProviderToolContinuation<'a>,
+}
+
+impl ToolTaskCorrectionContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+
+    pub fn parent_attempt_id(&self) -> &TaskObservationId {
+        self.parent_attempt_id
+    }
+}
+
 /// The durable result of one caller-requested completion-oriented provider/tool step.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -534,6 +600,7 @@ pub enum ToolTaskRuntimeError {
     TaskNotAssociated { task_id: TaskId },
     StaleContinuationTranscript { task_id: TaskId },
     InvalidAttemptText(TaskObservationTextError),
+    InvalidCorrectionText(TaskObservationTextError),
     InvalidTaskOutput(TaskOutputError),
     Provider(ProviderError),
     Invocation(DurableToolRegistryInvocationError),
@@ -557,6 +624,9 @@ impl fmt::Display for ToolTaskRuntimeError {
             Self::InvalidAttemptText(error) => {
                 write!(formatter, "tool task attempt observation error: {error}")
             }
+            Self::InvalidCorrectionText(error) => {
+                write!(formatter, "tool task correction observation error: {error}")
+            }
             Self::InvalidTaskOutput(error) => {
                 write!(formatter, "tool task output error: {error}")
             }
@@ -573,6 +643,7 @@ impl Error for ToolTaskRuntimeError {
             Self::Task(error) => Some(error),
             Self::InvocationStore(error) => Some(error),
             Self::InvalidAttemptText(error) => Some(error),
+            Self::InvalidCorrectionText(error) => Some(error),
             Self::InvalidTaskOutput(error) => Some(error),
             Self::Provider(error) => Some(error),
             Self::Invocation(error) => Some(error),
@@ -614,6 +685,33 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
         registry: &mut ToolRegistry,
         authorizer: &mut A,
     ) -> Result<ToolTaskTurnOutcome, ToolTaskRuntimeError> {
+        self.execute_observation_task_turn(
+            task_id,
+            human_content,
+            attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+            invocation_id,
+            registry,
+            authorizer,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the private bridge retains explicit evidence and invocation identities"
+    )]
+    fn execute_observation_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        observation_id: TaskObservationId,
+        observation_kind: TaskObservationKind,
+        parent_attempt_id: Option<&TaskObservationId>,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskTurnOutcome, ToolTaskRuntimeError> {
         let task = self.load_active_task(task_id)?;
         let session_id =
             task.session_id()
@@ -621,12 +719,8 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
                 .ok_or_else(|| ToolTaskRuntimeError::TaskNotAssociated {
                     task_id: task_id.clone(),
                 })?;
-        task.validate_observation_append(
-            &attempt_observation_id,
-            TaskObservationKind::Attempt,
-            None,
-        )
-        .map_err(ToolTaskRuntimeError::Task)?;
+        task.validate_observation_append(&observation_id, observation_kind, parent_attempt_id)
+            .map_err(ToolTaskRuntimeError::Task)?;
         self.ensure_session_writable(&session_id)?;
         self.ensure_invocation_available(&invocation_id)?;
 
@@ -650,22 +744,36 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
 
         match step {
             ProviderToolStepOutcome::Final { content, .. } => {
-                let attempt_text = content.as_str().to_owned();
+                let observation_text = content.as_str().to_owned();
                 let session = self
                     .sessions
                     .append_turn(&session_id, SessionTurnRole::Assistant, content)
                     .map_err(ToolTaskRuntimeError::Session)?;
-                let attempt_text = TaskObservationText::new(attempt_text)
-                    .map_err(ToolTaskRuntimeError::InvalidAttemptText)?;
-                let task = self
-                    .tasks
-                    .append_observation(
+                let observation_text =
+                    TaskObservationText::new(observation_text).map_err(|error| {
+                        match observation_kind {
+                            TaskObservationKind::Correction => {
+                                ToolTaskRuntimeError::InvalidCorrectionText(error)
+                            }
+                            _ => ToolTaskRuntimeError::InvalidAttemptText(error),
+                        }
+                    })?;
+                let task = match parent_attempt_id {
+                    Some(parent_attempt_id) => self.tasks.append_observation_for_attempt(
                         task_id,
-                        attempt_observation_id,
-                        TaskObservationKind::Attempt,
-                        attempt_text,
-                    )
-                    .map_err(ToolTaskRuntimeError::Task)?;
+                        observation_id,
+                        observation_kind,
+                        observation_text,
+                        parent_attempt_id.clone(),
+                    ),
+                    None => self.tasks.append_observation(
+                        task_id,
+                        observation_id,
+                        observation_kind,
+                        observation_text,
+                    ),
+                }
+                .map_err(ToolTaskRuntimeError::Task)?;
                 Ok(ToolTaskTurnOutcome::Final { session, task })
             }
             ProviderToolStepOutcome::ToolCompleted {
@@ -681,6 +789,64 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
                 output,
                 continuation,
             }),
+        }
+    }
+
+    /// Executes one correction turn through a bounded provider/tool step.
+    ///
+    /// Final provider content becomes Correction evidence linked to the caller-owned parent
+    /// Attempt. A tool request remains non-terminal and retains that lineage only in memory.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "correction adds explicit parent and evidence identities to task-turn inputs"
+    )]
+    pub fn execute_task_correction_turn<A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        parent_attempt_id: &TaskObservationId,
+        human_content: SessionTurnContent,
+        correction_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskCorrectionOutcome, ToolTaskRuntimeError> {
+        let outcome = self.execute_observation_task_turn(
+            task_id,
+            human_content,
+            correction_observation_id,
+            TaskObservationKind::Correction,
+            Some(parent_attempt_id),
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        Ok(Self::correction_outcome(outcome, parent_attempt_id.clone()))
+    }
+
+    fn correction_outcome(
+        outcome: ToolTaskTurnOutcome,
+        parent_attempt_id: TaskObservationId,
+    ) -> ToolTaskCorrectionOutcome {
+        match outcome {
+            ToolTaskTurnOutcome::Final { session, task } => {
+                ToolTaskCorrectionOutcome::Final { session, task }
+            }
+            ToolTaskTurnOutcome::ToolCompleted {
+                session,
+                task_id,
+                tool_id,
+                input,
+                output,
+                continuation,
+            } => ToolTaskCorrectionOutcome::ToolCompleted {
+                session,
+                task_id,
+                parent_attempt_id,
+                tool_id,
+                input,
+                output,
+                continuation,
+            },
         }
     }
 
@@ -954,6 +1120,31 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
         registry: &mut ToolRegistry,
         authorizer: &mut A,
     ) -> Result<ToolTaskTurnOutcome, ToolTaskRuntimeError> {
+        self.continue_observation_task_turn(
+            continuation,
+            attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+            invocation_id,
+            registry,
+            authorizer,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the private continuation retains explicit evidence and invocation identities"
+    )]
+    fn continue_observation_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        continuation: ToolTaskContinuation<'_>,
+        observation_id: TaskObservationId,
+        observation_kind: TaskObservationKind,
+        parent_attempt_id: Option<&TaskObservationId>,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskTurnOutcome, ToolTaskRuntimeError> {
         let task = self.load_active_task(continuation.task_id)?;
         let session_id =
             task.session_id()
@@ -982,12 +1173,8 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
                 task_id: continuation.task_id.clone(),
             });
         }
-        task.validate_observation_append(
-            &attempt_observation_id,
-            TaskObservationKind::Attempt,
-            None,
-        )
-        .map_err(ToolTaskRuntimeError::Task)?;
+        task.validate_observation_append(&observation_id, observation_kind, parent_attempt_id)
+            .map_err(ToolTaskRuntimeError::Task)?;
         self.ensure_invocation_available(&invocation_id)?;
 
         let response = self
@@ -1030,7 +1217,7 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
 
         match step {
             ProviderToolStepOutcome::Final { content, .. } => {
-                let attempt_text = content.as_str().to_owned();
+                let observation_text = content.as_str().to_owned();
                 let session = self
                     .sessions
                     .append_turn_if_current_transcript(
@@ -1043,17 +1230,31 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
                     .ok_or_else(|| ToolTaskRuntimeError::StaleContinuationTranscript {
                         task_id: continuation.task_id.clone(),
                     })?;
-                let attempt_text = TaskObservationText::new(attempt_text)
-                    .map_err(ToolTaskRuntimeError::InvalidAttemptText)?;
-                let task = self
-                    .tasks
-                    .append_observation(
+                let observation_text =
+                    TaskObservationText::new(observation_text).map_err(|error| {
+                        match observation_kind {
+                            TaskObservationKind::Correction => {
+                                ToolTaskRuntimeError::InvalidCorrectionText(error)
+                            }
+                            _ => ToolTaskRuntimeError::InvalidAttemptText(error),
+                        }
+                    })?;
+                let task = match parent_attempt_id {
+                    Some(parent_attempt_id) => self.tasks.append_observation_for_attempt(
                         continuation.task_id,
-                        attempt_observation_id,
-                        TaskObservationKind::Attempt,
-                        attempt_text,
-                    )
-                    .map_err(ToolTaskRuntimeError::Task)?;
+                        observation_id,
+                        observation_kind,
+                        observation_text,
+                        parent_attempt_id.clone(),
+                    ),
+                    None => self.tasks.append_observation(
+                        continuation.task_id,
+                        observation_id,
+                        observation_kind,
+                        observation_text,
+                    ),
+                }
+                .map_err(ToolTaskRuntimeError::Task)?;
                 Ok(ToolTaskTurnOutcome::Final { session, task })
             }
             ProviderToolStepOutcome::ToolCompleted {
@@ -1070,6 +1271,32 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
                 continuation: next,
             }),
         }
+    }
+
+    /// Continues a correction turn while preserving the caller-owned parent Attempt.
+    pub fn continue_correction_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        continuation: ToolTaskCorrectionContinuation<'_>,
+        correction_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskCorrectionOutcome, ToolTaskRuntimeError> {
+        let parent_attempt_id = continuation.parent_attempt_id.clone();
+        let continuation = ToolTaskContinuation {
+            task_id: continuation.task_id,
+            provider: continuation.provider,
+        };
+        let outcome = self.continue_observation_task_turn(
+            continuation,
+            correction_observation_id,
+            TaskObservationKind::Correction,
+            Some(&parent_attempt_id),
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        Ok(Self::correction_outcome(outcome, parent_attempt_id))
     }
 
     /// Continues a caller-requested completion turn with the same provider instance.
