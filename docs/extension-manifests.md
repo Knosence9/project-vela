@@ -43,4 +43,4 @@ The caller chooses each manifest path or the one extension root. Successful stan
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, registries, dependencies, enable/disable state, lifecycle hooks, activation, reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries, dependencies, enable/disable state, lifecycle hooks, activation, reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration.
