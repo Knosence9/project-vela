@@ -392,6 +392,72 @@ impl ToolTaskCompletionContinuation<'_> {
     }
 }
 
+/// The durable result of one caller-requested failure-oriented provider/tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolTaskFailureOutcome {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        failure: TaskFailure,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+    },
+}
+
+impl ToolTaskFailureOutcome {
+    /// Borrows a continuation that preserves caller-requested failure intent and diagnostic.
+    pub fn continuation(&self) -> Option<ToolTaskFailureContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                failure,
+                tool_id,
+                input,
+                output,
+                ..
+            } => Some(ToolTaskFailureContinuation {
+                task_id,
+                failure,
+                provider: ProviderToolContinuation::new(
+                    session.turns(),
+                    ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                ),
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed provider/tool continuation that can only resume failure-oriented operations.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolTaskFailureContinuation<'a> {
+    task_id: &'a TaskId,
+    failure: &'a TaskFailure,
+    provider: ProviderToolContinuation<'a>,
+}
+
+impl ToolTaskFailureContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+
+    pub fn failure(&self) -> &TaskFailure {
+        self.failure
+    }
+}
+
 /// A failure while bridging one initial provider-tool step into a durable task turn.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -605,6 +671,68 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
             } => Ok(ToolTaskCompletionOutcome::ToolCompleted {
                 session,
                 task_id,
+                tool_id,
+                input,
+                output,
+                continuation,
+            }),
+        }
+    }
+
+    /// Executes one caller-requested failure turn through a bounded provider/tool step.
+    ///
+    /// Provider content is Attempt evidence only; the caller-owned diagnostic fails the task
+    /// after a final response. A tool request remains non-terminal and requires an explicit
+    /// failure continuation.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "failure adds one caller-owned diagnostic to the symmetric task-turn inputs"
+    )]
+    pub fn fail_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        failure: TaskFailure,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskFailureOutcome, ToolTaskRuntimeError> {
+        let outcome = self.execute_task_turn(
+            task_id,
+            human_content,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        self.fail_final_outcome(outcome, failure)
+    }
+
+    fn fail_final_outcome(
+        &mut self,
+        outcome: ToolTaskTurnOutcome,
+        failure: TaskFailure,
+    ) -> Result<ToolTaskFailureOutcome, ToolTaskRuntimeError> {
+        match outcome {
+            ToolTaskTurnOutcome::Final { session, task } => {
+                let task = self
+                    .tasks
+                    .fail(task.id(), failure)
+                    .map_err(ToolTaskRuntimeError::Task)?;
+                Ok(ToolTaskFailureOutcome::Final { session, task })
+            }
+            ToolTaskTurnOutcome::ToolCompleted {
+                session,
+                task_id,
+                tool_id,
+                input,
+                output,
+                continuation,
+            } => Ok(ToolTaskFailureOutcome::ToolCompleted {
+                session,
+                task_id,
+                failure,
                 tool_id,
                 input,
                 output,
@@ -840,6 +968,30 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
             authorizer,
         )?;
         self.complete_final_outcome(outcome)
+    }
+
+    /// Continues a caller-requested failure turn with the same provider and diagnostic.
+    pub fn continue_failure_task_turn<A: ToolAuthorizer>(
+        &mut self,
+        continuation: ToolTaskFailureContinuation<'_>,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ToolTaskFailureOutcome, ToolTaskRuntimeError> {
+        let failure = continuation.failure.clone();
+        let continuation = ToolTaskContinuation {
+            task_id: continuation.task_id,
+            provider: continuation.provider,
+        };
+        let outcome = self.continue_task_turn(
+            continuation,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        self.fail_final_outcome(outcome, failure)
     }
 
     /// Explicitly continues with the same provider instance without persisting a session turn.
