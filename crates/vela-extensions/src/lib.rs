@@ -130,6 +130,41 @@ impl DiscoveredExtension {
     }
 }
 
+/// An immutable, non-activating snapshot of one discovered extension root.
+#[derive(Clone, Debug)]
+pub struct ExtensionRegistry {
+    extensions: Vec<DiscoveredExtension>,
+    indices_by_id: BTreeMap<String, usize>,
+}
+
+impl ExtensionRegistry {
+    /// Discovers one extension root and owns the complete validated snapshot.
+    pub fn discover(root: impl AsRef<Path>) -> Result<Self, ExtensionDiscoveryError> {
+        let extensions = discover_extensions(root)?;
+        let indices_by_id = extensions
+            .iter()
+            .enumerate()
+            .map(|(index, extension)| (extension.manifest().id().to_owned(), index))
+            .collect();
+        Ok(Self {
+            extensions,
+            indices_by_id,
+        })
+    }
+
+    /// Resolves one exact caller-authored extension ID without activation.
+    pub fn get(&self, id: &str) -> Option<&DiscoveredExtension> {
+        self.indices_by_id
+            .get(id)
+            .map(|index| &self.extensions[*index])
+    }
+
+    /// Enumerates the snapshot in deterministic manifest-path order.
+    pub fn extensions(&self) -> impl ExactSizeIterator<Item = &DiscoveredExtension> {
+        self.extensions.iter()
+    }
+}
+
 /// Discovers validated manifests at `root/*/extension.yaml` without activating them.
 pub fn discover_extensions(
     root: impl AsRef<Path>,

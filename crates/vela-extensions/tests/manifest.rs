@@ -3,7 +3,7 @@ use std::{error::Error, fs};
 use tempfile::tempdir;
 use vela_extensions::{
     ExtensionDiscoveryError, ExtensionKind, ExtensionManifest, ExtensionManifestError,
-    MAX_MANIFEST_BYTES, discover_extensions,
+    ExtensionRegistry, MAX_MANIFEST_BYTES, discover_extensions,
 };
 
 #[test]
@@ -459,6 +459,64 @@ fn discovery_preserves_root_enumeration_errors() {
         ExtensionDiscoveryError::ReadRoot { ref path, .. } if path == &missing
     ));
     assert!(error.source().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_resolves_exact_ids_and_enumerates_in_manifest_path_order() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("zeta/extension.yaml"), "alpha.id");
+    write_manifest(root.path().join("alpha/extension.yaml"), "zeta.id");
+
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+
+    assert_eq!(
+        registry
+            .extensions()
+            .map(|extension| extension.manifest().id())
+            .collect::<Vec<_>>(),
+        ["zeta.id", "alpha.id"]
+    );
+    assert_eq!(
+        registry.get("alpha.id").expect("exact ID").path(),
+        root.path().join("zeta/extension.yaml")
+    );
+    assert!(registry.get("Alpha.Id").is_none());
+    assert!(registry.get(" alpha.id").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_preserves_discovery_failures() {
+    let root = tempdir().expect("temporary extension root");
+    let invalid_path = root.path().join("invalid/extension.yaml");
+    fs::create_dir_all(invalid_path.parent().expect("manifest parent"))
+        .expect("create extension directory");
+    fs::write(&invalid_path, "manifest_version: nope").expect("write invalid manifest");
+
+    let error = ExtensionRegistry::discover(root.path()).expect_err("invalid registry");
+
+    assert!(matches!(
+        error,
+        ExtensionDiscoveryError::Manifest { ref path, .. } if path == &invalid_path
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_is_an_explicit_immutable_snapshot() {
+    let root = tempdir().expect("temporary extension root");
+    let registry = ExtensionRegistry::discover(root.path()).expect("empty registry");
+    assert_eq!(registry.extensions().count(), 0);
+
+    write_manifest(root.path().join("later/extension.yaml"), "later.tool");
+
+    assert!(registry.get("later.tool").is_none());
+    assert_eq!(registry.extensions().count(), 0);
+
+    let refreshed = ExtensionRegistry::discover(root.path()).expect("refreshed registry");
+    assert_eq!(refreshed.extensions().count(), 1);
+    assert!(refreshed.get("later.tool").is_some());
 }
 
 #[cfg(not(unix))]

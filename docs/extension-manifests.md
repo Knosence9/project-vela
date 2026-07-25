@@ -31,10 +31,16 @@ Each result contains the validated manifest and its source path. An unreadable r
 
 One discovered root is an exact-ID namespace. After validating candidates in sorted path order, discovery rejects an ID that exactly equals one from an earlier manifest. The typed duplicate error contains the preserved ID, the first manifest path, and the duplicate manifest path; it has no underlying source. Comparison does not trim, case-fold, normalize, or otherwise reinterpret IDs, so IDs that differ only by case or surrounding whitespace remain distinct. The first sorted path is always the original and the next equal ID is always the reported duplicate.
 
+## Registry snapshots
+
+`ExtensionRegistry::discover(root)` owns an immutable, all-or-nothing snapshot of one successful discovery. `get(id)` resolves the exact caller-authored ID without trimming, normalization, case folding, authorization, or activation. `extensions()` borrows entries in lexicographic manifest-path order, preserving discovery order rather than sorting by ID. Empty roots produce empty snapshots, and discovery failures are returned unchanged without exposing a partial registry.
+
+A registry never watches or automatically rescans its root. Filesystem changes do not alter an existing snapshot; a caller must explicitly construct a fresh registry to observe them. A refreshed snapshot repeats all descriptor-anchored package validation. Like discovery itself, a registry is metadata and not an activation lease.
+
 ## Ownership and trust boundary
 
 The caller chooses each manifest path or the one extension root. Successful standalone parsing does not consult configuration or inspect an entrypoint on the filesystem. Discovery validates that the entrypoint target is an extension-local regular file at discovery time, but successful parsing or discovery does not register a capability, grant permission, import code, execute an entrypoint, read target content, or persist state. Discovery is not an activation lease: a future loader must reopen targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes again, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, registries, dependencies, enable/disable state, lifecycle hooks, activation, reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries, dependencies, enable/disable state, lifecycle hooks, activation, reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration.

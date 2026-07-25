@@ -161,6 +161,7 @@ The first milestone is the **evidence loop**:
 31. Reject exact duplicate capability IDs within one discovered extension root. ✅
 32. Validate portable extension-local entrypoint references without resolving or activating them. ✅
 33. Validate discovered entrypoint targets as extension-local regular files without reading or activating them. ✅
+34. Build immutable discovered extension registry snapshots with exact-ID lookup. ✅
 
 ## Project documents
 
