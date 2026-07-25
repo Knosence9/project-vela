@@ -1,0 +1,4 @@
+manifest_version: 1
+id: local.service
+kind: service
+entrypoint: local-service

@@ -1,0 +1,5 @@
+manifest_version: 1
+id: local.search
+kind: tool
+entrypoint: local-search
+description: Searches local project files
