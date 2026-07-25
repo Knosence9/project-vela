@@ -749,31 +749,13 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
                     .sessions
                     .append_turn(&session_id, SessionTurnRole::Assistant, content)
                     .map_err(ToolTaskRuntimeError::Session)?;
-                let observation_text =
-                    TaskObservationText::new(observation_text).map_err(|error| {
-                        match observation_kind {
-                            TaskObservationKind::Correction => {
-                                ToolTaskRuntimeError::InvalidCorrectionText(error)
-                            }
-                            _ => ToolTaskRuntimeError::InvalidAttemptText(error),
-                        }
-                    })?;
-                let task = match parent_attempt_id {
-                    Some(parent_attempt_id) => self.tasks.append_observation_for_attempt(
-                        task_id,
-                        observation_id,
-                        observation_kind,
-                        observation_text,
-                        parent_attempt_id.clone(),
-                    ),
-                    None => self.tasks.append_observation(
-                        task_id,
-                        observation_id,
-                        observation_kind,
-                        observation_text,
-                    ),
-                }
-                .map_err(ToolTaskRuntimeError::Task)?;
+                let task = self.persist_final_observation(
+                    task_id,
+                    observation_id,
+                    observation_kind,
+                    parent_attempt_id,
+                    observation_text,
+                )?;
                 Ok(ToolTaskTurnOutcome::Final { session, task })
             }
             ProviderToolStepOutcome::ToolCompleted {
@@ -1103,6 +1085,39 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
         }
         Ok(())
     }
+
+    fn persist_final_observation(
+        &mut self,
+        task_id: &TaskId,
+        observation_id: TaskObservationId,
+        observation_kind: TaskObservationKind,
+        parent_attempt_id: Option<&TaskObservationId>,
+        text: String,
+    ) -> Result<Task, ToolTaskRuntimeError> {
+        let observation_text =
+            TaskObservationText::new(text).map_err(|error| match observation_kind {
+                TaskObservationKind::Correction => {
+                    ToolTaskRuntimeError::InvalidCorrectionText(error)
+                }
+                _ => ToolTaskRuntimeError::InvalidAttemptText(error),
+            })?;
+        match parent_attempt_id {
+            Some(parent_attempt_id) => self.tasks.append_observation_for_attempt(
+                task_id,
+                observation_id,
+                observation_kind,
+                observation_text,
+                parent_attempt_id.clone(),
+            ),
+            None => self.tasks.append_observation(
+                task_id,
+                observation_id,
+                observation_kind,
+                observation_text,
+            ),
+        }
+        .map_err(ToolTaskRuntimeError::Task)
+    }
 }
 
 impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
@@ -1230,31 +1245,13 @@ impl<P: ToolAssistantProvider + ToolAssistantContinuationProvider> ToolAssistant
                     .ok_or_else(|| ToolTaskRuntimeError::StaleContinuationTranscript {
                         task_id: continuation.task_id.clone(),
                     })?;
-                let observation_text =
-                    TaskObservationText::new(observation_text).map_err(|error| {
-                        match observation_kind {
-                            TaskObservationKind::Correction => {
-                                ToolTaskRuntimeError::InvalidCorrectionText(error)
-                            }
-                            _ => ToolTaskRuntimeError::InvalidAttemptText(error),
-                        }
-                    })?;
-                let task = match parent_attempt_id {
-                    Some(parent_attempt_id) => self.tasks.append_observation_for_attempt(
-                        continuation.task_id,
-                        observation_id,
-                        observation_kind,
-                        observation_text,
-                        parent_attempt_id.clone(),
-                    ),
-                    None => self.tasks.append_observation(
-                        continuation.task_id,
-                        observation_id,
-                        observation_kind,
-                        observation_text,
-                    ),
-                }
-                .map_err(ToolTaskRuntimeError::Task)?;
+                let task = self.persist_final_observation(
+                    continuation.task_id,
+                    observation_id,
+                    observation_kind,
+                    parent_attempt_id,
+                    observation_text,
+                )?;
                 Ok(ToolTaskTurnOutcome::Final { session, task })
             }
             ProviderToolStepOutcome::ToolCompleted {
