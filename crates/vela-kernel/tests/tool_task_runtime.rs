@@ -477,6 +477,14 @@ fn completion_final_response_persists_attempt_and_completes_task() {
     assert_eq!(task.observations().len(), 1);
     assert_eq!(task.observations()[0].text().as_str(), "completed answer");
     assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
+    assert_eq!(
         TaskStore::open(&path)
             .unwrap()
             .load(&task_id)
@@ -721,7 +729,7 @@ fn task_continuation_persists_final_response_and_attempt() {
 fn completion_continuation_persists_final_response_and_completes_task() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
-    let (_, task_id) = setup(&path);
+    let (session_id, task_id) = setup(&path);
     let provider = StatefulProvider {
         initial_calls: Rc::new(RefCell::new(0)),
         continuation_calls: Rc::new(RefCell::new(0)),
@@ -756,20 +764,28 @@ fn completion_continuation_persists_final_response_and_completes_task() {
         )
         .unwrap();
 
-    let ToolTaskCompletionOutcome::Final { task, .. } = outcome else {
+    let ToolTaskCompletionOutcome::Final { session, task } = outcome else {
         panic!("expected final completion continuation")
     };
     assert_eq!(task.status(), TaskStatus::Completed);
     assert_eq!(task.output().unwrap().as_str(), "continued final");
     assert_eq!(task.observations().len(), 1);
     assert_eq!(task.observations()[0].text().as_str(), "continued final");
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
 }
 
 #[test]
 fn completion_intent_survives_multiple_explicit_tool_steps() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
-    let (_, task_id) = setup(&path);
+    let (session_id, task_id) = setup(&path);
     let continuation_calls = Rc::new(RefCell::new(0));
     let provider = ChainedProvider {
         continuation_calls: continuation_calls.clone(),
@@ -814,13 +830,21 @@ fn completion_intent_survives_multiple_explicit_tool_steps() {
         )
         .unwrap();
 
-    let ToolTaskCompletionOutcome::Final { task, .. } = final_outcome else {
+    let ToolTaskCompletionOutcome::Final { session, task } = final_outcome else {
         panic!("expected completed multi-tool turn")
     };
     assert_eq!(task.status(), TaskStatus::Completed);
     assert_eq!(task.output().unwrap().as_str(), "chain complete");
     assert_eq!((*continuation_calls.borrow(), *tool_calls.borrow()), (2, 2));
     assert_eq!(authorizer.calls, 2);
+    assert_eq!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap(),
+        session
+    );
 }
 
 #[test]
