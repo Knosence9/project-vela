@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Execute one provider-requested tool step",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/559 with an additive provider boundary that returns final content or dispatches at most one registered tool request through the existing durable task associated path.",
+    "acceptance_criteria": [
+      "Keep the existing AssistantProvider and tool-free runtime behavior compatible.",
+      "Call the tool-capable provider exactly once and dispatch at most one tool with caller-owned task, invocation, registry, store, and authorization inputs.",
+      "Return explicit continuation state and exact tool input/output in memory while durable invocation evidence remains metadata-only.",
+      "Preserve typed provider, lookup, task, permission, adapter, identity, and persistence failures without retries or an automatic continuation loop."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED with one-step provider/tool runtime tests.",
+      "outcome": "failure",
+      "diagnostic": "The focused tests failed because the additive tool-capable provider response and runtime operation did not exist.",
+      "patch": "Kept tests for final content, allowed dispatch, denial, unknown tools, provider and adapter failures, duplicate identity, missing tasks, exact call counts, and metadata-only retention."
+    },
+    {
+      "summary": "Implemented one bounded provider/tool response dispatch.",
+      "outcome": "success",
+      "diagnostic": "The provider is called once; final content returns directly, while one tool request reuses ToolRegistry::invoke_for_task_durable and returns ProviderRequired without a second provider call.",
+      "patch": "Added the provider-neutral response, explicit step outcome and continuation types, typed wrapper errors, focused integration coverage, and behavior documentation."
+    },
+    {
+      "summary": "Fixed a missing continuation value found by independent review.",
+      "outcome": "success",
+      "diagnostic": "The first continuation shape retained exact output but omitted the exact tool input needed for a later provider continuation.",
+      "patch": "Added a failing assertion, retained the exact input alongside output in memory, and re-reviewed with no remaining blocking finding."
+    },
+    {
+      "summary": "Verified and merged the bounded runtime slice.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify and independent pre-commit review passed. GitHub Rust quality gate run 30131438736 succeeded; CodeRabbit reported adaptive review limiting rather than a substantive review.",
+      "patch": "Pull request 560 squash-merged as 2ee721dbccdd01231804aa897541891277bbaa6d and closed issue 559."
+    }
+  ],
+  "outcome": {
+    "summary": "A tool-capable provider can now produce final content or request one durably evidenced, task associated tool invocation with explicit caller-owned continuation.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test provider_tool_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # exact tool input omission fixed and re-review passed", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30131438736", "status": "passed"},
+      {"command": "Pull request 560 squash merge 2ee721dbccdd01231804aa897541891277bbaa6d", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Compose provider dispatch with the established durable registry path instead of duplicating permission and persistence semantics.",
+    "A continuation must retain both exact tool input and output in memory even when durable policy intentionally retains metadata only.",
+    "One provider call and at most one tool call form a testable boundary before any automatic runtime loop is introduced.",
+    "A green review status explicitly marked rate limited is evidence of no substantive review and must not be represented otherwise."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/560"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

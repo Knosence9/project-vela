@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist explicit provider-tool task continuations",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/569 by persisting one explicit continuation in its originating durable task and session while preserving caller-controlled progression and metadata-only tool evidence.",
+    "acceptance_criteria": [
+      "Preflight the active originating task, immutable session association, exact continuation transcript, unused Attempt identity, and fresh invocation identity before the provider call.",
+      "Call the owned continuation provider once, then persist final assistant content and Attempt or dispatch one subsequent tool request and return another exact in-memory continuation.",
+      "Reject stale transcripts before dispatch and guard final append atomically against a racing transcript change.",
+      "Preserve typed ordered failures, exact in-memory tool values, and metadata-only durable invocation evidence without retry, rollback, or an automatic next step."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for durable final and chained-tool continuations.",
+      "outcome": "failure",
+      "diagnostic": "ToolAssistantRuntime lacked a task bound continuation operation and the session store lacked a conditional transcript append boundary.",
+      "patch": "Kept tests for final persistence and reopen, another tool and reuse, retention, preflight ordering, provider and invocation failures, append prefixes, transcript staleness, races, and exact call counts."
+    },
+    {
+      "summary": "Implemented one explicit durable continuation operation.",
+      "outcome": "success",
+      "diagnostic": "The runtime validates the original task/session/transcript and caller identities, calls the same provider once, then either records exact final content plus an Attempt or dispatches one tool and returns unchanged durable projections with a new continuation.",
+      "patch": "Added continue_task_turn, typed stale-continuation handling, guarded session append support, broad integration coverage, and runtime/tool documentation."
+    },
+    {
+      "summary": "Fixed continuation races found by independent review.",
+      "outcome": "success",
+      "diagnostic": "A transcript could change while the provider was running: the initial implementation could dispatch a now-stale tool request or append final content after unrelated conversation progress.",
+      "patch": "Added a post-provider transcript recheck before tool dispatch and an atomic expected-transcript guard for final assistant append, with RED race tests for both paths."
+    },
+    {
+      "summary": "Fixed metadata-only version retry behavior found by independent review.",
+      "outcome": "success",
+      "diagnostic": "A transcript projection can remain byte-equivalent while its stream version changes; retrying against only content could accept stale continuation ownership.",
+      "patch": "Included authoritative session stream version in the continuation snapshot and stale check so metadata-only version movement invalidates the retry."
+    },
+    {
+      "summary": "Verified, obtained substantive exact-head review, and merged.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify and independent review passed after race fixes. GitHub Rust quality gate run 30138755979 succeeded. The initial CodeRabbit run was rate limited; after its cooldown, a deliberate exact-head review completed with only non-blocking nitpicks and zero review threads.",
+      "patch": "Pull request 570 squash-merged as 5383171afe0809e3217327391332b1ae1054c9e1 and closed issue 569."
+    }
+  ],
+  "outcome": {
+    "summary": "Provider-tool continuations can now advance one explicit durable task turn at a time, rejecting stale or racing transcripts while retaining exact tool payloads only in memory.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_task_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # transcript race and version findings fixed", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30138755979 and substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/570", "status": "passed"},
+      {"command": "Pull request 570 squash merge 5383171afe0809e3217327391332b1ae1054c9e1", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Continuation ownership must include both transcript content and authoritative stream version so equivalent projections cannot hide intervening writes.",
+    "Validate again after an external provider call before dispatching a tool because preflight freshness can expire while control is outside the kernel.",
+    "Final transcript append needs an atomic expected-state guard; a separate recheck followed by append leaves a race window.",
+    "Explicit one-step progression keeps identity, authorization, failure prefixes, and retention visible at every provider/tool boundary.",
+    "A false-green rate-limited review must not race auto-merge; wait for cooldown and substantive exact-head review."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/570"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

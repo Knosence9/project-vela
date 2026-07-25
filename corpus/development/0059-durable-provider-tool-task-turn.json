@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist an initial provider-tool task turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/566 by bridging one provider-tool step into durable task and session turn orchestration without an automatic continuation loop.",
+    "acceptance_criteria": [
+      "Preflight active task association, unique caller-owned Attempt identity, writable session, and fresh invocation identity before provider effects.",
+      "Persist the human turn, call the provider once, and persist final assistant content plus an Attempt or return a human-only session with an exact in-memory tool continuation.",
+      "Reuse durable task associated registry dispatch with caller-owned authorization and metadata-only tool evidence.",
+      "Preserve typed failures and documented ordered partial-commit prefixes without retry, rollback, or a second provider call."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED across durable success and failure prefixes.",
+      "outcome": "failure",
+      "diagnostic": "The integration target lacked ToolAssistantRuntime and could not orchestrate task association, transcript persistence, provider execution, tool dispatch, or Attempt observations.",
+      "patch": "Kept tests for final and tool success after reopen, preflight ordering, provider failure after human persistence, permission and adapter failures, terminal writes, assistant and Attempt append failures, races, exact calls, and retention."
+    },
+    {
+      "summary": "Implemented the additive durable tool-task runtime.",
+      "outcome": "success",
+      "diagnostic": "The runtime opens all stores over one database, validates caller-owned identities and state, commits the human turn, executes one provider/tool step, and returns either persisted final projections or explicit continuation data.",
+      "patch": "Added ToolAssistantRuntime, typed outcomes and errors, task bound continuation access, integration tests, runtime/tool documentation, and milestone status."
+    },
+    {
+      "summary": "Expanded failure-prefix coverage before publication.",
+      "outcome": "success",
+      "diagnostic": "Independent verification identified value in proving terminal invocation write failures and assistant or Attempt append failures rather than relying only on happy paths.",
+      "patch": "Added focused tests and clarified the exact durable prefix retained by each failure stage."
+    },
+    {
+      "summary": "Corrected an overstated invocation-prefix contract from substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that docs implied every invocation failure retained an invocation prefix, although unknown tools and other pre-intent failures retain only the human turn.",
+      "patch": "Updated both runtime and tool docs to distinguish pre-intent from post-intent failures, resolved the review thread, and obtained a completed exact-head incremental review."
+    },
+    {
+      "summary": "Verified and merged after the review cooldown.",
+      "outcome": "success",
+      "diagnostic": "Pinned just verify, 13 focused tests, formatting, diff checks, and independent review passed. Rust quality gate run 30135536435 succeeded; the exact-head CodeRabbit review completed with no new actionable findings.",
+      "patch": "Pull request 567 squash-merged as 666a99f87b139150137b3b179952c21f9fbe4c19 and closed issue 566."
+    }
+  ],
+  "outcome": {
+    "summary": "Initial provider-tool task turns now preserve durable human/final transcript and Attempt evidence while successful tool continuations remain explicit and payload-memory-only.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_task_runtime # 13 passed", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Independent pre-commit review # no blocking findings", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30135536435 and completed CodeRabbit review at https://github.com/Knosence9/project-vela/pull/567", "status": "passed"},
+      {"command": "Pull request 567 squash merge 666a99f87b139150137b3b179952c21f9fbe4c19", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Preflight all caller-owned identity and association constraints before committing the human turn or calling the provider.",
+    "Ordered partial commits are part of the public failure contract when rollback across transcript, task, and invocation streams is intentionally absent.",
+    "Pre-intent tool failures and post-intent invocation failures retain different durable prefixes and documentation must distinguish them.",
+    "A rate-limited incremental status must pause merge until substantive exact-head review completes."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/567"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

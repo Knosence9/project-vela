@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Continue explicitly after one provider tool step",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/563 by making ProviderRequired actionable through one explicit caller-owned provider continuation.",
+    "acceptance_criteria": [
+      "Add a continuation-provider trait without changing existing provider or runtime behavior.",
+      "Expose the exact successful prior tool result and call the continuation provider exactly once.",
+      "Return Complete for final content or dispatch at most one subsequent tool request with a fresh caller-owned invocation identity.",
+      "Keep exact tool values in memory, durable evidence metadata-only, and every failure typed and source-preserving without retry or an automatic loop."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED for an explicit provider continuation.",
+      "outcome": "failure",
+      "diagnostic": "The focused continuation target failed on the missing continuation provider, context, and runtime operation.",
+      "patch": "Kept tests for exact prior-result delivery, final response, one subsequent request with fresh identity, provider failure ordering, exact call counts, and metadata-only retention."
+    },
+    {
+      "summary": "Implemented and refactored one explicit continuation step.",
+      "outcome": "success",
+      "diagnostic": "A borrowed continuation context supplies exact prior tool data to one provider call; final content completes, while a subsequent request reuses durable task associated dispatch and returns another ProviderRequired value.",
+      "patch": "Added the additive continuation trait and operation, then extracted shared response dispatch so initial and continued steps preserve one implementation of lookup, authorization, persistence, and result shaping."
+    },
+    {
+      "summary": "Verified and merged the caller-controlled continuation slice.",
+      "outcome": "success",
+      "diagnostic": "Focused continuation tests and pinned just verify passed. GitHub Rust quality gate run 30132026503 succeeded; CodeRabbit reported adaptive review limiting rather than a substantive review.",
+      "patch": "Pull request 564 squash-merged as f957649cb48cd48d30044c0d86f9697bb479c24e and closed issue 563."
+    }
+  ],
+  "outcome": {
+    "summary": "A successful provider tool step can now be continued explicitly for one more provider response and at most one fresh durable tool invocation.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test provider_tool_continuation", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30132026503", "status": "passed"},
+      {"command": "Pull request 564 squash merge f957649cb48cd48d30044c0d86f9697bb479c24e", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Caller-controlled one-step continuation makes provider and tool call counts explicit and avoids hiding retries or loops.",
+    "Borrowing prior tool data can preserve exact in-memory context without widening durable retention.",
+    "Initial and continued provider responses should share one dispatch helper so lookup, permission, and persistence ordering cannot drift.",
+    "Fresh durable identity and authorization remain caller responsibilities for every subsequent tool request."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/564"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
