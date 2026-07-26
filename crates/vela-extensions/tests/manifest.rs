@@ -843,10 +843,10 @@ fn selection_kind_projection_can_be_empty() {
 #[test]
 fn preparation_reacquires_owned_tool_artifacts_in_exact_id_order() {
     let root = tempdir().expect("temporary extension root");
-    write_manifest(root.path().join("zeta/extension.yaml"), "zeta.tool");
-    write_manifest(root.path().join("alpha/extension.yaml"), "alpha.tool");
-    fs::write(root.path().join("alpha/run"), b"alpha component").expect("write alpha bytes");
-    fs::write(root.path().join("zeta/run"), b"zeta component").expect("write zeta bytes");
+    write_manifest(root.path().join("first/extension.yaml"), "zeta.tool");
+    write_manifest(root.path().join("second/extension.yaml"), "alpha.tool");
+    fs::write(root.path().join("second/run"), b"alpha component").expect("write alpha bytes");
+    fs::write(root.path().join("first/run"), b"zeta component").expect("write zeta bytes");
     let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
     let selection = registry
         .select_kind(ExtensionKind::Tool, ["zeta.tool", "alpha.tool"])
@@ -860,6 +860,37 @@ fn preparation_reacquires_owned_tool_artifacts_in_exact_id_order() {
     assert_eq!(artifacts[0].bytes(), b"alpha component");
     assert_eq!(artifacts[1].id(), "zeta.tool");
     assert_eq!(artifacts[1].bytes(), b"zeta component");
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_accepts_equivalent_root_paths() {
+    use std::os::unix::fs::symlink;
+
+    let parent = tempdir().expect("temporary parent");
+    let real_parent = parent.path().join("real");
+    let root = real_parent.join("extensions");
+    write_manifest(root.join("tool/extension.yaml"), "equivalent.tool");
+    let registry = ExtensionRegistry::discover(&root).expect("extension registry");
+    let selection = registry
+        .select_kind(ExtensionKind::Tool, ["equivalent.tool"])
+        .expect("tool selection");
+    fs::create_dir(parent.path().join("detour")).expect("create path detour");
+    let lexical_root = parent.path().join("detour/../real/extensions");
+
+    let lexical_artifacts = prepare_tool_artifacts(&lexical_root, &selection)
+        .expect("lexically equivalent root must prepare artifacts");
+
+    assert_eq!(lexical_artifacts.len(), 1);
+    assert_eq!(lexical_artifacts[0].id(), "equivalent.tool");
+
+    symlink(&real_parent, parent.path().join("alias")).expect("create parent alias");
+    let alias_root = parent.path().join("alias/extensions");
+    let alias_artifacts = prepare_tool_artifacts(&alias_root, &selection)
+        .expect("aliased parent path must prepare artifacts");
+
+    assert_eq!(alias_artifacts.len(), 1);
+    assert_eq!(alias_artifacts[0].id(), "equivalent.tool");
 }
 
 #[cfg(unix)]
@@ -995,10 +1026,13 @@ fn preparation_rejects_missing_non_regular_and_intermediate_symlink_targets() {
             }
         }
 
-        assert!(matches!(
-            prepare_tool_artifacts(root.path(), &selection),
-            Err(ExtensionPreparationError::Entrypoint { ref id, .. }) if id == "unsafe.tool"
-        ));
+        assert!(
+            matches!(
+                prepare_tool_artifacts(root.path(), &selection),
+                Err(ExtensionPreparationError::Entrypoint { ref id, .. }) if id == "unsafe.tool"
+            ),
+            "case {case} must fail with an entrypoint error"
+        );
     }
 }
 

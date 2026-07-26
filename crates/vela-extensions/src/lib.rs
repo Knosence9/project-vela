@@ -12,7 +12,11 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::{ffi::OsStr, os::fd::AsFd, os::unix::ffi::OsStrExt};
+use std::{
+    ffi::{OsStr, OsString},
+    os::fd::AsFd,
+    os::unix::ffi::OsStrExt,
+};
 
 #[cfg(unix)]
 use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, statat};
@@ -150,10 +154,20 @@ impl DiscoveredExtension {
 }
 
 /// Owned bytes for one revalidated selected tool, ready for a later component compiler.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct PreparedToolArtifact {
     id: String,
     bytes: Vec<u8>,
+}
+
+impl fmt::Debug for PreparedToolArtifact {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedToolArtifact")
+            .field("id", &self.id)
+            .field("bytes_len", &self.bytes.len())
+            .finish()
+    }
 }
 
 impl PreparedToolArtifact {
@@ -430,6 +444,11 @@ pub fn discover_extensions(
 ///
 /// Preparation is descriptor-anchored and all-or-nothing. It does not compile, register, authorize,
 /// persist, or execute the returned artifacts.
+///
+/// # Platform support
+///
+/// Only Unix targets are supported. Other targets return [`ExtensionPreparationError::ReadRoot`]
+/// with [`io::ErrorKind::Unsupported`].
 pub fn prepare_tool_artifacts(
     root: impl AsRef<Path>,
     selection: &ExtensionSelection<'_>,
@@ -457,34 +476,31 @@ fn prepare_tool_artifacts_platform(
             source,
         })?;
 
-    if let Some(extension) = selection.extensions().next()
-        && root_identity != extension.root_identity
-    {
-        return Err(ExtensionPreparationError::SourceMismatch {
-            id: extension.manifest().id().to_owned(),
-            path: extension.path().to_path_buf(),
-        });
-    }
-
     let mut artifacts = Vec::with_capacity(selection.len());
     for extension in selection.extensions() {
         let id = extension.manifest().id().to_owned();
+        if root_identity != extension.root_identity {
+            return Err(ExtensionPreparationError::SourceMismatch {
+                id,
+                path: extension.path().to_path_buf(),
+            });
+        }
         if extension.manifest().kind() != ExtensionKind::Tool {
             return Err(ExtensionPreparationError::KindMismatch {
                 id,
                 actual: extension.manifest().kind(),
             });
         }
-        let package_name = selected_package_name(root, extension).ok_or_else(|| {
+        let package_name = selected_package_name(extension).ok_or_else(|| {
             ExtensionPreparationError::SourceMismatch {
                 id: id.clone(),
                 path: extension.path().to_path_buf(),
             }
         })?;
-        let package_path = root.join(package_name);
+        let package_path = root.join(&package_name);
         let package_fd = openat(
             &root_fd,
-            package_name,
+            &package_name,
             OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY | OFlags::NOFOLLOW,
             Mode::empty(),
         )
@@ -567,17 +583,12 @@ fn prepare_tool_artifacts_platform(
 }
 
 #[cfg(unix)]
-fn selected_package_name<'a>(root: &Path, extension: &'a DiscoveredExtension) -> Option<&'a OsStr> {
-    let relative = extension.path().strip_prefix(root).ok()?;
-    let mut components = relative.components();
-    match (components.next(), components.next(), components.next()) {
-        (
-            Some(std::path::Component::Normal(package)),
-            Some(std::path::Component::Normal(manifest)),
-            None,
-        ) if manifest == "extension.yaml" => Some(package),
-        _ => None,
+fn selected_package_name(extension: &DiscoveredExtension) -> Option<OsString> {
+    let manifest_path = extension.path();
+    if manifest_path.file_name()? != "extension.yaml" {
+        return None;
     }
+    manifest_path.parent()?.file_name().map(OsStr::to_owned)
 }
 
 #[cfg(unix)]
