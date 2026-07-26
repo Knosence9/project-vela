@@ -3,7 +3,7 @@ use std::{error::Error, fs};
 use tempfile::tempdir;
 use vela_extensions::{
     ExtensionDiscoveryError, ExtensionKind, ExtensionManifest, ExtensionManifestError,
-    ExtensionRegistry, MAX_MANIFEST_BYTES, discover_extensions,
+    ExtensionRegistry, ExtensionRegistryChange, MAX_MANIFEST_BYTES, discover_extensions,
 };
 
 #[test]
@@ -517,6 +517,90 @@ fn registry_is_an_explicit_immutable_snapshot() {
     let refreshed = ExtensionRegistry::discover(root.path()).expect("refreshed registry");
     assert_eq!(refreshed.extensions().count(), 1);
     assert!(refreshed.get("later.tool").is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_compares_snapshots_by_exact_id_in_deterministic_order() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("unchanged/extension.yaml"), "unchanged.id");
+    write_manifest(root.path().join("changed/extension.yaml"), "changed.id");
+    write_manifest(root.path().join("removed/extension.yaml"), "removed.id");
+    let previous = ExtensionRegistry::discover(root.path()).expect("previous registry");
+
+    fs::remove_dir_all(root.path().join("removed")).expect("remove extension");
+    write_manifest(root.path().join("added/extension.yaml"), "added.id");
+    fs::write(
+        root.path().join("changed/extension.yaml"),
+        "manifest_version: 1\nid: changed.id\nkind: tool\nentrypoint: run\ndescription: changed\n",
+    )
+    .expect("change manifest metadata");
+    let current = ExtensionRegistry::discover(root.path()).expect("current registry");
+
+    let changes = current.changes_from(&previous);
+
+    assert_eq!(changes.len(), 3);
+    assert!(matches!(
+        changes[0],
+        ExtensionRegistryChange::Added(extension)
+            if extension.manifest().id() == "added.id"
+    ));
+    assert!(matches!(
+        changes[1],
+        ExtensionRegistryChange::Changed { previous, current }
+            if previous.manifest().description().is_none()
+                && current.manifest().description() == Some("changed")
+    ));
+    assert!(matches!(
+        changes[2],
+        ExtensionRegistryChange::Removed(extension)
+            if extension.manifest().id() == "removed.id"
+    ));
+    assert!(current.changes_from(&current).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_comparison_reports_source_path_changes() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("before/extension.yaml"), "moved.id");
+    let previous = ExtensionRegistry::discover(root.path()).expect("previous registry");
+
+    fs::rename(root.path().join("before"), root.path().join("after"))
+        .expect("move extension directory");
+    let current = ExtensionRegistry::discover(root.path()).expect("current registry");
+
+    let changes = current.changes_from(&previous);
+
+    assert!(matches!(
+        changes.as_slice(),
+        [ExtensionRegistryChange::Changed { previous, current }]
+            if previous.path() == root.path().join("before/extension.yaml")
+                && current.path() == root.path().join("after/extension.yaml")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_comparison_preserves_exact_id_semantics() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("lower/extension.yaml"), "shared.id");
+    let previous = ExtensionRegistry::discover(root.path()).expect("previous registry");
+
+    write_manifest(root.path().join("upper/extension.yaml"), "Shared.id");
+    write_manifest(root.path().join("spaced/extension.yaml"), "'shared.id '");
+    let current = ExtensionRegistry::discover(root.path()).expect("current registry");
+
+    let added_ids = current
+        .changes_from(&previous)
+        .into_iter()
+        .map(|change| match change {
+            ExtensionRegistryChange::Added(extension) => extension.manifest().id(),
+            other => panic!("expected added extension, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(added_ids, ["Shared.id", "shared.id "]);
 }
 
 #[cfg(not(unix))]
