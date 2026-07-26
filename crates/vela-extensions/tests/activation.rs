@@ -3,11 +3,12 @@ use std::{error::Error, fs};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 use vela_extensions::{
-    ExtensionKind, ExtensionRegistry, ToolActivationError, activate_tool_selection,
+    ExtensionKind, ExtensionRegistry, ToolActivationError, ToolComponentInvocationError,
+    ToolExecutionLimits, activate_tool_selection, activate_tool_selection_with_limits,
 };
 use vela_kernel::tool::{
-    PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolRegistry,
-    ToolRegistryError, ToolRequest,
+    PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationError,
+    ToolRegistry, ToolRegistryError, ToolRegistryInvocationError, ToolRequest,
 };
 
 const ECHO_COMPONENT: &str = r#"
@@ -142,6 +143,47 @@ fn invalid_or_duplicate_batches_leave_the_registry_unchanged() {
 }
 
 #[test]
+fn explicit_limits_are_applied_only_when_an_activated_tool_is_invoked() {
+    let root = tempdir().expect("temporary extension root");
+    write_tool(root.path(), "limited", "limited.tool", ECHO_COMPONENT);
+    let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = extensions
+        .select_kind(ExtensionKind::Tool, ["limited.tool"])
+        .expect("tool selection");
+    let mut tools = ToolRegistry::new();
+
+    activate_tool_selection_with_limits(
+        root.path(),
+        &selection,
+        &mut tools,
+        ToolExecutionLimits {
+            max_instances: 0,
+            ..ToolExecutionLimits::default()
+        },
+    )
+    .expect("restrictive limits must not instantiate during activation");
+
+    assert_eq!(tools.metadata().len(), 1);
+    let error = tools
+        .invoke(
+            &ToolId::new("limited.tool").expect("tool ID"),
+            &mut Allow,
+            &json!({"ready": true}),
+        )
+        .expect_err("the caller-selected instance limit must terminate invocation");
+    let ToolRegistryInvocationError::Invocation(ToolInvocationError::Tool { error, .. }) = error
+    else {
+        panic!("unexpected registry invocation error: {error:?}");
+    };
+    assert!(matches!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<ToolComponentInvocationError>()),
+        Some(ToolComponentInvocationError::Execution { .. })
+    ));
+}
+
+#[test]
 fn non_tool_selection_leaves_the_registry_unchanged() {
     let root = tempdir().expect("temporary extension root");
     write_tool(root.path(), "skill", "skill.one", ECHO_COMPONENT);
@@ -177,7 +219,16 @@ fn empty_selection_is_a_noop() {
         .expect("seed registry");
     fs::remove_dir(root.path()).expect("remove unused empty root");
 
-    activate_tool_selection(root.path(), &selection, &mut tools).expect("empty activation");
+    activate_tool_selection_with_limits(
+        root.path(),
+        &selection,
+        &mut tools,
+        ToolExecutionLimits {
+            max_instances: 0,
+            ..ToolExecutionLimits::default()
+        },
+    )
+    .expect("empty activation");
 
     assert_eq!(tools.metadata().len(), 1);
 }

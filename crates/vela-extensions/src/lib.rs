@@ -875,7 +875,8 @@ pub fn compile_tool_components(
     Ok(compiled)
 }
 
-/// Revalidates, compiles, adapts, and atomically registers one selected tool batch.
+/// Revalidates, compiles, adapts with default limits, and atomically registers one selected tool
+/// batch.
 ///
 /// Every stage completes for the full selection before the caller-owned registry is mutated.
 /// Compilation and adapter construction are inert; guest code can run only through a later
@@ -884,6 +885,20 @@ pub fn activate_tool_selection(
     root: impl AsRef<Path>,
     selection: &ExtensionSelection<'_>,
     registry: &mut ToolRegistry,
+) -> Result<(), ToolActivationError> {
+    activate_tool_selection_with_limits(root, selection, registry, ToolExecutionLimits::default())
+}
+
+/// Revalidates, compiles, adapts with uniform caller-selected limits, and atomically registers one
+/// selected tool batch.
+///
+/// Restrictive limits do not instantiate or invoke guests during activation. They are installed in
+/// a fresh store only after a later registry invocation passes the existing authorization boundary.
+pub fn activate_tool_selection_with_limits(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+    registry: &mut ToolRegistry,
+    limits: ToolExecutionLimits,
 ) -> Result<(), ToolActivationError> {
     if selection.is_empty() {
         return Ok(());
@@ -896,7 +911,7 @@ pub fn activate_tool_selection(
         .into_iter()
         .map(|component| {
             let id = component.id().to_owned();
-            ComponentTool::new(component)
+            ComponentTool::with_limits(component, limits)
                 .map_err(|source| ToolActivationError::Construction { id, source })
         })
         .collect::<Result<Vec<_>, _>>()?;
