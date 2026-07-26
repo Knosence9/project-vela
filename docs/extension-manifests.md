@@ -57,10 +57,18 @@ Each entrypoint read accepts at most 16 MiB (`MAX_ENTRYPOINT_BYTES`) and probes 
 
 Preparation does not compile or validate a WebAssembly component, mutate a registry, authorize a tool, persist state, or execute guest code. Those remain later activation and invocation boundaries.
 
+## Tool component compilation
+
+`compile_tool_components(artifacts)` is the inert compiler boundary for prepared tools. It creates a Wasmtime engine with the Component Model explicitly enabled and compiles binary component bytes without Wasmtime's text-format support. Every component must have no top-level imports and exactly one top-level export: the synchronous function `invoke(input: string) -> result<string, string>` specified structurally by `vela:extension/tool@0.1.0`. Core modules, malformed bytes, imports, missing or additional exports, and incompatible parameter or result types fail closed.
+
+Success returns owned `CompiledToolComponent` values in artifact input order, preserving exact IDs. Compilation is all-or-nothing and creates no store or instance, so it cannot call a guest export. Engine and binary-compilation failures preserve the Wasmtime error source; structural ABI failures preserve a typed `ToolComponentAbiError`; artifact-specific failures expose the exact ID. The compiled component remains inert for a later controlled activation boundary.
+
+Compilation does not instantiate components, register adapters, mutate a tool registry, authorize invocations, validate JSON payloads, apply execution fuel or epoch limits, persist state, or expose WASI or other host imports. Those remain later activation and invocation work.
+
 ## Ownership and trust boundary
 
 The caller chooses each manifest path or the one extension root. Successful standalone parsing does not consult configuration or inspect an entrypoint on the filesystem. Discovery validates that the entrypoint target is an extension-local regular file at discovery time, but successful parsing or discovery does not register a capability, grant permission, import code, execute an entrypoint, read target content, or persist state. Discovery is not an activation lease: a future loader must reopen targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes again, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, adapter registration, skill or workflow parsing, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration. A successful registry selection, kind-constrained selection, or kind projection records enablement intent only and is not activation or permission.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, adapter registration, skill or workflow parsing, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, invocation resource limits, persistence, or migration. A successful registry selection, kind-constrained selection, or kind projection records enablement intent only and is not activation or permission.

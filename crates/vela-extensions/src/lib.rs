@@ -21,6 +21,11 @@ use std::{
 #[cfg(unix)]
 use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, statat};
 use serde::Deserialize;
+use wasmtime::component::{
+    Component,
+    types::{ComponentItem, Type},
+};
+use wasmtime::{Config, Engine};
 
 const SUPPORTED_MANIFEST_VERSION: u64 = 1;
 
@@ -177,6 +182,69 @@ impl PreparedToolArtifact {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+}
+
+/// One inert WebAssembly tool component compiled against Vela's version 0.1.0 ABI.
+#[derive(Clone)]
+pub struct CompiledToolComponent {
+    id: String,
+    component: Component,
+}
+
+impl fmt::Debug for CompiledToolComponent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompiledToolComponent")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CompiledToolComponent {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the inert compiled component for later controlled activation.
+    pub fn component(&self) -> &Component {
+        &self.component
+    }
+}
+
+/// A structural mismatch with `vela:extension/tool@0.1.0`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ToolComponentAbiError {
+    Imports,
+    Exports,
+    InvokeType,
+}
+
+/// A fail-closed tool component engine, compilation, or ABI error.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolComponentCompilationError {
+    Engine {
+        source: wasmtime::Error,
+    },
+    Artifact {
+        id: String,
+        source: wasmtime::Error,
+    },
+    Abi {
+        id: String,
+        source: ToolComponentAbiError,
+    },
+}
+
+impl ToolComponentCompilationError {
+    /// Identifies the failing artifact, or `None` when engine creation itself failed.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Engine { .. } => None,
+            Self::Artifact { id, .. } | Self::Abi { id, .. } => Some(id),
+        }
     }
 }
 
@@ -454,6 +522,80 @@ pub fn prepare_tool_artifacts(
     selection: &ExtensionSelection<'_>,
 ) -> Result<Vec<PreparedToolArtifact>, ExtensionPreparationError> {
     prepare_tool_artifacts_platform(root.as_ref(), selection)
+}
+
+/// Compiles prepared tools against the exact no-import `vela:extension/tool@0.1.0` ABI.
+///
+/// Compilation is inert and all-or-nothing: it creates no store or instance, calls no guest code,
+/// and performs no registration, authorization, or persistence.
+pub fn compile_tool_components(
+    artifacts: &[PreparedToolArtifact],
+) -> Result<Vec<CompiledToolComponent>, ToolComponentCompilationError> {
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine =
+        Engine::new(&config).map_err(|source| ToolComponentCompilationError::Engine { source })?;
+    let mut compiled = Vec::with_capacity(artifacts.len());
+
+    for artifact in artifacts {
+        let id = artifact.id().to_owned();
+        let component = Component::new(&engine, artifact.bytes()).map_err(|source| {
+            ToolComponentCompilationError::Artifact {
+                id: id.clone(),
+                source,
+            }
+        })?;
+        validate_tool_component_abi(&engine, &component).map_err(|source| {
+            ToolComponentCompilationError::Abi {
+                id: id.clone(),
+                source,
+            }
+        })?;
+        compiled.push(CompiledToolComponent { id, component });
+    }
+
+    Ok(compiled)
+}
+
+fn validate_tool_component_abi(
+    engine: &Engine,
+    component: &Component,
+) -> Result<(), ToolComponentAbiError> {
+    let component_type = component.component_type();
+    if component_type.imports(engine).len() != 0 {
+        return Err(ToolComponentAbiError::Imports);
+    }
+
+    let mut exports = component_type.exports(engine);
+    let Some(("invoke", export)) = exports.next() else {
+        return Err(ToolComponentAbiError::Exports);
+    };
+    if exports.next().is_some() {
+        return Err(ToolComponentAbiError::Exports);
+    }
+    let ComponentItem::ComponentFunc(function) = export.ty else {
+        return Err(ToolComponentAbiError::InvokeType);
+    };
+    if function.async_() {
+        return Err(ToolComponentAbiError::InvokeType);
+    }
+
+    let mut parameters = function.params();
+    if !matches!(parameters.next(), Some(("input", Type::String))) || parameters.next().is_some() {
+        return Err(ToolComponentAbiError::InvokeType);
+    }
+    let mut results = function.results();
+    let Some(Type::Result(result)) = results.next() else {
+        return Err(ToolComponentAbiError::InvokeType);
+    };
+    if results.next().is_some()
+        || result.ok() != Some(Type::String)
+        || result.err() != Some(Type::String)
+    {
+        return Err(ToolComponentAbiError::InvokeType);
+    }
+
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1011,6 +1153,52 @@ impl Error for ExtensionPreparationError {
             | Self::PackageChanged { .. }
             | Self::ManifestChanged { .. }
             | Self::EntrypointTooLarge { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for ToolComponentAbiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Imports => "tool component must not import host capabilities",
+            Self::Exports => "tool component must export only invoke",
+            Self::InvokeType => {
+                "tool component invoke must be synchronous (input: string) -> result<string, string>"
+            }
+        })
+    }
+}
+
+impl Error for ToolComponentAbiError {}
+
+impl fmt::Display for ToolComponentCompilationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Engine { source } => write!(
+                formatter,
+                "could not create tool component engine: {source}"
+            ),
+            Self::Artifact { id, source } => {
+                write!(
+                    formatter,
+                    "could not compile tool component {id:?}: {source}"
+                )
+            }
+            Self::Abi { id, source } => {
+                write!(
+                    formatter,
+                    "tool component {id:?} has an incompatible ABI: {source}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for ToolComponentCompilationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Engine { source } | Self::Artifact { source, .. } => Some(source.as_ref()),
+            Self::Abi { source, .. } => Some(source),
         }
     }
 }

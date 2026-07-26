@@ -169,6 +169,7 @@ The first milestone is the **evidence loop**:
 39. Fail closed when typed selection intent disagrees with a capability's validated kind. ✅
 40. Specify the first tools-only WebAssembly component activation and isolation boundary. ✅
 41. Reacquire selected tool entrypoints as bounded, descriptor-anchored owned artifacts. ✅
+42. Compile selected no-import tool components against the exact inert version 0.1.0 ABI. ✅
 
 ## Project documents
 

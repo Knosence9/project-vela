@@ -4,8 +4,29 @@ use tempfile::tempdir;
 use vela_extensions::{
     ExtensionDiscoveryError, ExtensionKind, ExtensionManifest, ExtensionManifestError,
     ExtensionPreparationError, ExtensionRegistry, ExtensionRegistryChange, ExtensionSelectionError,
-    MAX_ENTRYPOINT_BYTES, MAX_MANIFEST_BYTES, discover_extensions, prepare_tool_artifacts,
+    MAX_ENTRYPOINT_BYTES, MAX_MANIFEST_BYTES, PreparedToolArtifact, ToolComponentCompilationError,
+    compile_tool_components, discover_extensions, prepare_tool_artifacts,
 };
+
+const VALID_TOOL_COMPONENT: &str = r#"
+(component
+  (core module $guest
+    (memory (export "memory") 1)
+    (func $start unreachable)
+    (start $start)
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      i32.const 0)
+    (func (export "invoke") (param i32 i32) (result i32)
+      unreachable))
+  (core instance $guest (instantiate $guest))
+  (type $outcome (result string (error string)))
+  (type $invoke (func (param "input" string) (result $outcome)))
+  (func $invoke (type $invoke)
+    (canon lift (core func $guest "invoke")
+      (memory $guest "memory")
+      (realloc (func $guest "realloc"))))
+  (export "invoke" (func $invoke)))
+"#;
 
 #[test]
 fn loads_a_valid_version_one_manifest() {
@@ -1132,6 +1153,103 @@ fn preparation_rejects_oversized_targets_without_returning_a_prefix() {
     assert!(error.source().is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn compilation_accepts_the_exact_inert_tool_world_in_input_order() {
+    let valid = wat::parse_str(VALID_TOOL_COMPONENT).expect("valid component");
+    let mut artifacts = prepared_component_artifacts(&[
+        ("first", "zeta.tool", &valid),
+        ("second", "alpha.tool", &valid),
+    ]);
+    artifacts.reverse();
+
+    let compiled = compile_tool_components(&artifacts).expect("exact tool components");
+
+    assert_eq!(
+        compiled
+            .iter()
+            .map(|component| component.id())
+            .collect::<Vec<_>>(),
+        ["zeta.tool", "alpha.tool"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn compilation_rejects_non_components_imports_and_wrong_worlds() {
+    let core_module = wat::parse_str("(module)").expect("core module");
+    let importing = wat::parse_str("(component (import \"host\" (func (param \"input\" string))))")
+        .expect("importing component");
+    let missing_invoke = wat::parse_str("(component)").expect("empty component");
+    let wrong_signature = wat::parse_str(
+        r#"(component
+            (core module $m (func (export "invoke") (param i32)))
+            (core instance $m (instantiate $m))
+            (type $f (func (param "input" u32)))
+            (func $f (type $f) (canon lift (core func $m "invoke")))
+            (export "invoke" (func $f)))"#,
+    )
+    .expect("wrong signature component");
+    let wrong_result = wat::parse_str(
+        r#"(component
+            (core module $m
+                (memory (export "memory") 1)
+                (func (export "realloc") (param i32 i32 i32 i32) (result i32) i32.const 0)
+                (func (export "invoke") (param i32 i32) (result i32) unreachable))
+            (core instance $m (instantiate $m))
+            (type $f (func (param "input" string) (result string)))
+            (func $f (type $f) (canon lift (core func $m "invoke")
+                (memory $m "memory") (realloc (func $m "realloc"))))
+            (export "invoke" (func $f)))"#,
+    )
+    .expect("wrong result component");
+    let wrong_parameter_name = wat::parse_str(
+        VALID_TOOL_COMPONENT.replace("(param \"input\" string)", "(param \"payload\" string)"),
+    )
+    .expect("wrong parameter name component");
+    let extra_export = wat::parse_str(VALID_TOOL_COMPONENT.replace(
+        "(export \"invoke\" (func $invoke)))",
+        "(export \"invoke\" (func $invoke)) (export \"other\" (func $invoke)))",
+    ))
+    .expect("extra export component");
+    let cases: [(&str, &[u8]); 8] = [
+        ("malformed", b"not wasm"),
+        ("core-module", &core_module),
+        ("import", &importing),
+        ("missing-invoke", &missing_invoke),
+        ("wrong-signature", &wrong_signature),
+        ("wrong-result", &wrong_result),
+        ("wrong-parameter-name", &wrong_parameter_name),
+        ("extra-export", &extra_export),
+    ];
+
+    for (case, bytes) in cases {
+        let id = format!("{case}.tool");
+        let artifacts = prepared_component_artifacts(&[(case, &id, bytes)]);
+        let error = compile_tool_components(&artifacts).expect_err("invalid tool component");
+
+        assert_eq!(error.id(), Some(id.as_str()), "unexpected ID for {case}");
+        assert!(error.source().is_some(), "{case} must preserve its source");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn compilation_is_all_or_nothing_and_identifies_the_failing_artifact() {
+    let valid = wat::parse_str(VALID_TOOL_COMPONENT).expect("valid component");
+    let artifacts = prepared_component_artifacts(&[
+        ("first", "alpha.tool", &valid),
+        ("second", "zeta.tool", b"not a component"),
+    ]);
+
+    let error = compile_tool_components(&artifacts).expect_err("batch must fail atomically");
+
+    assert!(
+        matches!(&error, ToolComponentCompilationError::Artifact { id, .. } if id == "zeta.tool"),
+        "unexpected batch error: {error:?}"
+    );
+}
+
 #[cfg(not(unix))]
 #[test]
 fn discovery_fails_closed_when_descriptor_anchored_traversal_is_unavailable() {
@@ -1150,6 +1268,22 @@ fn discovery_fails_closed_when_descriptor_anchored_traversal_is_unavailable() {
         source.map(std::io::Error::kind),
         Some(std::io::ErrorKind::Unsupported)
     );
+}
+
+#[cfg(unix)]
+fn prepared_component_artifacts(entries: &[(&str, &str, &[u8])]) -> Vec<PreparedToolArtifact> {
+    let root = tempdir().expect("temporary extension root");
+    let mut ids = Vec::new();
+    for (package, id, bytes) in entries {
+        write_manifest(root.path().join(package).join("extension.yaml"), id);
+        fs::write(root.path().join(package).join("run"), bytes).expect("write component bytes");
+        ids.push(*id);
+    }
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = registry
+        .select_kind(ExtensionKind::Tool, ids)
+        .expect("tool selection");
+    prepare_tool_artifacts(root.path(), &selection).expect("prepared tool artifacts")
 }
 
 fn write_manifest(path: std::path::PathBuf, id: &str) {
