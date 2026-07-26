@@ -166,6 +166,7 @@ The first milestone is the **evidence loop**:
 36. Select caller-requested registry capabilities by exact ID without activation. ✅
 37. Expose immutable typed selections as non-activating enablement intent. ✅
 38. Partition selected capabilities by validated kind without activation. ✅
+39. Fail closed when typed selection intent disagrees with a capability's validated kind. ✅
 
 ## Project documents
 
