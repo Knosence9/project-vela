@@ -151,6 +151,16 @@ pub enum ExtensionRegistryChange<'a> {
     },
 }
 
+/// A fail-closed exact-ID registry selection error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ExtensionSelectionError {
+    /// The caller requested the same exact ID more than once.
+    DuplicateId { id: String },
+    /// The requested exact ID does not exist in the registry snapshot.
+    NotFound { id: String },
+}
+
 impl ExtensionRegistry {
     /// Discovers one extension root and owns the complete validated snapshot.
     pub fn discover(root: impl AsRef<Path>) -> Result<Self, ExtensionDiscoveryError> {
@@ -176,6 +186,36 @@ impl ExtensionRegistry {
     /// Enumerates the snapshot in deterministic manifest-path order.
     pub fn extensions(&self) -> impl ExactSizeIterator<Item = &DiscoveredExtension> {
         self.extensions.iter()
+    }
+
+    /// Resolves an all-or-nothing caller selection in deterministic exact-ID order.
+    ///
+    /// Selection performs no filesystem access, activation, authorization, or mutation.
+    pub fn select<I, S>(&self, ids: I) -> Result<Vec<&DiscoveredExtension>, ExtensionSelectionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected_ids = BTreeSet::new();
+        let mut duplicate_ids = BTreeSet::new();
+        for id in ids {
+            let id = id.as_ref().to_owned();
+            if !selected_ids.insert(id.clone()) {
+                duplicate_ids.insert(id);
+            }
+        }
+
+        if let Some(id) = duplicate_ids.into_iter().next() {
+            return Err(ExtensionSelectionError::DuplicateId { id });
+        }
+
+        selected_ids
+            .into_iter()
+            .map(|id| {
+                self.get(&id)
+                    .ok_or(ExtensionSelectionError::NotFound { id })
+            })
+            .collect()
     }
 
     /// Compares this current snapshot with a previous snapshot in exact-ID order.
@@ -434,6 +474,22 @@ struct RawExtensionManifest {
     entrypoint: String,
     description: Option<String>,
 }
+
+impl fmt::Display for ExtensionSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateId { id } => {
+                write!(
+                    formatter,
+                    "extension selection contains duplicate ID {id:?}"
+                )
+            }
+            Self::NotFound { id } => write!(formatter, "extension ID {id:?} was not found"),
+        }
+    }
+}
+
+impl Error for ExtensionSelectionError {}
 
 /// A deterministic manifest read, parse, or validation failure.
 #[derive(Debug)]

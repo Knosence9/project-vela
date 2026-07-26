@@ -3,7 +3,8 @@ use std::{error::Error, fs};
 use tempfile::tempdir;
 use vela_extensions::{
     ExtensionDiscoveryError, ExtensionKind, ExtensionManifest, ExtensionManifestError,
-    ExtensionRegistry, ExtensionRegistryChange, MAX_MANIFEST_BYTES, discover_extensions,
+    ExtensionRegistry, ExtensionRegistryChange, ExtensionSelectionError, MAX_MANIFEST_BYTES,
+    discover_extensions,
 };
 
 #[test]
@@ -601,6 +602,68 @@ fn registry_comparison_preserves_exact_id_semantics() {
         .collect::<Vec<_>>();
 
     assert_eq!(added_ids, ["Shared.id", "shared.id "]);
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_selects_exact_ids_in_deterministic_order() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("zeta/extension.yaml"), "zeta.id");
+    write_manifest(root.path().join("upper/extension.yaml"), "Alpha.id");
+    write_manifest(root.path().join("spaced/extension.yaml"), "'alpha.id '");
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+
+    let selected = registry
+        .select(["zeta.id", "alpha.id ", "Alpha.id"])
+        .expect("valid exact-ID selection");
+
+    assert_eq!(
+        selected
+            .into_iter()
+            .map(|extension| extension.manifest().id())
+            .collect::<Vec<_>>(),
+        ["Alpha.id", "alpha.id ", "zeta.id"]
+    );
+    assert!(
+        registry
+            .select(std::iter::empty::<&str>())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_selection_fails_closed_for_duplicate_or_unknown_ids() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("known/extension.yaml"), "known.id");
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+
+    let duplicate = registry
+        .select(["known.id", "known.id"])
+        .expect_err("duplicate request");
+    assert!(matches!(
+        duplicate,
+        ExtensionSelectionError::DuplicateId { ref id } if id == "known.id"
+    ));
+    assert_eq!(
+        duplicate.to_string(),
+        "extension selection contains duplicate ID \"known.id\""
+    );
+    assert!(duplicate.source().is_none());
+
+    let unknown = registry
+        .select(["known.id", "Known.id"])
+        .expect_err("unknown exact ID");
+    assert!(matches!(
+        unknown,
+        ExtensionSelectionError::NotFound { ref id } if id == "Known.id"
+    ));
+    assert_eq!(
+        unknown.to_string(),
+        "extension ID \"Known.id\" was not found"
+    );
+    assert!(unknown.source().is_none());
 }
 
 #[cfg(not(unix))]

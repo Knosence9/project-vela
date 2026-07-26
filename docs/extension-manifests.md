@@ -39,10 +39,12 @@ A registry never watches or automatically rescans its root. Filesystem changes d
 
 `current.changes_from(previous)` compares two already-built snapshots without filesystem access or mutation. It returns changes in exact-ID order: `Added` borrows the current record, `Removed` borrows the previous record, and `Changed` borrows both records when the same exact ID has different manifest metadata or a different source path. Equal records are omitted. Comparison preserves authored ID case and whitespace and does not normalize, authorize, or activate either snapshot.
 
+`registry.select(ids)` validates one caller-owned capability selection against an existing snapshot without filesystem access or mutation. Success borrows the selected records in exact-ID order regardless of request order; an empty request succeeds. Duplicate requested IDs and IDs absent from the snapshot fail the whole selection with typed, source-free errors. Selection preserves authored case and whitespace and does not enable, authorize, load, or activate a capability.
+
 ## Ownership and trust boundary
 
 The caller chooses each manifest path or the one extension root. Successful standalone parsing does not consult configuration or inspect an entrypoint on the filesystem. Discovery validates that the entrypoint target is an extension-local regular file at discovery time, but successful parsing or discovery does not register a capability, grant permission, import code, execute an entrypoint, read target content, or persist state. Discovery is not an activation lease: a future loader must reopen targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes again, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries, dependencies, enable/disable state, lifecycle hooks, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries, dependencies, enable/disable state, lifecycle hooks, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration. A successful registry selection validates identity only and is not enablement or permission.
