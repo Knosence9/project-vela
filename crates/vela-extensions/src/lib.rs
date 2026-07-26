@@ -456,6 +456,36 @@ impl Error for ToolReplacementError {
     }
 }
 
+#[derive(Debug)]
+enum ToolAdapterBatchError {
+    Preparation(ExtensionPreparationError),
+    Compilation(ToolComponentCompilationError),
+    Construction {
+        id: String,
+        source: ComponentToolConstructionError,
+    },
+}
+
+impl From<ToolAdapterBatchError> for ToolActivationError {
+    fn from(error: ToolAdapterBatchError) -> Self {
+        match error {
+            ToolAdapterBatchError::Preparation(source) => Self::Preparation { source },
+            ToolAdapterBatchError::Compilation(source) => Self::Compilation { source },
+            ToolAdapterBatchError::Construction { id, source } => Self::Construction { id, source },
+        }
+    }
+}
+
+impl From<ToolAdapterBatchError> for ToolReplacementError {
+    fn from(error: ToolAdapterBatchError) -> Self {
+        match error {
+            ToolAdapterBatchError::Preparation(source) => Self::Preparation { source },
+            ToolAdapterBatchError::Compilation(source) => Self::Compilation { source },
+            ToolAdapterBatchError::Construction { id, source } => Self::Construction { id, source },
+        }
+    }
+}
+
 /// A typed failure from one isolated component invocation.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -984,21 +1014,8 @@ pub fn activate_tool_selection_with_limits(
     registry: &mut ToolRegistry,
     limits: ToolExecutionLimits,
 ) -> Result<(), ToolActivationError> {
-    if selection.is_empty() {
-        return Ok(());
-    }
-    let artifacts = prepare_tool_artifacts(root, selection)
-        .map_err(|source| ToolActivationError::Preparation { source })?;
-    let components = compile_tool_components(&artifacts)
-        .map_err(|source| ToolActivationError::Compilation { source })?;
-    let tools = components
-        .into_iter()
-        .map(|component| {
-            let id = component.id().to_owned();
-            ComponentTool::with_limits(component, limits)
-                .map_err(|source| ToolActivationError::Construction { id, source })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let tools =
+        build_tool_adapter_batch(root, selection, limits).map_err(ToolActivationError::from)?;
     registry
         .register_all(tools)
         .map_err(|source| ToolActivationError::Registration { source })
@@ -1052,24 +1069,33 @@ pub fn replace_tool_selection_with_limits(
     registry: &mut ToolRegistry,
     limits: ToolExecutionLimits,
 ) -> Result<(), ToolReplacementError> {
+    let tools =
+        build_tool_adapter_batch(root, selection, limits).map_err(ToolReplacementError::from)?;
+    registry
+        .replace_all(tools)
+        .map_err(|source| ToolReplacementError::Registry { source })
+}
+
+fn build_tool_adapter_batch(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+    limits: ToolExecutionLimits,
+) -> Result<Vec<ComponentTool>, ToolAdapterBatchError> {
     if selection.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
-    let artifacts = prepare_tool_artifacts(root, selection)
-        .map_err(|source| ToolReplacementError::Preparation { source })?;
-    let components = compile_tool_components(&artifacts)
-        .map_err(|source| ToolReplacementError::Compilation { source })?;
-    let tools = components
+    let artifacts =
+        prepare_tool_artifacts(root, selection).map_err(ToolAdapterBatchError::Preparation)?;
+    let components =
+        compile_tool_components(&artifacts).map_err(ToolAdapterBatchError::Compilation)?;
+    components
         .into_iter()
         .map(|component| {
             let id = component.id().to_owned();
             ComponentTool::with_limits(component, limits)
-                .map_err(|source| ToolReplacementError::Construction { id, source })
+                .map_err(|source| ToolAdapterBatchError::Construction { id, source })
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    registry
-        .replace_all(tools)
-        .map_err(|source| ToolReplacementError::Registry { source })
+        .collect()
 }
 
 fn validate_tool_component_abi(
