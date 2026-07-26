@@ -12,16 +12,23 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::{ffi::OsStr, os::fd::AsFd, os::unix::ffi::OsStrExt};
+use std::{
+    ffi::{OsStr, OsString},
+    os::fd::AsFd,
+    os::unix::ffi::OsStrExt,
+};
 
 #[cfg(unix)]
-use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, open, openat, statat};
+use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, statat};
 use serde::Deserialize;
 
 const SUPPORTED_MANIFEST_VERSION: u64 = 1;
 
 /// Maximum accepted encoded manifest size.
 pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+
+/// Maximum accepted encoded WebAssembly component size during artifact preparation.
+pub const MAX_ENTRYPOINT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// A capability class understood by version-one manifests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,11 +121,27 @@ impl ExtensionManifest {
 }
 
 /// One validated manifest and the path it was loaded from.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct DiscoveredExtension {
     path: PathBuf,
     manifest: ExtensionManifest,
+    root_identity: FileIdentity,
+    package_identity: FileIdentity,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl PartialEq for DiscoveredExtension {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.manifest == other.manifest
+    }
+}
+
+impl Eq for DiscoveredExtension {}
 
 impl DiscoveredExtension {
     pub fn path(&self) -> &Path {
@@ -127,6 +150,33 @@ impl DiscoveredExtension {
 
     pub fn manifest(&self) -> &ExtensionManifest {
         &self.manifest
+    }
+}
+
+/// Owned bytes for one revalidated selected tool, ready for a later component compiler.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PreparedToolArtifact {
+    id: String,
+    bytes: Vec<u8>,
+}
+
+impl fmt::Debug for PreparedToolArtifact {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedToolArtifact")
+            .field("id", &self.id)
+            .field("bytes_len", &self.bytes.len())
+            .finish()
+    }
+}
+
+impl PreparedToolArtifact {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 }
 
@@ -148,6 +198,53 @@ pub enum ExtensionRegistryChange<'a> {
     Changed {
         previous: &'a DiscoveredExtension,
         current: &'a DiscoveredExtension,
+    },
+}
+
+/// A fail-closed selected-tool artifact preparation error.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ExtensionPreparationError {
+    ReadRoot {
+        path: PathBuf,
+        source: io::Error,
+    },
+    SourceMismatch {
+        id: String,
+        path: PathBuf,
+    },
+    KindMismatch {
+        id: String,
+        actual: ExtensionKind,
+    },
+    Package {
+        id: String,
+        path: PathBuf,
+        source: io::Error,
+    },
+    PackageChanged {
+        id: String,
+        path: PathBuf,
+    },
+    Manifest {
+        id: String,
+        path: PathBuf,
+        source: ExtensionManifestError,
+    },
+    ManifestChanged {
+        id: String,
+        path: PathBuf,
+    },
+    Entrypoint {
+        id: String,
+        path: PathBuf,
+        entrypoint: String,
+        source: io::Error,
+    },
+    EntrypointTooLarge {
+        id: String,
+        path: PathBuf,
+        max_bytes: u64,
     },
 }
 
@@ -343,6 +440,265 @@ pub fn discover_extensions(
     discover_extensions_platform(root.as_ref())
 }
 
+/// Reopens selected tool packages beneath their original root and returns bounded owned bytes.
+///
+/// Preparation is descriptor-anchored and all-or-nothing. It does not compile, register, authorize,
+/// persist, or execute the returned artifacts.
+///
+/// # Platform support
+///
+/// Only Unix targets are supported. Other targets return [`ExtensionPreparationError::ReadRoot`]
+/// with [`io::ErrorKind::Unsupported`].
+pub fn prepare_tool_artifacts(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+) -> Result<Vec<PreparedToolArtifact>, ExtensionPreparationError> {
+    prepare_tool_artifacts_platform(root.as_ref(), selection)
+}
+
+#[cfg(unix)]
+fn prepare_tool_artifacts_platform(
+    root: &Path,
+    selection: &ExtensionSelection<'_>,
+) -> Result<Vec<PreparedToolArtifact>, ExtensionPreparationError> {
+    let root_fd = open(
+        root,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(|source| ExtensionPreparationError::ReadRoot {
+        path: root.to_path_buf(),
+        source: io::Error::from(source),
+    })?;
+    let root_identity =
+        file_identity(&root_fd).map_err(|source| ExtensionPreparationError::ReadRoot {
+            path: root.to_path_buf(),
+            source,
+        })?;
+
+    let mut artifacts = Vec::with_capacity(selection.len());
+    for extension in selection.extensions() {
+        let id = extension.manifest().id().to_owned();
+        if root_identity != extension.root_identity {
+            return Err(ExtensionPreparationError::SourceMismatch {
+                id,
+                path: extension.path().to_path_buf(),
+            });
+        }
+        if extension.manifest().kind() != ExtensionKind::Tool {
+            return Err(ExtensionPreparationError::KindMismatch {
+                id,
+                actual: extension.manifest().kind(),
+            });
+        }
+        let package_name = selected_package_name(extension).ok_or_else(|| {
+            ExtensionPreparationError::SourceMismatch {
+                id: id.clone(),
+                path: extension.path().to_path_buf(),
+            }
+        })?;
+        let package_path = root.join(&package_name);
+        let package_fd = openat(
+            &root_fd,
+            &package_name,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(|source| ExtensionPreparationError::Package {
+            id: id.clone(),
+            path: package_path.clone(),
+            source: io::Error::from(source),
+        })?;
+        let package_identity =
+            file_identity(&package_fd).map_err(|source| ExtensionPreparationError::Package {
+                id: id.clone(),
+                path: package_path.clone(),
+                source,
+            })?;
+        if package_identity != extension.package_identity {
+            return Err(ExtensionPreparationError::PackageChanged {
+                id,
+                path: package_path,
+            });
+        }
+
+        let manifest_path = package_path.join("extension.yaml");
+        let manifest_fd = openat(
+            &package_fd,
+            c"extension.yaml",
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(|source| ExtensionPreparationError::Manifest {
+            id: id.clone(),
+            path: manifest_path.clone(),
+            source: ExtensionManifestError::Read {
+                source: io::Error::from(source),
+            },
+        })?;
+        let manifest_file = fs::File::from(manifest_fd);
+        let metadata =
+            manifest_file
+                .metadata()
+                .map_err(|source| ExtensionPreparationError::Manifest {
+                    id: id.clone(),
+                    path: manifest_path.clone(),
+                    source: ExtensionManifestError::Read { source },
+                })?;
+        if !metadata.is_file() {
+            return Err(ExtensionPreparationError::Manifest {
+                id,
+                path: manifest_path,
+                source: ExtensionManifestError::Read {
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "extension manifest is not a regular file",
+                    ),
+                },
+            });
+        }
+        let manifest = ExtensionManifest::load_reader(manifest_file).map_err(|source| {
+            ExtensionPreparationError::Manifest {
+                id: id.clone(),
+                path: manifest_path.clone(),
+                source,
+            }
+        })?;
+        if &manifest != extension.manifest() {
+            return Err(ExtensionPreparationError::ManifestChanged {
+                id,
+                path: manifest_path,
+            });
+        }
+
+        let bytes = read_entrypoint(
+            &package_fd,
+            &id,
+            &package_path,
+            extension.manifest().entrypoint(),
+        )?;
+        artifacts.push(PreparedToolArtifact { id, bytes });
+    }
+    Ok(artifacts)
+}
+
+#[cfg(unix)]
+fn selected_package_name(extension: &DiscoveredExtension) -> Option<OsString> {
+    let manifest_path = extension.path();
+    if manifest_path.file_name()? != "extension.yaml" {
+        return None;
+    }
+    manifest_path.parent()?.file_name().map(OsStr::to_owned)
+}
+
+#[cfg(unix)]
+fn file_identity(file: &impl AsFd) -> io::Result<FileIdentity> {
+    let metadata = fstat(file).map_err(io::Error::from)?;
+    Ok(FileIdentity {
+        device: metadata.st_dev,
+        inode: metadata.st_ino,
+    })
+}
+
+#[cfg(unix)]
+fn read_entrypoint(
+    package: &impl AsFd,
+    id: &str,
+    package_path: &Path,
+    entrypoint: &str,
+) -> Result<Vec<u8>, ExtensionPreparationError> {
+    let mut current_directory = None;
+    let mut components = entrypoint.split('/').peekable();
+    while let Some(component) = components.next() {
+        let parent = current_directory
+            .as_ref()
+            .map_or_else(|| package.as_fd(), AsFd::as_fd);
+        if components.peek().is_some() {
+            current_directory = Some(
+                openat(
+                    parent,
+                    component,
+                    OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                    Mode::empty(),
+                )
+                .map_err(|source| ExtensionPreparationError::Entrypoint {
+                    id: id.to_owned(),
+                    path: package_path.to_path_buf(),
+                    entrypoint: entrypoint.to_owned(),
+                    source: io::Error::from(source),
+                })?,
+            );
+            continue;
+        }
+
+        let target = openat(
+            parent,
+            component,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(|source| ExtensionPreparationError::Entrypoint {
+            id: id.to_owned(),
+            path: package_path.to_path_buf(),
+            entrypoint: entrypoint.to_owned(),
+            source: io::Error::from(source),
+        })?;
+        let mut file = fs::File::from(target);
+        let metadata = file
+            .metadata()
+            .map_err(|source| ExtensionPreparationError::Entrypoint {
+                id: id.to_owned(),
+                path: package_path.to_path_buf(),
+                entrypoint: entrypoint.to_owned(),
+                source,
+            })?;
+        if !metadata.is_file() {
+            return Err(ExtensionPreparationError::Entrypoint {
+                id: id.to_owned(),
+                path: package_path.to_path_buf(),
+                entrypoint: entrypoint.to_owned(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "extension entrypoint target is not a regular file",
+                ),
+            });
+        }
+        let mut bytes = Vec::new();
+        file.by_ref()
+            .take(MAX_ENTRYPOINT_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| ExtensionPreparationError::Entrypoint {
+                id: id.to_owned(),
+                path: package_path.to_path_buf(),
+                entrypoint: entrypoint.to_owned(),
+                source,
+            })?;
+        if bytes.len() > MAX_ENTRYPOINT_BYTES as usize {
+            return Err(ExtensionPreparationError::EntrypointTooLarge {
+                id: id.to_owned(),
+                path: package_path.to_path_buf(),
+                max_bytes: MAX_ENTRYPOINT_BYTES,
+            });
+        }
+        return Ok(bytes);
+    }
+    unreachable!("validated entrypoints contain a component")
+}
+
+#[cfg(not(unix))]
+fn prepare_tool_artifacts_platform(
+    root: &Path,
+    _selection: &ExtensionSelection<'_>,
+) -> Result<Vec<PreparedToolArtifact>, ExtensionPreparationError> {
+    Err(ExtensionPreparationError::ReadRoot {
+        path: root.to_path_buf(),
+        source: io::Error::new(
+            io::ErrorKind::Unsupported,
+            "secure extension preparation is unsupported on this platform",
+        ),
+    })
+}
+
 #[cfg(unix)]
 fn discover_extensions_platform(
     root: &Path,
@@ -356,6 +712,11 @@ fn discover_extensions_platform(
         path: root.to_path_buf(),
         source: io::Error::from(source),
     })?;
+    let root_identity =
+        file_identity(&root_fd).map_err(|source| ExtensionDiscoveryError::ReadRoot {
+            path: root.to_path_buf(),
+            source,
+        })?;
     let mut directory =
         Dir::read_from(&root_fd).map_err(|source| ExtensionDiscoveryError::ReadRoot {
             path: root.to_path_buf(),
@@ -395,6 +756,11 @@ fn discover_extensions_platform(
                 });
             }
         };
+        let package_identity =
+            file_identity(&child_fd).map_err(|source| ExtensionDiscoveryError::ReadRoot {
+                path: child_path.clone(),
+                source,
+            })?;
         let path = child_path.join("extension.yaml");
         let manifest_fd = match openat(
             &child_fd,
@@ -444,7 +810,12 @@ fn discover_extensions_platform(
             });
         }
         paths_by_id.insert(manifest.id().to_owned(), path.clone());
-        discovered.push(DiscoveredExtension { path, manifest });
+        discovered.push(DiscoveredExtension {
+            path,
+            manifest,
+            root_identity,
+            package_identity,
+        });
     }
     Ok(discovered)
 }
@@ -566,6 +937,82 @@ struct RawExtensionManifest {
     kind: String,
     entrypoint: String,
     description: Option<String>,
+}
+
+impl fmt::Display for ExtensionPreparationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReadRoot { path, source } => write!(
+                formatter,
+                "could not reopen extension root {}: {source}",
+                path.display()
+            ),
+            Self::SourceMismatch { id, path } => write!(
+                formatter,
+                "selected extension {id:?} does not belong to the supplied root at {}",
+                path.display()
+            ),
+            Self::KindMismatch { id, actual } => write!(
+                formatter,
+                "selected extension {id:?} has kind {actual:?}, expected Tool"
+            ),
+            Self::Package { id, path, source } => write!(
+                formatter,
+                "could not reopen selected extension package {id:?} at {}: {source}",
+                path.display()
+            ),
+            Self::PackageChanged { id, path } => write!(
+                formatter,
+                "selected extension package {id:?} changed at {}",
+                path.display()
+            ),
+            Self::Manifest { id, path, source } => write!(
+                formatter,
+                "could not revalidate selected extension manifest {id:?} at {}: {source}",
+                path.display()
+            ),
+            Self::ManifestChanged { id, path } => write!(
+                formatter,
+                "selected extension manifest {id:?} changed at {}",
+                path.display()
+            ),
+            Self::Entrypoint {
+                id,
+                path,
+                entrypoint,
+                source,
+            } => write!(
+                formatter,
+                "could not reopen selected tool entrypoint {entrypoint:?} for {id:?} beneath {}: {source}",
+                path.display()
+            ),
+            Self::EntrypointTooLarge {
+                id,
+                path,
+                max_bytes,
+            } => write!(
+                formatter,
+                "selected tool entrypoint for {id:?} beneath {} exceeds {max_bytes} bytes",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl Error for ExtensionPreparationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ReadRoot { source, .. }
+            | Self::Package { source, .. }
+            | Self::Entrypoint { source, .. } => Some(source),
+            Self::Manifest { source, .. } => Some(source),
+            Self::SourceMismatch { .. }
+            | Self::KindMismatch { .. }
+            | Self::PackageChanged { .. }
+            | Self::ManifestChanged { .. }
+            | Self::EntrypointTooLarge { .. } => None,
+        }
+    }
 }
 
 impl fmt::Display for ExtensionSelectionError {

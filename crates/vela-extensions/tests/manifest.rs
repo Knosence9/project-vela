@@ -3,8 +3,8 @@ use std::{error::Error, fs};
 use tempfile::tempdir;
 use vela_extensions::{
     ExtensionDiscoveryError, ExtensionKind, ExtensionManifest, ExtensionManifestError,
-    ExtensionRegistry, ExtensionRegistryChange, ExtensionSelectionError, MAX_MANIFEST_BYTES,
-    discover_extensions,
+    ExtensionPreparationError, ExtensionRegistry, ExtensionRegistryChange, ExtensionSelectionError,
+    MAX_ENTRYPOINT_BYTES, MAX_MANIFEST_BYTES, discover_extensions, prepare_tool_artifacts,
 };
 
 #[test]
@@ -837,6 +837,299 @@ fn selection_kind_projection_can_be_empty() {
     assert_eq!(workflows.len(), 0);
     assert!(workflows.extensions().next().is_none());
     assert!(workflows.get("known.tool").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_reacquires_owned_tool_artifacts_in_exact_id_order() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("first/extension.yaml"), "zeta.tool");
+    write_manifest(root.path().join("second/extension.yaml"), "alpha.tool");
+    fs::write(root.path().join("second/run"), b"alpha component").expect("write alpha bytes");
+    fs::write(root.path().join("first/run"), b"zeta component").expect("write zeta bytes");
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = registry
+        .select_kind(ExtensionKind::Tool, ["zeta.tool", "alpha.tool"])
+        .expect("tool selection");
+
+    let artifacts =
+        prepare_tool_artifacts(root.path(), &selection).expect("prepared tool artifacts");
+
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts[0].id(), "alpha.tool");
+    assert_eq!(artifacts[0].bytes(), b"alpha component");
+    assert_eq!(artifacts[1].id(), "zeta.tool");
+    assert_eq!(artifacts[1].bytes(), b"zeta component");
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_accepts_equivalent_root_paths() {
+    use std::os::unix::fs::symlink;
+
+    let parent = tempdir().expect("temporary parent");
+    let real_parent = parent.path().join("real");
+    let root = real_parent.join("extensions");
+    write_manifest(root.join("tool/extension.yaml"), "equivalent.tool");
+    let registry = ExtensionRegistry::discover(&root).expect("extension registry");
+    let selection = registry
+        .select_kind(ExtensionKind::Tool, ["equivalent.tool"])
+        .expect("tool selection");
+    fs::create_dir(parent.path().join("detour")).expect("create path detour");
+    let lexical_root = parent.path().join("detour/../real/extensions");
+
+    let lexical_artifacts = prepare_tool_artifacts(&lexical_root, &selection)
+        .expect("lexically equivalent root must prepare artifacts");
+
+    assert_eq!(lexical_artifacts.len(), 1);
+    assert_eq!(lexical_artifacts[0].id(), "equivalent.tool");
+
+    symlink(&real_parent, parent.path().join("alias")).expect("create parent alias");
+    let alias_root = parent.path().join("alias/extensions");
+    let alias_artifacts = prepare_tool_artifacts(&alias_root, &selection)
+        .expect("aliased parent path must prepare artifacts");
+
+    assert_eq!(alias_artifacts.len(), 1);
+    assert_eq!(alias_artifacts[0].id(), "equivalent.tool");
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_fails_closed_for_wrong_kind_root_and_changed_manifest() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest_with_kind(
+        root.path().join("skill/extension.yaml"),
+        "review.skill",
+        "skill",
+    );
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = registry
+        .select(["review.skill"])
+        .expect("generic selection");
+
+    let wrong_kind =
+        prepare_tool_artifacts(root.path(), &selection).expect_err("wrong kind must fail");
+    assert!(matches!(
+        wrong_kind,
+        ExtensionPreparationError::KindMismatch {
+            ref id,
+            actual: ExtensionKind::Skill,
+        } if id == "review.skill"
+    ));
+
+    let other_root = tempdir().expect("different extension root");
+    let wrong_root =
+        prepare_tool_artifacts(other_root.path(), &selection).expect_err("wrong root must fail");
+    assert!(matches!(
+        wrong_root,
+        ExtensionPreparationError::SourceMismatch { ref id, .. } if id == "review.skill"
+    ));
+
+    write_manifest(root.path().join("tool/extension.yaml"), "changed.tool");
+    let changed_registry = ExtensionRegistry::discover(root.path()).expect("changed registry");
+    let changed_selection = changed_registry
+        .select_kind(ExtensionKind::Tool, ["changed.tool"])
+        .expect("tool selection");
+    fs::write(
+        root.path().join("tool/extension.yaml"),
+        "manifest_version: 1\nid: changed.tool\nkind: tool\nentrypoint: run\ndescription: changed\n",
+    )
+    .expect("change manifest");
+
+    let changed = prepare_tool_artifacts(root.path(), &changed_selection)
+        .expect_err("changed manifest must fail");
+    assert!(matches!(
+        changed,
+        ExtensionPreparationError::ManifestChanged { ref id, .. } if id == "changed.tool"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_rejects_replaced_moved_and_unsafe_selected_targets() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("tool/extension.yaml"), "stable.tool");
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = registry
+        .select_kind(ExtensionKind::Tool, ["stable.tool"])
+        .expect("tool selection");
+    fs::rename(root.path().join("tool"), root.path().join("moved")).expect("move selected package");
+    write_manifest(root.path().join("tool/extension.yaml"), "stable.tool");
+    assert!(matches!(
+        prepare_tool_artifacts(root.path(), &selection),
+        Err(ExtensionPreparationError::PackageChanged { ref id, .. }) if id == "stable.tool"
+    ));
+    fs::remove_dir_all(root.path().join("tool")).expect("remove replacement");
+    assert!(matches!(
+        prepare_tool_artifacts(root.path(), &selection),
+        Err(ExtensionPreparationError::Package { ref id, .. }) if id == "stable.tool"
+    ));
+
+    let unsafe_root = tempdir().expect("temporary extension root");
+    write_manifest(
+        unsafe_root.path().join("tool/extension.yaml"),
+        "unsafe.tool",
+    );
+    let unsafe_registry =
+        ExtensionRegistry::discover(unsafe_root.path()).expect("extension registry");
+    let unsafe_selection = unsafe_registry
+        .select_kind(ExtensionKind::Tool, ["unsafe.tool"])
+        .expect("tool selection");
+    fs::remove_file(unsafe_root.path().join("tool/run")).expect("remove entrypoint");
+    fs::write(unsafe_root.path().join("tool/outside"), "component").expect("write target");
+    symlink("outside", unsafe_root.path().join("tool/run")).expect("link target");
+    let error = prepare_tool_artifacts(unsafe_root.path(), &unsafe_selection)
+        .expect_err("symlink must fail");
+    assert!(matches!(
+        error,
+        ExtensionPreparationError::Entrypoint { ref id, .. } if id == "unsafe.tool"
+    ));
+    assert!(error.source().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_rejects_missing_non_regular_and_intermediate_symlink_targets() {
+    use std::os::unix::fs::symlink;
+
+    for case in ["missing", "directory", "intermediate-symlink"] {
+        let root = tempdir().expect("temporary extension root");
+        let entrypoint = if case == "intermediate-symlink" {
+            "nested/run"
+        } else {
+            "run"
+        };
+        write_manifest_with_entrypoint(
+            &root.path().join("tool/extension.yaml"),
+            "unsafe.tool",
+            entrypoint,
+        );
+        let target = root.path().join("tool").join(entrypoint);
+        fs::create_dir_all(target.parent().expect("target parent")).expect("create target parent");
+        fs::write(&target, "component").expect("write initial target");
+        let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+        let selection = registry
+            .select_kind(ExtensionKind::Tool, ["unsafe.tool"])
+            .expect("tool selection");
+
+        if case == "intermediate-symlink" {
+            fs::remove_dir_all(root.path().join("tool/nested")).expect("remove nested target");
+            fs::create_dir(root.path().join("tool/real")).expect("create real target directory");
+            fs::write(root.path().join("tool/real/run"), "component").expect("write target");
+            symlink("real", root.path().join("tool/nested")).expect("link intermediate directory");
+        } else {
+            fs::remove_file(root.path().join("tool/run")).expect("remove target");
+            if case == "directory" {
+                fs::create_dir(root.path().join("tool/run")).expect("create target directory");
+            }
+        }
+
+        assert!(
+            matches!(
+                prepare_tool_artifacts(root.path(), &selection),
+                Err(ExtensionPreparationError::Entrypoint { ref id, .. }) if id == "unsafe.tool"
+            ),
+            "case {case} must fail with an entrypoint error"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_rejects_symlinks_at_root_package_and_manifest_boundaries() {
+    use std::os::unix::fs::symlink;
+
+    let parent = tempdir().expect("temporary parent");
+    let root = parent.path().join("extensions");
+    write_manifest(root.join("tool/extension.yaml"), "root.tool");
+    let registry = ExtensionRegistry::discover(&root).expect("extension registry");
+    let selection = registry
+        .select_kind(ExtensionKind::Tool, ["root.tool"])
+        .expect("tool selection");
+    fs::rename(&root, parent.path().join("real-root")).expect("move root");
+    symlink("real-root", &root).expect("link root");
+    assert!(matches!(
+        prepare_tool_artifacts(&root, &selection),
+        Err(ExtensionPreparationError::ReadRoot { .. })
+    ));
+
+    let package_root = tempdir().expect("temporary extension root");
+    write_manifest(
+        package_root.path().join("tool/extension.yaml"),
+        "package.tool",
+    );
+    let package_registry =
+        ExtensionRegistry::discover(package_root.path()).expect("extension registry");
+    let package_selection = package_registry
+        .select_kind(ExtensionKind::Tool, ["package.tool"])
+        .expect("tool selection");
+    fs::rename(
+        package_root.path().join("tool"),
+        package_root.path().join("real-tool"),
+    )
+    .expect("move package");
+    symlink("real-tool", package_root.path().join("tool")).expect("link package");
+    assert!(matches!(
+        prepare_tool_artifacts(package_root.path(), &package_selection),
+        Err(ExtensionPreparationError::Package { .. })
+    ));
+
+    let manifest_root = tempdir().expect("temporary extension root");
+    write_manifest(
+        manifest_root.path().join("tool/extension.yaml"),
+        "manifest.tool",
+    );
+    let manifest_registry =
+        ExtensionRegistry::discover(manifest_root.path()).expect("extension registry");
+    let manifest_selection = manifest_registry
+        .select_kind(ExtensionKind::Tool, ["manifest.tool"])
+        .expect("tool selection");
+    fs::rename(
+        manifest_root.path().join("tool/extension.yaml"),
+        manifest_root.path().join("tool/real.yaml"),
+    )
+    .expect("move manifest");
+    symlink(
+        "real.yaml",
+        manifest_root.path().join("tool/extension.yaml"),
+    )
+    .expect("link manifest");
+    assert!(matches!(
+        prepare_tool_artifacts(manifest_root.path(), &manifest_selection),
+        Err(ExtensionPreparationError::Manifest { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_rejects_oversized_targets_without_returning_a_prefix() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("alpha/extension.yaml"), "alpha.tool");
+    write_manifest(root.path().join("zeta/extension.yaml"), "zeta.tool");
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = registry
+        .select_kind(ExtensionKind::Tool, ["alpha.tool", "zeta.tool"])
+        .expect("tool selection");
+    fs::write(
+        root.path().join("zeta/run"),
+        vec![0_u8; MAX_ENTRYPOINT_BYTES as usize + 1],
+    )
+    .expect("write oversized target");
+
+    let error =
+        prepare_tool_artifacts(root.path(), &selection).expect_err("oversized target must fail");
+
+    assert!(matches!(
+        error,
+        ExtensionPreparationError::EntrypointTooLarge {
+            ref id,
+            max_bytes: MAX_ENTRYPOINT_BYTES,
+            ..
+        } if id == "zeta.tool"
+    ));
+    assert!(error.source().is_none());
 }
 
 #[cfg(not(unix))]
