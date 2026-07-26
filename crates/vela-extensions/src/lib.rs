@@ -26,7 +26,7 @@ use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, stat
 use serde::Deserialize;
 use vela_kernel::tool::{
     Tool, ToolEffect, ToolError, ToolId, ToolIdError, ToolRegistry, ToolRegistryError,
-    ToolRegistryRemovalError,
+    ToolRegistryRemovalError, ToolRegistryReplacementError,
 };
 use wasmtime::component::{
     Component, Linker,
@@ -399,6 +399,58 @@ impl Error for ToolDeactivationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::WrongKind { .. } => None,
+            Self::Registry { source } => Some(source),
+        }
+    }
+}
+
+/// A typed failure while atomically replacing one selected active tool batch.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolReplacementError {
+    Preparation {
+        source: ExtensionPreparationError,
+    },
+    Compilation {
+        source: ToolComponentCompilationError,
+    },
+    Construction {
+        id: String,
+        source: ComponentToolConstructionError,
+    },
+    Registry {
+        source: ToolRegistryReplacementError,
+    },
+}
+
+impl fmt::Display for ToolReplacementError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Preparation { .. } => {
+                formatter.write_str("failed to prepare selected replacement tools")
+            }
+            Self::Compilation { .. } => {
+                formatter.write_str("failed to compile selected replacement tools")
+            }
+            Self::Construction { id, .. } => {
+                write!(
+                    formatter,
+                    "failed to construct selected replacement tool {id}"
+                )
+            }
+            Self::Registry { .. } => {
+                formatter.write_str("failed to replace selected tools atomically")
+            }
+        }
+    }
+}
+
+impl Error for ToolReplacementError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Preparation { source } => Some(source),
+            Self::Compilation { source } => Some(source),
+            Self::Construction { source, .. } => Some(source),
             Self::Registry { source } => Some(source),
         }
     }
@@ -975,6 +1027,49 @@ pub fn deactivate_tool_selection(
             ToolId::new(extension.manifest().id()).expect("validated non-blank ID")
         }))
         .map_err(|source| ToolDeactivationError::Registry { source })
+}
+
+/// Revalidates, compiles, adapts with default limits, and atomically replaces one selected active
+/// tool batch.
+///
+/// Every stage completes for the full selection before the caller-owned registry is mutated.
+pub fn replace_tool_selection(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+    registry: &mut ToolRegistry,
+) -> Result<(), ToolReplacementError> {
+    replace_tool_selection_with_limits(root, selection, registry, ToolExecutionLimits::default())
+}
+
+/// Revalidates, compiles, adapts with uniform caller-selected limits, and atomically replaces one
+/// selected active tool batch.
+///
+/// Restrictive limits remain inert until a later authorized invocation. Any preparation,
+/// compilation, construction, or registry failure preserves every previously active adapter.
+pub fn replace_tool_selection_with_limits(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+    registry: &mut ToolRegistry,
+    limits: ToolExecutionLimits,
+) -> Result<(), ToolReplacementError> {
+    if selection.is_empty() {
+        return Ok(());
+    }
+    let artifacts = prepare_tool_artifacts(root, selection)
+        .map_err(|source| ToolReplacementError::Preparation { source })?;
+    let components = compile_tool_components(&artifacts)
+        .map_err(|source| ToolReplacementError::Compilation { source })?;
+    let tools = components
+        .into_iter()
+        .map(|component| {
+            let id = component.id().to_owned();
+            ComponentTool::with_limits(component, limits)
+                .map_err(|source| ToolReplacementError::Construction { id, source })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    registry
+        .replace_all(tools)
+        .map_err(|source| ToolReplacementError::Registry { source })
 }
 
 fn validate_tool_component_abi(

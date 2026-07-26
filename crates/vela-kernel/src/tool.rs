@@ -181,6 +181,28 @@ impl fmt::Display for ToolRegistryRemovalError {
 
 impl Error for ToolRegistryRemovalError {}
 
+/// A fail-closed error from atomically replacing a caller-supplied adapter batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ToolRegistryReplacementError {
+    DuplicateId { tool_id: ToolId },
+    NotFound { tool_id: ToolId },
+}
+
+impl fmt::Display for ToolRegistryReplacementError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateId { tool_id } => write!(
+                formatter,
+                "tool {tool_id} was supplied for replacement more than once"
+            ),
+            Self::NotFound { tool_id } => write!(formatter, "tool {tool_id} is not registered"),
+        }
+    }
+}
+
+impl Error for ToolRegistryReplacementError {}
+
 /// An unknown adapter identity or existing invocation-protocol failure.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -306,6 +328,41 @@ impl ToolRegistry {
         }
         for tool_id in unique_ids {
             self.tools.remove(&tool_id);
+        }
+        Ok(())
+    }
+
+    /// Replaces one homogeneous adapter batch atomically by exact ID.
+    ///
+    /// Duplicate replacements take precedence over missing adapters. Both diagnostics are selected
+    /// in stable-ID order, and every replacement is inspected before the registry is mutated.
+    pub fn replace_all<T, I>(&mut self, tools: I) -> Result<(), ToolRegistryReplacementError>
+    where
+        T: Tool + 'static,
+        I: IntoIterator<Item = T>,
+    {
+        let tools = tools.into_iter().collect::<Vec<_>>();
+        let mut unique_ids = BTreeSet::new();
+        let mut duplicate_ids = BTreeSet::new();
+        for tool in &tools {
+            let tool_id = tool.id().clone();
+            if !unique_ids.insert(tool_id.clone()) {
+                duplicate_ids.insert(tool_id);
+            }
+        }
+        if let Some(tool_id) = duplicate_ids.into_iter().next() {
+            return Err(ToolRegistryReplacementError::DuplicateId { tool_id });
+        }
+        if let Some(tool_id) = unique_ids
+            .iter()
+            .find(|tool_id| !self.tools.contains_key(*tool_id))
+        {
+            return Err(ToolRegistryReplacementError::NotFound {
+                tool_id: tool_id.clone(),
+            });
+        }
+        for tool in tools {
+            self.tools.insert(tool.id().clone(), Box::new(tool));
         }
         Ok(())
     }
