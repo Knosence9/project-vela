@@ -39,7 +39,9 @@ A registry never watches or automatically rescans its root. Filesystem changes d
 
 `current.changes_from(previous)` compares two already-built snapshots without filesystem access or mutation. It returns changes in exact-ID order: `Added` borrows the current record, `Removed` borrows the previous record, and `Changed` borrows both records when the same exact ID has different manifest metadata or a different source path. Equal records are omitted. Comparison preserves authored ID case and whitespace and does not normalize, authorize, or activate either snapshot.
 
-`registry.select(ids)` validates one caller-owned capability selection against an existing snapshot without filesystem access or mutation. Success borrows the selected records in exact-ID order regardless of request order; an empty request succeeds. Duplicate requested IDs and IDs absent from the snapshot fail the whole selection with typed, source-free errors. Selection preserves authored case and whitespace and does not enable, authorize, load, or activate a capability.
+`registry.select(ids)` validates one caller-owned capability selection against an existing snapshot without filesystem access or mutation. Success returns an immutable `ExtensionSelection` that borrows the selected records from that snapshot, supports exact-ID lookup, and enumerates in exact-ID order regardless of request order; an empty request succeeds. Duplicate requested IDs and IDs absent from the snapshot fail the whole selection with typed, source-free errors. Selection preserves authored case and whitespace.
+
+Discovery is the installed metadata catalog; a selection records only in-memory enablement intent. Constructing a new selection that omits an ID is the current disable operation. A selection cannot outlive or rebind itself to its originating registry, and it does not persist configuration, authorize, load, execute, or activate a capability. Future activation must separately reopen an entrypoint through the descriptor-anchored boundary, and each future tool invocation must still receive caller-owned permission.
 
 ## Ownership and trust boundary
 
@@ -47,4 +49,4 @@ The caller chooses each manifest path or the one extension root. Successful stan
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries, dependencies, enable/disable state, lifecycle hooks, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration. A successful registry selection validates identity only and is not enablement or permission.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration. A successful registry selection records enablement intent only and is not activation or permission.

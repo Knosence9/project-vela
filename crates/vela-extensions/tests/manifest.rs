@@ -617,19 +617,32 @@ fn registry_selects_exact_ids_in_deterministic_order() {
         .select(["zeta.id", "alpha.id ", "Alpha.id"])
         .expect("valid exact-ID selection");
 
+    assert_eq!(selected.len(), 3);
+    assert!(!selected.is_empty());
     assert_eq!(
         selected
-            .into_iter()
+            .extensions()
             .map(|extension| extension.manifest().id())
             .collect::<Vec<_>>(),
         ["Alpha.id", "alpha.id ", "zeta.id"]
     );
-    assert!(
-        registry
-            .select(std::iter::empty::<&str>())
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        selected
+            .get("alpha.id ")
+            .expect("selected exact ID")
+            .manifest()
+            .id(),
+        "alpha.id "
     );
+    assert!(selected.get("alpha.id").is_none());
+
+    let empty = registry
+        .select(std::iter::empty::<&str>())
+        .expect("empty selection");
+    assert!(empty.is_empty());
+    assert_eq!(empty.len(), 0);
+    assert!(empty.extensions().next().is_none());
+    assert!(empty.get("Alpha.id").is_none());
 }
 
 #[cfg(unix)]

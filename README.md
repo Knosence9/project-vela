@@ -164,6 +164,7 @@ The first milestone is the **evidence loop**:
 34. Build immutable discovered extension registry snapshots with exact-ID lookup. ✅
 35. Compare immutable extension registry snapshots deterministically without activation. ✅
 36. Select caller-requested registry capabilities by exact ID without activation. ✅
+37. Expose immutable typed selections as non-activating enablement intent. ✅
 
 ## Project documents
 

@@ -161,6 +161,37 @@ pub enum ExtensionSelectionError {
     NotFound { id: String },
 }
 
+/// An immutable caller selection borrowed from one registry snapshot.
+#[derive(Clone, Debug)]
+pub struct ExtensionSelection<'a> {
+    extensions: Vec<&'a DiscoveredExtension>,
+}
+
+impl<'a> ExtensionSelection<'a> {
+    /// Resolves one exact ID within this selection.
+    pub fn get(&self, id: &str) -> Option<&'a DiscoveredExtension> {
+        self.extensions
+            .binary_search_by(|extension| extension.manifest().id().cmp(id))
+            .ok()
+            .map(|index| self.extensions[index])
+    }
+
+    /// Enumerates selected records in deterministic exact-ID order.
+    pub fn extensions(&self) -> impl ExactSizeIterator<Item = &'a DiscoveredExtension> + '_ {
+        self.extensions.iter().copied()
+    }
+
+    /// Returns the number of selected records.
+    pub fn len(&self) -> usize {
+        self.extensions.len()
+    }
+
+    /// Returns whether no records are selected.
+    pub fn is_empty(&self) -> bool {
+        self.extensions.is_empty()
+    }
+}
+
 impl ExtensionRegistry {
     /// Discovers one extension root and owns the complete validated snapshot.
     pub fn discover(root: impl AsRef<Path>) -> Result<Self, ExtensionDiscoveryError> {
@@ -191,7 +222,7 @@ impl ExtensionRegistry {
     /// Resolves an all-or-nothing caller selection in deterministic exact-ID order.
     ///
     /// Selection performs no filesystem access, activation, authorization, or mutation.
-    pub fn select<I, S>(&self, ids: I) -> Result<Vec<&DiscoveredExtension>, ExtensionSelectionError>
+    pub fn select<I, S>(&self, ids: I) -> Result<ExtensionSelection<'_>, ExtensionSelectionError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -209,13 +240,14 @@ impl ExtensionRegistry {
             return Err(ExtensionSelectionError::DuplicateId { id });
         }
 
-        selected_ids
+        let extensions = selected_ids
             .into_iter()
             .map(|id| {
                 self.get(&id)
                     .ok_or(ExtensionSelectionError::NotFound { id })
             })
-            .collect()
+            .collect::<Result<_, _>>()?;
+        Ok(ExtensionSelection { extensions })
     }
 
     /// Compares this current snapshot with a previous snapshot in exact-ID order.
