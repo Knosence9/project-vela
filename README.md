@@ -165,6 +165,7 @@ The first milestone is the **evidence loop**:
 35. Compare immutable extension registry snapshots deterministically without activation. ✅
 36. Select caller-requested registry capabilities by exact ID without activation. ✅
 37. Expose immutable typed selections as non-activating enablement intent. ✅
+38. Partition selected capabilities by validated kind without activation. ✅
 
 ## Project documents
 

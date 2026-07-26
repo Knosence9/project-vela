@@ -679,6 +679,78 @@ fn registry_selection_fails_closed_for_duplicate_or_unknown_ids() {
     assert!(unknown.source().is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn selection_projects_capabilities_by_kind_in_exact_id_order() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest_with_kind(root.path().join("zeta/extension.yaml"), "zeta.tool", "tool");
+    write_manifest_with_kind(
+        root.path().join("alpha/extension.yaml"),
+        "alpha.skill",
+        "skill",
+    );
+    write_manifest_with_kind(
+        root.path().join("middle/extension.yaml"),
+        "middle.tool",
+        "tool",
+    );
+    write_manifest_with_kind(
+        root.path().join("workflow/extension.yaml"),
+        "review.workflow",
+        "workflow",
+    );
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = registry
+        .select(["zeta.tool", "alpha.skill", "middle.tool", "review.workflow"])
+        .expect("mixed selection");
+
+    let tools = selection.of_kind(ExtensionKind::Tool);
+
+    assert_eq!(tools.len(), 2);
+    assert!(!tools.is_empty());
+    assert_eq!(
+        tools
+            .extensions()
+            .map(|extension| extension.manifest().id())
+            .collect::<Vec<_>>(),
+        ["middle.tool", "zeta.tool"]
+    );
+    assert_eq!(
+        tools
+            .get("zeta.tool")
+            .expect("selected tool")
+            .manifest()
+            .kind(),
+        ExtensionKind::Tool
+    );
+    assert!(tools.get("alpha.skill").is_none());
+    assert!(tools.get("missing.tool").is_none());
+    assert_eq!(
+        selection
+            .of_kind(ExtensionKind::Workflow)
+            .extensions()
+            .next()
+            .map(|extension| extension.manifest().id()),
+        Some("review.workflow")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn selection_kind_projection_can_be_empty() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest(root.path().join("known/extension.yaml"), "known.tool");
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = registry.select(["known.tool"]).expect("tool selection");
+
+    let workflows = selection.of_kind(ExtensionKind::Workflow);
+
+    assert!(workflows.is_empty());
+    assert_eq!(workflows.len(), 0);
+    assert!(workflows.extensions().next().is_none());
+    assert!(workflows.get("known.tool").is_none());
+}
+
 #[cfg(not(unix))]
 #[test]
 fn discovery_fails_closed_when_descriptor_anchored_traversal_is_unavailable() {
@@ -701,6 +773,20 @@ fn discovery_fails_closed_when_descriptor_anchored_traversal_is_unavailable() {
 
 fn write_manifest(path: std::path::PathBuf, id: &str) {
     write_manifest_with_entrypoint(&path, id, "run");
+    fs::write(
+        path.parent().expect("manifest parent").join("run"),
+        "not executed",
+    )
+    .expect("write entrypoint");
+}
+
+fn write_manifest_with_kind(path: std::path::PathBuf, id: &str, kind: &str) {
+    fs::create_dir_all(path.parent().expect("manifest parent")).expect("create manifest directory");
+    fs::write(
+        &path,
+        format!("manifest_version: 1\nid: {id}\nkind: {kind}\nentrypoint: run\n"),
+    )
+    .expect("write manifest");
     fs::write(
         path.parent().expect("manifest parent").join("run"),
         "not executed",

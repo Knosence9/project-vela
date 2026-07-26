@@ -41,6 +41,8 @@ A registry never watches or automatically rescans its root. Filesystem changes d
 
 `registry.select(ids)` validates one caller-owned capability selection against an existing snapshot without filesystem access or mutation. Success returns an immutable `ExtensionSelection` that borrows the selected records from that snapshot, supports exact-ID lookup, and enumerates in exact-ID order regardless of request order; an empty request succeeds. Duplicate requested IDs and IDs absent from the snapshot fail the whole selection with typed, source-free errors. Selection preserves authored case and whitespace.
 
+`selection.of_kind(kind)` returns another immutable selection containing only records of the requested validated `ExtensionKind`. The projection preserves exact-ID order, lookup, length, and emptiness semantics, borrows the same registry records, and returns an empty selection when that kind is absent. It lets a future lifecycle layer route enablement intent toward the separate tool, skill, and workflow registries described by the architecture without opening entrypoints or treating metadata as activated.
+
 Discovery is the installed metadata catalog; a selection records only in-memory enablement intent. To represent disabled intent for a subsequent operation, construct a new selection that omits the ID. A selection cannot outlive or rebind itself to its originating registry, and it does not persist configuration, authorize, load, execute, or activate a capability. Future activation must separately reopen an entrypoint through the descriptor-anchored boundary, and each future tool invocation must still receive caller-owned permission.
 
 ## Ownership and trust boundary
@@ -49,4 +51,4 @@ The caller chooses each manifest path or the one extension root. Successful stan
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration. A successful registry selection records enablement intent only and is not activation or permission.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, adapter registration, skill or workflow parsing, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, sandboxing, persistence, or migration. A successful registry selection or kind projection records enablement intent only and is not activation or permission.
