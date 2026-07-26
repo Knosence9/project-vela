@@ -47,6 +47,8 @@ A registry never watches or automatically rescans its root. Filesystem changes d
 
 Discovery is the installed metadata catalog; a selection records only in-memory enablement intent. To represent disabled intent for a subsequent operation, construct a new selection that omits the ID. A selection cannot outlive or rebind itself to its originating registry, and it does not persist configuration, authorize, load, execute, or activate a capability. Future activation must separately reopen an entrypoint through the descriptor-anchored boundary, and each future tool invocation must still receive caller-owned permission.
 
+The accepted first execution boundary is specified by [ADR-0003](adr/0003-tools-only-wasm-component-boundary.md). It limits activation to kind-constrained tool selections and no-import WebAssembly components. That decision does not make activation part of the current manifest or registry API; the executable loader remains separate follow-on work.
+
 ## Ownership and trust boundary
 
 The caller chooses each manifest path or the one extension root. Successful standalone parsing does not consult configuration or inspect an entrypoint on the filesystem. Discovery validates that the entrypoint target is an extension-local regular file at discovery time, but successful parsing or discovery does not register a capability, grant permission, import code, execute an entrypoint, read target content, or persist state. Discovery is not an activation lease: a future loader must reopen targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes again, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.

@@ -167,6 +167,7 @@ The first milestone is the **evidence loop**:
 37. Expose immutable typed selections as non-activating enablement intent. ✅
 38. Partition selected capabilities by validated kind without activation. ✅
 39. Fail closed when typed selection intent disagrees with a capability's validated kind. ✅
+40. Specify the first tools-only WebAssembly component activation and isolation boundary. ✅
 
 ## Project documents
 
