@@ -49,6 +49,14 @@ Discovery is the installed metadata catalog; a selection records only in-memory 
 
 The accepted first execution boundary is specified by [ADR-0003](adr/0003-tools-only-wasm-component-boundary.md). It limits activation to kind-constrained tool selections and no-import WebAssembly components. That decision does not make activation part of the current manifest or registry API; the executable loader remains separate follow-on work.
 
+## Tool artifact preparation
+
+`prepare_tool_artifacts(root, selection)` is the non-executing bridge between a kind-constrained selection and the later component compiler. It reopens the caller-supplied original root without following symlinks, requires that root and every selected package still have their discovery-time filesystem identities, reloads each manifest through its anchored package descriptor, and requires the manifest and expected source location to match the selected record exactly. It then reopens every entrypoint component relative to that same package descriptor, rejecting symlinks and non-regular targets.
+
+Each entrypoint read accepts at most 16 MiB (`MAX_ENTRYPOINT_BYTES`) and probes one additional boundary byte before returning `EntrypointTooLarge`. Success returns owned `PreparedToolArtifact` values in exact-ID order, preserving each exact ID and its bytes. The operation is all-or-nothing: a changed or moved package, changed manifest, mismatched root, wrong capability kind, unsafe target, read failure, or oversized target returns one deterministic `ExtensionPreparationError` and no artifact prefix. Filesystem and manifest failures remain available through `std::error::Error::source`.
+
+Preparation does not compile or validate a WebAssembly component, mutate a registry, authorize a tool, persist state, or execute guest code. Those remain later activation and invocation boundaries.
+
 ## Ownership and trust boundary
 
 The caller chooses each manifest path or the one extension root. Successful standalone parsing does not consult configuration or inspect an entrypoint on the filesystem. Discovery validates that the entrypoint target is an extension-local regular file at discovery time, but successful parsing or discovery does not register a capability, grant permission, import code, execute an entrypoint, read target content, or persist state. Discovery is not an activation lease: a future loader must reopen targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes again, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.
