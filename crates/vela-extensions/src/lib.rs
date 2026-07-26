@@ -9,6 +9,9 @@ use std::{
     fmt, fs, io,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Arc, OnceLock, mpsc},
+    thread,
+    time::Duration,
 };
 
 #[cfg(unix)]
@@ -21,11 +24,12 @@ use std::{
 #[cfg(unix)]
 use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, statat};
 use serde::Deserialize;
+use vela_kernel::tool::{Tool, ToolEffect, ToolError, ToolId, ToolIdError};
 use wasmtime::component::{
-    Component,
+    Component, Linker,
     types::{ComponentItem, Type},
 };
-use wasmtime::{Config, Engine};
+use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 
 const SUPPORTED_MANIFEST_VERSION: u64 = 1;
 
@@ -34,6 +38,23 @@ pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 /// Maximum accepted encoded WebAssembly component size during artifact preparation.
 pub const MAX_ENTRYPOINT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Default maximum bytes available to each guest linear memory during one invocation.
+pub const DEFAULT_TOOL_MEMORY_BYTES: usize = 16 * 1024 * 1024;
+/// Default maximum elements available to each guest table during one invocation.
+pub const DEFAULT_TOOL_TABLE_ELEMENTS: usize = 10_000;
+/// Default maximum core instances created in one invocation store.
+pub const DEFAULT_TOOL_INSTANCES: usize = 100;
+/// Default maximum linear memories created in one invocation store.
+pub const DEFAULT_TOOL_MEMORIES: usize = 10;
+/// Default maximum tables created in one invocation store.
+pub const DEFAULT_TOOL_TABLES: usize = 10;
+/// Default Wasmtime fuel available to one invocation.
+pub const DEFAULT_TOOL_FUEL: u64 = 10_000_000;
+/// Default wall-clock epoch deadline for one invocation.
+pub const DEFAULT_TOOL_EPOCH_DEADLINE: Duration = Duration::from_secs(1);
+
+const TOOL_EPOCH_TICK: Duration = Duration::from_millis(10);
 
 /// A capability class understood by version-one manifests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,6 +211,7 @@ impl PreparedToolArtifact {
 pub struct CompiledToolComponent {
     id: String,
     component: Component,
+    epoch_ticker: Arc<OnceLock<EpochTicker>>,
 }
 
 impl fmt::Debug for CompiledToolComponent {
@@ -209,6 +231,248 @@ impl CompiledToolComponent {
     /// Returns the inert compiled component for later controlled activation.
     pub fn component(&self) -> &Component {
         &self.component
+    }
+}
+
+/// Per-invocation Wasmtime resource policy for a component-backed tool.
+///
+/// Limits are implementation policy rather than part of the guest ABI. A fresh store receives
+/// this complete policy before each instantiation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolExecutionLimits {
+    pub max_memory_bytes: usize,
+    pub max_table_elements: usize,
+    pub max_instances: usize,
+    pub max_memories: usize,
+    pub max_tables: usize,
+    pub fuel: u64,
+    pub epoch_deadline: Duration,
+}
+
+impl Default for ToolExecutionLimits {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: DEFAULT_TOOL_MEMORY_BYTES,
+            max_table_elements: DEFAULT_TOOL_TABLE_ELEMENTS,
+            max_instances: DEFAULT_TOOL_INSTANCES,
+            max_memories: DEFAULT_TOOL_MEMORIES,
+            max_tables: DEFAULT_TOOL_TABLES,
+            fuel: DEFAULT_TOOL_FUEL,
+            epoch_deadline: DEFAULT_TOOL_EPOCH_DEADLINE,
+        }
+    }
+}
+
+/// An inert kernel tool adapter around one compiled no-import component.
+pub struct ComponentTool {
+    id: ToolId,
+    component: Component,
+    epoch_ticker: Arc<OnceLock<EpochTicker>>,
+    limits: ToolExecutionLimits,
+}
+
+impl fmt::Debug for ComponentTool {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ComponentTool")
+            .field("id", &self.id)
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ComponentTool {
+    /// Adapts an inert compiled component using the default per-invocation resource policy.
+    pub fn new(component: CompiledToolComponent) -> Result<Self, ComponentToolConstructionError> {
+        Self::with_limits(component, ToolExecutionLimits::default())
+    }
+
+    /// Adapts an inert compiled component using an explicit per-invocation resource policy.
+    pub fn with_limits(
+        component: CompiledToolComponent,
+        limits: ToolExecutionLimits,
+    ) -> Result<Self, ComponentToolConstructionError> {
+        let id = ToolId::new(component.id.clone())
+            .map_err(|source| ComponentToolConstructionError { source })?;
+        Ok(Self {
+            id,
+            component: component.component,
+            epoch_ticker: component.epoch_ticker,
+            limits,
+        })
+    }
+
+    pub fn limits(&self) -> ToolExecutionLimits {
+        self.limits
+    }
+}
+
+/// A compiled manifest ID that cannot be represented by the kernel tool protocol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentToolConstructionError {
+    source: ToolIdError,
+}
+
+impl fmt::Display for ComponentToolConstructionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("compiled component has an invalid tool ID")
+    }
+}
+
+impl Error for ComponentToolConstructionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// A typed failure from one isolated component invocation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolComponentInvocationError {
+    Input { source: serde_json::Error },
+    Execution { source: wasmtime::Error },
+    Guest { source: GuestToolError },
+    Output { source: serde_json::Error },
+}
+
+impl fmt::Display for ToolComponentInvocationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input { .. } => formatter.write_str("failed to serialize tool input as JSON"),
+            Self::Execution { .. } => formatter.write_str("component tool execution failed"),
+            Self::Guest { source } => {
+                write!(formatter, "component tool returned an error: {source}")
+            }
+            Self::Output { .. } => formatter.write_str("component tool returned invalid JSON"),
+        }
+    }
+}
+
+impl Error for ToolComponentInvocationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Input { source } | Self::Output { source } => Some(source),
+            Self::Execution { source } => Some(source.as_ref()),
+            Self::Guest { source } => Some(source),
+        }
+    }
+}
+
+/// Untrusted diagnostic text returned through the guest ABI's error case.
+#[derive(Debug)]
+pub struct GuestToolError {
+    diagnostic: String,
+}
+
+impl GuestToolError {
+    pub fn diagnostic(&self) -> &str {
+        &self.diagnostic
+    }
+}
+
+impl fmt::Display for GuestToolError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.diagnostic)
+    }
+}
+
+impl Error for GuestToolError {}
+
+impl Tool for ComponentTool {
+    fn id(&self) -> &ToolId {
+        &self.id
+    }
+
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::Pure
+    }
+
+    fn invoke(&mut self, input: &serde_json::Value) -> Result<serde_json::Value, ToolError> {
+        self.invoke_component(input).map_err(ToolError::new)
+    }
+}
+
+impl ComponentTool {
+    fn invoke_component(
+        &self,
+        input: &serde_json::Value,
+    ) -> Result<serde_json::Value, ToolComponentInvocationError> {
+        let input = serde_json::to_string(input)
+            .map_err(|source| ToolComponentInvocationError::Input { source })?;
+        let engine = self.component.engine();
+        let mut store = Store::new(engine, self.store_limits());
+        store.limiter(|limits| limits);
+        store
+            .set_fuel(self.limits.fuel)
+            .map_err(|source| ToolComponentInvocationError::Execution { source })?;
+        self.epoch_ticker
+            .get_or_init(|| EpochTicker::start(engine.clone()));
+        store.set_epoch_deadline(epoch_ticks(self.limits.epoch_deadline));
+
+        let linker = Linker::new(engine);
+        let instance = linker
+            .instantiate(&mut store, &self.component)
+            .map_err(|source| ToolComponentInvocationError::Execution { source })?;
+        let invoke = instance
+            .get_typed_func::<(String,), (Result<String, String>,)>(&mut store, "invoke")
+            .map_err(|source| ToolComponentInvocationError::Execution { source })?;
+        let (result,) = invoke
+            .call(&mut store, (input,))
+            .map_err(|source| ToolComponentInvocationError::Execution { source })?;
+        let output = result.map_err(|diagnostic| ToolComponentInvocationError::Guest {
+            source: GuestToolError { diagnostic },
+        })?;
+        serde_json::from_str(&output)
+            .map_err(|source| ToolComponentInvocationError::Output { source })
+    }
+
+    fn store_limits(&self) -> StoreLimits {
+        StoreLimitsBuilder::new()
+            .memory_size(self.limits.max_memory_bytes)
+            .table_elements(self.limits.max_table_elements)
+            .instances(self.limits.max_instances)
+            .memories(self.limits.max_memories)
+            .tables(self.limits.max_tables)
+            .trap_on_grow_failure(true)
+            .build()
+    }
+}
+
+fn epoch_ticks(deadline: Duration) -> u64 {
+    deadline
+        .as_nanos()
+        .div_ceil(TOOL_EPOCH_TICK.as_nanos())
+        .clamp(1, u64::MAX.into()) as u64
+}
+
+#[derive(Debug)]
+struct EpochTicker {
+    cancel: mpsc::Sender<()>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl EpochTicker {
+    fn start(engine: Engine) -> Self {
+        let (cancel, receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            while let Err(mpsc::RecvTimeoutError::Timeout) = receiver.recv_timeout(TOOL_EPOCH_TICK)
+            {
+                engine.increment_epoch();
+            }
+        });
+        Self {
+            cancel,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for EpochTicker {
+    fn drop(&mut self) {
+        let _ = self.cancel.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -533,8 +797,11 @@ pub fn compile_tool_components(
 ) -> Result<Vec<CompiledToolComponent>, ToolComponentCompilationError> {
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.consume_fuel(true);
+    config.epoch_interruption(true);
     let engine =
         Engine::new(&config).map_err(|source| ToolComponentCompilationError::Engine { source })?;
+    let epoch_ticker = Arc::new(OnceLock::new());
     let mut compiled = Vec::with_capacity(artifacts.len());
 
     for artifact in artifacts {
@@ -551,7 +818,11 @@ pub fn compile_tool_components(
                 source,
             }
         })?;
-        compiled.push(CompiledToolComponent { id, component });
+        compiled.push(CompiledToolComponent {
+            id,
+            component,
+            epoch_ticker: Arc::clone(&epoch_ticker),
+        });
     }
 
     Ok(compiled)
