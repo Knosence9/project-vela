@@ -61,9 +61,19 @@ Preparation does not compile or validate a WebAssembly component, mutate a regis
 
 `compile_tool_components(artifacts)` is the inert compiler boundary for prepared tools. It creates a Wasmtime engine with the Component Model explicitly enabled and compiles binary component bytes without Wasmtime's text-format support. Every component must have no top-level imports and exactly one top-level export: the synchronous function `invoke(input: string) -> result<string, string>` specified structurally by `vela:extension/tool@0.1.0`. Core modules, malformed bytes, imports, missing or additional exports, and incompatible parameter or result types fail closed.
 
-Success returns owned `CompiledToolComponent` values in artifact input order, preserving exact IDs. Compilation is all-or-nothing and creates no store or instance, so it cannot call a guest export. Engine and binary-compilation failures preserve the Wasmtime error source; structural ABI failures preserve a typed `ToolComponentAbiError`; artifact-specific failures expose the exact ID. The compiled component remains inert for a later controlled activation boundary.
+Success returns owned `CompiledToolComponent` values in artifact input order, preserving exact IDs. Compilation is all-or-nothing and creates no store or instance, so it cannot call a guest export. Engine and binary-compilation failures preserve the Wasmtime error source; structural ABI failures preserve a typed `ToolComponentAbiError`; artifact-specific failures expose the exact ID. Each compiled component remains inert until explicitly consumed by the adapter described below; adapter construction is inert as well.
 
-Compilation does not instantiate components, register adapters, mutate a tool registry, authorize invocations, validate JSON payloads, apply execution fuel or epoch limits, persist state, or expose WASI or other host imports. Those remain later activation and invocation work.
+Compilation itself does not instantiate components, register adapters, mutate a tool registry, authorize invocations, validate JSON payloads, apply per-invocation limits, persist state, or expose WASI or other host imports. The adapter below owns invocation behavior; registration and activation remain separate work.
+
+## Tool component invocation
+
+`ComponentTool::new(compiled)` adapts one inert `CompiledToolComponent` to the kernel `Tool` contract. Construction preserves the exact manifest ID as `ToolId`, classifies version-one components as `ToolEffect::Pure`, and creates no store or instance. The `id()` and `effect()` accessors likewise call no guest code. Registration and root-to-registry activation remain separate work, so callers retain the existing kernel authorization boundary and must invoke an adapter only through that boundary.
+
+Every authorized `invoke` serializes the caller-owned `serde_json::Value`, creates a fresh Wasmtime store and no-import component instance, calls the exact synchronous ABI once, and discards all guest state afterward. A successful guest string must parse as exactly one JSON value. Guest `err(string)` diagnostics, malformed successful JSON, instantiation failures, traps, fuel exhaustion, epoch interruption, and resource-limit failures become sourced `ToolError` failures without retry or persistence. No WASI or other host imports are linked.
+
+The default policy permits at most 16 MiB per linear memory, 10,000 elements per table, 100 core instances, 10 linear memories, 10 tables, and 10,000,000 fuel units per invocation. A shared 10 ms engine ticker enforces a one-second epoch deadline without allowing one invocation's private timer to shorten another invocation's configured deadline. `ToolExecutionLimits` makes this implementation policy explicit and replaceable at adapter construction; these values are not part of `vela:extension/tool@0.1.0`.
+
+Invocation does not register adapters, activate a selected batch, authorize itself, retry, persist guest diagnostics or outputs, reuse a store or instance, expose broader effects, or grant host capabilities. Atomic root-to-registry activation remains the next boundary.
 
 ## Ownership and trust boundary
 
@@ -71,4 +81,4 @@ The caller chooses each manifest path or the one extension root. Successful stan
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, adapter registration, skill or workflow parsing, activation, automatic refresh or reload, filesystem watching, config integration, execution, tool authorization, invocation resource limits, persistence, or migration. A successful registry selection, kind-constrained selection, or kind projection records enablement intent only and is not activation or permission.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, adapter registration, skill or workflow parsing, activation, automatic refresh or reload, filesystem watching, config integration, tool authorization, persistence, or migration. A successful registry selection, kind-constrained selection, or kind projection records enablement intent only and is not activation or permission.
