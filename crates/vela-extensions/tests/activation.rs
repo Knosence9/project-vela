@@ -4,13 +4,14 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 use vela_extensions::{
     ExtensionKind, ExtensionRegistry, ToolActivationError, ToolComponentInvocationError,
-    ToolDeactivationError, ToolExecutionLimits, activate_tool_selection,
-    activate_tool_selection_with_limits, deactivate_tool_selection,
+    ToolDeactivationError, ToolExecutionLimits, ToolReplacementError, activate_tool_selection,
+    activate_tool_selection_with_limits, deactivate_tool_selection, replace_tool_selection,
+    replace_tool_selection_with_limits,
 };
 use vela_kernel::tool::{
     PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationError,
     ToolRegistry, ToolRegistryError, ToolRegistryInvocationError, ToolRegistryRemovalError,
-    ToolRequest,
+    ToolRegistryReplacementError, ToolRequest,
 };
 
 const ECHO_COMPONENT: &str = r#"
@@ -231,6 +232,7 @@ fn empty_selection_is_a_noop() {
         },
     )
     .expect("empty activation");
+    replace_tool_selection(root.path(), &selection, &mut tools).expect("empty replacement");
     deactivate_tool_selection(&selection, &mut tools).expect("empty deactivation");
 
     assert_eq!(tools.metadata().len(), 1);
@@ -315,6 +317,144 @@ fn non_tool_selection_cannot_deactivate_a_same_id_adapter() {
     assert_eq!(tools.metadata()[0].id().as_str(), "shared.id");
 }
 
+#[test]
+fn selected_active_tools_are_replaced_atomically_without_running_guests() {
+    let root = tempdir().expect("temporary extension root");
+    write_tool(
+        root.path(),
+        "alpha",
+        "alpha.tool",
+        &start_trapping_component(),
+    );
+    let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool"])
+        .expect("tool selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new("alpha.tool", json!({"adapter": "old"})))
+        .expect("seed old adapter");
+
+    replace_tool_selection_with_limits(
+        root.path(),
+        &selection,
+        &mut tools,
+        ToolExecutionLimits::default(),
+    )
+    .expect("atomic replacement");
+
+    let error = tools
+        .invoke(
+            &ToolId::new("alpha.tool").expect("tool ID"),
+            &mut Allow,
+            &json!({"adapter": "new"}),
+        )
+        .expect_err("the newly installed guest must trap only when later invoked");
+    assert!(matches!(
+        error,
+        ToolRegistryInvocationError::Invocation(ToolInvocationError::Tool { .. })
+    ));
+}
+
+#[test]
+fn selected_tool_replacement_applies_explicit_limits_only_on_later_invocation() {
+    let root = tempdir().expect("temporary extension root");
+    write_tool(root.path(), "limited", "limited.tool", ECHO_COMPONENT);
+    let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = extensions
+        .select_kind(ExtensionKind::Tool, ["limited.tool"])
+        .expect("tool selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new("limited.tool", json!({"adapter": "old"})))
+        .expect("seed old adapter");
+
+    replace_tool_selection_with_limits(
+        root.path(),
+        &selection,
+        &mut tools,
+        ToolExecutionLimits {
+            max_instances: 0,
+            ..ToolExecutionLimits::default()
+        },
+    )
+    .expect("restrictive limits must not instantiate during replacement");
+
+    let error = tools
+        .invoke(
+            &ToolId::new("limited.tool").expect("tool ID"),
+            &mut Allow,
+            &json!(null),
+        )
+        .expect_err("replacement invocation must receive the explicit limit");
+    let ToolRegistryInvocationError::Invocation(ToolInvocationError::Tool { error, .. }) = error
+    else {
+        panic!("unexpected registry invocation error: {error:?}");
+    };
+    assert!(matches!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<ToolComponentInvocationError>()),
+        Some(ToolComponentInvocationError::Execution { .. })
+    ));
+}
+
+#[test]
+fn failed_selected_tool_replacement_preserves_the_old_invocable_batch() {
+    for (case, component) in [("invalid", "not a component"), ("missing", ECHO_COMPONENT)] {
+        let root = tempdir().expect("temporary extension root");
+        write_tool(root.path(), "alpha", "alpha.tool", component);
+        let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
+        let selection = extensions
+            .select_kind(ExtensionKind::Tool, ["alpha.tool"])
+            .expect("tool selection");
+        let mut tools = ToolRegistry::new();
+        if case == "invalid" {
+            tools
+                .register(MarkerTool::new("alpha.tool", json!({"adapter": "old"})))
+                .expect("seed old adapter");
+        } else {
+            tools
+                .register(MarkerTool::new("keep.tool", json!({"adapter": "keep"})))
+                .expect("seed unrelated adapter");
+        }
+
+        let error = replace_tool_selection(root.path(), &selection, &mut tools)
+            .expect_err("replacement must fail closed");
+
+        match case {
+            "invalid" => assert!(matches!(error, ToolReplacementError::Compilation { .. })),
+            "missing" => assert!(matches!(
+                error,
+                ToolReplacementError::Registry {
+                    source: ToolRegistryReplacementError::NotFound { ref tool_id }
+                } if tool_id.as_str() == "alpha.tool"
+            )),
+            _ => unreachable!("fixed cases"),
+        }
+        let existing_id = if case == "invalid" {
+            "alpha.tool"
+        } else {
+            "keep.tool"
+        };
+        let expected = if case == "invalid" {
+            json!({"adapter": "old"})
+        } else {
+            json!({"adapter": "keep"})
+        };
+        assert_eq!(
+            tools
+                .invoke(
+                    &ToolId::new(existing_id).expect("tool ID"),
+                    &mut Allow,
+                    &json!(null),
+                )
+                .expect("old adapter remains invocable"),
+            expected
+        );
+    }
+}
+
 fn write_tool(root: &std::path::Path, package_name: &str, id: &str, component: &str) {
     let package = root.join(package_name);
     fs::create_dir(&package).expect("create package");
@@ -365,5 +505,33 @@ impl Tool for DummyTool {
 
     fn invoke(&mut self, input: &Value) -> Result<Value, ToolError> {
         Ok(input.clone())
+    }
+}
+
+struct MarkerTool {
+    id: ToolId,
+    output: Value,
+}
+
+impl MarkerTool {
+    fn new(id: &str, output: Value) -> Self {
+        Self {
+            id: ToolId::new(id).expect("tool ID"),
+            output,
+        }
+    }
+}
+
+impl Tool for MarkerTool {
+    fn id(&self) -> &ToolId {
+        &self.id
+    }
+
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::Pure
+    }
+
+    fn invoke(&mut self, _input: &Value) -> Result<Value, ToolError> {
+        Ok(self.output.clone())
     }
 }

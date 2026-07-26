@@ -8,7 +8,8 @@ use vela_kernel::{
         DurableToolInvocationError, DurableToolRegistryInvocationError, PermissionDecision, Tool,
         ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId, ToolInvocationStatus,
         ToolInvocationStore, ToolInvocationStoreError, ToolRegistry, ToolRegistryError,
-        ToolRegistryInvocationError, ToolRegistryRemovalError, ToolRequest,
+        ToolRegistryInvocationError, ToolRegistryRemovalError, ToolRegistryReplacementError,
+        ToolRequest,
     },
 };
 
@@ -305,6 +306,126 @@ fn batch_unregistration_rejects_missing_and_duplicate_ids_without_mutation() {
                 .collect::<Vec<_>>(),
             vec!["tool.alpha", "tool.keep"]
         );
+    }
+}
+
+#[test]
+fn batch_replacement_is_atomic_and_preserves_unrelated_adapters() {
+    let old_alpha_calls = Rc::new(Cell::new(0));
+    let old_zeta_calls = Rc::new(Cell::new(0));
+    let new_alpha_calls = Rc::new(Cell::new(0));
+    let new_zeta_calls = Rc::new(Cell::new(0));
+    let keep_calls = Rc::new(Cell::new(0));
+    let mut registry = ToolRegistry::new();
+    for (id, calls) in [
+        ("tool.alpha", old_alpha_calls.clone()),
+        ("tool.keep", keep_calls.clone()),
+        ("tool.zeta", old_zeta_calls.clone()),
+    ] {
+        registry
+            .register(FakeTool::new(id, ToolEffect::Pure, calls))
+            .unwrap();
+    }
+
+    registry
+        .replace_all([
+            FakeTool::new(
+                "tool.zeta",
+                ToolEffect::ExternalRead,
+                new_zeta_calls.clone(),
+            ),
+            FakeTool::new(
+                "tool.alpha",
+                ToolEffect::ExternalWrite,
+                new_alpha_calls.clone(),
+            ),
+        ])
+        .unwrap();
+    registry.replace_all(Vec::<FakeTool>::new()).unwrap();
+
+    assert_eq!(
+        registry
+            .metadata()
+            .iter()
+            .map(|metadata| (metadata.id().as_str(), metadata.effect()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("tool.alpha", ToolEffect::ExternalWrite),
+            ("tool.keep", ToolEffect::Pure),
+            ("tool.zeta", ToolEffect::ExternalRead),
+        ]
+    );
+    for id in ["tool.alpha", "tool.keep", "tool.zeta"] {
+        registry
+            .invoke(
+                &ToolId::new(id).unwrap(),
+                &mut RecordingAuthorizer::new(PermissionDecision::Allow),
+                &json!(null),
+            )
+            .unwrap();
+    }
+    assert_eq!(old_alpha_calls.get(), 0);
+    assert_eq!(old_zeta_calls.get(), 0);
+    assert_eq!(new_alpha_calls.get(), 1);
+    assert_eq!(new_zeta_calls.get(), 1);
+    assert_eq!(keep_calls.get(), 1);
+}
+
+#[test]
+fn batch_replacement_rejects_missing_and_duplicate_ids_without_mutation() {
+    for (replacements, expected) in [
+        (
+            vec!["tool.zeta", "tool.beta"],
+            ToolRegistryReplacementError::NotFound {
+                tool_id: ToolId::new("tool.beta").unwrap(),
+            },
+        ),
+        (
+            vec!["tool.missing", "tool.alpha", "tool.alpha"],
+            ToolRegistryReplacementError::DuplicateId {
+                tool_id: ToolId::new("tool.alpha").unwrap(),
+            },
+        ),
+        (
+            vec!["tool.zeta", "tool.zeta", "tool.alpha", "tool.alpha"],
+            ToolRegistryReplacementError::DuplicateId {
+                tool_id: ToolId::new("tool.alpha").unwrap(),
+            },
+        ),
+    ] {
+        let original_calls = Rc::new(Cell::new(0));
+        let replacement_calls = Rc::new(Cell::new(0));
+        let mut registry = ToolRegistry::new();
+        for id in ["tool.alpha", "tool.keep"] {
+            registry
+                .register(FakeTool::new(id, ToolEffect::Pure, original_calls.clone()))
+                .unwrap();
+        }
+
+        let error =
+            registry
+                .replace_all(replacements.into_iter().map(|id| {
+                    FakeTool::new(id, ToolEffect::Destructive, replacement_calls.clone())
+                }))
+                .unwrap_err();
+
+        assert_eq!(error, expected);
+        assert!(error.source().is_none());
+        assert!(
+            registry
+                .metadata()
+                .iter()
+                .all(|metadata| metadata.effect() == ToolEffect::Pure)
+        );
+        registry
+            .invoke(
+                &ToolId::new("tool.alpha").unwrap(),
+                &mut RecordingAuthorizer::new(PermissionDecision::Allow),
+                &json!(null),
+            )
+            .unwrap();
+        assert_eq!(original_calls.get(), 1);
+        assert_eq!(replacement_calls.get(), 0);
     }
 }
 
