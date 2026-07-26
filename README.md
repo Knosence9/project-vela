@@ -162,6 +162,7 @@ The first milestone is the **evidence loop**:
 32. Validate portable extension-local entrypoint references without resolving or activating them. ✅
 33. Validate discovered entrypoint targets as extension-local regular files without reading or activating them. ✅
 34. Build immutable discovered extension registry snapshots with exact-ID lookup. ✅
+35. Compare immutable extension registry snapshots deterministically without activation. ✅
 
 ## Project documents
 

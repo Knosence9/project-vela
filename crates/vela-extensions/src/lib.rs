@@ -4,7 +4,7 @@
 //! ownership of path selection, discovery, lifecycle, execution, and policy.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt, fs, io,
     io::Read,
@@ -137,6 +137,20 @@ pub struct ExtensionRegistry {
     indices_by_id: BTreeMap<String, usize>,
 }
 
+/// One exact-ID difference between two immutable registry snapshots.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtensionRegistryChange<'a> {
+    /// The extension exists only in the current snapshot.
+    Added(&'a DiscoveredExtension),
+    /// The extension exists only in the previous snapshot.
+    Removed(&'a DiscoveredExtension),
+    /// The exact ID exists in both snapshots, but its path or manifest changed.
+    Changed {
+        previous: &'a DiscoveredExtension,
+        current: &'a DiscoveredExtension,
+    },
+}
+
 impl ExtensionRegistry {
     /// Discovers one extension root and owns the complete validated snapshot.
     pub fn discover(root: impl AsRef<Path>) -> Result<Self, ExtensionDiscoveryError> {
@@ -162,6 +176,30 @@ impl ExtensionRegistry {
     /// Enumerates the snapshot in deterministic manifest-path order.
     pub fn extensions(&self) -> impl ExactSizeIterator<Item = &DiscoveredExtension> {
         self.extensions.iter()
+    }
+
+    /// Compares this current snapshot with a previous snapshot in exact-ID order.
+    ///
+    /// Comparison is pure: it performs no filesystem access and changes neither registry.
+    pub fn changes_from<'a>(&'a self, previous: &'a Self) -> Vec<ExtensionRegistryChange<'a>> {
+        let ids = self
+            .indices_by_id
+            .keys()
+            .chain(previous.indices_by_id.keys())
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+
+        ids.into_iter()
+            .filter_map(|id| match (previous.get(id), self.get(id)) {
+                (None, Some(current)) => Some(ExtensionRegistryChange::Added(current)),
+                (Some(previous), None) => Some(ExtensionRegistryChange::Removed(previous)),
+                (Some(previous), Some(current)) if previous != current => {
+                    Some(ExtensionRegistryChange::Changed { previous, current })
+                }
+                (Some(_), Some(_)) => None,
+                (None, None) => unreachable!("ID originated in one registry"),
+            })
+            .collect()
     }
 }
 
