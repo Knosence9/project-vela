@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, error::Error, fmt, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -222,6 +227,29 @@ impl ToolRegistry {
             return Err(ToolRegistryError::DuplicateId { tool_id });
         }
         self.tools.insert(tool_id, Box::new(tool));
+        Ok(())
+    }
+
+    /// Registers one homogeneous batch atomically without replacing existing adapters.
+    ///
+    /// Every ID is inspected before the registry is mutated. A collision with either an
+    /// existing adapter or an earlier adapter in the batch leaves the registry unchanged.
+    pub fn register_all<T, I>(&mut self, tools: I) -> Result<(), ToolRegistryError>
+    where
+        T: Tool + 'static,
+        I: IntoIterator<Item = T>,
+    {
+        let tools = tools.into_iter().collect::<Vec<_>>();
+        let mut batch_ids = BTreeSet::new();
+        for tool in &tools {
+            let tool_id = tool.id().clone();
+            if self.tools.contains_key(&tool_id) || !batch_ids.insert(tool_id.clone()) {
+                return Err(ToolRegistryError::DuplicateId { tool_id });
+            }
+        }
+        for tool in tools {
+            self.tools.insert(tool.id().clone(), Box::new(tool));
+        }
         Ok(())
     }
 

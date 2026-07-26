@@ -24,7 +24,9 @@ use std::{
 #[cfg(unix)]
 use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, statat};
 use serde::Deserialize;
-use vela_kernel::tool::{Tool, ToolEffect, ToolError, ToolId, ToolIdError};
+use vela_kernel::tool::{
+    Tool, ToolEffect, ToolError, ToolId, ToolIdError, ToolRegistry, ToolRegistryError,
+};
 use wasmtime::component::{
     Component, Linker,
     types::{ComponentItem, Type},
@@ -322,6 +324,51 @@ impl fmt::Display for ComponentToolConstructionError {
 impl Error for ComponentToolConstructionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+/// A typed failure while atomically activating one selected tool batch.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolActivationError {
+    Preparation {
+        source: ExtensionPreparationError,
+    },
+    Compilation {
+        source: ToolComponentCompilationError,
+    },
+    Construction {
+        id: String,
+        source: ComponentToolConstructionError,
+    },
+    Registration {
+        source: ToolRegistryError,
+    },
+}
+
+impl fmt::Display for ToolActivationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Preparation { .. } => formatter.write_str("failed to prepare selected tools"),
+            Self::Compilation { .. } => formatter.write_str("failed to compile selected tools"),
+            Self::Construction { id, .. } => {
+                write!(formatter, "failed to construct selected tool {id}")
+            }
+            Self::Registration { .. } => {
+                formatter.write_str("failed to register selected tools atomically")
+            }
+        }
+    }
+}
+
+impl Error for ToolActivationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Preparation { source } => Some(source),
+            Self::Compilation { source } => Some(source),
+            Self::Construction { source, .. } => Some(source),
+            Self::Registration { source } => Some(source),
+        }
     }
 }
 
@@ -826,6 +873,36 @@ pub fn compile_tool_components(
     }
 
     Ok(compiled)
+}
+
+/// Revalidates, compiles, adapts, and atomically registers one selected tool batch.
+///
+/// Every stage completes for the full selection before the caller-owned registry is mutated.
+/// Compilation and adapter construction are inert; guest code can run only through a later
+/// registry invocation and its existing authorization boundary.
+pub fn activate_tool_selection(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+    registry: &mut ToolRegistry,
+) -> Result<(), ToolActivationError> {
+    if selection.is_empty() {
+        return Ok(());
+    }
+    let artifacts = prepare_tool_artifacts(root, selection)
+        .map_err(|source| ToolActivationError::Preparation { source })?;
+    let components = compile_tool_components(&artifacts)
+        .map_err(|source| ToolActivationError::Compilation { source })?;
+    let tools = components
+        .into_iter()
+        .map(|component| {
+            let id = component.id().to_owned();
+            ComponentTool::new(component)
+                .map_err(|source| ToolActivationError::Construction { id, source })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    registry
+        .register_all(tools)
+        .map_err(|source| ToolActivationError::Registration { source })
 }
 
 fn validate_tool_component_abi(

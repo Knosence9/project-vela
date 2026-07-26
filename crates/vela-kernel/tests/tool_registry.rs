@@ -203,6 +203,38 @@ fn duplicate_registration_is_rejected_without_replacing_the_original() {
 }
 
 #[test]
+fn batch_registration_rejects_internal_duplicates_atomically() {
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(FakeTool::new(
+            "tool.existing",
+            ToolEffect::Pure,
+            Rc::new(Cell::new(0)),
+        ))
+        .unwrap();
+
+    let error = registry
+        .register_all([
+            FakeTool::new("tool.first", ToolEffect::Pure, Rc::new(Cell::new(0))),
+            FakeTool::new("tool.first", ToolEffect::Destructive, Rc::new(Cell::new(0))),
+        ])
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ToolRegistryError::DuplicateId { ref tool_id } if tool_id.as_str() == "tool.first"
+    ));
+    assert_eq!(
+        registry
+            .metadata()
+            .iter()
+            .map(|metadata| metadata.id().as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool.existing"]
+    );
+}
+
+#[test]
 fn registry_invocation_preserves_allow_deny_and_sourced_failure_behavior() {
     let allowed_calls = Rc::new(Cell::new(0));
     let denied_calls = Rc::new(Cell::new(0));

@@ -47,7 +47,7 @@ A registry never watches or automatically rescans its root. Filesystem changes d
 
 Discovery is the installed metadata catalog; a selection records only in-memory enablement intent. To represent disabled intent for a subsequent operation, construct a new selection that omits the ID. A selection cannot outlive or rebind itself to its originating registry, and it does not persist configuration, authorize, load, execute, or activate a capability. Future activation must separately reopen an entrypoint through the descriptor-anchored boundary, and each future tool invocation must still receive caller-owned permission.
 
-The accepted first execution boundary is specified by [ADR-0003](adr/0003-tools-only-wasm-component-boundary.md). It limits activation to kind-constrained tool selections and no-import WebAssembly components. That decision does not make activation part of the current manifest or registry API; the executable loader remains separate follow-on work.
+The accepted first execution boundary is specified by [ADR-0003](adr/0003-tools-only-wasm-component-boundary.md). It limits activation to kind-constrained tool selections and no-import WebAssembly components. Selection remains inert until a caller explicitly invokes the separate activation operation below.
 
 ## Tool artifact preparation
 
@@ -63,17 +63,23 @@ Preparation does not compile or validate a WebAssembly component, mutate a regis
 
 Success returns owned `CompiledToolComponent` values in artifact input order, preserving exact IDs. Compilation is all-or-nothing and creates no store or instance, so it cannot call a guest export. Engine and binary-compilation failures preserve the Wasmtime error source; structural ABI failures preserve a typed `ToolComponentAbiError`; artifact-specific failures expose the exact ID. Each compiled component remains inert until explicitly consumed by the adapter described below; adapter construction is inert as well.
 
-Compilation itself does not instantiate components, register adapters, mutate a tool registry, authorize invocations, validate JSON payloads, apply per-invocation limits, persist state, or expose WASI or other host imports. The adapter below owns invocation behavior; registration and activation remain separate work.
+Compilation itself does not instantiate components, register adapters, mutate a tool registry, authorize invocations, validate JSON payloads, apply per-invocation limits, persist state, or expose WASI or other host imports. The adapter below owns invocation behavior; the activation operation owns registration.
 
 ## Tool component invocation
 
-`ComponentTool::new(compiled)` adapts one inert `CompiledToolComponent` to the kernel `Tool` contract. Construction preserves the exact manifest ID as `ToolId`, classifies version-one components as `ToolEffect::Pure`, and creates no store or instance. The `id()` and `effect()` accessors likewise call no guest code. Registration and root-to-registry activation remain separate work, so callers retain the existing kernel authorization boundary and must invoke an adapter only through that boundary.
+`ComponentTool::new(compiled)` adapts one inert `CompiledToolComponent` to the kernel `Tool` contract. Construction preserves the exact manifest ID as `ToolId`, classifies version-one components as `ToolEffect::Pure`, and creates no store or instance. The `id()` and `effect()` accessors likewise call no guest code. Callers retain the existing kernel authorization boundary and must invoke an adapter only through that boundary.
 
 Every authorized `invoke` serializes the caller-owned `serde_json::Value`, creates a fresh Wasmtime store and no-import component instance, calls the exact synchronous ABI once, and discards all guest state afterward. A successful guest string must parse as exactly one JSON value. Guest `err(string)` diagnostics, malformed successful JSON, instantiation failures, traps, fuel exhaustion, epoch interruption, and resource-limit failures become sourced `ToolError` failures without retry or persistence. No WASI or other host imports are linked.
 
 The default policy permits at most 16 MiB per linear memory, 10,000 elements per table, 100 core instances, 10 linear memories, 10 tables, and 10,000,000 fuel units per invocation. A shared 10 ms engine ticker enforces a one-second epoch deadline without allowing one invocation's private timer to shorten another invocation's configured deadline. `ToolExecutionLimits` makes this implementation policy explicit and replaceable at adapter construction; these values are not part of `vela:extension/tool@0.1.0`.
 
-Invocation does not register adapters, activate a selected batch, authorize itself, retry, persist guest diagnostics or outputs, reuse a store or instance, expose broader effects, or grant host capabilities. Atomic root-to-registry activation remains the next boundary.
+Invocation does not register adapters, activate a selected batch, authorize itself, retry, persist guest diagnostics or outputs, reuse a store or instance, expose broader effects, or grant host capabilities.
+
+## Atomic tool activation
+
+`activate_tool_selection(root, selection, registry)` composes preparation, compilation, inert adapter construction, and registration into the explicit root-to-registry boundary. It completes every pre-registration stage for the whole exact-ID selection before mutating the caller-owned `ToolRegistry`. The registry's homogeneous batch operation preflights collisions against existing adapters and within the batch before inserting anything, so every preparation, compilation, construction, or duplicate-ID failure leaves existing registry metadata and adapters unchanged. An empty selection succeeds without filesystem access or registry mutation.
+
+Activation errors identify the failed stage and preserve its typed source. Successful metadata is ordered by exact `ToolId`, every version-one adapter remains `Pure`, and neither compilation, adapter construction, metadata inspection, nor registration creates a store or instance. Guest code can run only through a later registry invocation after caller-owned authorization. Activation does not replace or remove adapters, persist configuration, enable hot reload, activate skills or workflows, expose host imports, or grant broader effects.
 
 ## Ownership and trust boundary
 
@@ -81,4 +87,4 @@ The caller chooses each manifest path or the one extension root. Successful stan
 
 ## Non-goals
 
-This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, adapter registration, skill or workflow parsing, activation, automatic refresh or reload, filesystem watching, config integration, tool authorization, persistence, or migration. A successful registry selection, kind-constrained selection, or kind projection records enablement intent only and is not activation or permission.
+This boundary does not provide recursive or multi-root scanning, cross-root duplicate detection or precedence, mutable extension registries or selection toggles, dependencies, persisted enable/disable configuration, lifecycle hooks, skill or workflow activation, automatic refresh or reload, filesystem watching, config integration, tool authorization, persistence, or migration. A successful registry selection, kind-constrained selection, or kind projection records enablement intent only and is not activation or permission.
