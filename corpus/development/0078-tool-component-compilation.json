@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compile exact tool components without activation",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/623 by compiling prepared bytes against the exact inert no-import tool component ABI.",
+    "acceptance_criteria": [
+      "Accept binary components implementing only synchronous invoke(string) returning result<string, string>.",
+      "Reject malformed bytes, core modules, imports, missing or extra exports, and incompatible signatures.",
+      "Preserve exact artifact IDs and caller input order with all-or-nothing typed failures.",
+      "Create no store or instance and call no guest export during compilation."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for the exact component compiler boundary.",
+      "outcome": "failure",
+      "diagnostic": "No compilation API or artifact-specific component compilation error existed.",
+      "patch": "Added tests requiring valid inert components and fail-closed handling of malformed, imported, structurally incompatible, and extra interface surface."
+    },
+    {
+      "summary": "Implemented narrowly featured inert Wasmtime compilation.",
+      "outcome": "success",
+      "diagnostic": "Structural Component Model validation can enforce the version 0.1.0 no-import world before any store, instance, adapter, or permission boundary exists.",
+      "patch": "Added Wasmtime Component Model compilation, exact top-level import and export checks, owned compiled artifacts, and typed source-preserving errors."
+    },
+    {
+      "summary": "Kept compilation independent from activation and invocation.",
+      "outcome": "success",
+      "diagnostic": "Components containing trapping code proved that binary compilation and ABI inspection do not instantiate or run guest exports.",
+      "patch": "Documented and tested the inert all-or-nothing compiler contract and deferred adapters, stores, resource policy, and registration."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now compiles prepared tools into owned inert components only when every artifact matches the exact no-import version 0.1.0 ABI.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --test manifest compilation_ --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30207891738 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/624", "status": "passed"},
+      {"command": "Pull request 624 squash merge cc3206a2de21b5052aba9db6e7bbce059e60db2a", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Compile and ABI validation can remain a completely inert boundary with no guest instance.",
+    "Rejecting all imports avoids creating an accidental ambient host capability contract.",
+    "Exact interface shape should reject both missing requirements and unsupported extra surface.",
+    "Artifact-specific typed errors preserve deterministic batch diagnostics without exposing a partial result."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/624"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

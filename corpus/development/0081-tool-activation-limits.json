@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Apply caller-selected limits during atomic tool activation",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/629 by applying one caller-selected resource policy uniformly across an atomically activated tool batch.",
+    "acceptance_criteria": [
+      "Expose an additive explicit-policy activation operation for one ToolExecutionLimits value.",
+      "Keep default activation API-compatible by delegating with default limits.",
+      "Preserve atomic registration, exact-ID ordering, revalidation, inert construction, and empty no-op behavior.",
+      "Apply restrictive limits only after authorization when invocation creates a fresh store."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for explicit activation policy.",
+      "outcome": "failure",
+      "diagnostic": "Atomic activation always used built-in defaults and exposed no activate_tool_selection_with_limits operation.",
+      "patch": "Added integration tests requiring explicit restrictive limits and an empty explicit-policy activation after removing the root."
+    },
+    {
+      "summary": "Implemented uniform caller-selected activation limits.",
+      "outcome": "success",
+      "diagnostic": "Constructing every inert adapter with one copied policy keeps batch semantics simple while allowing callers to tighten limits without bypassing atomic activation.",
+      "patch": "Added activate_tool_selection_with_limits and made default activation delegate with ToolExecutionLimits::default."
+    },
+    {
+      "summary": "Verified limits remain inert until authorized invocation.",
+      "outcome": "success",
+      "diagnostic": "A restrictive instance limit must not execute or reject a valid component during activation, but must fail when a later authorized invocation instantiates it.",
+      "patch": "Covered successful registration followed by resource-limited invocation failure and documented the uniform policy boundary."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can now apply one explicit resource policy uniformly during atomic activation while default behavior remains compatible and guest execution remains authorization-gated.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-extensions --test activation", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30214708288 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/630", "status": "passed"},
+      {"command": "Pull request 630 squash merge eab9ac3860bfeeaa48b55dea8b726fe5de8cfd5b", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Caller-selected policy should remain available at the highest safe atomic activation boundary.",
+    "One uniform batch policy avoids premature per-tool manifest configuration and reusable grants.",
+    "Restrictive execution policy belongs to fresh invocation stores, not inert compilation or registration.",
+    "API compatibility is simplest when the default operation delegates to the explicit-policy operation."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/630"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
