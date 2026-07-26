@@ -168,6 +168,21 @@ pub struct ExtensionSelection<'a> {
 }
 
 impl<'a> ExtensionSelection<'a> {
+    /// Projects this selection to one validated capability kind.
+    ///
+    /// The projected selection preserves exact-ID order and borrows the same registry records.
+    /// Projection performs no filesystem access, activation, authorization, or mutation.
+    pub fn of_kind(&self, kind: ExtensionKind) -> Self {
+        Self {
+            extensions: self
+                .extensions
+                .iter()
+                .copied()
+                .filter(|extension| extension.manifest().kind() == kind)
+                .collect(),
+        }
+    }
+
     /// Resolves one exact ID within this selection.
     pub fn get(&self, id: &str) -> Option<&'a DiscoveredExtension> {
         self.extensions
