@@ -26,6 +26,7 @@ use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, stat
 use serde::Deserialize;
 use vela_kernel::tool::{
     Tool, ToolEffect, ToolError, ToolId, ToolIdError, ToolRegistry, ToolRegistryError,
+    ToolRegistryRemovalError,
 };
 use wasmtime::component::{
     Component, Linker,
@@ -368,6 +369,37 @@ impl Error for ToolActivationError {
             Self::Compilation { source } => Some(source),
             Self::Construction { source, .. } => Some(source),
             Self::Registration { source } => Some(source),
+        }
+    }
+}
+
+/// A typed failure while atomically deactivating one selected tool batch.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolDeactivationError {
+    WrongKind { id: String, actual: ExtensionKind },
+    Registry { source: ToolRegistryRemovalError },
+}
+
+impl fmt::Display for ToolDeactivationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongKind { id, actual } => {
+                write!(
+                    formatter,
+                    "selected capability {id} is {actual:?}, not Tool"
+                )
+            }
+            Self::Registry { .. } => formatter.write_str("failed to unregister selected tools"),
+        }
+    }
+}
+
+impl Error for ToolDeactivationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::WrongKind { .. } => None,
+            Self::Registry { source } => Some(source),
         }
     }
 }
@@ -918,6 +950,31 @@ pub fn activate_tool_selection_with_limits(
     registry
         .register_all(tools)
         .map_err(|source| ToolActivationError::Registration { source })
+}
+
+/// Atomically removes the exact adapters named by one selected tool batch.
+///
+/// Deactivation performs no filesystem access, guest execution, or authorization. The immutable
+/// selection remains metadata and may be activated again only through the existing revalidation
+/// boundary.
+pub fn deactivate_tool_selection(
+    selection: &ExtensionSelection<'_>,
+    registry: &mut ToolRegistry,
+) -> Result<(), ToolDeactivationError> {
+    if let Some(extension) = selection
+        .extensions()
+        .find(|extension| extension.manifest().kind() != ExtensionKind::Tool)
+    {
+        return Err(ToolDeactivationError::WrongKind {
+            id: extension.manifest().id().to_owned(),
+            actual: extension.manifest().kind(),
+        });
+    }
+    registry
+        .unregister_all(selection.extensions().map(|extension| {
+            ToolId::new(extension.manifest().id()).expect("validated non-blank ID")
+        }))
+        .map_err(|source| ToolDeactivationError::Registry { source })
 }
 
 fn validate_tool_component_abi(

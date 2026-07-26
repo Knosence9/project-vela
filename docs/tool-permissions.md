@@ -52,7 +52,9 @@ Provider content, exact prior and subsequent tool input/output, and adapter erro
 
 ## In-memory registry
 
-`ToolRegistry` is a process-local owner and deterministic directory for extension-provided adapters. Registration uses each adapter's existing stable `ToolId`; duplicate IDs return `ToolRegistryError::DuplicateId` without replacing or invoking the original or duplicate adapter. There is deliberately no removal, replacement, alias, reload, or persistence policy.
+`ToolRegistry` is a process-local owner and deterministic directory for extension-provided adapters. Registration uses each adapter's existing stable `ToolId`; duplicate IDs return `ToolRegistryError::DuplicateId` without replacing or invoking the original or duplicate adapter.
+
+`ToolRegistry::unregister_all` atomically removes one caller-owned exact-ID batch. It preflights the entire request before mutation: the lexicographically first duplicate ID takes precedence over lookup, then the lexicographically first absent ID returns `ToolRegistryRemovalError::NotFound`. Either failure is source-free and leaves all adapters unchanged. Empty removal succeeds, and successful removal preserves every unrelated adapter. Mutable registry ownership prevents this synchronous operation from racing an invocation through the same registry; it does not cancel work already executing elsewhere. There is deliberately no replacement, alias, automatic reload, or persistence policy.
 
 `ToolRegistry::metadata` returns cloned `ToolMetadata` entries in ascending ID order, independent of registration order. Metadata contains only the adapter ID and declared maximum effect. Enumeration does not authorize or invoke an adapter.
 
@@ -95,4 +97,4 @@ Existing event families, session/task replay, the tool-free `AssistantProvider`,
 
 ## Non-goals
 
-This slice does not add a concrete provider integration, automatic multi-step provider/tool loop, durable tool-result transcript role, automatic or model-owned permission, persisted allow grants, reusable grants, registry persistence/removal/replacement/reload, JSON Schema publication, real filesystem/network/process/credential tools, session or attempt association, task-filtered discovery, a task-side invocation index, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.
+This slice does not add a concrete provider integration, automatic multi-step provider/tool loop, durable tool-result transcript role, automatic or model-owned permission, persisted allow grants, reusable grants, registry persistence/replacement/reload, JSON Schema publication, real filesystem/network/process/credential tools, session or attempt association, task-filtered discovery, a task-side invocation index, retries, timeout implementation, asynchronous execution, cooperative cancellation, sandboxing, isolation, rich invocation payload retention, deterministic verification ingestion, event migration, or identity/personality policy.
