@@ -681,6 +681,94 @@ fn registry_selection_fails_closed_for_duplicate_or_unknown_ids() {
 
 #[cfg(unix)]
 #[test]
+fn registry_selects_one_expected_kind_in_exact_id_order() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest_with_kind(root.path().join("zeta/extension.yaml"), "zeta.tool", "tool");
+    write_manifest_with_kind(
+        root.path().join("alpha/extension.yaml"),
+        "alpha.tool",
+        "tool",
+    );
+    write_manifest_with_kind(
+        root.path().join("skill/extension.yaml"),
+        "review.skill",
+        "skill",
+    );
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+
+    let tools = registry
+        .select_kind(ExtensionKind::Tool, ["zeta.tool", "alpha.tool"])
+        .expect("kind-constrained selection");
+
+    assert_eq!(
+        tools
+            .extensions()
+            .map(|extension| extension.manifest().id())
+            .collect::<Vec<_>>(),
+        ["alpha.tool", "zeta.tool"]
+    );
+    assert!(
+        registry
+            .select_kind(ExtensionKind::Workflow, std::iter::empty::<&str>())
+            .expect("empty kind-constrained selection")
+            .is_empty()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn kind_constrained_selection_fails_closed_with_deterministic_errors() {
+    let root = tempdir().expect("temporary extension root");
+    write_manifest_with_kind(root.path().join("tool/extension.yaml"), "zeta.tool", "tool");
+    write_manifest_with_kind(
+        root.path().join("skill/extension.yaml"),
+        "alpha.skill",
+        "skill",
+    );
+    let registry = ExtensionRegistry::discover(root.path()).expect("extension registry");
+
+    let duplicate = registry
+        .select_kind(
+            ExtensionKind::Tool,
+            ["zeta.tool", "zeta.tool", "alpha.skill", "alpha.skill"],
+        )
+        .expect_err("first duplicate takes precedence");
+    assert!(matches!(
+        duplicate,
+        ExtensionSelectionError::DuplicateId { ref id } if id == "alpha.skill"
+    ));
+
+    let mismatch = registry
+        .select_kind(ExtensionKind::Tool, ["zeta.tool", "alpha.skill"])
+        .expect_err("wrong kind");
+    assert!(matches!(
+        mismatch,
+        ExtensionSelectionError::KindMismatch {
+            ref id,
+            expected: ExtensionKind::Tool,
+            actual: ExtensionKind::Skill,
+        } if id == "alpha.skill"
+    ));
+    assert_eq!(
+        mismatch.to_string(),
+        "extension ID \"alpha.skill\" has kind Skill, expected Tool"
+    );
+    assert!(mismatch.source().is_none());
+
+    let unknown = registry
+        .select_kind(
+            ExtensionKind::Tool,
+            ["zeta.tool", "Alpha.missing", "alpha.skill"],
+        )
+        .expect_err("first exact ID lookup error");
+    assert!(matches!(
+        unknown,
+        ExtensionSelectionError::NotFound { ref id } if id == "Alpha.missing"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn selection_projects_capabilities_by_kind_in_exact_id_order() {
     let root = tempdir().expect("temporary extension root");
     write_manifest_with_kind(root.path().join("zeta/extension.yaml"), "zeta.tool", "tool");

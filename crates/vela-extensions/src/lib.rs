@@ -159,6 +159,12 @@ pub enum ExtensionSelectionError {
     DuplicateId { id: String },
     /// The requested exact ID does not exist in the registry snapshot.
     NotFound { id: String },
+    /// The requested exact ID exists, but has a different validated capability kind.
+    KindMismatch {
+        id: String,
+        expected: ExtensionKind,
+        actual: ExtensionKind,
+    },
 }
 
 /// An immutable caller selection borrowed from one registry snapshot.
@@ -242,6 +248,34 @@ impl ExtensionRegistry {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.select_with_kind(ids, None)
+    }
+
+    /// Resolves an all-or-nothing caller selection of one expected capability kind.
+    ///
+    /// Kind-constrained selection performs no filesystem access, activation, authorization, or
+    /// mutation. An existing ID of another kind is rejected rather than silently omitted.
+    pub fn select_kind<I, S>(
+        &self,
+        kind: ExtensionKind,
+        ids: I,
+    ) -> Result<ExtensionSelection<'_>, ExtensionSelectionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.select_with_kind(ids, Some(kind))
+    }
+
+    fn select_with_kind<I, S>(
+        &self,
+        ids: I,
+        expected_kind: Option<ExtensionKind>,
+    ) -> Result<ExtensionSelection<'_>, ExtensionSelectionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected_ids = BTreeSet::new();
         let mut duplicate_ids = BTreeSet::new();
         for id in ids {
@@ -258,8 +292,20 @@ impl ExtensionRegistry {
         let extensions = selected_ids
             .into_iter()
             .map(|id| {
-                self.get(&id)
-                    .ok_or(ExtensionSelectionError::NotFound { id })
+                let extension = self
+                    .get(&id)
+                    .ok_or_else(|| ExtensionSelectionError::NotFound { id: id.clone() })?;
+                let actual = extension.manifest().kind();
+                if let Some(expected) = expected_kind
+                    && actual != expected
+                {
+                    return Err(ExtensionSelectionError::KindMismatch {
+                        id,
+                        expected,
+                        actual,
+                    });
+                }
+                Ok(extension)
             })
             .collect::<Result<_, _>>()?;
         Ok(ExtensionSelection { extensions })
@@ -532,6 +578,14 @@ impl fmt::Display for ExtensionSelectionError {
                 )
             }
             Self::NotFound { id } => write!(formatter, "extension ID {id:?} was not found"),
+            Self::KindMismatch {
+                id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "extension ID {id:?} has kind {actual:?}, expected {expected:?}"
+            ),
         }
     }
 }
