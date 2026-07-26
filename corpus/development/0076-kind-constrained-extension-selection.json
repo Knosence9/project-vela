@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Fail closed on extension selection kind mismatch",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/615 by validating that caller-selected exact IDs all match one expected capability kind.",
+    "acceptance_criteria": [
+      "Return an immutable selection only when every requested record has the expected ExtensionKind.",
+      "Reject wrong-kind IDs with a typed source-free error containing exact ID, expected kind, and actual kind.",
+      "Preserve empty success, duplicate and absent-ID rejection, borrowed records, and exact-ID ordering.",
+      "Report the first deterministic error with duplicates preceding sorted lookup and kind validation."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for kind-constrained registry selection.",
+      "outcome": "failure",
+      "diagnostic": "The registry had generic selection and post-selection projection but no fail-closed API or typed mismatch error for one expected capability kind.",
+      "patch": "Added tests requiring select_kind, KindMismatch details, matching and empty success, duplicate and absent behavior, ordering, precedence, and source-free errors."
+    },
+    {
+      "summary": "Implemented deterministic fail-closed kind selection.",
+      "outcome": "success",
+      "diagnostic": "Validating each resolved record in sorted exact-ID order prevents a routing mismatch from becoming a silent omission.",
+      "patch": "Added ExtensionRegistry::select_kind, ExtensionSelectionError::KindMismatch, error formatting, docs, and milestone evidence."
+    },
+    {
+      "summary": "Refactored generic and constrained selection through one resolver.",
+      "outcome": "success",
+      "diagnostic": "Separate duplicate and lookup implementations could drift and violate the existing deterministic error contract.",
+      "patch": "Introduced one private optional-kind resolver shared by select and select_kind and retained focused behavior coverage."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now fails closed when exact-ID enablement intent is routed toward the wrong validated capability kind, without crossing activation or permission boundaries.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --locked in the pinned Nix environment", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30189862802 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/616", "status": "passed"},
+      {"command": "Pull request 616 squash merge 9829791a8a9feca94159baf853931e00188502cf", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Fail-closed kind validation prevents a caller routing error from becoming a silent filtered omission.",
+    "Typed mismatch errors should preserve exact identity and both sides of the expected-versus-actual contract.",
+    "Explicit error precedence makes equivalent invalid input deterministic regardless of request order.",
+    "Generic and constrained selection should share resolution logic so identity semantics cannot diverge."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/616"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

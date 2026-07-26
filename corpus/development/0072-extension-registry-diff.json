@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compare immutable extension registry snapshots",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/607 by comparing two already-discovered snapshots deterministically without filesystem access or activation.",
+    "acceptance_criteria": [
+      "Represent added, removed, and changed exact IDs explicitly with borrowed discovered records.",
+      "Order changes deterministically by exact caller-authored ID.",
+      "Treat a source-path or validated-manifest difference for the same ID as changed.",
+      "Return no changes for equal snapshots while preserving case and whitespace as identity."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for immutable snapshot comparison.",
+      "outcome": "failure",
+      "diagnostic": "ExtensionRegistry exposed discovery and lookup but had no change type or comparison operation.",
+      "patch": "Added focused tests requiring explicit added, removed, changed, equal, moved-path, ordering, and exact-ID behavior."
+    },
+    {
+      "summary": "Implemented pure deterministic registry comparison.",
+      "outcome": "success",
+      "diagnostic": "A sorted union of both exact-ID maps can classify changes without reopening the filesystem or mutating either snapshot.",
+      "patch": "Added ExtensionRegistryChange, changes_from, public documentation, and milestone evidence."
+    },
+    {
+      "summary": "Refined edge coverage and the public contract.",
+      "outcome": "success",
+      "diagnostic": "Path changes and case-or-whitespace-distinct IDs needed explicit coverage so comparison could not drift toward normalized identity.",
+      "patch": "Added path-change and exact-ID tests and clarified the non-activation and explicit-refresh boundaries."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now compare immutable extension registry snapshots as deterministic borrowed added, removed, and changed records without activation or refresh side effects.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --locked registry_", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30180986960 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/608", "status": "passed"},
+      {"command": "Pull request 608 squash merge b7fa0b4a5fcec137e3bba3fea2b221de2c443eab", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Snapshot comparison can stay independent of filesystem refresh and capability lifecycle policy.",
+    "A sorted union of exact identities makes both classification and output order deterministic.",
+    "Source path is part of a discovered extension record even when the manifest metadata is unchanged.",
+    "Identity-preserving comparisons must not trim, case-fold, or normalize caller-authored IDs."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/608"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Expose immutable typed extension selections",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/611 by replacing a raw borrowed vector with a selection type that records in-memory enablement intent.",
+    "acceptance_criteria": [
+      "Borrow selected records from exactly one immutable registry snapshot.",
+      "Expose deterministic exact-ID lookup, enumeration, length, and emptiness.",
+      "Preserve existing duplicate, absent-ID, all-or-nothing, and ordering behavior.",
+      "Keep selection distinct from activation, persisted configuration, and per-invocation permission."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for a typed borrowed selection.",
+      "outcome": "failure",
+      "diagnostic": "The raw Vec of borrowed records had no selection-specific exact lookup or enumeration contract.",
+      "patch": "Changed focused tests to require ExtensionSelection accessors for valid and empty selections."
+    },
+    {
+      "summary": "Implemented the minimal immutable selection view.",
+      "outcome": "success",
+      "diagnostic": "One exact-ID-sorted borrowed vector supports deterministic enumeration and binary-search lookup without a second index or mutable state.",
+      "patch": "Added ExtensionSelection with get, extensions, len, and is_empty and returned it from registry selection."
+    },
+    {
+      "summary": "Corrected lifecycle wording before merge.",
+      "outcome": "success",
+      "diagnostic": "The initial wording could imply an enduring enablement state even though the borrowed selection cannot survive or rebind to a replacement registry snapshot.",
+      "patch": "Clarified that disablement means constructing a new omission-based selection and that selection neither persists nor grants activation or permission."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now represents exact-ID selection as an immutable typed view borrowed from one registry snapshot, with deterministic lookup and explicit non-activating lifecycle semantics.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-extensions", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30185668654 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/612", "status": "passed"},
+      {"command": "Pull request 612 squash merge 44e7551e11c5bde7582f94a10d3e8dd7a404175d", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A domain type can state lifecycle and trust boundaries that a raw collection cannot express.",
+    "Sorted borrowed storage is sufficient for deterministic enumeration and exact lookup at this scale.",
+    "Omission in a newly constructed immutable selection is simpler than premature mutable toggle policy.",
+    "Enablement intent must remain distinct from activation and caller-owned per-invocation permission."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/612"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

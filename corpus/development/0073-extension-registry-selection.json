@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Select exact extension registry capabilities",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/609 by validating caller-selected exact IDs against one immutable snapshot before any activation boundary.",
+    "acceptance_criteria": [
+      "Resolve valid and empty selections without filesystem access or mutation.",
+      "Return borrowed records in exact-ID order independent of request order.",
+      "Reject duplicate and absent IDs with typed source-free errors and no partial result.",
+      "Preserve case and surrounding whitespace as identity-significant."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for exact-ID selection.",
+      "outcome": "failure",
+      "diagnostic": "The immutable registry supported individual lookup but had no all-or-nothing operation for validating a caller-owned set of capability IDs.",
+      "patch": "Added focused tests for valid, empty, reordered, duplicate, absent, and case-or-whitespace-distinct selections."
+    },
+    {
+      "summary": "Implemented fail-closed non-activating selection.",
+      "outcome": "success",
+      "diagnostic": "Sorting caller IDs in a set provides deterministic output while a separate duplicate set preserves explicit duplicate rejection.",
+      "patch": "Added ExtensionRegistry::select, typed duplicate and not-found errors, borrowed results, docs, and milestone evidence."
+    },
+    {
+      "summary": "Verified selection stayed outside lifecycle and permission boundaries.",
+      "outcome": "success",
+      "diagnostic": "Identity validation must not be described as loading, enablement, authorization, or reusable permission.",
+      "patch": "Clarified public documentation and non-goals while retaining source-free deterministic selection errors."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now validates exact caller-selected capability IDs against one immutable registry snapshot as an ordered all-or-nothing borrowed result without activation.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --test manifest registry_select", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30183315792 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/610", "status": "passed"},
+      {"command": "Pull request 610 squash merge 9b419394f7a35dbc97b58a7d6210bc3827995c83", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Caller-owned selection should validate identity before any loader or permission policy is introduced.",
+    "Duplicate requests are a distinct input error and should not disappear through set deduplication.",
+    "Deterministic ordering makes equivalent caller intent produce equivalent observable results.",
+    "Selecting installed metadata does not activate, authorize, or execute a capability."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/610"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Partition extension selections by validated kind",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/613 by projecting mixed immutable enablement intent toward separate tool, skill, and workflow lifecycle layers.",
+    "acceptance_criteria": [
+      "Project one existing selection by a caller-supplied validated ExtensionKind.",
+      "Preserve exact-ID order, lookup, length, and emptiness while borrowing the same registry records.",
+      "Return an empty selection when the requested kind is absent.",
+      "Perform no filesystem access, entrypoint loading, activation, authorization, or persistence."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for kind-based selection projection.",
+      "outcome": "failure",
+      "diagnostic": "ExtensionSelection exposed mixed records but had no operation for routing them by validated tool, skill, or workflow kind.",
+      "patch": "Added focused tests requiring mixed-kind filtering, exact-ID order and lookup, wrong-kind absence, and empty projections."
+    },
+    {
+      "summary": "Implemented immutable kind projection.",
+      "outcome": "success",
+      "diagnostic": "Filtering the existing sorted borrowed vector preserves every selection accessor contract without cloning discovered records.",
+      "patch": "Added ExtensionSelection::of_kind and documented its routing-intent boundary."
+    },
+    {
+      "summary": "Refactored to reuse the existing selection abstraction.",
+      "outcome": "success",
+      "diagnostic": "A second kind-view type would duplicate lookup, enumeration, length, and emptiness behavior without adding a stronger invariant.",
+      "patch": "Returned ExtensionSelection directly and expanded mixed and empty projection coverage."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now partition immutable selected extension metadata by validated capability kind while preserving borrowed deterministic behavior and unchanged activation boundaries.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --locked in the pinned Nix environment", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30188153063 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/614", "status": "passed"},
+      {"command": "Pull request 614 squash merge a04eb8810f498cf8b1d5ef8646142eea54a280fc", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Shared installed metadata can be routed toward separate capability lifecycles without activating it.",
+    "Filtering an already sorted immutable selection naturally preserves deterministic exact-ID order.",
+    "Reusing a proven selection abstraction is preferable when a new wrapper would add no invariant.",
+    "Projection silently omits other kinds, so stricter caller intent needs a separate fail-closed operation."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/614"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
