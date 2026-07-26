@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Activate selected tool components atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/627 by composing preparation, compilation, inert adapter construction, and caller-owned registry registration.",
+    "acceptance_criteria": [
+      "Expose one root-to-registry operation without invoking guest code.",
+      "Commit deterministic exact-ID pure tools only after the entire selected batch succeeds.",
+      "Leave the registry unchanged on preparation, compilation, construction, or duplicate-ID failure.",
+      "Make empty selection a filesystem-free successful no-op."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for atomic root-to-registry activation.",
+      "outcome": "failure",
+      "diagnostic": "No activation operation or staged activation error existed, and the kernel registry had no atomic batch registration primitive.",
+      "patch": "Added activation tests for success, rollback, exact metadata, unsupported kinds, duplicates, and inert guest behavior plus registry batch tests."
+    },
+    {
+      "summary": "Implemented staged all-or-nothing activation.",
+      "outcome": "success",
+      "diagnostic": "Completing preparation, compilation, and adapter construction before a preflighted homogeneous registry batch preserves existing registry state on every failure.",
+      "patch": "Added activate_tool_selection, ToolActivationError, ToolRegistry::register_all, docs, and milestone evidence."
+    },
+    {
+      "summary": "Fixed empty activation after independent review.",
+      "outcome": "success",
+      "diagnostic": "The first implementation called preparation for an empty selection and therefore touched a root that the contract required it to ignore.",
+      "patch": "Added a RED regression that removes the root before empty activation, then returned early before filesystem access."
+    }
+  ],
+  "outcome": {
+    "summary": "Selected tool components now activate into caller-owned registries atomically, remain inert until authorized invocation, and treat empty intent as a filesystem-free no-op.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-extensions --test activation", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30212234807 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/628", "status": "passed"},
+      {"command": "Pull request 628 squash merge 5ee03e08634423a7b8d0fc5b76f2e0d3ff6d16b5", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Atomic registration requires preflighting both existing collisions and duplicates inside the incoming batch.",
+    "Staged typed errors preserve which trust boundary failed without exposing partial activation.",
+    "An empty operation should avoid even prerequisite filesystem access when the contract promises a no-op.",
+    "Independent review is most valuable when it turns a subtle contract mismatch into a focused regression test."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/628"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

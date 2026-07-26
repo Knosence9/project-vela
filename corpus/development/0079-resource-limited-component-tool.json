@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Invoke compiled tools in fresh resource-limited stores",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/625 by adapting one inert compiled component to the existing authorized kernel Tool contract.",
+    "acceptance_criteria": [
+      "Expose inert exact-ID pure-effect metadata and run guest code only through authorized invocation.",
+      "Create a fresh no-import store and instance for every invocation without reusable guest state.",
+      "Round-trip exact JSON and fail closed on guest errors, malformed output, traps, and setup failures.",
+      "Enforce explicit memory, table, instance, fuel, and epoch limits without retry or persistence."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for component-backed tool invocation.",
+      "outcome": "failure",
+      "diagnostic": "The crate had no ComponentTool adapter, invocation error taxonomy, or explicit resource-policy type.",
+      "patch": "Added focused tests for inert metadata, JSON behavior, guest failures, fresh state, and each configured resource limit."
+    },
+    {
+      "summary": "Implemented fresh isolated invocation stores.",
+      "outcome": "success",
+      "diagnostic": "One store and instance per authorized call prevents guest state from becoming an implicit grant or cross-invocation channel.",
+      "patch": "Added ComponentTool, ToolExecutionLimits, no-import instantiation, exact JSON conversion, and sourced typed invocation failures."
+    },
+    {
+      "summary": "Applied bounded execution without broadening capabilities.",
+      "outcome": "success",
+      "diagnostic": "Resource exhaustion and traps must terminate one invocation without retry while a shared epoch ticker must not let one call shorten another deadline.",
+      "patch": "Added store resource limits, fuel, a shared ticker with per-store epoch deadlines, documented defaults, and termination coverage."
+    }
+  ],
+  "outcome": {
+    "summary": "Compiled version 0.1.0 tools now execute only after caller-owned authorization in fresh no-import stores with explicit deterministic resource limits.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --test component_tool --offline", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30210322084 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/626", "status": "passed"},
+      {"command": "Pull request 626 squash merge 65789c65ca6fff52d135d1db0501c7a609243bc0", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Fresh stores make guest state isolation explicit and deterministic.",
+    "Inert metadata access preserves the existing authorization-before-execution ordering.",
+    "Guest success still requires host-side JSON validation before a value crosses the adapter boundary.",
+    "Fuel, epoch, and store limits are invocation policy rather than part of the guest ABI."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/626"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reopen selected tool entrypoints for activation",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/620 by reacquiring bounded owned tool artifacts through descriptor-anchored revalidation without executing them.",
+    "acceptance_criteria": [
+      "Reopen the original root, selected package, manifest, and entrypoint without following symlinks.",
+      "Reject changed identity, metadata, unsafe targets, wrong kinds, and entrypoints larger than 16 MiB.",
+      "Return owned artifacts in exact-ID order with all-or-nothing typed failures.",
+      "Perform no compilation, registry mutation, authorization, persistence, or guest execution."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for secure tool artifact preparation.",
+      "outcome": "failure",
+      "diagnostic": "The extension crate had no preparation API, owned artifact type, size limit, or preparation error contract.",
+      "patch": "Added focused tests requiring descriptor-anchored reacquisition, deterministic ordering, the byte boundary, and fail-closed filesystem behavior."
+    },
+    {
+      "summary": "Implemented descriptor-anchored all-or-nothing preparation.",
+      "outcome": "success",
+      "diagnostic": "Discovery metadata is not an activation lease, so preparation must reopen and revalidate the selected package before reading bounded bytes.",
+      "patch": "Added prepare_tool_artifacts, owned prepared artifacts, retained filesystem identities, bounded reads, and typed source-preserving errors."
+    },
+    {
+      "summary": "Reviewed the target identity boundary explicitly.",
+      "outcome": "success",
+      "diagnostic": "Discovery deliberately does not read or lease entrypoint content; preparation securely accepts the current regular file only after package and manifest identity revalidation.",
+      "patch": "Documented that content identity or signatures remain a separate contract while package replacement, metadata change, escapes, symlinks, and oversized files fail closed."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now reacquires selected tool entrypoints as bounded owned artifacts through an anchored, revalidated, non-executing filesystem boundary.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-extensions --test manifest preparation_ --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30204562524 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/622", "status": "passed"},
+      {"command": "Pull request 622 squash merge 2256ec16185ffdc8e016cee91e1aec06c025d755", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Discovery-time validation must not be treated as authority to open an entrypoint later.",
+    "Descriptor-anchored traversal keeps selected package identity separate from mutable path names.",
+    "Bounded reads should probe one additional byte to distinguish the exact accepted boundary.",
+    "Content signatures and discovery-time content leases should not be invented inside a filesystem reacquisition slice."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/622"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
