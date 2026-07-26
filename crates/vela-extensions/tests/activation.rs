@@ -4,11 +4,13 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 use vela_extensions::{
     ExtensionKind, ExtensionRegistry, ToolActivationError, ToolComponentInvocationError,
-    ToolExecutionLimits, activate_tool_selection, activate_tool_selection_with_limits,
+    ToolDeactivationError, ToolExecutionLimits, activate_tool_selection,
+    activate_tool_selection_with_limits, deactivate_tool_selection,
 };
 use vela_kernel::tool::{
     PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationError,
-    ToolRegistry, ToolRegistryError, ToolRegistryInvocationError, ToolRequest,
+    ToolRegistry, ToolRegistryError, ToolRegistryInvocationError, ToolRegistryRemovalError,
+    ToolRequest,
 };
 
 const ECHO_COMPONENT: &str = r#"
@@ -229,8 +231,88 @@ fn empty_selection_is_a_noop() {
         },
     )
     .expect("empty activation");
+    deactivate_tool_selection(&selection, &mut tools).expect("empty deactivation");
 
     assert_eq!(tools.metadata().len(), 1);
+}
+
+#[test]
+fn selected_tools_are_deactivated_atomically_without_filesystem_or_guest_access() {
+    let root = tempdir().expect("temporary extension root");
+    write_tool(
+        root.path(),
+        "alpha",
+        "alpha.tool",
+        &start_trapping_component(),
+    );
+    write_tool(root.path(), "zeta", "zeta.tool", ECHO_COMPONENT);
+    let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let alpha = extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool"])
+        .expect("alpha selection");
+    let both = extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool", "zeta.tool"])
+        .expect("full selection");
+    let mut tools = ToolRegistry::new();
+    activate_tool_selection(root.path(), &alpha, &mut tools).expect("alpha activation");
+    fs::remove_dir_all(root.path()).expect("remove extension root");
+
+    let error = deactivate_tool_selection(&both, &mut tools)
+        .expect_err("missing zeta must preserve alpha atomically");
+    assert!(error.source().is_some());
+    assert!(matches!(
+        error,
+        ToolDeactivationError::Registry {
+            source: ToolRegistryRemovalError::NotFound { ref tool_id }
+        } if tool_id.as_str() == "zeta.tool"
+    ));
+    assert_eq!(tools.metadata()[0].id().as_str(), "alpha.tool");
+
+    deactivate_tool_selection(&alpha, &mut tools).expect("deactivation without root access");
+    assert!(tools.metadata().is_empty());
+    let error = tools
+        .invoke(
+            &ToolId::new("alpha.tool").expect("tool ID"),
+            &mut Allow,
+            &json!(null),
+        )
+        .expect_err("deactivated tool must not resolve");
+    assert!(matches!(
+        error,
+        ToolRegistryInvocationError::NotFound { .. }
+    ));
+}
+
+#[test]
+fn non_tool_selection_cannot_deactivate_a_same_id_adapter() {
+    let root = tempdir().expect("temporary extension root");
+    let package = root.path().join("skill");
+    fs::create_dir(&package).expect("create package");
+    fs::write(
+        package.join("extension.yaml"),
+        "manifest_version: 1\nid: shared.id\nkind: skill\nentrypoint: skill.md\n",
+    )
+    .expect("write manifest");
+    fs::write(package.join("skill.md"), "instructions").expect("write entrypoint");
+    let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let skill = extensions.select(["shared.id"]).expect("skill selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(DummyTool::new("shared.id"))
+        .expect("register same-ID adapter");
+
+    let error = deactivate_tool_selection(&skill, &mut tools)
+        .expect_err("wrong-kind metadata must fail closed");
+
+    assert!(matches!(
+        error,
+        ToolDeactivationError::WrongKind {
+            ref id,
+            actual: ExtensionKind::Skill
+        } if id == "shared.id"
+    ));
+    assert!(error.source().is_none());
+    assert_eq!(tools.metadata()[0].id().as_str(), "shared.id");
 }
 
 fn write_tool(root: &std::path::Path, package_name: &str, id: &str, component: &str) {

@@ -157,6 +157,30 @@ impl fmt::Display for ToolRegistryError {
 
 impl Error for ToolRegistryError {}
 
+/// A fail-closed error from atomically removing a caller-selected adapter batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ToolRegistryRemovalError {
+    DuplicateId { tool_id: ToolId },
+    NotFound { tool_id: ToolId },
+}
+
+impl fmt::Display for ToolRegistryRemovalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateId { tool_id } => {
+                write!(
+                    formatter,
+                    "tool {tool_id} was requested for removal more than once"
+                )
+            }
+            Self::NotFound { tool_id } => write!(formatter, "tool {tool_id} is not registered"),
+        }
+    }
+}
+
+impl Error for ToolRegistryRemovalError {}
+
 /// An unknown adapter identity or existing invocation-protocol failure.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -249,6 +273,39 @@ impl ToolRegistry {
         }
         for tool in tools {
             self.tools.insert(tool.id().clone(), Box::new(tool));
+        }
+        Ok(())
+    }
+
+    /// Unregisters one exact-ID batch atomically.
+    ///
+    /// Duplicate requests take precedence over missing adapters. Both diagnostics are selected in
+    /// stable-ID order, and every ID is inspected before the registry is mutated.
+    pub fn unregister_all<I>(&mut self, tool_ids: I) -> Result<(), ToolRegistryRemovalError>
+    where
+        I: IntoIterator<Item = ToolId>,
+    {
+        let tool_ids = tool_ids.into_iter().collect::<Vec<_>>();
+        let mut unique_ids = BTreeSet::new();
+        let mut duplicate_ids = BTreeSet::new();
+        for tool_id in &tool_ids {
+            if !unique_ids.insert(tool_id.clone()) {
+                duplicate_ids.insert(tool_id.clone());
+            }
+        }
+        if let Some(tool_id) = duplicate_ids.into_iter().next() {
+            return Err(ToolRegistryRemovalError::DuplicateId { tool_id });
+        }
+        if let Some(tool_id) = unique_ids
+            .iter()
+            .find(|tool_id| !self.tools.contains_key(*tool_id))
+        {
+            return Err(ToolRegistryRemovalError::NotFound {
+                tool_id: tool_id.clone(),
+            });
+        }
+        for tool_id in unique_ids {
+            self.tools.remove(&tool_id);
         }
         Ok(())
     }

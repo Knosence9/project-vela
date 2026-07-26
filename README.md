@@ -173,6 +173,7 @@ The first milestone is the **evidence loop**:
 43. Invoke compiled tools through fresh resource-limited stores and exact JSON validation. ✅
 44. Activate selected tools into caller-owned registries with atomic all-or-nothing registration. ✅
 45. Apply caller-selected uniform resource limits through atomic tool activation. ✅
+46. Revoke selected process-local tool adapters through atomic fail-closed deactivation. ✅
 
 ## Project documents
 

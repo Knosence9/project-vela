@@ -8,7 +8,7 @@ use vela_kernel::{
         DurableToolInvocationError, DurableToolRegistryInvocationError, PermissionDecision, Tool,
         ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId, ToolInvocationStatus,
         ToolInvocationStore, ToolInvocationStoreError, ToolRegistry, ToolRegistryError,
-        ToolRegistryInvocationError, ToolRequest,
+        ToolRegistryInvocationError, ToolRegistryRemovalError, ToolRequest,
     },
 };
 
@@ -232,6 +232,80 @@ fn batch_registration_rejects_internal_duplicates_atomically() {
             .collect::<Vec<_>>(),
         vec!["tool.existing"]
     );
+}
+
+#[test]
+fn batch_unregistration_is_atomic_and_preserves_unrelated_adapters() {
+    let mut registry = ToolRegistry::new();
+    for id in ["tool.alpha", "tool.keep", "tool.zeta"] {
+        registry
+            .register(FakeTool::new(id, ToolEffect::Pure, Rc::new(Cell::new(0))))
+            .unwrap();
+    }
+
+    registry
+        .unregister_all([
+            ToolId::new("tool.zeta").unwrap(),
+            ToolId::new("tool.alpha").unwrap(),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        registry
+            .metadata()
+            .iter()
+            .map(|metadata| metadata.id().as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool.keep"]
+    );
+    registry.unregister_all(Vec::<ToolId>::new()).unwrap();
+    assert_eq!(registry.metadata()[0].id().as_str(), "tool.keep");
+}
+
+#[test]
+fn batch_unregistration_rejects_missing_and_duplicate_ids_without_mutation() {
+    for (ids, expected) in [
+        (
+            vec!["tool.zeta", "tool.beta"],
+            ToolRegistryRemovalError::NotFound {
+                tool_id: ToolId::new("tool.beta").unwrap(),
+            },
+        ),
+        (
+            vec!["tool.missing", "tool.alpha", "tool.alpha"],
+            ToolRegistryRemovalError::DuplicateId {
+                tool_id: ToolId::new("tool.alpha").unwrap(),
+            },
+        ),
+        (
+            vec!["tool.zeta", "tool.zeta", "tool.alpha", "tool.alpha"],
+            ToolRegistryRemovalError::DuplicateId {
+                tool_id: ToolId::new("tool.alpha").unwrap(),
+            },
+        ),
+    ] {
+        let mut registry = ToolRegistry::new();
+        for id in ["tool.alpha", "tool.keep"] {
+            registry
+                .register(FakeTool::new(id, ToolEffect::Pure, Rc::new(Cell::new(0))))
+                .unwrap();
+        }
+
+        let error = registry
+            .unregister_all(ids.into_iter().map(|id| ToolId::new(id).unwrap()))
+            .unwrap_err();
+
+        assert_eq!(error, expected);
+        assert!(error.source().is_none());
+        assert_eq!(
+            registry
+                .metadata()
+                .iter()
+                .map(|metadata| metadata.id().as_str())
+                .collect::<Vec<_>>(),
+            vec!["tool.alpha", "tool.keep"]
+        );
+    }
 }
 
 #[test]
