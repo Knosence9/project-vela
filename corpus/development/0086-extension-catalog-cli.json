@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect validated extension catalogs through the developer CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/645 by exposing deterministic read-only extension discovery without crossing activation or permission boundaries.",
+    "acceptance_criteria": [
+      "Delegate one caller-selected root to ExtensionRegistry::discover instead of duplicating parsing or traversal.",
+      "Print deterministic records for exact authored IDs, validated kinds, entrypoints, and root-relative manifests plus an aggregate count.",
+      "Make empty roots succeed and invalid roots fail without exposing a valid prefix or partial success output.",
+      "Keep inspection read-only and document that it does not select, activate, compile, authorize, execute, mutate, or persist capabilities."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED CLI integration coverage for mixed, empty, and invalid extension roots.",
+      "outcome": "failure",
+      "diagnostic": "The focused integration test failed because extension was not a recognized vela-dev subcommand.",
+      "patch": "Added command-level expectations for deterministic mixed-kind output, a zero-count empty root, and all-or-nothing invalid-root failure."
+    },
+    {
+      "summary": "Composed immutable discovery into a minimal inspection command.",
+      "outcome": "success",
+      "diagnostic": "The extension crate already owned descriptor-anchored validation and deterministic manifest-path order, so the CLI needed only presentation and exit behavior.",
+      "patch": "Added extension inspect dispatch, catalog rendering, fixtures, integration coverage, usage documentation, and milestone evidence."
+    },
+    {
+      "summary": "Hardened terminal framing after independent pre-commit review.",
+      "outcome": "success",
+      "diagnostic": "Raw authored IDs, entrypoints, paths, and diagnostics could contain tabs, newlines, or terminal control bytes and break the promised one-record and one-diagnostic framing.",
+      "patch": "Applied quoted debug escaping to every untrusted field and root-scoped diagnostic, then added adversarial regression coverage before the pull request was opened."
+    }
+  ],
+  "outcome": {
+    "summary": "Contributors can inspect one validated extension catalog deterministically while untrusted metadata remains framed and every activation, execution, permission, and persistence boundary stays closed.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30238846065 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/646", "status": "passed"},
+      {"command": "Pull request 646 squash merge e24f4f01259a38084eeb265f35455e38936192b3", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A user-facing boundary should compose the security-sensitive library contract rather than grow a second parser or filesystem traversal.",
+    "Read-only metadata inspection still needs explicit negative authority boundaries because discovery is neither enablement nor permission.",
+    "Deterministic ordering is insufficient when untrusted fields can inject delimiters or terminal controls into the presentation format.",
+    "Adversarial output framing belongs in integration tests before a developer command is treated as safely inspectable."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/646"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
