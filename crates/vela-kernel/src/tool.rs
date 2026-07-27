@@ -203,6 +203,40 @@ impl fmt::Display for ToolRegistryReplacementError {
 
 impl Error for ToolRegistryReplacementError {}
 
+/// A fail-closed error from atomically reconciling one caller-owned adapter selection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ToolRegistryReconciliationError {
+    DuplicatePreviousId { tool_id: ToolId },
+    DuplicateCurrentId { tool_id: ToolId },
+    PreviousNotFound { tool_id: ToolId },
+    CurrentConflict { tool_id: ToolId },
+}
+
+impl fmt::Display for ToolRegistryReconciliationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicatePreviousId { tool_id } => write!(
+                formatter,
+                "previous tool {tool_id} was supplied for reconciliation more than once"
+            ),
+            Self::DuplicateCurrentId { tool_id } => write!(
+                formatter,
+                "current tool {tool_id} was supplied for reconciliation more than once"
+            ),
+            Self::PreviousNotFound { tool_id } => {
+                write!(formatter, "previous tool {tool_id} is not registered")
+            }
+            Self::CurrentConflict { tool_id } => write!(
+                formatter,
+                "current tool {tool_id} conflicts with an unrelated registered tool"
+            ),
+        }
+    }
+}
+
+impl Error for ToolRegistryReconciliationError {}
+
 /// An unknown adapter identity or existing invocation-protocol failure.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -362,6 +396,71 @@ impl ToolRegistry {
             });
         }
         for tool in tools {
+            self.tools.insert(tool.id().clone(), Box::new(tool));
+        }
+        Ok(())
+    }
+
+    /// Atomically reconciles one caller-owned previous ID set to one current adapter batch.
+    ///
+    /// Duplicate previous IDs, duplicate current IDs, missing previous adapters, and collisions
+    /// between current-only and unrelated active adapters are rejected in that order. Each class
+    /// reports its lexicographically first exact ID, and every failure leaves the registry unchanged.
+    pub fn reconcile_all<T, P, I>(
+        &mut self,
+        previous_ids: P,
+        current_tools: I,
+    ) -> Result<(), ToolRegistryReconciliationError>
+    where
+        T: Tool + 'static,
+        P: IntoIterator<Item = ToolId>,
+        I: IntoIterator<Item = T>,
+    {
+        let previous_ids = previous_ids.into_iter().collect::<Vec<_>>();
+        let current_tools = current_tools.into_iter().collect::<Vec<_>>();
+        let mut previous = BTreeSet::new();
+        let mut duplicate_previous = BTreeSet::new();
+        for tool_id in previous_ids {
+            if !previous.insert(tool_id.clone()) {
+                duplicate_previous.insert(tool_id);
+            }
+        }
+        if let Some(tool_id) = duplicate_previous.into_iter().next() {
+            return Err(ToolRegistryReconciliationError::DuplicatePreviousId { tool_id });
+        }
+
+        let mut current = BTreeSet::new();
+        let mut duplicate_current = BTreeSet::new();
+        for tool in &current_tools {
+            let tool_id = tool.id().clone();
+            if !current.insert(tool_id.clone()) {
+                duplicate_current.insert(tool_id);
+            }
+        }
+        if let Some(tool_id) = duplicate_current.into_iter().next() {
+            return Err(ToolRegistryReconciliationError::DuplicateCurrentId { tool_id });
+        }
+        if let Some(tool_id) = previous
+            .iter()
+            .find(|tool_id| !self.tools.contains_key(*tool_id))
+        {
+            return Err(ToolRegistryReconciliationError::PreviousNotFound {
+                tool_id: tool_id.clone(),
+            });
+        }
+        if let Some(tool_id) = current
+            .difference(&previous)
+            .find(|tool_id| self.tools.contains_key(*tool_id))
+        {
+            return Err(ToolRegistryReconciliationError::CurrentConflict {
+                tool_id: tool_id.clone(),
+            });
+        }
+
+        for tool_id in previous {
+            self.tools.remove(&tool_id);
+        }
+        for tool in current_tools {
             self.tools.insert(tool.id().clone(), Box::new(tool));
         }
         Ok(())

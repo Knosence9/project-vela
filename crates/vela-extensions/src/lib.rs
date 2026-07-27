@@ -26,7 +26,7 @@ use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, stat
 use serde::Deserialize;
 use vela_kernel::tool::{
     Tool, ToolEffect, ToolError, ToolId, ToolIdError, ToolRegistry, ToolRegistryError,
-    ToolRegistryRemovalError, ToolRegistryReplacementError,
+    ToolRegistryReconciliationError, ToolRegistryRemovalError, ToolRegistryReplacementError,
 };
 use wasmtime::component::{
     Component, Linker,
@@ -456,6 +456,66 @@ impl Error for ToolReplacementError {
     }
 }
 
+/// A typed failure while atomically reconciling previous and current selected tool batches.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ToolReconciliationError {
+    WrongKind {
+        id: String,
+        actual: ExtensionKind,
+    },
+    Preparation {
+        source: ExtensionPreparationError,
+    },
+    Compilation {
+        source: ToolComponentCompilationError,
+    },
+    Construction {
+        id: String,
+        source: ComponentToolConstructionError,
+    },
+    Registry {
+        source: ToolRegistryReconciliationError,
+    },
+}
+
+impl fmt::Display for ToolReconciliationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongKind { id, actual } => {
+                write!(
+                    formatter,
+                    "selected capability {id} is {actual:?}, not Tool"
+                )
+            }
+            Self::Preparation { .. } => {
+                formatter.write_str("failed to prepare current selected tools")
+            }
+            Self::Compilation { .. } => {
+                formatter.write_str("failed to compile current selected tools")
+            }
+            Self::Construction { id, .. } => {
+                write!(formatter, "failed to construct current selected tool {id}")
+            }
+            Self::Registry { .. } => {
+                formatter.write_str("failed to reconcile selected tools atomically")
+            }
+        }
+    }
+}
+
+impl Error for ToolReconciliationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::WrongKind { .. } => None,
+            Self::Preparation { source } => Some(source),
+            Self::Compilation { source } => Some(source),
+            Self::Construction { source, .. } => Some(source),
+            Self::Registry { source } => Some(source),
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ToolAdapterBatchError {
     Preparation(ExtensionPreparationError),
@@ -477,6 +537,16 @@ impl From<ToolAdapterBatchError> for ToolActivationError {
 }
 
 impl From<ToolAdapterBatchError> for ToolReplacementError {
+    fn from(error: ToolAdapterBatchError) -> Self {
+        match error {
+            ToolAdapterBatchError::Preparation(source) => Self::Preparation { source },
+            ToolAdapterBatchError::Compilation(source) => Self::Compilation { source },
+            ToolAdapterBatchError::Construction { id, source } => Self::Construction { id, source },
+        }
+    }
+}
+
+impl From<ToolAdapterBatchError> for ToolReconciliationError {
     fn from(error: ToolAdapterBatchError) -> Self {
         match error {
             ToolAdapterBatchError::Preparation(source) => Self::Preparation { source },
@@ -1074,6 +1144,63 @@ pub fn replace_tool_selection_with_limits(
     registry
         .replace_all(tools)
         .map_err(|source| ToolReplacementError::Registry { source })
+}
+
+/// Revalidates and atomically reconciles a previous selected active batch to a current selection
+/// using default invocation limits.
+pub fn reconcile_tool_selections(
+    root: impl AsRef<Path>,
+    previous: &ExtensionSelection<'_>,
+    current: &ExtensionSelection<'_>,
+    registry: &mut ToolRegistry,
+) -> Result<(), ToolReconciliationError> {
+    reconcile_tool_selections_with_limits(
+        root,
+        previous,
+        current,
+        registry,
+        ToolExecutionLimits::default(),
+    )
+}
+
+/// Revalidates and atomically reconciles a previous selected active batch to a current selection
+/// using one uniform caller-selected invocation policy.
+///
+/// The complete current batch is constructed inertly before registry mutation. Reconciliation
+/// removes previous-only IDs, replaces shared IDs, adds current-only IDs, and preserves unrelated
+/// adapters as one fail-closed commit. Guest execution still requires later authorization.
+pub fn reconcile_tool_selections_with_limits(
+    root: impl AsRef<Path>,
+    previous: &ExtensionSelection<'_>,
+    current: &ExtensionSelection<'_>,
+    registry: &mut ToolRegistry,
+    limits: ToolExecutionLimits,
+) -> Result<(), ToolReconciliationError> {
+    validate_tool_selection(previous)?;
+    validate_tool_selection(current)?;
+    let tools =
+        build_tool_adapter_batch(root, current, limits).map_err(ToolReconciliationError::from)?;
+    let previous_ids = previous
+        .extensions()
+        .map(|extension| ToolId::new(extension.manifest().id()).expect("validated non-blank ID"));
+    registry
+        .reconcile_all(previous_ids, tools)
+        .map_err(|source| ToolReconciliationError::Registry { source })
+}
+
+fn validate_tool_selection(
+    selection: &ExtensionSelection<'_>,
+) -> Result<(), ToolReconciliationError> {
+    if let Some(extension) = selection
+        .extensions()
+        .find(|extension| extension.manifest().kind() != ExtensionKind::Tool)
+    {
+        return Err(ToolReconciliationError::WrongKind {
+            id: extension.manifest().id().to_owned(),
+            actual: extension.manifest().kind(),
+        });
+    }
+    Ok(())
 }
 
 fn build_tool_adapter_batch(
