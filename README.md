@@ -197,6 +197,7 @@ The first milestone is the **evidence loop**:
 51. Invoke one exact validated WebAssembly tool through the developer CLI permission boundary. ✅
 52. Prepare selected skill entrypoints as inert bounded UTF-8 instruction artifacts. ✅
 53. Register prepared skills into caller-owned process-local registries atomically without prompt influence. ✅
+54. Compose explicitly selected registered skills into provider-neutral tool-free turns. ✅
 
 ## Project documents
 

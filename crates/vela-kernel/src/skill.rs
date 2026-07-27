@@ -93,6 +93,42 @@ impl fmt::Display for SkillRegistryError {
 
 impl Error for SkillRegistryError {}
 
+/// A deterministic failure to select registered skills for one request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SkillSelectionError {
+    DuplicateId { skill_id: SkillId },
+    MissingId { skill_id: SkillId },
+}
+
+impl fmt::Display for SkillSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateId { skill_id } => {
+                write!(formatter, "skill {skill_id} was selected more than once")
+            }
+            Self::MissingId { skill_id } => {
+                write!(formatter, "skill {skill_id} is not registered")
+            }
+        }
+    }
+}
+
+impl Error for SkillSelectionError {}
+
+/// Immutable borrowed skill blocks selected explicitly for one provider request.
+#[derive(Debug)]
+pub struct SkillSelection<'a> {
+    skills: Vec<&'a RegisteredSkill>,
+}
+
+impl<'a> SkillSelection<'a> {
+    /// Iterates only selected skill blocks in ascending exact-ID order.
+    pub fn skills(&self) -> impl Iterator<Item = &'a RegisteredSkill> + '_ {
+        self.skills.iter().copied()
+    }
+}
+
 /// A caller-owned, process-local deterministic directory of inert skill instructions.
 #[derive(Debug, Default)]
 pub struct SkillRegistry {
@@ -125,6 +161,34 @@ impl SkillRegistry {
 
     pub fn get(&self, skill_id: &SkillId) -> Option<&RegisteredSkill> {
         self.skills.get(skill_id)
+    }
+
+    /// Borrows the exact caller-selected skills without mutating the registry.
+    ///
+    /// Duplicate IDs are rejected before missing IDs. Within each class, the
+    /// lexicographically first exact ID is reported, independent of caller order.
+    pub fn select(&self, skill_ids: &[SkillId]) -> Result<SkillSelection<'_>, SkillSelectionError> {
+        let mut counts = BTreeMap::new();
+        for skill_id in skill_ids {
+            *counts.entry(skill_id).or_insert(0_usize) += 1;
+        }
+        if let Some((skill_id, _)) = counts.iter().find(|(_, count)| **count > 1) {
+            return Err(SkillSelectionError::DuplicateId {
+                skill_id: (*skill_id).clone(),
+            });
+        }
+
+        let mut selected = Vec::with_capacity(counts.len());
+        for skill_id in counts.keys() {
+            let skill =
+                self.skills
+                    .get(*skill_id)
+                    .ok_or_else(|| SkillSelectionError::MissingId {
+                        skill_id: (*skill_id).clone(),
+                    })?;
+            selected.push(skill);
+        }
+        Ok(SkillSelection { skills: selected })
     }
 
     /// Iterates registered skills in ascending exact-ID order.
