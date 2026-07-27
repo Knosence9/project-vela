@@ -9,6 +9,7 @@
 - **Durable composed attempt issue:** [#664](https://github.com/Knosence9/project-vela/issues/664)
 - **Durable composed correction issue:** [#666](https://github.com/Knosence9/project-vela/issues/666)
 - **Durable composed completion issue:** [#668](https://github.com/Knosence9/project-vela/issues/668)
+- **Durable composed failure issue:** [#670](https://github.com/Knosence9/project-vela/issues/670)
 
 ## Context
 
@@ -39,7 +40,9 @@ The first durable integration initially applied that contract only to attempt-pr
 
 The additive correction integration retains the caller-selected parent Attempt in its opaque composed continuation alongside the same immutable authority and in-memory result context. It validates skill selection before correction lineage or side effects, reuses the established stale-transcript and invocation boundaries, and appends final provider content as an exact Correction linked to that parent. Existing skill-free correction methods remain unchanged.
 
-The additive completion integration retains explicit caller completion intent with the same immutable composition and in-memory result context. It validates selection before task, session, invocation, provider, or tool side effects; continuations revalidate the active task and exact transcript. Final content commits an assistant turn, exact Attempt, and completion in order, with that content used unchanged as task output. Existing skill-free completion methods remain unchanged; composed failure and cancellation require separate bounded integrations.
+The additive completion integration retains explicit caller completion intent with the same immutable composition and in-memory result context. It validates selection before task, session, invocation, provider, or tool side effects; continuations revalidate the active task and exact transcript. Final content commits an assistant turn, exact Attempt, and completion in order, with that content used unchanged as task output. Existing skill-free completion methods remain unchanged.
+
+The additive failure integration retains a validated caller-owned `TaskFailure` with the immutable composition and in-memory result context. Skill selection and diagnostic construction complete before durable, provider, or tool side effects; continuations revalidate the active task and exact transcript before work. Final content commits an assistant turn and exact Attempt before the retained diagnostic fails the task. Provider output is never terminal detail or verification evidence. Existing skill-free failure methods remain unchanged; composed cancellation requires a separate bounded integration.
 
 ## Alternatives considered
 
@@ -73,7 +76,7 @@ Those policies require product evidence that the first process-local registry do
 - Callers and provider adapters must opt into the separate composed provider trait and turn method; existing turns intentionally ignore registered skills.
 - Process restart loses registrations.
 - Exact-ID ordering is deterministic but does not express dependencies or author-selected precedence.
-- Completion, failure, and cancellation composition still require separately bounded integrations.
+- Cancellation composition still requires a separately bounded integration.
 
 ## Verification
 
@@ -89,6 +92,8 @@ The durable correction slice additionally proves selection and lineage failure b
 
 The durable completion slice additionally proves exact composition across completion continuations, assistant-turn/Attempt/completion ordering, exact final output, and selection or stale/terminal rejection before forbidden side effects.
 
+The durable failure slice additionally proves exact composition and caller-owned diagnostic retention across failure continuations, assistant-turn/Attempt/failure ordering, exclusion of model output from terminal detail and verification evidence, and selection or stale/terminal rejection before forbidden side effects.
+
 ## Revisit when
 
-Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, composed failure or cancellation turns, replacement or hot reload, workflows, remote packages, or content-addressed identity.
+Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, composed cancellation turns, replacement or hot reload, workflows, remote packages, or content-addressed identity.
