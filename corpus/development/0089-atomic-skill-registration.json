@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Register prepared skills atomically in a caller-owned registry",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/655 by making validated instructions available as process-local registered data without implicitly composing them into provider requests.",
+    "acceptance_criteria": [
+      "Provide validated exact skill IDs, immutable instruction text, deterministic lookup and iteration, and redacted Debug output.",
+      "Register one homogeneous selected batch atomically and reject duplicate batch IDs or existing registry collisions without partial mutation.",
+      "Reuse exact-kind selection and descriptor-anchored skill preparation before mutating the caller-owned registry exactly once.",
+      "Keep registration inert with no provider call, automatic selection, persistence, lifecycle replacement, workflow activation, or tool authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED kernel and extension coverage for atomic registration.",
+      "outcome": "failure",
+      "diagnostic": "Focused tests failed to compile because the kernel skill registry and the extension registration bridge did not exist.",
+      "patch": "Added tests for exact instruction preservation, deterministic order, redacted inspection, duplicate batches, registry collisions, wrong kinds, preparation failures, and empty no-op selection."
+    },
+    {
+      "summary": "Implemented a caller-owned inert registry and one atomic extension bridge.",
+      "outcome": "success",
+      "diagnostic": "Building and validating the complete selected batch before one registry mutation preserved prior state for every selection, preparation, conversion, or collision failure.",
+      "patch": "Added SkillId, RegisteredSkill, SkillRegistry::register_all, typed errors, register_skill_selection, ADR-0005, behavior documentation, and milestone evidence."
+    },
+    {
+      "summary": "Completed independent and automated review without behavioral corrections.",
+      "outcome": "success",
+      "diagnostic": "Independent pre-commit review found no blocking issue, and the substantive CodeRabbit pass generated no actionable comment; the documented public boundary remained intentionally small.",
+      "patch": "Retained the minimal atomic API and explicit non-goals after verifying the complete repository quality gate."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can now register an exact selected skill batch atomically into their own process-local registry while registered instructions remain inert until explicitly selected for a request.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30267886922 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/656", "status": "passed"},
+      {"command": "Pull request 656 squash merge d6b7da8846721bd3aa49772a7767121c8ce579be", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Registry mutation should occur only after the complete external selection and preparation pipeline succeeds.",
+    "Caller ownership keeps registration availability separate from ambient process-global prompt behavior.",
+    "Deterministic metadata can remain inspectable while authored instruction bodies stay redacted from Debug output.",
+    "An empty selection is a successful no-op and does not need filesystem access.",
+    "Registration grants neither per-request prompt authority nor tool permission."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/skill.rs", "url": "https://github.com/Knosence9/project-vela/pull/656"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Prepare selected skill instructions as inert artifacts",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/652 by preparing exact selected skill entrypoints as bounded immutable UTF-8 instructions without granting prompt or execution authority.",
+    "acceptance_criteria": [
+      "Reject non-skill selections before filesystem access and preserve deterministic exact-ID ordering.",
+      "Revalidate package, manifest, entrypoint, and descriptor identity through the shared descriptor-anchored preparation boundary.",
+      "Enforce a 1 MiB plus probe-byte read boundary, valid UTF-8, all-or-nothing failure, and redacted diagnostics.",
+      "Keep prepared instructions inert with no registration, provider composition, execution, persistence, workflow activation, or tool grant."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED integration coverage for bounded exact-content skill preparation.",
+      "outcome": "failure",
+      "diagnostic": "The focused skill_preparation test initially failed to compile because no prepared-skill artifact or skill preparation API existed.",
+      "patch": "Added coverage for exact content and order, wrong-kind preflight, empty selection, size boundaries, invalid UTF-8, changed identities, unsafe symlinks, and all-or-nothing failure."
+    },
+    {
+      "summary": "Implemented skill preparation by sharing the descriptor-anchored byte boundary.",
+      "outcome": "success",
+      "diagnostic": "Reusing the existing bounded raw-byte preparation path kept filesystem identity checks DRY while a skill-specific conversion layer enforced UTF-8 and preserved inert semantics.",
+      "patch": "Added PreparedSkillArtifact, typed preparation failures, the 1 MiB skill limit, exact-kind selection, documentation, and ADR-0004."
+    },
+    {
+      "summary": "Removed content disclosure and corrected generalized diagnostics during review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found that derived Debug output exposed authored instructions; substantive review also found an expected-kind diagnostic still hardcoded to Tool and an avoidable UTF-8 buffer copy.",
+      "patch": "Redacted prepared instruction Debug output, derived mismatch text from the stored expected kind, converted owned bytes with String::from_utf8, and added regression coverage."
+    }
+  ],
+  "outcome": {
+    "summary": "Selected skill entrypoints now become exact, bounded, UTF-8, descriptor-revalidated artifacts that remain inert until a later caller-owned registration and composition boundary.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30263008181 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/653", "status": "passed"},
+      {"command": "Pull request 653 squash merge 1584d9ac3e4d4dbab65f6441756ee3893fab21a6", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Instruction text is sensitive authored content even when it is inert, so diagnostics and Debug implementations must redact it by construction.",
+    "Sharing byte-level descriptor revalidation avoids duplicating filesystem trust logic while allowing skill-specific encoding and size policy.",
+    "A generalized helper must derive diagnostics from its stored expected kind rather than retain tool-specific wording.",
+    "Owned UTF-8 conversion can validate and reuse the existing buffer without copying the full instruction body.",
+    "Preparation establishes validated data availability, not prompt authority, execution, or permission."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/653"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
