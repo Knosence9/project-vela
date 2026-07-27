@@ -22,6 +22,14 @@ The `vela-kernel` crate provides a synchronous, provider-neutral boundary that e
 
 Selection completes before any transcript write or provider invocation. After selection, composed execution has the ordinary durable ordering: append the human turn, call the composed provider exactly once, then append its assistant response. Provider failure leaves the human turn committed, appends no assistant turn, and retains the adapter error in the existing `RuntimeError::Provider` source chain. `execute_turn` and every existing task or tool-capable method continue to use their original provider boundaries and never receive registered skills implicitly.
 
+## Explicit composed bounded tool steps
+
+`execute_composed_provider_tool_step` is the additive low-level composition boundary for one provider call and at most one tool invocation. It validates caller-selected exact skill IDs before the provider, authorization, adapter, or invocation store can be reached. `ComposedToolAssistantRequest` exposes system policy, developer policy, selected skills, transcript, and deterministic tool metadata as separate typed fields. The first four retain their documented instruction authority; tool metadata is descriptive capability data and grants no permission.
+
+A final provider response returns without authorization or tool evidence. A successful tool request uses the existing task-associated durable registry dispatch and returns exact input/output only in memory. `ComposedProviderToolStepOutcome::continuation` borrows an opaque continuation containing the exact initial policies, selected skill blocks, transcript, and prior result. `continue_composed_provider_tool_step` refreshes current tool metadata but provides no API to replace that retained composition. Each subsequent request requires a fresh caller-owned invocation ID and authorizer and advances only through another explicit operation; skills never authorize tools and Vela never runs an automatic loop.
+
+Selection failures are exposed separately from the existing provider/tool step error. Provider, lookup, task-validation, authorization, adapter, and persistence failures retain the existing source chain and durable invocation prefixes through the composed wrapper. Existing `ToolAssistantProvider`, `ToolAssistantContinuationProvider`, low-level skill-free operations, and `ToolAssistantRuntime` methods are unchanged. Durable task-turn composition remains a later bounded integration.
+
 ## Task-associated turns
 
 `AssistantRuntime::execute_task_turn` connects the same single-turn sequence to one existing task. The caller supplies the task ID, human content, and a caller-owned observation ID. The task must be active and already associated with a session; missing, completed, cancelled, failed, and unassociated tasks fail before a transcript write or provider invocation. A closed associated session is rejected by the existing session boundary before provider invocation.
@@ -85,6 +93,6 @@ Failures preserve the ordered prefix. Deterministic preflight failures leave no 
 
 ## Non-goals
 
-This slice does not add asynchronous execution, streaming, cooperative cancellation, concurrent invocation coordination, automatic retries or tool continuations, provider-specific policy serialization, provider/model metadata, credentials, concrete external tools, model-owned permissions, token accounting, automatic skill routing, skill persistence, precedence, dependencies, automatic task creation, association, failure or cancellation, generic caller-selected evidence kinds, runtime diagnostic or verification turns, cross-aggregate transactions, or storage migration. Skills remain unavailable to task and tool-capable turns.
+This slice does not add asynchronous execution, streaming, cooperative cancellation, concurrent invocation coordination, automatic retries or tool continuations, provider-specific policy serialization, provider/model metadata, credentials, concrete external tools, model-owned permissions, token accounting, automatic skill routing, skill persistence, precedence, dependencies, automatic task creation, association, failure or cancellation, generic caller-selected evidence kinds, runtime diagnostic or verification turns, cross-aggregate transactions, or storage migration. Skills remain unavailable to durable task turns and `ToolAssistantRuntime` paths.
 
 See [`session-lifecycle.md`](session-lifecycle.md) for transcript persistence and [`event-log.md`](event-log.md) for durability guarantees.

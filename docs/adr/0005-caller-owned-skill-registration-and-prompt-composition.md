@@ -3,8 +3,9 @@
 - **Status:** accepted
 - **Date:** 2026-07-27
 - **Owners:** Project Vela maintainers
-- **Related issue:** [#654](https://github.com/Knosence9/project-vela/issues/654)
+- **Related issues:** [#654](https://github.com/Knosence9/project-vela/issues/654), [#659](https://github.com/Knosence9/project-vela/issues/659)
 - **First execution issue:** [#655](https://github.com/Knosence9/project-vela/issues/655)
+- **Composed tool execution issue:** [#660](https://github.com/Knosence9/project-vela/issues/660)
 
 ## Context
 
@@ -27,7 +28,9 @@ The provider-neutral `ComposedAssistantRequest` preserves four distinct fields, 
 3. explicitly selected skill blocks in deterministic exact-ID order;
 4. the durable conversation transcript.
 
-Provider adapters may lower those typed fields into provider-native roles, but may not concatenate them behind the caller's back or promote skill instructions above caller policy. `AssistantRuntime::execute_composed_turn` accepts a caller-owned exact-ID selection per request and validates it before transcript persistence. Existing runtime methods remain skill-free. Tool-capable turns require a separate contract that preserves the same composition across every continuation; this decision does not inject skills into them.
+Provider adapters may lower those typed fields into provider-native roles, but may not concatenate them behind the caller's back or promote skill instructions above caller policy. `AssistantRuntime::execute_composed_turn` accepts a caller-owned exact-ID selection per request and validates it before transcript persistence. Existing runtime methods remain skill-free.
+
+The additive low-level composed tool boundary preserves that authority across explicit bounded provider/tool chains. Its initial request keeps caller system policy, caller developer policy, selected skills, durable transcript, and deterministic tool metadata structurally distinct. Tool metadata, tool input, and tool output are capability/data fields, not instruction authority. A successful tool step retains the exact policy fields, selected skill blocks, transcript, and in-memory result in an opaque continuation; later calls can refresh descriptive tool metadata but cannot replace the retained composition. Every step still calls the provider at most once, dispatches at most one tool, requires a fresh caller-owned invocation identity and authorizer, and advances only through an explicit caller operation. Skill selection never grants tool permission. Existing skill-free tool traits and operations remain unchanged.
 
 ## Alternatives considered
 
@@ -61,7 +64,7 @@ Those policies require product evidence that the first process-local registry do
 - Callers and provider adapters must opt into the separate composed provider trait and turn method; existing turns intentionally ignore registered skills.
 - Process restart loses registrations.
 - Exact-ID ordering is deterministic but does not express dependencies or author-selected precedence.
-- Tool-capable turns cannot use skills until continuation semantics are defined.
+- Durable task-turn composition still requires separately bounded integration across attempt, correction, completion, failure, and cancellation paths.
 
 ## Verification
 
@@ -69,6 +72,8 @@ The first execution slice must use RED→GREEN tests proving exact text and ID o
 
 The composition slice proves duplicate/missing selection rejection, skill-free defaults, exact typed provider fields and authority order, exclusion of registered-but-unselected skills, and unchanged durable failure semantics.
 
+The composed tool slice proves selection failure before provider or invocation side effects, distinct policy/skill/transcript/tool fields, retained composition across continuations, fresh authorization and invocation identity for each tool, exact in-memory results, one provider call and at most one invocation per operation, and unchanged skill-free tool APIs.
+
 ## Revisit when
 
-Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, tool-capable continuation composition, replacement or hot reload, workflows, remote packages, or content-addressed identity.
+Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, durable task-turn composition, replacement or hot reload, workflows, remote packages, or content-addressed identity.
