@@ -198,6 +198,7 @@ The first milestone is the **evidence loop**:
 52. Prepare selected skill entrypoints as inert bounded UTF-8 instruction artifacts. ✅
 53. Register prepared skills into caller-owned process-local registries atomically without prompt influence. ✅
 54. Compose explicitly selected registered skills into provider-neutral tool-free turns. ✅
+55. Preserve explicit skill composition across caller-driven bounded provider/tool continuations. ✅
 
 ## Project documents
 

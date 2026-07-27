@@ -117,7 +117,7 @@ impl fmt::Display for SkillSelectionError {
 impl Error for SkillSelectionError {}
 
 /// Immutable borrowed skill blocks selected explicitly for one provider request.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SkillSelection<'a> {
     skills: Vec<&'a RegisteredSkill>,
 }

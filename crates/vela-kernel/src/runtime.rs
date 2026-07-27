@@ -87,6 +87,156 @@ pub trait ComposedAssistantProvider {
     ) -> Result<SessionTurnContent, ProviderError>;
 }
 
+/// Opaque retained policy, skill, and transcript context for one composed tool chain.
+#[derive(Clone, Debug)]
+struct ComposedToolContext<'a> {
+    system_policy: SystemPolicy<'a>,
+    developer_policy: DeveloperPolicy<'a>,
+    selected_skills: SkillSelection<'a>,
+    transcript: &'a [SessionTurn],
+}
+
+impl<'a> ComposedToolContext<'a> {
+    fn request(&self, tools: Vec<ToolMetadata>) -> ComposedToolAssistantRequest<'a> {
+        ComposedToolAssistantRequest {
+            system_policy: self.system_policy,
+            developer_policy: self.developer_policy,
+            selected_skills: self.selected_skills.clone(),
+            transcript: self.transcript,
+            tools,
+        }
+    }
+}
+
+/// A provider-neutral composed request with capability metadata kept below instruction fields.
+#[derive(Debug)]
+pub struct ComposedToolAssistantRequest<'a> {
+    system_policy: SystemPolicy<'a>,
+    developer_policy: DeveloperPolicy<'a>,
+    selected_skills: SkillSelection<'a>,
+    transcript: &'a [SessionTurn],
+    tools: Vec<ToolMetadata>,
+}
+
+impl<'a> ComposedToolAssistantRequest<'a> {
+    pub fn system_policy(&self) -> SystemPolicy<'a> {
+        self.system_policy
+    }
+
+    pub fn developer_policy(&self) -> DeveloperPolicy<'a> {
+        self.developer_policy
+    }
+
+    pub fn skills(&self) -> impl Iterator<Item = &'a RegisteredSkill> + '_ {
+        self.selected_skills.skills()
+    }
+
+    pub fn transcript(&self) -> &'a [SessionTurn] {
+        self.transcript
+    }
+
+    pub fn tools(&self) -> &[ToolMetadata] {
+        &self.tools
+    }
+}
+
+/// A synchronous provider for one explicitly composed bounded tool step.
+pub trait ComposedToolAssistantProvider {
+    fn complete_composed_with_tools(
+        &mut self,
+        request: ComposedToolAssistantRequest<'_>,
+    ) -> Result<ProviderToolResponse, ProviderError>;
+}
+
+/// A synchronous provider for one continuation with retained composition and one prior result.
+pub trait ComposedToolAssistantContinuationProvider {
+    fn complete_composed_after_tool(
+        &mut self,
+        request: ComposedToolAssistantContinuationRequest<'_>,
+    ) -> Result<ProviderToolResponse, ProviderError>;
+}
+
+/// Caller-held retained composition and exact prior in-memory tool result.
+#[derive(Clone, Debug)]
+pub struct ComposedProviderToolContinuation<'a> {
+    context: ComposedToolContext<'a>,
+    prior_result: ProviderToolResult<'a>,
+}
+
+/// A provider request for one continuation with current descriptive tool metadata.
+#[derive(Debug)]
+pub struct ComposedToolAssistantContinuationRequest<'a> {
+    context: ComposedToolContext<'a>,
+    prior_result: ProviderToolResult<'a>,
+    tools: Vec<ToolMetadata>,
+}
+
+impl<'a> ComposedToolAssistantContinuationRequest<'a> {
+    pub fn request(&self) -> ComposedToolAssistantRequest<'a> {
+        self.context.request(self.tools.clone())
+    }
+
+    pub fn prior_result(&self) -> ProviderToolResult<'a> {
+        self.prior_result
+    }
+}
+
+/// One opaque completed composed tool step with exact in-memory values and retained context.
+#[derive(Debug)]
+pub struct ComposedToolCompleted<'a> {
+    tool_id: ToolId,
+    input: Value,
+    output: Value,
+    continuation: ToolStepContinuation,
+    context: ComposedToolContext<'a>,
+}
+
+impl ComposedToolCompleted<'_> {
+    pub fn tool_id(&self) -> &ToolId {
+        &self.tool_id
+    }
+
+    pub fn input(&self) -> &Value {
+        &self.input
+    }
+
+    pub fn output(&self) -> &Value {
+        &self.output
+    }
+
+    pub fn continuation(&self) -> ToolStepContinuation {
+        self.continuation
+    }
+}
+
+/// A composed bounded-step result that retains instruction fields only when continuation is needed.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ComposedProviderToolStepOutcome<'a> {
+    Final {
+        content: SessionTurnContent,
+        continuation: ToolStepContinuation,
+    },
+    ToolCompleted(ComposedToolCompleted<'a>),
+}
+
+impl ComposedProviderToolStepOutcome<'_> {
+    /// Borrows an immutable continuation that retains the exact initial composition and result.
+    pub fn continuation(&self) -> Option<ComposedProviderToolContinuation<'_>> {
+        match self {
+            Self::ToolCompleted(completed) => Some(ComposedProviderToolContinuation {
+                context: completed.context.clone(),
+                prior_result: ProviderToolResult {
+                    tool_id: &completed.tool_id,
+                    input: &completed.input,
+                    output: &completed.output,
+                },
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
 /// A synchronous provider that may request at most one tool invocation.
 ///
 /// Registry metadata is descriptive only. A provider cannot authorize an invocation or choose
@@ -230,6 +380,163 @@ impl Error for ProviderToolStepError {
             Self::Provider(error) => Some(error),
             Self::Invocation(error) => Some(error),
         }
+    }
+}
+
+/// A deterministic skill-selection failure or an existing provider/tool step failure.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ComposedProviderToolStepError {
+    SkillSelection(SkillSelectionError),
+    Step(ProviderToolStepError),
+}
+
+impl fmt::Display for ComposedProviderToolStepError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SkillSelection(error) => {
+                write!(formatter, "assistant skill selection error: {error}")
+            }
+            Self::Step(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for ComposedProviderToolStepError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::SkillSelection(error) => Some(error),
+            Self::Step(error) => Some(error),
+        }
+    }
+}
+
+/// Calls a composed tool-capable provider once and dispatches at most one durable invocation.
+///
+/// Skill selection is validated before the provider call or any invocation side effect. A tool
+/// result retains the exact policies, selected skill blocks, and transcript for continuation.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_composed_provider_tool_step<'a, P, A>(
+    provider: &mut P,
+    system_policy: SystemPolicy<'a>,
+    developer_policy: DeveloperPolicy<'a>,
+    skill_registry: &'a SkillRegistry,
+    selected_skill_ids: &[SkillId],
+    transcript: &'a [SessionTurn],
+    registry: &mut ToolRegistry,
+    store: &mut ToolInvocationStore,
+    task_id: &TaskId,
+    invocation_id: ToolInvocationId,
+    authorizer: &mut A,
+) -> Result<ComposedProviderToolStepOutcome<'a>, ComposedProviderToolStepError>
+where
+    P: ComposedToolAssistantProvider,
+    A: ToolAuthorizer,
+{
+    let context = ComposedToolContext {
+        system_policy,
+        developer_policy,
+        selected_skills: skill_registry
+            .select(selected_skill_ids)
+            .map_err(ComposedProviderToolStepError::SkillSelection)?,
+        transcript,
+    };
+    let response = provider
+        .complete_composed_with_tools(context.request(registry.metadata()))
+        .map_err(ProviderToolStepError::Provider)
+        .map_err(ComposedProviderToolStepError::Step)?;
+
+    dispatch_composed_provider_tool_response(
+        response,
+        context,
+        registry,
+        store,
+        task_id,
+        invocation_id,
+        authorizer,
+    )
+}
+
+/// Calls one explicit composed continuation and dispatches at most one subsequent invocation.
+///
+/// The provider receives the exact retained policies, skill selection, transcript, and prior tool
+/// result. Tool metadata is refreshed from the current registry without changing that composition.
+#[allow(clippy::too_many_arguments)]
+pub fn continue_composed_provider_tool_step<'a, P, A>(
+    provider: &mut P,
+    continuation: ComposedProviderToolContinuation<'a>,
+    registry: &mut ToolRegistry,
+    store: &mut ToolInvocationStore,
+    task_id: &TaskId,
+    invocation_id: ToolInvocationId,
+    authorizer: &mut A,
+) -> Result<ComposedProviderToolStepOutcome<'a>, ComposedProviderToolStepError>
+where
+    P: ComposedToolAssistantContinuationProvider,
+    A: ToolAuthorizer,
+{
+    let context = continuation.context.clone();
+    let request = ComposedToolAssistantContinuationRequest {
+        context: continuation.context,
+        prior_result: continuation.prior_result,
+        tools: registry.metadata(),
+    };
+    let response = provider
+        .complete_composed_after_tool(request)
+        .map_err(ProviderToolStepError::Provider)
+        .map_err(ComposedProviderToolStepError::Step)?;
+
+    dispatch_composed_provider_tool_response(
+        response,
+        context,
+        registry,
+        store,
+        task_id,
+        invocation_id,
+        authorizer,
+    )
+}
+
+fn dispatch_composed_provider_tool_response<'a, A: ToolAuthorizer>(
+    response: ProviderToolResponse,
+    context: ComposedToolContext<'a>,
+    registry: &mut ToolRegistry,
+    store: &mut ToolInvocationStore,
+    task_id: &TaskId,
+    invocation_id: ToolInvocationId,
+    authorizer: &mut A,
+) -> Result<ComposedProviderToolStepOutcome<'a>, ComposedProviderToolStepError> {
+    match dispatch_provider_tool_response(
+        response,
+        registry,
+        store,
+        task_id,
+        invocation_id,
+        authorizer,
+    )
+    .map_err(ComposedProviderToolStepError::Step)?
+    {
+        ProviderToolStepOutcome::Final {
+            content,
+            continuation,
+        } => Ok(ComposedProviderToolStepOutcome::Final {
+            content,
+            continuation,
+        }),
+        ProviderToolStepOutcome::ToolCompleted {
+            tool_id,
+            input,
+            output,
+            continuation,
+        } => Ok(ComposedProviderToolStepOutcome::ToolCompleted(
+            ComposedToolCompleted {
+                tool_id,
+                input,
+                output,
+                continuation,
+                context,
+            },
+        )),
     }
 }
 
