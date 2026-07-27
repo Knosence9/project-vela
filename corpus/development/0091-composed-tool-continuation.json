@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve selected-skill authority across bounded tool steps",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/660 by retaining one exact caller composition through explicit provider/tool continuations without weakening per-invocation authorization.",
+    "acceptance_criteria": [
+      "Validate exact selected skill IDs before provider, authorization, adapter, or durable invocation activity.",
+      "Expose caller policies, selected skill blocks, transcript, deterministic tool metadata, and prior tool results as distinct authority or data fields.",
+      "Retain the exact initial composition across explicit bounded continuations while each operation calls the provider and dispatches a tool at most once.",
+      "Require a fresh invocation identity and authorizer for every tool request, preserve source failures, and leave all existing skill-free APIs behavior-compatible."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED low-level coverage for composed provider/tool steps.",
+      "outcome": "failure",
+      "diagnostic": "The focused runtime test failed because no composed tool request, retained continuation, outcome, or provider traits existed.",
+      "patch": "Added coverage for selection rejection, distinct fields, unselected exclusion, final content, retained continuations, fresh authorization and identities, durable evidence, provider failures, and skill-free compatibility."
+    },
+    {
+      "summary": "Implemented additive bounded composed tool-step orchestration.",
+      "outcome": "success",
+      "diagnostic": "A retained continuation context could preserve immutable caller policy and exact selected blocks while advancing only the exact prior in-memory tool result through the existing durable dispatch boundary.",
+      "patch": "Added composed initial and continuation provider contracts, typed requests and outcomes, one-step orchestration, documentation, and the ADR-0005 extension."
+    },
+    {
+      "summary": "Prevented completed chains from advertising another provider continuation after substantive review.",
+      "outcome": "success",
+      "diagnostic": "The first implementation returned Some from continuation() for every completed tool, including ToolStepContinuation::Complete, so Option-driven callers could make one extra provider call.",
+      "patch": "Added a regression for completed outcomes, returned a continuation only for ProviderRequired, clarified documentation wording, reran the complete quality gate, and completed exact-head incremental review."
+    }
+  ],
+  "outcome": {
+    "summary": "Provider/tool callers can now advance one explicit bounded step at a time while exact policy and selected-skill authority remain fixed and every requested tool retains fresh caller-owned permission.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30282094141 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/661", "status": "passed"},
+      {"command": "Pull request 661 squash merge 5e6a14fde09ae5e4ba10714ba7706f0c6e89ae84", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A completion marker must not expose an optional continuation merely because the last bounded step invoked a tool.",
+    "Retaining composition inside the outcome prevents callers from substituting policies or selected instructions between provider calls.",
+    "Skill authority and tool capability are orthogonal: every tool still needs a fresh identity and one-invocation authorizer.",
+    "Explicit one-provider and one-tool bounds make progression caller-owned and prevent a hidden automatic loop.",
+    "Incremental review must cover the exact follow-up commit; a rate-limited green status is not review evidence."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/661"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

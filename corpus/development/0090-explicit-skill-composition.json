@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compose explicitly selected skills into tool-free turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/657 by giving callers a provider-neutral tool-free request boundary with explicit skill selection and structurally distinct authority fields.",
+    "acceptance_criteria": [
+      "Reject duplicate or missing exact skill IDs deterministically before persistence or provider invocation.",
+      "Expose system policy, developer policy, exact-ID-ordered selected skills, and durable transcript as distinct typed provider fields in descending authority order.",
+      "Exclude registered but unselected skills and keep existing runtime APIs skill-free unless the composed API is explicitly called.",
+      "Preserve human-turn-first durable ordering and source-preserving provider failure behavior."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for exact selection and composed turn behavior.",
+      "outcome": "failure",
+      "diagnostic": "Focused tests failed because SkillRegistry had no exact-ID selection operation and AssistantRuntime had no composed provider request or execution boundary.",
+      "patch": "Added tests for duplicate and missing selection, deterministic ordering, exact text, unselected exclusion, typed request fields, skill-free defaults, and provider failure persistence."
+    },
+    {
+      "summary": "Implemented deterministic borrowed selection and one provider-neutral composed turn.",
+      "outcome": "success",
+      "diagnostic": "Keeping policy, selected instruction blocks, and transcript as separate typed fields preserved authority classification without kernel prompt concatenation or provider-native role lowering.",
+      "patch": "Added SkillSelection, selection errors, ComposedAssistantRequest, ComposedAssistantProvider, execute_composed_turn, documentation, and milestone evidence."
+    },
+    {
+      "summary": "Confirmed the bounded contract through independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review and CodeRabbit found no blocking or actionable issue, so no speculative routing, token budgeting, tool, or serialization behavior was added.",
+      "patch": "Kept existing turns behavior-compatible and retained the explicit composed API as the only path by which selected skills influence a provider request."
+    }
+  ],
+  "outcome": {
+    "summary": "Tool-free runtime callers can explicitly select exact registered skills and pass them to providers beneath caller policy and above transcript without changing skill-free defaults.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30275228556 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/658", "status": "passed"},
+      {"command": "Pull request 658 squash merge b62c87c0910d6842eae73f6a09d1d1ea841f5202", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Skill availability becomes request authority only through explicit exact-ID selection by the caller.",
+    "Typed provider fields preserve authority ordering more reliably than concatenating a synthetic kernel prompt.",
+    "Selection validation belongs before durable transcript mutation and provider invocation.",
+    "Registered but unselected instructions must be absent rather than merely assigned lower precedence.",
+    "Additive composed APIs preserve conservative skill-free defaults for existing callers."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/658"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
