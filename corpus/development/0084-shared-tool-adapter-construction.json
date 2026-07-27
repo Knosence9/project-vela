@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Share inert tool adapter construction",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/637 by centralizing the preparation, compilation, and construction pipeline shared by activation and replacement.",
+    "acceptance_criteria": [
+      "Use one private implementation for selected artifact preparation, component compilation, and limited adapter construction.",
+      "Map shared stage failures into the existing activation and replacement error taxonomies with sources intact.",
+      "Keep register_all and replace_all as the distinct lifecycle-specific commits.",
+      "Preserve empty no-I/O behavior, caller-selected limits, and deferred authorized invocation."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Verified the duplication identified by the preceding replacement review.",
+      "outcome": "success",
+      "diagnostic": "Activation and replacement repeated the same empty check, preparation, compilation, and ComponentTool construction stages, risking drift when a stage changed.",
+      "patch": "Bounded the refactor to one private adapter-batch helper and one private stage-error taxonomy without changing public lifecycle contracts."
+    },
+    {
+      "summary": "Centralized inert adapter batch construction.",
+      "outcome": "success",
+      "diagnostic": "A shared private result can preserve stage identity while each public operation retains its established error type and registry commit.",
+      "patch": "Added ToolAdapterBatchError, conversions to activation and replacement errors, and build_tool_adapter_batch used by both operations."
+    },
+    {
+      "summary": "Reverified behavior after the structural refactor.",
+      "outcome": "success",
+      "diagnostic": "The refactor needed to preserve the existing empty-selection no-I/O path and ensure limits and source chains did not drift.",
+      "patch": "Ran the full activation integration suite and workspace quality gate against the single-file implementation change."
+    }
+  ],
+  "outcome": {
+    "summary": "Activation and replacement now share one inert adapter construction pipeline while retaining distinct atomic registry commits and compatible public error boundaries.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-extensions --test activation", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30225399671 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/638", "status": "passed"},
+      {"command": "Pull request 638 squash merge aef9340132a9a38a689f593399817c5d801996eb", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Shared trust-boundary stages should have one implementation before another lifecycle operation is added.",
+    "Private stage errors can remove duplication without widening or breaking public error contracts.",
+    "Registry mutation remains easier to reason about when lifecycle-specific commits stay outside the shared builder.",
+    "A narrow structural follow-up can resolve review debt without mixing it into the feature that exposed the duplication."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/638"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

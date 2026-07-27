@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reconcile selected active tools atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/639 by transitioning one explicit previous tool selection to one current selection as a single remove, replace, and add commit.",
+    "acceptance_criteria": [
+      "Reject non-tool selections and build the complete descriptor-revalidated current adapter batch before mutation.",
+      "Atomically remove previous-only IDs, replace shared IDs, and add current-only IDs while preserving unrelated adapters.",
+      "Report deterministic duplicate, missing-previous, and unrelated-current conflict errors without partial mutation.",
+      "Preserve later per-invocation authorization, explicit limits, empty no-op behavior, and caller-owned lifecycle evidence."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for one mixed lifecycle transition.",
+      "outcome": "failure",
+      "diagnostic": "Focused kernel and extension tests could not compile because no reconciliation error, registry primitive, or previous-to-current extension operation existed.",
+      "patch": "Added tests for mixed success, deterministic preflight failures, current artifact failure, collisions, wrong kinds, empty selections, and explicit invocation limits."
+    },
+    {
+      "summary": "Implemented atomic previous-to-current reconciliation.",
+      "outcome": "success",
+      "diagnostic": "Explicit previous ownership plus a fully built current batch lets one registry preflight distinguish removals, replacements, additions, and unrelated collisions before mutation.",
+      "patch": "Added ToolRegistry::reconcile_all, typed kernel and extension errors, default and limit-aware reconciliation operations, docs, and milestone evidence."
+    },
+    {
+      "summary": "Added direct evidence against sequential partial state during independent review.",
+      "outcome": "success",
+      "diagnostic": "Success and rollback tests did not by themselves show why composing deactivation and activation was insufficient when the second operation failed.",
+      "patch": "Added a regression demonstrating that sequential deactivation followed by failed activation loses the old adapter, then verified the atomic operation preserves it."
+    }
+  ],
+  "outcome": {
+    "summary": "Caller-owned previous and current tool selections now drive one atomic remove, replace, and add transition that preserves every old and unrelated adapter on failure.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30228966755 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/640", "status": "passed"},
+      {"command": "Pull request 640 squash merge 4b1335f951fb605b33b853f31564d1f036b65240", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Sequentially correct lifecycle operations can still expose partial state when composed across a later failure.",
+    "Adapter ownership must come from explicit caller-held previous selection evidence rather than registry inference.",
+    "A current-only ID needs distinct conflict handling because an existing adapter may be unrelated to the reconciled selection.",
+    "Rebuilding shared IDs uniformly keeps current-root artifact revalidation simple and avoids an unproven optimization.",
+    "CodeRabbit suggested renaming the public root parameter to current_root in pull request 640; the non-blocking suggestion was not applied before merge, while the API documentation retained the contract that only the complete current batch is revalidated."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/640"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
