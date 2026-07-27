@@ -42,6 +42,9 @@ pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 /// Maximum accepted encoded WebAssembly component size during artifact preparation.
 pub const MAX_ENTRYPOINT_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Maximum accepted UTF-8 instruction size during skill artifact preparation.
+pub const MAX_SKILL_INSTRUCTION_BYTES: u64 = 1024 * 1024;
+
 /// Default maximum bytes available to each guest linear memory during one invocation.
 pub const DEFAULT_TOOL_MEMORY_BYTES: usize = 16 * 1024 * 1024;
 /// Default maximum elements available to each guest table during one invocation.
@@ -206,6 +209,33 @@ impl PreparedToolArtifact {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+}
+
+/// Owned UTF-8 instructions for one revalidated selected skill.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PreparedSkillArtifact {
+    id: String,
+    instructions: String,
+}
+
+impl fmt::Debug for PreparedSkillArtifact {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedSkillArtifact")
+            .field("id", &self.id)
+            .field("instructions_len", &self.instructions.len())
+            .finish()
+    }
+}
+
+impl PreparedSkillArtifact {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn instructions(&self) -> &str {
+        &self.instructions
     }
 }
 
@@ -802,6 +832,11 @@ pub enum ExtensionPreparationError {
         id: String,
         actual: ExtensionKind,
     },
+    ExpectedKindMismatch {
+        id: String,
+        expected: ExtensionKind,
+        actual: ExtensionKind,
+    },
     Package {
         id: String,
         path: PathBuf,
@@ -830,6 +865,23 @@ pub enum ExtensionPreparationError {
         id: String,
         path: PathBuf,
         max_bytes: u64,
+    },
+}
+
+/// A fail-closed selected-skill preparation error.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum SkillPreparationError {
+    WrongKind {
+        id: String,
+        actual: ExtensionKind,
+    },
+    Preparation {
+        source: ExtensionPreparationError,
+    },
+    InvalidUtf8 {
+        id: String,
+        source: std::str::Utf8Error,
     },
 }
 
@@ -1038,7 +1090,67 @@ pub fn prepare_tool_artifacts(
     root: impl AsRef<Path>,
     selection: &ExtensionSelection<'_>,
 ) -> Result<Vec<PreparedToolArtifact>, ExtensionPreparationError> {
-    prepare_tool_artifacts_platform(root.as_ref(), selection)
+    prepare_artifact_bytes_platform(
+        root.as_ref(),
+        selection,
+        ExtensionKind::Tool,
+        MAX_ENTRYPOINT_BYTES,
+    )
+    .map(|artifacts| {
+        artifacts
+            .into_iter()
+            .map(|artifact| PreparedToolArtifact {
+                id: artifact.id,
+                bytes: artifact.bytes,
+            })
+            .collect()
+    })
+}
+
+/// Reopens selected skill packages beneath their original root and returns bounded UTF-8 text.
+///
+/// Preparation is descriptor-anchored and all-or-nothing. The returned instructions remain inert:
+/// this operation does not register a skill, compose a provider prompt, authorize tools, persist,
+/// or execute content. A non-skill selection is rejected before filesystem access.
+pub fn prepare_skill_artifacts(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+) -> Result<Vec<PreparedSkillArtifact>, SkillPreparationError> {
+    if let Some(extension) = selection
+        .extensions()
+        .find(|extension| extension.manifest().kind() != ExtensionKind::Skill)
+    {
+        return Err(SkillPreparationError::WrongKind {
+            id: extension.manifest().id().to_owned(),
+            actual: extension.manifest().kind(),
+        });
+    }
+
+    if selection.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    prepare_artifact_bytes_platform(
+        root.as_ref(),
+        selection,
+        ExtensionKind::Skill,
+        MAX_SKILL_INSTRUCTION_BYTES,
+    )
+    .map_err(|source| SkillPreparationError::Preparation { source })?
+    .into_iter()
+    .map(|artifact| {
+        let instructions = String::from_utf8(artifact.bytes).map_err(|source| {
+            SkillPreparationError::InvalidUtf8 {
+                id: artifact.id.clone(),
+                source: source.utf8_error(),
+            }
+        })?;
+        Ok(PreparedSkillArtifact {
+            id: artifact.id,
+            instructions,
+        })
+    })
+    .collect()
 }
 
 /// Compiles prepared tools against the exact no-import `vela:extension/tool@0.1.0` ABI.
@@ -1296,11 +1408,18 @@ fn validate_tool_component_abi(
     Ok(())
 }
 
+struct PreparedArtifactBytes {
+    id: String,
+    bytes: Vec<u8>,
+}
+
 #[cfg(unix)]
-fn prepare_tool_artifacts_platform(
+fn prepare_artifact_bytes_platform(
     root: &Path,
     selection: &ExtensionSelection<'_>,
-) -> Result<Vec<PreparedToolArtifact>, ExtensionPreparationError> {
+    expected_kind: ExtensionKind,
+    max_bytes: u64,
+) -> Result<Vec<PreparedArtifactBytes>, ExtensionPreparationError> {
     let root_fd = open(
         root,
         OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY | OFlags::NOFOLLOW,
@@ -1325,10 +1444,16 @@ fn prepare_tool_artifacts_platform(
                 path: extension.path().to_path_buf(),
             });
         }
-        if extension.manifest().kind() != ExtensionKind::Tool {
-            return Err(ExtensionPreparationError::KindMismatch {
-                id,
-                actual: extension.manifest().kind(),
+        if extension.manifest().kind() != expected_kind {
+            let actual = extension.manifest().kind();
+            return Err(if expected_kind == ExtensionKind::Tool {
+                ExtensionPreparationError::KindMismatch { id, actual }
+            } else {
+                ExtensionPreparationError::ExpectedKindMismatch {
+                    id,
+                    expected: expected_kind,
+                    actual,
+                }
             });
         }
         let package_name = selected_package_name(extension).ok_or_else(|| {
@@ -1416,8 +1541,9 @@ fn prepare_tool_artifacts_platform(
             &id,
             &package_path,
             extension.manifest().entrypoint(),
+            max_bytes,
         )?;
-        artifacts.push(PreparedToolArtifact { id, bytes });
+        artifacts.push(PreparedArtifactBytes { id, bytes });
     }
     Ok(artifacts)
 }
@@ -1446,6 +1572,7 @@ fn read_entrypoint(
     id: &str,
     package_path: &Path,
     entrypoint: &str,
+    max_bytes: u64,
 ) -> Result<Vec<u8>, ExtensionPreparationError> {
     let mut current_directory = None;
     let mut components = entrypoint.split('/').peekable();
@@ -1505,7 +1632,7 @@ fn read_entrypoint(
         }
         let mut bytes = Vec::new();
         file.by_ref()
-            .take(MAX_ENTRYPOINT_BYTES + 1)
+            .take(max_bytes + 1)
             .read_to_end(&mut bytes)
             .map_err(|source| ExtensionPreparationError::Entrypoint {
                 id: id.to_owned(),
@@ -1513,11 +1640,11 @@ fn read_entrypoint(
                 entrypoint: entrypoint.to_owned(),
                 source,
             })?;
-        if bytes.len() > MAX_ENTRYPOINT_BYTES as usize {
+        if bytes.len() > max_bytes as usize {
             return Err(ExtensionPreparationError::EntrypointTooLarge {
                 id: id.to_owned(),
                 path: package_path.to_path_buf(),
-                max_bytes: MAX_ENTRYPOINT_BYTES,
+                max_bytes,
             });
         }
         return Ok(bytes);
@@ -1526,10 +1653,12 @@ fn read_entrypoint(
 }
 
 #[cfg(not(unix))]
-fn prepare_tool_artifacts_platform(
+fn prepare_artifact_bytes_platform(
     root: &Path,
     _selection: &ExtensionSelection<'_>,
-) -> Result<Vec<PreparedToolArtifact>, ExtensionPreparationError> {
+    _expected_kind: ExtensionKind,
+    _max_bytes: u64,
+) -> Result<Vec<PreparedArtifactBytes>, ExtensionPreparationError> {
     Err(ExtensionPreparationError::ReadRoot {
         path: root.to_path_buf(),
         source: io::Error::new(
@@ -1796,6 +1925,14 @@ impl fmt::Display for ExtensionPreparationError {
                 formatter,
                 "selected extension {id:?} has kind {actual:?}, expected Tool"
             ),
+            Self::ExpectedKindMismatch {
+                id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "selected extension {id:?} has kind {actual:?}, expected {expected:?}"
+            ),
             Self::Package { id, path, source } => write!(
                 formatter,
                 "could not reopen selected extension package {id:?} at {}: {source}",
@@ -1823,7 +1960,7 @@ impl fmt::Display for ExtensionPreparationError {
                 source,
             } => write!(
                 formatter,
-                "could not reopen selected tool entrypoint {entrypoint:?} for {id:?} beneath {}: {source}",
+                "could not reopen selected extension entrypoint {entrypoint:?} for {id:?} beneath {}: {source}",
                 path.display()
             ),
             Self::EntrypointTooLarge {
@@ -1832,7 +1969,7 @@ impl fmt::Display for ExtensionPreparationError {
                 max_bytes,
             } => write!(
                 formatter,
-                "selected tool entrypoint for {id:?} beneath {} exceeds {max_bytes} bytes",
+                "selected extension entrypoint for {id:?} beneath {} exceeds {max_bytes} bytes",
                 path.display()
             ),
         }
@@ -1848,9 +1985,37 @@ impl Error for ExtensionPreparationError {
             Self::Manifest { source, .. } => Some(source),
             Self::SourceMismatch { .. }
             | Self::KindMismatch { .. }
+            | Self::ExpectedKindMismatch { .. }
             | Self::PackageChanged { .. }
             | Self::ManifestChanged { .. }
             | Self::EntrypointTooLarge { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for SkillPreparationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongKind { id, actual } => {
+                write!(
+                    formatter,
+                    "selected capability {id:?} is {actual:?}, not Skill"
+                )
+            }
+            Self::Preparation { .. } => formatter.write_str("failed to prepare selected skills"),
+            Self::InvalidUtf8 { id, .. } => {
+                write!(formatter, "selected skill {id:?} is not valid UTF-8")
+            }
+        }
+    }
+}
+
+impl Error for SkillPreparationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::WrongKind { .. } => None,
+            Self::Preparation { source } => Some(source),
+            Self::InvalidUtf8 { source, .. } => Some(source),
         }
     }
 }

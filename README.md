@@ -195,6 +195,7 @@ The first milestone is the **evidence loop**:
 49. Reject non-tool activation and replacement intent before filesystem access. ✅
 50. Inspect validated extension catalogs through the developer CLI without activation. ✅
 51. Invoke one exact validated WebAssembly tool through the developer CLI permission boundary. ✅
+52. Prepare selected skill entrypoints as inert bounded UTF-8 instruction artifacts. ✅
 
 ## Project documents
 

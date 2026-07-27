@@ -57,6 +57,14 @@ Each entrypoint read accepts at most 16 MiB (`MAX_ENTRYPOINT_BYTES`) and probes 
 
 Preparation does not compile or validate a WebAssembly component, mutate a registry, authorize a tool, persist state, or execute guest code. Those remain later activation and invocation boundaries.
 
+## Skill instruction preparation
+
+The accepted first skill boundary is specified by [ADR-0004](adr/0004-inert-utf8-skill-preparation.md). `prepare_skill_artifacts(root, selection)` accepts only selected version-one `Skill` records and rejects the lexicographically first other kind before filesystem access. An empty selection returns an empty result without opening the root.
+
+For a non-empty selection, preparation reuses the descriptor-anchored root, package, manifest, and entrypoint revalidation boundary described above. Each entrypoint read accepts at most 1 MiB (`MAX_SKILL_INSTRUCTION_BYTES`) plus one boundary probe byte and must be valid UTF-8. Success returns immutable owned exact IDs and exact authored instruction text in exact-ID order. Any identity, manifest, entrypoint, size, encoding, or kind failure returns no artifact prefix; sourced failures remain available through `std::error::Error::source`.
+
+Prepared skill instructions are inert data. Preparation does not parse Markdown or front matter, register or activate a skill, compose a provider prompt, execute content, grant tool permission, persist enablement, watch files, or activate workflows. A separate future contract must define caller-owned skill registration and explicit prompt composition before these instructions may influence a model turn.
+
 ## Tool component compilation
 
 `compile_tool_components(artifacts)` is the inert compiler boundary for prepared tools. It creates a Wasmtime engine with the Component Model explicitly enabled and compiles binary component bytes without Wasmtime's text-format support. Every component must have no top-level imports and exactly one top-level export: the synchronous function `invoke(input: string) -> result<string, string>` specified structurally by `vela:extension/tool@0.1.0`. Core modules, malformed bytes, imports, missing or additional exports, and incompatible parameter or result types fail closed.
