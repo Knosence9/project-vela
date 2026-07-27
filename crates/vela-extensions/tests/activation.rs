@@ -4,14 +4,15 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 use vela_extensions::{
     ExtensionKind, ExtensionRegistry, ToolActivationError, ToolComponentInvocationError,
-    ToolDeactivationError, ToolExecutionLimits, ToolReplacementError, activate_tool_selection,
-    activate_tool_selection_with_limits, deactivate_tool_selection, replace_tool_selection,
+    ToolDeactivationError, ToolExecutionLimits, ToolReconciliationError, ToolReplacementError,
+    activate_tool_selection, activate_tool_selection_with_limits, deactivate_tool_selection,
+    reconcile_tool_selections, reconcile_tool_selections_with_limits, replace_tool_selection,
     replace_tool_selection_with_limits,
 };
 use vela_kernel::tool::{
     PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationError,
-    ToolRegistry, ToolRegistryError, ToolRegistryInvocationError, ToolRegistryRemovalError,
-    ToolRegistryReplacementError, ToolRequest,
+    ToolRegistry, ToolRegistryError, ToolRegistryInvocationError, ToolRegistryReconciliationError,
+    ToolRegistryRemovalError, ToolRegistryReplacementError, ToolRequest,
 };
 
 const ECHO_COMPONENT: &str = r#"
@@ -233,6 +234,19 @@ fn empty_selection_is_a_noop() {
     )
     .expect("empty activation");
     replace_tool_selection(root.path(), &selection, &mut tools).expect("empty replacement");
+    reconcile_tool_selections(root.path(), &selection, &selection, &mut tools)
+        .expect("empty reconciliation");
+    reconcile_tool_selections_with_limits(
+        root.path(),
+        &selection,
+        &selection,
+        &mut tools,
+        ToolExecutionLimits {
+            max_instances: 0,
+            ..ToolExecutionLimits::default()
+        },
+    )
+    .expect("empty limited reconciliation");
     deactivate_tool_selection(&selection, &mut tools).expect("empty deactivation");
 
     assert_eq!(tools.metadata().len(), 1);
@@ -453,6 +467,315 @@ fn failed_selected_tool_replacement_preserves_the_old_invocable_batch() {
             expected
         );
     }
+}
+
+#[test]
+fn sequential_deactivation_then_failed_activation_exposes_partial_state() {
+    let previous_root = tempdir().expect("previous extension root");
+    write_tool(previous_root.path(), "alpha", "alpha.tool", ECHO_COMPONENT);
+    let previous_extensions =
+        ExtensionRegistry::discover(previous_root.path()).expect("previous registry");
+    let previous = previous_extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool"])
+        .expect("previous selection");
+    let current_root = tempdir().expect("current extension root");
+    write_tool(
+        current_root.path(),
+        "alpha",
+        "alpha.tool",
+        "not a component",
+    );
+    let current_extensions =
+        ExtensionRegistry::discover(current_root.path()).expect("current registry");
+    let current = current_extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool"])
+        .expect("current selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new("alpha.tool", json!({"adapter": "old"})))
+        .expect("old adapter");
+
+    deactivate_tool_selection(&previous, &mut tools).expect("first sequential mutation");
+    let error = activate_tool_selection(current_root.path(), &current, &mut tools)
+        .expect_err("second sequential operation fails");
+
+    assert!(matches!(error, ToolActivationError::Compilation { .. }));
+    assert!(matches!(
+        tools
+            .invoke(
+                &ToolId::new("alpha.tool").unwrap(),
+                &mut Allow,
+                &json!(null),
+            )
+            .expect_err("old adapter was already removed"),
+        ToolRegistryInvocationError::NotFound { .. }
+    ));
+}
+
+#[test]
+fn selected_tool_reconciliation_is_one_atomic_remove_replace_add_transition() {
+    let previous_root = tempdir().expect("previous extension root");
+    write_tool(previous_root.path(), "alpha", "alpha.tool", ECHO_COMPONENT);
+    write_tool(
+        previous_root.path(),
+        "remove",
+        "remove.tool",
+        ECHO_COMPONENT,
+    );
+    let previous_extensions =
+        ExtensionRegistry::discover(previous_root.path()).expect("previous registry");
+    let previous = previous_extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool", "remove.tool"])
+        .expect("previous selection");
+
+    let current_root = tempdir().expect("current extension root");
+    write_tool(current_root.path(), "alpha", "alpha.tool", ECHO_COMPONENT);
+    write_tool(current_root.path(), "added", "added.tool", ECHO_COMPONENT);
+    let current_extensions =
+        ExtensionRegistry::discover(current_root.path()).expect("current registry");
+    let current = current_extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool", "added.tool"])
+        .expect("current selection");
+
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new("alpha.tool", json!({"adapter": "old"})))
+        .expect("old alpha");
+    tools
+        .register(MarkerTool::new("remove.tool", json!({"adapter": "remove"})))
+        .expect("removed tool");
+    tools
+        .register(MarkerTool::new("keep.tool", json!({"adapter": "keep"})))
+        .expect("unrelated tool");
+
+    reconcile_tool_selections_with_limits(
+        current_root.path(),
+        &previous,
+        &current,
+        &mut tools,
+        ToolExecutionLimits::default(),
+    )
+    .expect("atomic reconciliation");
+
+    assert_eq!(
+        tools
+            .metadata()
+            .iter()
+            .map(|metadata| metadata.id().as_str())
+            .collect::<Vec<_>>(),
+        vec!["added.tool", "alpha.tool", "keep.tool"]
+    );
+    for id in ["added.tool", "alpha.tool"] {
+        let input = json!({"tool": id});
+        assert_eq!(
+            tools
+                .invoke(&ToolId::new(id).unwrap(), &mut Allow, &input)
+                .expect("new component invocation"),
+            input
+        );
+    }
+    assert_eq!(
+        tools
+            .invoke(&ToolId::new("keep.tool").unwrap(), &mut Allow, &json!(null),)
+            .expect("unrelated adapter remains"),
+        json!({"adapter": "keep"})
+    );
+    assert!(matches!(
+        tools
+            .invoke(
+                &ToolId::new("remove.tool").unwrap(),
+                &mut Allow,
+                &json!(null),
+            )
+            .expect_err("removed adapter"),
+        ToolRegistryInvocationError::NotFound { .. }
+    ));
+}
+
+#[test]
+fn failed_selected_tool_reconciliation_preserves_every_old_adapter() {
+    let previous_root = tempdir().expect("previous extension root");
+    write_tool(previous_root.path(), "alpha", "alpha.tool", ECHO_COMPONENT);
+    let previous_extensions =
+        ExtensionRegistry::discover(previous_root.path()).expect("previous registry");
+    let previous = previous_extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool"])
+        .expect("previous selection");
+
+    let current_root = tempdir().expect("current extension root");
+    write_tool(
+        current_root.path(),
+        "alpha",
+        "alpha.tool",
+        "not a component",
+    );
+    let current_extensions =
+        ExtensionRegistry::discover(current_root.path()).expect("current registry");
+    let current = current_extensions
+        .select_kind(ExtensionKind::Tool, ["alpha.tool"])
+        .expect("current selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new("alpha.tool", json!({"adapter": "old"})))
+        .expect("old adapter");
+
+    let error = reconcile_tool_selections(current_root.path(), &previous, &current, &mut tools)
+        .expect_err("invalid current component must fail before mutation");
+
+    assert!(matches!(error, ToolReconciliationError::Compilation { .. }));
+    assert_eq!(
+        tools
+            .invoke(
+                &ToolId::new("alpha.tool").unwrap(),
+                &mut Allow,
+                &json!(null),
+            )
+            .expect("old adapter remains"),
+        json!({"adapter": "old"})
+    );
+}
+
+#[test]
+fn selected_tool_reconciliation_reports_registry_conflicts_without_mutation() {
+    let previous_root = tempdir().expect("previous extension root");
+    let previous_extensions =
+        ExtensionRegistry::discover(previous_root.path()).expect("previous registry");
+    let previous = previous_extensions
+        .select_kind(ExtensionKind::Tool, std::iter::empty::<&str>())
+        .expect("empty previous selection");
+    let current_root = tempdir().expect("current extension root");
+    write_tool(current_root.path(), "keep", "keep.tool", ECHO_COMPONENT);
+    let current_extensions =
+        ExtensionRegistry::discover(current_root.path()).expect("current registry");
+    let current = current_extensions
+        .select_kind(ExtensionKind::Tool, ["keep.tool"])
+        .expect("current selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new(
+            "keep.tool",
+            json!({"adapter": "unrelated"}),
+        ))
+        .expect("unrelated adapter");
+
+    let error = reconcile_tool_selections(current_root.path(), &previous, &current, &mut tools)
+        .expect_err("current-only collision");
+
+    assert!(matches!(
+        error,
+        ToolReconciliationError::Registry {
+            source: ToolRegistryReconciliationError::CurrentConflict { ref tool_id }
+        } if tool_id.as_str() == "keep.tool"
+    ));
+    assert_eq!(
+        tools
+            .invoke(&ToolId::new("keep.tool").unwrap(), &mut Allow, &json!(null),)
+            .expect("unrelated adapter remains"),
+        json!({"adapter": "unrelated"})
+    );
+}
+
+#[test]
+fn selected_tool_reconciliation_applies_limits_only_on_later_invocation() {
+    let previous_root = tempdir().expect("previous extension root");
+    write_tool(
+        previous_root.path(),
+        "limited",
+        "limited.tool",
+        ECHO_COMPONENT,
+    );
+    let previous_extensions =
+        ExtensionRegistry::discover(previous_root.path()).expect("previous registry");
+    let previous = previous_extensions
+        .select_kind(ExtensionKind::Tool, ["limited.tool"])
+        .expect("previous selection");
+    let current_root = tempdir().expect("current extension root");
+    write_tool(
+        current_root.path(),
+        "limited",
+        "limited.tool",
+        ECHO_COMPONENT,
+    );
+    let current_extensions =
+        ExtensionRegistry::discover(current_root.path()).expect("current registry");
+    let current = current_extensions
+        .select_kind(ExtensionKind::Tool, ["limited.tool"])
+        .expect("current selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new("limited.tool", json!({"adapter": "old"})))
+        .expect("old adapter");
+
+    reconcile_tool_selections_with_limits(
+        current_root.path(),
+        &previous,
+        &current,
+        &mut tools,
+        ToolExecutionLimits {
+            max_instances: 0,
+            ..ToolExecutionLimits::default()
+        },
+    )
+    .expect("restrictive limits remain inert during reconciliation");
+
+    let error = tools
+        .invoke(
+            &ToolId::new("limited.tool").unwrap(),
+            &mut Allow,
+            &json!(null),
+        )
+        .expect_err("later invocation receives the configured limit");
+    let ToolRegistryInvocationError::Invocation(ToolInvocationError::Tool { error, .. }) = error
+    else {
+        panic!("unexpected registry invocation error: {error:?}");
+    };
+    assert!(matches!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<ToolComponentInvocationError>()),
+        Some(ToolComponentInvocationError::Execution { .. })
+    ));
+}
+
+#[test]
+fn non_tool_selection_cannot_participate_in_tool_reconciliation() {
+    let previous_root = tempdir().expect("previous extension root");
+    let package = previous_root.path().join("skill");
+    fs::create_dir(&package).expect("skill package");
+    fs::write(
+        package.join("extension.yaml"),
+        "manifest_version: 1\nid: shared.id\nkind: skill\nentrypoint: skill.md\n",
+    )
+    .expect("skill manifest");
+    fs::write(package.join("skill.md"), "instructions").expect("skill entrypoint");
+    let previous_extensions =
+        ExtensionRegistry::discover(previous_root.path()).expect("previous registry");
+    let previous = previous_extensions
+        .select(["shared.id"])
+        .expect("non-tool selection");
+    let current_root = tempdir().expect("current extension root");
+    let current_extensions =
+        ExtensionRegistry::discover(current_root.path()).expect("current registry");
+    let current = current_extensions
+        .select_kind(ExtensionKind::Tool, std::iter::empty::<&str>())
+        .expect("empty current selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new("shared.id", json!({"adapter": "old"})))
+        .expect("same-ID adapter");
+
+    let error = reconcile_tool_selections(current_root.path(), &previous, &current, &mut tools)
+        .expect_err("non-tool previous selection");
+
+    assert!(matches!(
+        error,
+        ToolReconciliationError::WrongKind {
+            ref id,
+            actual: ExtensionKind::Skill
+        } if id == "shared.id"
+    ));
+    assert!(error.source().is_none());
+    assert_eq!(tools.metadata()[0].id().as_str(), "shared.id");
 }
 
 fn write_tool(root: &std::path::Path, package_name: &str, id: &str, component: &str) {

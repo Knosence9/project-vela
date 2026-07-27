@@ -175,6 +175,7 @@ The first milestone is the **evidence loop**:
 45. Apply caller-selected uniform resource limits through atomic tool activation. ✅
 46. Revoke selected process-local tool adapters through atomic fail-closed deactivation. ✅
 47. Refresh selected active tool adapters through explicit atomic fail-closed replacement. ✅
+48. Reconcile previous and current selected active tool sets as one atomic remove/replace/add transition. ✅
 
 ## Project documents
 
