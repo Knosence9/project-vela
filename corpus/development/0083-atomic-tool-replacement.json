@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Replace selected active tools atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/635 by refreshing exact active tool adapters without discarding the working batch when changed artifacts fail validation.",
+    "acceptance_criteria": [
+      "Preflight duplicate replacement IDs and require every exact ID to be active before mutation.",
+      "Prepare, compile, and construct the complete replacement selection before swapping adapters.",
+      "Preserve old and unrelated adapters on every staged or registry failure.",
+      "Keep guest execution deferred behind later caller-owned authorization and support explicit uniform limits."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for atomic active-adapter replacement.",
+      "outcome": "failure",
+      "diagnostic": "Focused tests could not compile because the kernel replacement primitive, typed replacement errors, and extension replacement operations did not exist.",
+      "patch": "Added kernel tests for deterministic batch preflight and extension tests for successful refresh, invalid artifacts, missing active IDs, empty selection, and old-adapter preservation."
+    },
+    {
+      "summary": "Implemented staged fail-closed replacement.",
+      "outcome": "success",
+      "diagnostic": "Constructing the complete inert replacement batch before one preflighted registry commit avoids the downtime and partial state of sequential deactivation and activation.",
+      "patch": "Added ToolRegistry::replace_all, ToolReplacementError, default and explicit-limit replacement operations, documentation, and milestone evidence."
+    },
+    {
+      "summary": "Strengthened deferred-execution coverage during independent review.",
+      "outcome": "success",
+      "diagnostic": "The initial tests did not directly prove that a start-trapping guest stayed inert during replacement or that custom limits reached only a later invocation.",
+      "patch": "Added focused tests for no guest instantiation during replacement and restrictive caller-selected limits during the subsequent authorized invocation."
+    }
+  ],
+  "outcome": {
+    "summary": "Selected active WebAssembly tools can now be refreshed atomically while invalid replacements leave the complete old batch invocable and invocation policy remains caller-owned.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_registry batch_replacement", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-extensions --test activation", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30223655976 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/636", "status": "passed"},
+      {"command": "Pull request 636 squash merge 1a100871548cd7bf680c082ddfa50f0b1e87a3c3", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Replacement should prove the new complete batch valid before discarding any working adapter.",
+    "Atomic registry preflight separates adapter construction failures from missing-active-ID failures cleanly.",
+    "A trapping component is useful evidence that lifecycle operations remain inert until invocation.",
+    "Duplicated activation and replacement pipelines should be consolidated in a bounded follow-up rather than expanded in the feature change."
+  ],
+  "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/636"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
