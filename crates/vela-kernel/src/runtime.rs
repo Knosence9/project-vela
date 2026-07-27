@@ -224,15 +224,19 @@ impl ComposedProviderToolStepOutcome<'_> {
     /// Borrows an immutable continuation that retains the exact initial composition and result.
     pub fn continuation(&self) -> Option<ComposedProviderToolContinuation<'_>> {
         match self {
-            Self::ToolCompleted(completed) => Some(ComposedProviderToolContinuation {
-                context: completed.context.clone(),
-                prior_result: ProviderToolResult {
-                    tool_id: &completed.tool_id,
-                    input: &completed.input,
-                    output: &completed.output,
-                },
-            }),
-            Self::Final { .. } => None,
+            Self::ToolCompleted(completed)
+                if completed.continuation == ToolStepContinuation::ProviderRequired =>
+            {
+                Some(ComposedProviderToolContinuation {
+                    context: completed.context.clone(),
+                    prior_result: ProviderToolResult {
+                        tool_id: &completed.tool_id,
+                        input: &completed.input,
+                        output: &completed.output,
+                    },
+                })
+            }
+            _ => None,
         }
     }
 }
@@ -2214,5 +2218,29 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         self.sessions
             .append_turn(session_id, SessionTurnRole::Assistant, assistant_content)
             .map_err(RuntimeError::Session)
+    }
+}
+
+#[cfg(test)]
+mod composed_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn completed_tool_chain_does_not_expose_another_continuation() {
+        let skills = SkillRegistry::new();
+        let outcome = ComposedProviderToolStepOutcome::ToolCompleted(ComposedToolCompleted {
+            tool_id: ToolId::new("tool.done").unwrap(),
+            input: Value::Null,
+            output: Value::Null,
+            continuation: ToolStepContinuation::Complete,
+            context: ComposedToolContext {
+                system_policy: SystemPolicy::new("system"),
+                developer_policy: DeveloperPolicy::new("developer"),
+                selected_skills: skills.select(&[]).unwrap(),
+                transcript: &[],
+            },
+        });
+
+        assert!(outcome.continuation().is_none());
     }
 }

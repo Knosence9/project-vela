@@ -148,13 +148,18 @@ impl Tool for FakeTool {
 
 struct Authorizer {
     calls: usize,
+    decision: PermissionDecision,
 }
 
 impl ToolAuthorizer for Authorizer {
     fn authorize(&mut self, _request: ToolRequest<'_>) -> PermissionDecision {
         self.calls += 1;
-        PermissionDecision::Allow
+        self.decision
     }
+}
+
+fn authorizer(decision: PermissionDecision) -> Authorizer {
+    Authorizer { calls: 0, decision }
 }
 
 fn skill_registry() -> SkillRegistry {
@@ -215,7 +220,7 @@ fn skill_selection_failures_precede_provider_authorization_and_evidence() {
     let mut tools = ToolRegistry::new();
     let mut store = ToolInvocationStore::open(&path).unwrap();
     let invocation_id = ToolInvocationId::new("not-written").unwrap();
-    let mut authorizer = Authorizer { calls: 0 };
+    let mut authorizer = authorizer(PermissionDecision::Allow);
 
     let error = execute_composed_provider_tool_step(
         &mut provider,
@@ -297,7 +302,7 @@ fn initial_final_request_keeps_typed_fields_distinct_and_skips_tool_dispatch() {
         .unwrap();
     let mut store = ToolInvocationStore::open(&path).unwrap();
     let invocation_id = ToolInvocationId::new("unused").unwrap();
-    let mut authorizer = Authorizer { calls: 0 };
+    let mut authorizer = authorizer(PermissionDecision::Allow);
 
     let outcome = execute_composed_provider_tool_step(
         &mut provider,
@@ -376,7 +381,7 @@ fn continuation_retains_composition_and_requires_fresh_tool_authorization() {
     let mut store = ToolInvocationStore::open(&path).unwrap();
     let first_id = ToolInvocationId::new("first").unwrap();
     let second_id = ToolInvocationId::new("second").unwrap();
-    let mut first_authorizer = Authorizer { calls: 0 };
+    let mut first_authorizer = authorizer(PermissionDecision::Allow);
 
     let first = execute_composed_provider_tool_step(
         &mut provider,
@@ -399,7 +404,7 @@ fn continuation_retains_composition_and_requires_fresh_tool_authorization() {
             calls: Rc::new(Cell::new(0)),
         })
         .unwrap();
-    let mut second_authorizer = Authorizer { calls: 0 };
+    let mut second_authorizer = authorizer(PermissionDecision::Allow);
     let second = continue_composed_provider_tool_step(
         &mut provider,
         continuation,
@@ -460,6 +465,61 @@ fn continuation_retains_composition_and_requires_fresh_tool_authorization() {
 }
 
 #[test]
+fn denial_blocks_composed_tool_invocation_and_records_no_success() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let task_id = active_task(&path);
+    let provider_calls = Rc::new(Cell::new(0));
+    let tool_id = ToolId::new("tool.echo").unwrap();
+    let mut provider = Provider::new(
+        vec![Ok(ProviderToolResponse::ToolRequest {
+            tool_id: tool_id.clone(),
+            input: json!({"denied": true}),
+        })],
+        provider_calls.clone(),
+    );
+    let skills = skill_registry();
+    let tool_calls = Rc::new(Cell::new(0));
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(FakeTool {
+            id: tool_id,
+            calls: tool_calls.clone(),
+        })
+        .unwrap();
+    let mut store = ToolInvocationStore::open(&path).unwrap();
+    let invocation_id = ToolInvocationId::new("denied-composed").unwrap();
+    let mut deny = authorizer(PermissionDecision::Deny);
+
+    let error = execute_composed_provider_tool_step(
+        &mut provider,
+        SystemPolicy::new("system"),
+        DeveloperPolicy::new("developer"),
+        &skills,
+        &[SkillId::new("skill.alpha").unwrap()],
+        &[],
+        &mut tools,
+        &mut store,
+        &task_id,
+        invocation_id.clone(),
+        &mut deny,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ComposedProviderToolStepError::Step(ProviderToolStepError::Invocation(_))
+    ));
+    assert_eq!(provider_calls.get(), 1);
+    assert_eq!(deny.calls, 1);
+    assert_eq!(tool_calls.get(), 0);
+    assert_eq!(
+        store.load(&invocation_id).unwrap().unwrap().status(),
+        ToolInvocationStatus::Denied
+    );
+}
+
+#[test]
 fn continuation_provider_failure_preserves_source_and_skips_next_dispatch() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
@@ -488,7 +548,7 @@ fn continuation_provider_failure_preserves_source_and_skips_next_dispatch() {
     let mut store = ToolInvocationStore::open(&path).unwrap();
     let first_id = ToolInvocationId::new("completed-first").unwrap();
     let next_id = ToolInvocationId::new("not-written-next").unwrap();
-    let mut first_authorizer = Authorizer { calls: 0 };
+    let mut first_authorizer = authorizer(PermissionDecision::Allow);
     let first = execute_composed_provider_tool_step(
         &mut provider,
         SystemPolicy::new("system"),
@@ -503,7 +563,7 @@ fn continuation_provider_failure_preserves_source_and_skips_next_dispatch() {
         &mut first_authorizer,
     )
     .unwrap();
-    let mut next_authorizer = Authorizer { calls: 0 };
+    let mut next_authorizer = authorizer(PermissionDecision::Allow);
 
     let error = continue_composed_provider_tool_step(
         &mut provider,
@@ -555,7 +615,7 @@ fn composed_provider_failure_preserves_source_and_skips_dispatch() {
         .unwrap();
     let mut store = ToolInvocationStore::open(&path).unwrap();
     let invocation_id = ToolInvocationId::new("not-written").unwrap();
-    let mut authorizer = Authorizer { calls: 0 };
+    let mut authorizer = authorizer(PermissionDecision::Allow);
 
     let error = execute_composed_provider_tool_step(
         &mut provider,
