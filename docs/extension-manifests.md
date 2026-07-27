@@ -105,6 +105,12 @@ The kernel commit removes previous-only IDs, replaces IDs shared by both selecti
 
 Selections are explicit caller-owned lifecycle evidence: reconciliation never infers adapter ownership from registry metadata. It rebuilds even unchanged current IDs so the current root and artifacts receive the same revalidation as additions. The operation does not watch files, react automatically to snapshot differences, persist enablement, retain rollback history, interrupt an invocation already in flight, invoke guest code during the transition, activate non-tool kinds, or bypass later per-invocation authorization.
 
+## Developer CLI inspection
+
+`vela-dev extension inspect <ROOT>` exposes the immutable discovery catalog without adding another parsing or filesystem boundary. It delegates to `ExtensionRegistry::discover`, then prints one tab-separated record per extension in deterministic manifest-path order: debug-escaped exact authored ID, validated lowercase kind, debug-escaped authored entrypoint, and debug-escaped root-relative manifest path. Quoted escaping keeps untrusted delimiters, newlines, terminal controls, and path bytes inside one field. A final line reports the extension count; an empty valid root reports zero.
+
+Discovery remains all-or-nothing. An unreadable or invalid root exits non-zero with one root-scoped, debug-escaped diagnostic and emits no partial records or success summary. Diagnostic escaping prevents untrusted discovery paths or metadata from adding lines or terminal controls. The command is read-only: it does not recursively or automatically refresh the root, select IDs, activate or compile entrypoints, instantiate or invoke guests, authorize tools, mutate registries, infer configuration, or persist enablement.
+
 ## Ownership and trust boundary
 
 The caller chooses each manifest path or the one extension root. Successful standalone parsing does not consult configuration or inspect an entrypoint on the filesystem. Discovery validates that the entrypoint target is an extension-local regular file at discovery time, but successful parsing or discovery does not register a capability, grant permission, import code, execute an entrypoint, read target content, or persist state. Discovery is not an activation lease: a future loader must reopen targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes again, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.

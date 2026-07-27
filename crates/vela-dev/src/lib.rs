@@ -8,6 +8,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use record::DevelopmentRecord;
+use vela_extensions::{ExtensionKind, ExtensionRegistry};
 
 /// Project Vela's developer-facing command line.
 #[derive(Debug, Parser)]
@@ -30,6 +31,18 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<CorpusCommand>,
     },
+    /// Inspect validated Vela extension packages.
+    Extension {
+        #[command(subcommand)]
+        command: Option<ExtensionCommand>,
+    },
+}
+
+/// Extension-package workflows.
+#[derive(Debug, Subcommand)]
+pub enum ExtensionCommand {
+    /// Discover and print one validated extension root.
+    Inspect { root: PathBuf },
 }
 
 /// Corpus workflows.
@@ -56,9 +69,43 @@ impl Cli {
             Some(Command::Corpus {
                 command: Some(CorpusCommand::Inspect { path }),
             }) => inspect_corpus(&path),
+            Some(Command::Extension {
+                command: Some(ExtensionCommand::Inspect { root }),
+            }) => inspect_extensions(&root),
             _ => ExitCode::SUCCESS,
         }
     }
+}
+
+fn inspect_extensions(root: &Path) -> ExitCode {
+    let registry = match ExtensionRegistry::discover(root) {
+        Ok(registry) => registry,
+        Err(error) => {
+            let diagnostic = error.to_string();
+            eprintln!("$: invalid_extension_root: {diagnostic:?}");
+            return ExitCode::from(1);
+        }
+    };
+
+    for extension in registry.extensions() {
+        let manifest = extension.manifest();
+        let kind = match manifest.kind() {
+            ExtensionKind::Tool => "tool",
+            ExtensionKind::Skill => "skill",
+            ExtensionKind::Workflow => "workflow",
+        };
+        let path = extension
+            .path()
+            .strip_prefix(root)
+            .unwrap_or(extension.path());
+        println!(
+            "{:?}\t{kind}\t{:?}\t{path:?}",
+            manifest.id(),
+            manifest.entrypoint()
+        );
+    }
+    println!("inspected {} extensions", registry.extensions().len());
+    ExitCode::SUCCESS
 }
 
 fn inspect_corpus(root: &Path) -> ExitCode {

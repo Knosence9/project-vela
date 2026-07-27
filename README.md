@@ -122,6 +122,14 @@ nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/de
 
 Inspection prints each valid record and an aggregate summary. It continues past malformed, unreadable, or semantically invalid records, emits path-prefixed diagnostics, and exits non-zero when any record is invalid.
 
+Inspect one caller-selected extension root through the same validated, descriptor-anchored discovery boundary used by the extension library:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- extension inspect path/to/extensions
+```
+
+The command prints tab-separated, debug-escaped exact ID, validated kind, authored entrypoint, and root-relative manifest path fields in deterministic manifest-path order, followed by an aggregate count. Escaping keeps untrusted tabs, newlines, terminal controls, and path bytes inside one quoted field. Invalid roots fail with one escaped diagnostic and without printing a partial catalog. Inspection is read-only and does not select, activate, compile, execute, or persist capabilities.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
@@ -177,6 +185,7 @@ The first milestone is the **evidence loop**:
 47. Refresh selected active tool adapters through explicit atomic fail-closed replacement. ✅
 48. Reconcile previous and current selected active tool sets as one atomic remove/replace/add transition. ✅
 49. Reject non-tool activation and replacement intent before filesystem access. ✅
+50. Inspect validated extension catalogs through the developer CLI without activation. ✅
 
 ## Project documents
 

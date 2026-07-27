@@ -1,0 +1,4 @@
+manifest_version: 1
+id: beta.workflow
+kind: workflow
+entrypoint: WORKFLOW.md

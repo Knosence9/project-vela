@@ -1,0 +1,4 @@
+manifest_version: 1
+id: alpha.skill
+kind: skill
+entrypoint: SKILL.md
