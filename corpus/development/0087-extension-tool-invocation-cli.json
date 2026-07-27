@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Invoke one validated extension tool through the developer CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/647 by connecting one explicit JSON request to the isolated Wasm tool and caller-owned permission boundaries.",
+    "acceptance_criteria": [
+      "Parse exactly one JSON input value before extension filesystem access and select exactly one validated tool ID fail-closed.",
+      "Activate only that tool with default limits in a fresh registry and authorize only its Pure effect for one invocation.",
+      "Print one compact JSON value on success and no partial stdout with one escaped diagnostic for scoped failures.",
+      "Document that the command grants no persistence, reusable permission, retry, host import, watching, or skill and workflow execution."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED coverage for exact JSON invocation and fail-closed inputs.",
+      "outcome": "failure",
+      "diagnostic": "The CLI integration test failed because invoke was not a recognized extension subcommand.",
+      "patch": "Added command-level coverage for a generated echo component, malformed input before root access, wrong-kind selection, and invalid component activation."
+    },
+    {
+      "summary": "Implemented one-shot orchestration through existing extension and kernel contracts.",
+      "outcome": "success",
+      "diagnostic": "A fresh registry plus an authorizer scoped to one exact ID, one Pure effect, and one call kept explicit developer intent narrower than a reusable activation or grant.",
+      "patch": "Parsed input first, discovered and selected one tool, activated it with default limits, invoked it through ToolRegistry authorization, and emitted compact JSON or a shared escaped diagnostic."
+    },
+    {
+      "summary": "Reconciled the documented failure contract after substantive review.",
+      "outcome": "success",
+      "diagnostic": "The detailed extension documentation omitted malformed INPUT_JSON from its no-partial-stdout guarantee while the README used the overbroad phrase every failure.",
+      "patch": "Updated both documentation sites to enumerate malformed input and the scoped discovery, selection, activation, authorization, guest, trap, resource-limit, and malformed-output failure classes."
+    }
+  ],
+  "outcome": {
+    "summary": "The developer CLI now invokes one exact validated no-import Wasm tool with one JSON value through fresh resource limits and a non-reusable caller-owned permission decision.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30244099741 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/648", "status": "passed"},
+      {"command": "Pull request 648 squash merge f238e87eaf2de3207f19936c9324f79658f34c76", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "An explicit CLI request can own a narrow permission decision without turning selected metadata or process-local activation into ambient authority.",
+    "Parsing input before filesystem access makes malformed requests fail earlier and keeps failure ordering deterministic.",
+    "Fresh registries, adapters, stores, and one-use authorization make the command an invocation boundary rather than an enablement lifecycle.",
+    "The substantive review found that detailed documentation omitted malformed INPUT_JSON from the no-partial-stdout guarantee; both documentation sites were updated to enumerate malformed input and the scoped invocation failure classes.",
+    "Failure guarantees should enumerate their intended classes so documentation neither omits required cases nor promises behavior outside the defined boundary."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/648"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
