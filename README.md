@@ -196,6 +196,7 @@ The first milestone is the **evidence loop**:
 50. Inspect validated extension catalogs through the developer CLI without activation. ✅
 51. Invoke one exact validated WebAssembly tool through the developer CLI permission boundary. ✅
 52. Prepare selected skill entrypoints as inert bounded UTF-8 instruction artifacts. ✅
+53. Register prepared skills into caller-owned process-local registries atomically without prompt influence. ✅
 
 ## Project documents
 

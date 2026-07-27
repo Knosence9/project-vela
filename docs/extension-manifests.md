@@ -63,7 +63,13 @@ The accepted first skill boundary is specified by [ADR-0004](adr/0004-inert-utf8
 
 For a non-empty selection, preparation reuses the descriptor-anchored root, package, manifest, and entrypoint revalidation boundary described above. Each entrypoint read accepts at most 1 MiB (`MAX_SKILL_INSTRUCTION_BYTES`) plus one boundary probe byte and must be valid UTF-8. Success returns immutable owned exact IDs and exact authored instruction text in exact-ID order. Any identity, manifest, entrypoint, size, encoding, or kind failure returns no artifact prefix; sourced failures remain available through `std::error::Error::source`.
 
-Prepared skill instructions are inert data. Preparation does not parse Markdown or front matter, register or activate a skill, compose a provider prompt, execute content, grant tool permission, persist enablement, watch files, or activate workflows. A separate future contract must define caller-owned skill registration and explicit prompt composition before these instructions may influence a model turn.
+Prepared skill instructions are inert data. Preparation does not parse Markdown or front matter, register or activate a skill, compose a provider prompt, execute content, grant tool permission, persist enablement, watch files, or activate workflows. Registration and later prompt composition follow the separate contract in [ADR-0005](adr/0005-caller-owned-skill-registration-and-prompt-composition.md).
+
+## Atomic inert skill registration
+
+`register_skill_selection(root, selection, registry)` first rejects the lexicographically first selected non-skill before filesystem access, then reuses the complete descriptor-anchored skill preparation boundary and calls the caller-owned process-local `SkillRegistry` once. The registry preflights exact-ID collisions against existing instructions and within the batch before inserting anything. Any kind, preparation, encoding, or collision failure leaves every registered skill unchanged. An empty selection performs no filesystem access or mutation.
+
+Success preserves exact authored UTF-8 and exposes registered skills in deterministic exact-ID order. Debug output records instruction length rather than instruction bodies. Registration expresses availability only: it does not select a skill for a request, call a provider, compose a prompt, persist enablement, grant tool authority, parse instructions, replace registrations, or activate workflows. ADR-0005 requires a later explicit per-request selection and provider-neutral composition boundary before any registered skill may influence a model turn.
 
 ## Tool component compilation
 
