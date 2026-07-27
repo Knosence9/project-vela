@@ -5,8 +5,9 @@ use tempfile::tempdir;
 use vela_kernel::{
     runtime::{
         ComposedToolAssistantContinuationProvider, ComposedToolAssistantContinuationRequest,
-        ComposedToolAssistantProvider, ComposedToolAssistantRequest, ComposedToolTaskTurnOutcome,
-        DeveloperPolicy, ProviderError, ProviderToolResponse, SystemPolicy, ToolAssistantRuntime,
+        ComposedToolAssistantProvider, ComposedToolAssistantRequest,
+        ComposedToolTaskCorrectionOutcome, ComposedToolTaskTurnOutcome, DeveloperPolicy,
+        ProviderError, ProviderToolResponse, SystemPolicy, ToolAssistantRuntime,
         ToolTaskRuntimeError,
     },
     session::{SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole},
@@ -377,6 +378,264 @@ fn composed_task_turn_retains_authority_through_tool_continuation() {
         ToolInvocationStore::open(&path)
             .unwrap()
             .load(&ToolInvocationId::new("invocation-3-unused").unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn composed_correction_retains_authority_and_parent_through_tool_continuation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id, skills) = setup(&path);
+    let parent_attempt_id = TaskObservationId::new("attempt-parent").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .append_observation(
+            &task_id,
+            parent_attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            vela_kernel::task::TaskObservationText::new("original answer").unwrap(),
+        )
+        .unwrap();
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let provider = Provider {
+        observations: observations.clone(),
+        responses: vec![
+            ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"fact": "check"}),
+            },
+            ProviderToolResponse::Final(SessionTurnContent::new("corrected answer").unwrap()),
+        ],
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut tools = ToolRegistry::new();
+    tools.register(EchoTool).unwrap();
+    let selected = [
+        SkillId::new("skill.zeta").unwrap(),
+        SkillId::new("skill.alpha").unwrap(),
+    ];
+
+    let first = runtime
+        .execute_composed_task_correction_turn(
+            &task_id,
+            &parent_attempt_id,
+            SessionTurnContent::new("correct this").unwrap(),
+            TaskObservationId::new("correction-final").unwrap(),
+            ToolInvocationId::new("correction-invocation-1").unwrap(),
+            SystemPolicy::new("system policy"),
+            DeveloperPolicy::new("developer policy"),
+            &skills,
+            &selected,
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    let continuation = first.continuation().unwrap();
+    assert_eq!(continuation.parent_attempt_id(), &parent_attempt_id);
+    let final_outcome = runtime
+        .continue_composed_correction_task_turn(
+            continuation,
+            TaskObservationId::new("correction-final").unwrap(),
+            ToolInvocationId::new("correction-invocation-unused").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+
+    let ComposedToolTaskCorrectionOutcome::Final { session, task } = final_outcome else {
+        panic!("expected final composed correction outcome")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(task.observations().len(), 2);
+    let correction = &task.observations()[1];
+    assert_eq!(correction.kind(), TaskObservationKind::Correction);
+    assert_eq!(correction.text().as_str(), "corrected answer");
+    assert_eq!(correction.parent_attempt_id(), Some(&parent_attempt_id));
+    assert_eq!(observations.borrow().len(), 2);
+    assert!(observations.borrow().iter().all(|observed| {
+        observed.system == "system policy"
+            && observed.developer == "developer policy"
+            && observed.skills
+                == vec![
+                    ("skill.alpha".into(), "alpha instructions".into()),
+                    ("skill.zeta".into(), "zeta instructions".into()),
+                ]
+            && observed.transcript == vec![(SessionTurnRole::Human, "correct this".into())]
+            && observed.tools == vec![("tool.echo".into(), ToolEffect::Pure)]
+    }));
+    assert_eq!(observations.borrow()[0].prior, None);
+    assert_eq!(
+        observations.borrow()[1].prior,
+        Some((
+            "tool.echo".into(),
+            json!({"fact": "check"}),
+            json!({"echo": {"fact": "check"}}),
+        ))
+    );
+    assert_eq!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("correction-invocation-1").unwrap())
+            .unwrap()
+            .unwrap()
+            .status(),
+        ToolInvocationStatus::Succeeded
+    );
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("correction-invocation-unused").unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn composed_correction_rejects_selection_and_lineage_before_side_effects() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = ToolAssistantRuntime::open(
+        &path,
+        Provider {
+            observations: observations.clone(),
+            responses: vec![],
+        },
+    )
+    .unwrap();
+    let duplicate = SkillId::new("skill.alpha").unwrap();
+
+    let error = runtime
+        .execute_composed_task_correction_turn(
+            &task_id,
+            &TaskObservationId::new("missing-parent").unwrap(),
+            SessionTurnContent::new("must not persist").unwrap(),
+            TaskObservationId::new("correction-unused").unwrap(),
+            ToolInvocationId::new("correction-invocation-unused").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &skills,
+            &[duplicate.clone(), duplicate.clone()],
+            &mut ToolRegistry::new(),
+            &mut Allow(0),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ToolTaskRuntimeError::SkillSelection(SkillSelectionError::DuplicateId { skill_id })
+            if skill_id == duplicate
+    ));
+
+    let error = runtime
+        .execute_composed_task_correction_turn(
+            &task_id,
+            &TaskObservationId::new("missing-parent").unwrap(),
+            SessionTurnContent::new("still must not persist").unwrap(),
+            TaskObservationId::new("correction-unused").unwrap(),
+            ToolInvocationId::new("correction-invocation-unused").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &skills,
+            std::slice::from_ref(&duplicate),
+            &mut ToolRegistry::new(),
+            &mut Allow(0),
+        )
+        .unwrap_err();
+    assert!(matches!(error, ToolTaskRuntimeError::Task(_)));
+    assert!(observations.borrow().is_empty());
+    assert!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("correction-invocation-unused").unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn composed_correction_rejects_a_stale_transcript_before_continuation_provider_work() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id, skills) = setup(&path);
+    let parent_attempt_id = TaskObservationId::new("attempt-parent").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .append_observation(
+            &task_id,
+            parent_attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            vela_kernel::task::TaskObservationText::new("original answer").unwrap(),
+        )
+        .unwrap();
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = ToolAssistantRuntime::open(
+        &path,
+        Provider {
+            observations: observations.clone(),
+            responses: vec![ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"fact": "check"}),
+            }],
+        },
+    )
+    .unwrap();
+    let mut tools = ToolRegistry::new();
+    tools.register(EchoTool).unwrap();
+    let first = runtime
+        .execute_composed_task_correction_turn(
+            &task_id,
+            &parent_attempt_id,
+            SessionTurnContent::new("correct this").unwrap(),
+            TaskObservationId::new("correction-final").unwrap(),
+            ToolInvocationId::new("correction-invocation-1").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &skills,
+            &[SkillId::new("skill.alpha").unwrap()],
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .append_turn(
+            &session_id,
+            SessionTurnRole::Human,
+            SessionTurnContent::new("racing turn").unwrap(),
+        )
+        .unwrap();
+
+    let error = runtime
+        .continue_composed_correction_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("correction-final").unwrap(),
+            ToolInvocationId::new("correction-invocation-2").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ToolTaskRuntimeError::StaleContinuationTranscript { task_id: stale } if stale == task_id
+    ));
+    assert_eq!(observations.borrow().len(), 1);
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("correction-invocation-2").unwrap())
             .unwrap()
             .is_none()
     );

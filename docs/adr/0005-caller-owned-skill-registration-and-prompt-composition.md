@@ -7,6 +7,7 @@
 - **First execution issue:** [#655](https://github.com/Knosence9/project-vela/issues/655)
 - **Composed tool execution issue:** [#660](https://github.com/Knosence9/project-vela/issues/660)
 - **Durable composed attempt issue:** [#664](https://github.com/Knosence9/project-vela/issues/664)
+- **Durable composed correction issue:** [#666](https://github.com/Knosence9/project-vela/issues/666)
 
 ## Context
 
@@ -33,7 +34,9 @@ Provider adapters may lower those typed fields into provider-native roles, but m
 
 The additive low-level composed tool boundary preserves that authority across explicit bounded provider/tool chains. Its initial request keeps caller system policy, caller developer policy, selected skills, durable transcript, and deterministic tool metadata structurally distinct. Tool metadata, tool input, and tool output are capability/data fields, not instruction authority. A successful tool step retains the exact policy fields, selected skill blocks, transcript, and in-memory result in an opaque continuation; later calls can refresh descriptive tool metadata but cannot replace the retained composition. Every step still calls the provider at most once, dispatches at most one tool, requires a fresh caller-owned invocation identity and authorizer, and advances only through an explicit caller operation. Skill selection never grants tool permission. Existing skill-free tool traits and operations remain unchanged.
 
-The first durable integration applies that contract only to attempt-producing task turns. Selection succeeds before any durable or provider/tool side effect. The initial operation then reuses the existing task/session/invocation preflight and ordered human-turn boundary. Final content commits an assistant turn followed by an exact Attempt; a tool result remains in memory with the immutable task, transcript, policy, and skill-selection context. Explicit continuation revalidates the active task and exact durable transcript, refreshes only tool metadata, requires a fresh invocation identity and authorizer for another tool, and conditionally appends final content before the Attempt. Existing skill-free task methods remain unchanged; correction, completion, failure, and cancellation composition require separate bounded integrations.
+The first durable integration initially applied that contract only to attempt-producing task turns. Selection succeeds before any durable or provider/tool side effect. The initial operation then reuses the existing task/session/invocation preflight and ordered human-turn boundary. Final content commits an assistant turn followed by an exact Attempt; a tool result remains in memory with the immutable task, transcript, policy, and skill-selection context. Explicit continuation revalidates the active task and exact durable transcript, refreshes only tool metadata, requires a fresh invocation identity and authorizer for another tool, and conditionally appends final content before the Attempt. Existing skill-free task methods remain unchanged.
+
+The additive correction integration retains the caller-selected parent Attempt in its opaque composed continuation alongside the same immutable authority and in-memory result context. It validates skill selection before correction lineage or side effects, reuses the established stale-transcript and invocation boundaries, and appends final provider content as an exact Correction linked to that parent. Existing skill-free correction methods remain unchanged; terminal intent composition still requires separate bounded integrations.
 
 ## Alternatives considered
 
