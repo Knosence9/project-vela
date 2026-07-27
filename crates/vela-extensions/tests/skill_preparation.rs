@@ -78,6 +78,20 @@ fn rejects_first_non_skill_before_filesystem_access() {
 }
 
 #[test]
+fn preparation_kind_mismatch_reports_the_requested_kind() {
+    let error = ExtensionPreparationError::ExpectedKindMismatch {
+        id: "review.skill".to_owned(),
+        expected: ExtensionKind::Skill,
+        actual: ExtensionKind::Tool,
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "selected extension \"review.skill\" has kind Tool, expected Skill"
+    );
+}
+
+#[test]
 fn rejects_invalid_utf8_with_the_exact_id_and_source() {
     let root = tempdir().expect("temporary extension root");
     write_extension(root.path(), "skill", "review.skill", "skill", "valid");

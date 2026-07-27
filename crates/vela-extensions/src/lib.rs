@@ -832,6 +832,11 @@ pub enum ExtensionPreparationError {
         id: String,
         actual: ExtensionKind,
     },
+    ExpectedKindMismatch {
+        id: String,
+        expected: ExtensionKind,
+        actual: ExtensionKind,
+    },
     Package {
         id: String,
         path: PathBuf,
@@ -1134,12 +1139,12 @@ pub fn prepare_skill_artifacts(
     .map_err(|source| SkillPreparationError::Preparation { source })?
     .into_iter()
     .map(|artifact| {
-        let instructions = std::str::from_utf8(&artifact.bytes)
-            .map_err(|source| SkillPreparationError::InvalidUtf8 {
+        let instructions = String::from_utf8(artifact.bytes).map_err(|source| {
+            SkillPreparationError::InvalidUtf8 {
                 id: artifact.id.clone(),
-                source,
-            })?
-            .to_owned();
+                source: source.utf8_error(),
+            }
+        })?;
         Ok(PreparedSkillArtifact {
             id: artifact.id,
             instructions,
@@ -1440,9 +1445,15 @@ fn prepare_artifact_bytes_platform(
             });
         }
         if extension.manifest().kind() != expected_kind {
-            return Err(ExtensionPreparationError::KindMismatch {
-                id,
-                actual: extension.manifest().kind(),
+            let actual = extension.manifest().kind();
+            return Err(if expected_kind == ExtensionKind::Tool {
+                ExtensionPreparationError::KindMismatch { id, actual }
+            } else {
+                ExtensionPreparationError::ExpectedKindMismatch {
+                    id,
+                    expected: expected_kind,
+                    actual,
+                }
             });
         }
         let package_name = selected_package_name(extension).ok_or_else(|| {
@@ -1914,6 +1925,14 @@ impl fmt::Display for ExtensionPreparationError {
                 formatter,
                 "selected extension {id:?} has kind {actual:?}, expected Tool"
             ),
+            Self::ExpectedKindMismatch {
+                id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "selected extension {id:?} has kind {actual:?}, expected {expected:?}"
+            ),
             Self::Package { id, path, source } => write!(
                 formatter,
                 "could not reopen selected extension package {id:?} at {}: {source}",
@@ -1966,6 +1985,7 @@ impl Error for ExtensionPreparationError {
             Self::Manifest { source, .. } => Some(source),
             Self::SourceMismatch { .. }
             | Self::KindMismatch { .. }
+            | Self::ExpectedKindMismatch { .. }
             | Self::PackageChanged { .. }
             | Self::ManifestChanged { .. }
             | Self::EntrypointTooLarge { .. } => None,
