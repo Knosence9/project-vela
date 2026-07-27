@@ -8,7 +8,10 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use record::DevelopmentRecord;
-use vela_extensions::{ExtensionKind, ExtensionRegistry};
+use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
+use vela_kernel::tool::{
+    PermissionDecision, ToolAuthorizer, ToolEffect, ToolId, ToolRegistry, ToolRequest,
+};
 
 /// Project Vela's developer-facing command line.
 #[derive(Debug, Parser)]
@@ -31,7 +34,7 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<CorpusCommand>,
     },
-    /// Inspect validated Vela extension packages.
+    /// Work with validated Vela extension packages.
     Extension {
         #[command(subcommand)]
         command: Option<ExtensionCommand>,
@@ -43,6 +46,12 @@ pub enum Command {
 pub enum ExtensionCommand {
     /// Discover and print one validated extension root.
     Inspect { root: PathBuf },
+    /// Invoke one exact validated WebAssembly tool with a JSON value.
+    Invoke {
+        root: PathBuf,
+        id: String,
+        input_json: String,
+    },
 }
 
 /// Corpus workflows.
@@ -72,19 +81,81 @@ impl Cli {
             Some(Command::Extension {
                 command: Some(ExtensionCommand::Inspect { root }),
             }) => inspect_extensions(&root),
+            Some(Command::Extension {
+                command:
+                    Some(ExtensionCommand::Invoke {
+                        root,
+                        id,
+                        input_json,
+                    }),
+            }) => invoke_extension(&root, &id, &input_json),
             _ => ExitCode::SUCCESS,
         }
     }
 }
 
+fn invoke_extension(root: &Path, id: &str, input_json: &str) -> ExitCode {
+    let input = match serde_json::from_str(input_json) {
+        Ok(input) => input,
+        Err(error) => return extension_error("invalid_tool_input", error),
+    };
+    let extensions = match ExtensionRegistry::discover(root) {
+        Ok(extensions) => extensions,
+        Err(error) => return extension_error("invalid_extension_root", error),
+    };
+    let selection = match extensions.select_kind(ExtensionKind::Tool, [id]) {
+        Ok(selection) => selection,
+        Err(error) => return extension_error("invalid_tool_selection", error),
+    };
+    let mut tools = ToolRegistry::new();
+    if let Err(error) = activate_tool_selection(root, &selection, &mut tools) {
+        return extension_error("tool_activation_failed", error);
+    }
+    let tool_id = match ToolId::new(id) {
+        Ok(tool_id) => tool_id,
+        Err(error) => return extension_error("tool_activation_failed", error),
+    };
+    let mut authorizer = OneShotPureAuthorization {
+        tool_id: tool_id.clone(),
+        available: true,
+    };
+    let output = match tools.invoke(&tool_id, &mut authorizer, &input) {
+        Ok(output) => output,
+        Err(error) => return extension_error("tool_invocation_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+struct OneShotPureAuthorization {
+    tool_id: ToolId,
+    available: bool,
+}
+
+impl ToolAuthorizer for OneShotPureAuthorization {
+    fn authorize(&mut self, request: ToolRequest<'_>) -> PermissionDecision {
+        if self.available
+            && request.tool_id() == &self.tool_id
+            && request.effect() == ToolEffect::Pure
+        {
+            self.available = false;
+            PermissionDecision::Allow
+        } else {
+            PermissionDecision::Deny
+        }
+    }
+}
+
+fn extension_error(code: &str, error: impl std::fmt::Display) -> ExitCode {
+    let diagnostic = error.to_string();
+    eprintln!("$: {code}: {diagnostic:?}");
+    ExitCode::from(1)
+}
+
 fn inspect_extensions(root: &Path) -> ExitCode {
     let registry = match ExtensionRegistry::discover(root) {
         Ok(registry) => registry,
-        Err(error) => {
-            let diagnostic = error.to_string();
-            eprintln!("$: invalid_extension_root: {diagnostic:?}");
-            return ExitCode::from(1);
-        }
+        Err(error) => return extension_error("invalid_extension_root", error),
     };
 
     for extension in registry.extensions() {

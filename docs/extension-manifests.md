@@ -111,6 +111,12 @@ Selections are explicit caller-owned lifecycle evidence: reconciliation never in
 
 Discovery remains all-or-nothing. An unreadable or invalid root exits non-zero with one root-scoped, debug-escaped diagnostic and emits no partial records or success summary. Diagnostic escaping prevents untrusted discovery paths or metadata from adding lines or terminal controls. The command is read-only: it does not recursively or automatically refresh the root, select IDs, activate or compile entrypoints, instantiate or invoke guests, authorize tools, mutate registries, infer configuration, or persist enablement.
 
+## Developer CLI invocation
+
+`vela-dev extension invoke <ROOT> <EXACT_ID> <INPUT_JSON>` connects one explicit developer request to the existing library boundaries without adding another loader or executor. It parses the input as exactly one JSON value before touching the extension root, discovers the complete root, selects exactly one validated `Tool` ID, activates only that selection with default limits into a fresh process-local registry, and invokes it through the kernel permission protocol. The CLI-owned authorizer permits only the selected exact ID, only its version-one `Pure` effect, and only once.
+
+Success prints exactly one compact JSON value followed by a newline. Malformed `INPUT_JSON` and discovery, selection, activation, authorization, guest, trap, resource-limit, or malformed-output failures print no partial stdout and emit one debug-escaped single-line diagnostic. The explicit invocation is not a reusable grant: the command does not persist activation, permission, input, or output; retry; watch or refresh the root; expose host imports; or activate skills and workflows.
+
 ## Ownership and trust boundary
 
 The caller chooses each manifest path or the one extension root. Successful standalone parsing does not consult configuration or inspect an entrypoint on the filesystem. Discovery validates that the entrypoint target is an extension-local regular file at discovery time, but successful parsing or discovery does not register a capability, grant permission, import code, execute an entrypoint, read target content, or persist state. Discovery is not an activation lease: a future loader must reopen targets relative to an anchored extension-directory descriptor, reject symlink or file-type escapes again, and apply its own identity, lifecycle, compatibility, permission, and isolation rules before activation.

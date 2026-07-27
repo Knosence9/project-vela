@@ -3,6 +3,35 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::tempdir;
 
+const ECHO_COMPONENT: &str = r#"
+(component
+  (core module $guest
+    (memory (export "memory") 1)
+    (global $next (mut i32) (i32.const 64))
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      global.get $next
+      global.get $next
+      local.get 3
+      i32.add
+      global.set $next)
+    (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
+      i32.const 4
+      local.get $ptr
+      i32.store
+      i32.const 8
+      local.get $len
+      i32.store
+      i32.const 0))
+  (core instance $guest (instantiate $guest))
+  (type $outcome (result string (error string)))
+  (type $invoke (func (param "input" string) (result $outcome)))
+  (func $invoke (type $invoke)
+    (canon lift (core func $guest "invoke")
+      (memory $guest "memory")
+      (realloc (func $guest "realloc"))))
+  (export "invoke" (func $invoke)))
+"#;
+
 #[test]
 fn help_identifies_vela_developer_tooling() {
     let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
@@ -164,6 +193,75 @@ fn extension_inspection_escapes_untrusted_record_fields() {
     assert!(stderr.starts_with("$: invalid_extension_root: \""));
     assert!(stderr.contains("package\\nforged/extension.yaml"));
     assert!(!stderr.contains('\u{1b}'));
+}
+
+#[test]
+fn invokes_one_exact_tool_with_json_through_the_cli_permission_boundary() {
+    let root = tempdir().expect("extension root");
+    write_extension(root.path(), "echo", "echo.tool", "tool", ECHO_COMPONENT);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "extension",
+            "invoke",
+            root.path().to_str().expect("UTF-8 temporary root"),
+            "echo.tool",
+            r#"{"nested":[true,null,3]}"#,
+        ])
+        .assert()
+        .success()
+        .stdout("{\"nested\":[true,null,3]}\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn extension_invocation_rejects_input_before_filesystem_access_and_fails_closed_on_kind() {
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "extension",
+            "invoke",
+            "tests/fixtures/missing-extensions",
+            "echo.tool",
+            "not-json",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: invalid_tool_input:"));
+
+    let root = tempdir().expect("extension root");
+    write_extension(root.path(), "skill", "alpha.skill", "skill", "not wasm");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "extension",
+            "invoke",
+            root.path().to_str().expect("UTF-8 temporary root"),
+            "alpha.skill",
+            "null",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: invalid_tool_selection:"));
+}
+
+fn write_extension(root: &std::path::Path, package: &str, id: &str, kind: &str, body: &str) {
+    let package = root.join(package);
+    fs::create_dir(&package).expect("package directory");
+    fs::write(
+        package.join("extension.yaml"),
+        format!("manifest_version: 1\nid: {id}\nkind: {kind}\nentrypoint: run.wasm\n"),
+    )
+    .expect("manifest");
+    let bytes = if kind == "tool" {
+        wat::parse_str(body).expect("valid test component")
+    } else {
+        body.as_bytes().to_vec()
+    };
+    fs::write(package.join("run.wasm"), bytes).expect("entrypoint");
 }
 
 #[test]

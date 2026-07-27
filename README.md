@@ -130,6 +130,14 @@ nix develop --command cargo run --locked -p vela-dev -- extension inspect path/t
 
 The command prints tab-separated, debug-escaped exact ID, validated kind, authored entrypoint, and root-relative manifest path fields in deterministic manifest-path order, followed by an aggregate count. Escaping keeps untrusted tabs, newlines, terminal controls, and path bytes inside one quoted field. Invalid roots fail with one escaped diagnostic and without printing a partial catalog. Inspection is read-only and does not select, activate, compile, execute, or persist capabilities.
 
+Invoke one exact validated tool with one JSON value through the existing isolated WebAssembly and per-invocation permission boundaries:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- extension invoke path/to/extensions local.search '{"query":"Vela"}'
+```
+
+The explicit command authorizes only that one selected version-one `Pure` tool invocation. It uses a fresh process-local registry, default resource limits, and a fresh guest store; successful output is one compact JSON value. Malformed `INPUT_JSON` and discovery, selection, activation, authorization, guest, trap, resource-limit, or malformed-output failures emit one escaped diagnostic without partial stdout. Invocation does not persist activation or permission, grant host capabilities, retry, or run skills and workflows.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
@@ -186,6 +194,7 @@ The first milestone is the **evidence loop**:
 48. Reconcile previous and current selected active tool sets as one atomic remove/replace/add transition. ✅
 49. Reject non-tool activation and replacement intent before filesystem access. ✅
 50. Inspect validated extension catalogs through the developer CLI without activation. ✅
+51. Invoke one exact validated WebAssembly tool through the developer CLI permission boundary. ✅
 
 ## Project documents
 
