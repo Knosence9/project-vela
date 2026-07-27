@@ -70,7 +70,7 @@ Those policies require product evidence that the first process-local registry do
 - Callers and provider adapters must opt into the separate composed provider trait and turn method; existing turns intentionally ignore registered skills.
 - Process restart loses registrations.
 - Exact-ID ordering is deterministic but does not express dependencies or author-selected precedence.
-- Correction, completion, failure, and cancellation composition still require separately bounded integrations.
+- Completion, failure, and cancellation composition still require separately bounded integrations.
 
 ## Verification
 
@@ -82,6 +82,8 @@ The composed tool slice proves selection failure before provider or invocation s
 
 The durable attempt slice additionally proves selection failure before transcript persistence, exact composition across task-bound tool continuations, reuse of durable invocation evidence, and final assistant-turn/Attempt ordering.
 
+The durable correction slice additionally proves selection and lineage failure before any side effect, exact parent-Attempt and composition retention across task-bound tool continuations, and stale-transcript rejection before continuation provider work.
+
 ## Revisit when
 
-Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, composed correction or terminal task turns, replacement or hot reload, workflows, remote packages, or content-addressed identity.
+Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, composed terminal task turns, replacement or hot reload, workflows, remote packages, or content-addressed identity.
