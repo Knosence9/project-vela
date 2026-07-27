@@ -201,6 +201,7 @@ The first milestone is the **evidence loop**:
 55. Preserve explicit skill composition across caller-driven bounded provider/tool continuations. ✅
 56. Preserve explicit skill composition across durable attempt-producing task tool turns. ✅
 57. Preserve explicit skill composition and parent lineage across durable correction tool turns. ✅
+58. Preserve explicit skill composition across durable completion tool turns. ✅
 
 ## Project documents
 

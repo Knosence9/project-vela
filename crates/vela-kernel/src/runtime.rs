@@ -744,6 +744,117 @@ fn composed_correction_outcome<'a>(
     }
 }
 
+/// The durable result of one explicitly composed completion-oriented tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ComposedToolTaskCompletionOutcome<'a> {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        selected_skills: SkillSelection<'a>,
+    },
+}
+
+impl ComposedToolTaskCompletionOutcome<'_> {
+    /// Borrows the exact composition and completion intent for one continuation.
+    pub fn continuation(&self) -> Option<ComposedToolTaskCompletionContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                tool_id,
+                input,
+                output,
+                system_policy,
+                developer_policy,
+                selected_skills,
+                ..
+            } => Some(ComposedToolTaskCompletionContinuation {
+                task_id,
+                provider: ComposedProviderToolContinuation {
+                    context: ComposedToolContext {
+                        system_policy: *system_policy,
+                        developer_policy: *developer_policy,
+                        selected_skills: selected_skills.clone(),
+                        transcript: session.turns(),
+                    },
+                    prior_result: ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                },
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed composed continuation restricted to completion-producing operations.
+#[derive(Clone, Debug)]
+pub struct ComposedToolTaskCompletionContinuation<'a> {
+    task_id: &'a TaskId,
+    provider: ComposedProviderToolContinuation<'a>,
+}
+
+impl ComposedToolTaskCompletionContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+}
+
+fn complete_composed_outcome<'a>(
+    tasks: &mut TaskStore,
+    outcome: ComposedToolTaskTurnOutcome<'a>,
+) -> Result<ComposedToolTaskCompletionOutcome<'a>, ToolTaskRuntimeError> {
+    match outcome {
+        ComposedToolTaskTurnOutcome::Final { session, task } => {
+            let content = session
+                .turns()
+                .last()
+                .expect("a final composed task outcome has an assistant turn")
+                .content();
+            let output = TaskOutput::new(content.as_str())
+                .map_err(ToolTaskRuntimeError::InvalidTaskOutput)?;
+            let task = tasks
+                .complete(task.id(), output)
+                .map_err(ToolTaskRuntimeError::Task)?;
+            Ok(ComposedToolTaskCompletionOutcome::Final { session, task })
+        }
+        ComposedToolTaskTurnOutcome::ToolCompleted {
+            session,
+            task_id,
+            tool_id,
+            input,
+            output,
+            continuation,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        } => Ok(ComposedToolTaskCompletionOutcome::ToolCompleted {
+            session,
+            task_id,
+            tool_id,
+            input,
+            output,
+            continuation,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        }),
+    }
+}
+
 /// The durable result of one initial tool-capable task turn.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1718,6 +1829,39 @@ impl<P: ComposedToolAssistantProvider> ToolAssistantRuntime<P> {
         )
     }
 
+    /// Executes one explicitly composed completion turn through a bounded provider/tool step.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "composed completion retains explicit policy, skill, evidence, and tool inputs"
+    )]
+    pub fn complete_composed_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        skill_registry: &'a SkillRegistry,
+        selected_skill_ids: &[SkillId],
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskCompletionOutcome<'a>, ToolTaskRuntimeError> {
+        let outcome = self.execute_composed_task_turn(
+            task_id,
+            human_content,
+            attempt_observation_id,
+            invocation_id,
+            system_policy,
+            developer_policy,
+            skill_registry,
+            selected_skill_ids,
+            registry,
+            authorizer,
+        )?;
+        complete_composed_outcome(&mut self.tasks, outcome)
+    }
+
     /// Executes an explicitly composed correction turn while retaining caller-owned lineage.
     #[allow(
         clippy::too_many_arguments,
@@ -2246,6 +2390,29 @@ impl<P: ComposedToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
             registry,
             authorizer,
         )
+    }
+
+    /// Continues a composed completion while preserving its immutable authority context.
+    pub fn continue_composed_completion_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        continuation: ComposedToolTaskCompletionContinuation<'a>,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskCompletionOutcome<'a>, ToolTaskRuntimeError> {
+        let continuation = ComposedToolTaskContinuation {
+            task_id: continuation.task_id,
+            provider: continuation.provider,
+        };
+        let outcome = self.continue_composed_task_turn(
+            continuation,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        complete_composed_outcome(&mut self.tasks, outcome)
     }
 
     /// Continues a composed correction while preserving policy, skills, and parent Attempt.

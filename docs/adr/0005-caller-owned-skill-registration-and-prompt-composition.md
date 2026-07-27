@@ -8,6 +8,7 @@
 - **Composed tool execution issue:** [#660](https://github.com/Knosence9/project-vela/issues/660)
 - **Durable composed attempt issue:** [#664](https://github.com/Knosence9/project-vela/issues/664)
 - **Durable composed correction issue:** [#666](https://github.com/Knosence9/project-vela/issues/666)
+- **Durable composed completion issue:** [#668](https://github.com/Knosence9/project-vela/issues/668)
 
 ## Context
 
@@ -36,7 +37,9 @@ The additive low-level composed tool boundary preserves that authority across ex
 
 The first durable integration initially applied that contract only to attempt-producing task turns. Selection succeeds before any durable or provider/tool side effect. The initial operation then reuses the existing task/session/invocation preflight and ordered human-turn boundary. Final content commits an assistant turn followed by an exact Attempt; a tool result remains in memory with the immutable task, transcript, policy, and skill-selection context. Explicit continuation revalidates the active task and exact durable transcript, refreshes only tool metadata, requires a fresh invocation identity and authorizer for another tool, and conditionally appends final content before the Attempt. Existing skill-free task methods remain unchanged.
 
-The additive correction integration retains the caller-selected parent Attempt in its opaque composed continuation alongside the same immutable authority and in-memory result context. It validates skill selection before correction lineage or side effects, reuses the established stale-transcript and invocation boundaries, and appends final provider content as an exact Correction linked to that parent. Existing skill-free correction methods remain unchanged; terminal intent composition still requires separate bounded integrations.
+The additive correction integration retains the caller-selected parent Attempt in its opaque composed continuation alongside the same immutable authority and in-memory result context. It validates skill selection before correction lineage or side effects, reuses the established stale-transcript and invocation boundaries, and appends final provider content as an exact Correction linked to that parent. Existing skill-free correction methods remain unchanged.
+
+The additive completion integration retains explicit caller completion intent with the same immutable composition and in-memory result context. It validates selection before task, session, invocation, provider, or tool side effects; continuations revalidate the active task and exact transcript. Final content commits an assistant turn, exact Attempt, and completion in order, with that content used unchanged as task output. Existing skill-free completion methods remain unchanged; composed failure and cancellation require separate bounded integrations.
 
 ## Alternatives considered
 
@@ -84,6 +87,8 @@ The durable attempt slice additionally proves selection failure before transcrip
 
 The durable correction slice additionally proves selection and lineage failure before any side effect, exact parent-Attempt and composition retention across task-bound tool continuations, and stale-transcript rejection before continuation provider work.
 
+The durable completion slice additionally proves exact composition across completion continuations, assistant-turn/Attempt/completion ordering, exact final output, and selection or stale/terminal rejection before forbidden side effects.
+
 ## Revisit when
 
-Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, composed terminal task turns, replacement or hot reload, workflows, remote packages, or content-addressed identity.
+Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, composed failure or cancellation turns, replacement or hot reload, workflows, remote packages, or content-addressed identity.
