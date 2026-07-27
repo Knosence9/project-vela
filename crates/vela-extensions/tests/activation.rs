@@ -188,26 +188,42 @@ fn explicit_limits_are_applied_only_when_an_activated_tool_is_invoked() {
 }
 
 #[test]
-fn non_tool_selection_leaves_the_registry_unchanged() {
+fn activation_rejects_the_first_non_tool_before_filesystem_access() {
     let root = tempdir().expect("temporary extension root");
-    write_tool(root.path(), "skill", "skill.one", ECHO_COMPONENT);
+    write_tool(root.path(), "zeta", "zeta.skill", ECHO_COMPONENT);
     fs::write(
-        root.path().join("skill/extension.yaml"),
-        "manifest_version: 1\nid: skill.one\nkind: skill\nentrypoint: run\n",
+        root.path().join("zeta/extension.yaml"),
+        "manifest_version: 1\nid: zeta.skill\nkind: skill\nentrypoint: run\n",
     )
     .expect("rewrite skill manifest");
+    write_tool(root.path(), "alpha", "alpha.workflow", ECHO_COMPONENT);
+    fs::write(
+        root.path().join("alpha/extension.yaml"),
+        "manifest_version: 1\nid: alpha.workflow\nkind: workflow\nentrypoint: run\n",
+    )
+    .expect("rewrite workflow manifest");
     let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
-    let selection = extensions.select(["skill.one"]).expect("generic selection");
+    let selection = extensions
+        .select(["zeta.skill", "alpha.workflow"])
+        .expect("generic selection");
     let mut tools = ToolRegistry::new();
     tools
         .register(DummyTool::new("existing.tool"))
         .expect("seed registry");
+    fs::remove_dir_all(root.path()).expect("remove root before activation");
 
     let error = activate_tool_selection(root.path(), &selection, &mut tools)
         .expect_err("unsupported kind must fail closed");
 
-    assert!(matches!(error, ToolActivationError::Preparation { .. }));
-    assert_eq!(tools.metadata().len(), 1);
+    assert!(matches!(
+        error,
+        ToolActivationError::WrongKind {
+            ref id,
+            actual: ExtensionKind::Workflow
+        } if id == "alpha.workflow"
+    ));
+    assert!(error.source().is_none());
+    assert_eq!(tools.metadata()[0].id().as_str(), "existing.tool");
 }
 
 #[test]
@@ -467,6 +483,46 @@ fn failed_selected_tool_replacement_preserves_the_old_invocable_batch() {
             expected
         );
     }
+}
+
+#[test]
+fn replacement_rejects_non_tools_before_filesystem_access_and_preserves_old_adapter() {
+    let root = tempdir().expect("temporary extension root");
+    write_tool(root.path(), "skill", "shared.id", ECHO_COMPONENT);
+    fs::write(
+        root.path().join("skill/extension.yaml"),
+        "manifest_version: 1\nid: shared.id\nkind: skill\nentrypoint: run\n",
+    )
+    .expect("rewrite skill manifest");
+    let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
+    let selection = extensions.select(["shared.id"]).expect("generic selection");
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(MarkerTool::new("shared.id", json!({"adapter": "old"})))
+        .expect("seed old adapter");
+    fs::remove_dir_all(root.path()).expect("remove root before replacement");
+
+    let error = replace_tool_selection(root.path(), &selection, &mut tools)
+        .expect_err("unsupported kind must fail before root access");
+
+    assert!(matches!(
+        error,
+        ToolReplacementError::WrongKind {
+            ref id,
+            actual: ExtensionKind::Skill
+        } if id == "shared.id"
+    ));
+    assert!(error.source().is_none());
+    assert_eq!(
+        tools
+            .invoke(
+                &ToolId::new("shared.id").expect("tool ID"),
+                &mut Allow,
+                &json!(null),
+            )
+            .expect("old adapter remains invocable"),
+        json!({"adapter": "old"})
+    );
 }
 
 #[test]

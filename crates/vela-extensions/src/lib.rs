@@ -332,6 +332,10 @@ impl Error for ComponentToolConstructionError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ToolActivationError {
+    WrongKind {
+        id: String,
+        actual: ExtensionKind,
+    },
     Preparation {
         source: ExtensionPreparationError,
     },
@@ -350,6 +354,12 @@ pub enum ToolActivationError {
 impl fmt::Display for ToolActivationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::WrongKind { id, actual } => {
+                write!(
+                    formatter,
+                    "selected capability {id} is {actual:?}, not Tool"
+                )
+            }
             Self::Preparation { .. } => formatter.write_str("failed to prepare selected tools"),
             Self::Compilation { .. } => formatter.write_str("failed to compile selected tools"),
             Self::Construction { id, .. } => {
@@ -365,6 +375,7 @@ impl fmt::Display for ToolActivationError {
 impl Error for ToolActivationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::WrongKind { .. } => None,
             Self::Preparation { source } => Some(source),
             Self::Compilation { source } => Some(source),
             Self::Construction { source, .. } => Some(source),
@@ -408,6 +419,10 @@ impl Error for ToolDeactivationError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ToolReplacementError {
+    WrongKind {
+        id: String,
+        actual: ExtensionKind,
+    },
     Preparation {
         source: ExtensionPreparationError,
     },
@@ -426,6 +441,12 @@ pub enum ToolReplacementError {
 impl fmt::Display for ToolReplacementError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::WrongKind { id, actual } => {
+                write!(
+                    formatter,
+                    "selected capability {id} is {actual:?}, not Tool"
+                )
+            }
             Self::Preparation { .. } => {
                 formatter.write_str("failed to prepare selected replacement tools")
             }
@@ -448,6 +469,7 @@ impl fmt::Display for ToolReplacementError {
 impl Error for ToolReplacementError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::WrongKind { .. } => None,
             Self::Preparation { source } => Some(source),
             Self::Compilation { source } => Some(source),
             Self::Construction { source, .. } => Some(source),
@@ -1076,14 +1098,18 @@ pub fn activate_tool_selection(
 /// Revalidates, compiles, adapts with uniform caller-selected limits, and atomically registers one
 /// selected tool batch.
 ///
-/// Restrictive limits do not instantiate or invoke guests during activation. They are installed in
-/// a fresh store only after a later registry invocation passes the existing authorization boundary.
+/// A non-tool selection is rejected before root access. Restrictive limits do not instantiate or
+/// invoke guests during activation. They are installed in a fresh store only after a later registry
+/// invocation passes the existing authorization boundary.
 pub fn activate_tool_selection_with_limits(
     root: impl AsRef<Path>,
     selection: &ExtensionSelection<'_>,
     registry: &mut ToolRegistry,
     limits: ToolExecutionLimits,
 ) -> Result<(), ToolActivationError> {
+    if let Some((id, actual)) = first_non_tool(selection) {
+        return Err(ToolActivationError::WrongKind { id, actual });
+    }
     let tools =
         build_tool_adapter_batch(root, selection, limits).map_err(ToolActivationError::from)?;
     registry
@@ -1100,14 +1126,8 @@ pub fn deactivate_tool_selection(
     selection: &ExtensionSelection<'_>,
     registry: &mut ToolRegistry,
 ) -> Result<(), ToolDeactivationError> {
-    if let Some(extension) = selection
-        .extensions()
-        .find(|extension| extension.manifest().kind() != ExtensionKind::Tool)
-    {
-        return Err(ToolDeactivationError::WrongKind {
-            id: extension.manifest().id().to_owned(),
-            actual: extension.manifest().kind(),
-        });
+    if let Some((id, actual)) = first_non_tool(selection) {
+        return Err(ToolDeactivationError::WrongKind { id, actual });
     }
     registry
         .unregister_all(selection.extensions().map(|extension| {
@@ -1131,14 +1151,18 @@ pub fn replace_tool_selection(
 /// Revalidates, compiles, adapts with uniform caller-selected limits, and atomically replaces one
 /// selected active tool batch.
 ///
-/// Restrictive limits remain inert until a later authorized invocation. Any preparation,
-/// compilation, construction, or registry failure preserves every previously active adapter.
+/// A non-tool selection is rejected before root access. Restrictive limits remain inert until a
+/// later authorized invocation. Any validation, preparation, compilation, construction, or
+/// registry failure preserves every previously active adapter.
 pub fn replace_tool_selection_with_limits(
     root: impl AsRef<Path>,
     selection: &ExtensionSelection<'_>,
     registry: &mut ToolRegistry,
     limits: ToolExecutionLimits,
 ) -> Result<(), ToolReplacementError> {
+    if let Some((id, actual)) = first_non_tool(selection) {
+        return Err(ToolReplacementError::WrongKind { id, actual });
+    }
     let tools =
         build_tool_adapter_batch(root, selection, limits).map_err(ToolReplacementError::from)?;
     registry
@@ -1191,16 +1215,22 @@ pub fn reconcile_tool_selections_with_limits(
 fn validate_tool_selection(
     selection: &ExtensionSelection<'_>,
 ) -> Result<(), ToolReconciliationError> {
-    if let Some(extension) = selection
-        .extensions()
-        .find(|extension| extension.manifest().kind() != ExtensionKind::Tool)
-    {
-        return Err(ToolReconciliationError::WrongKind {
-            id: extension.manifest().id().to_owned(),
-            actual: extension.manifest().kind(),
-        });
+    if let Some((id, actual)) = first_non_tool(selection) {
+        return Err(ToolReconciliationError::WrongKind { id, actual });
     }
     Ok(())
+}
+
+fn first_non_tool(selection: &ExtensionSelection<'_>) -> Option<(String, ExtensionKind)> {
+    selection
+        .extensions()
+        .find(|extension| extension.manifest().kind() != ExtensionKind::Tool)
+        .map(|extension| {
+            (
+                extension.manifest().id().to_owned(),
+                extension.manifest().kind(),
+            )
+        })
 }
 
 fn build_tool_adapter_batch(
