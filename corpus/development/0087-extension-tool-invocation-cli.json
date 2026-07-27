@@ -43,6 +43,7 @@
     "An explicit CLI request can own a narrow permission decision without turning selected metadata or process-local activation into ambient authority.",
     "Parsing input before filesystem access makes malformed requests fail earlier and keeps failure ordering deterministic.",
     "Fresh registries, adapters, stores, and one-use authorization make the command an invocation boundary rather than an enablement lifecycle.",
+    "The substantive review found that detailed documentation omitted malformed INPUT_JSON from the no-partial-stdout guarantee; both documentation sites were updated to enumerate malformed input and the scoped invocation failure classes.",
     "Failure guarantees should enumerate their intended classes so documentation neither omits required cases nor promises behavior outside the defined boundary."
   ],
   "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/648"},
