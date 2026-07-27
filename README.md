@@ -199,6 +199,7 @@ The first milestone is the **evidence loop**:
 53. Register prepared skills into caller-owned process-local registries atomically without prompt influence. ✅
 54. Compose explicitly selected registered skills into provider-neutral tool-free turns. ✅
 55. Preserve explicit skill composition across caller-driven bounded provider/tool continuations. ✅
+56. Preserve explicit skill composition across durable attempt-producing task tool turns. ✅
 
 ## Project documents
 

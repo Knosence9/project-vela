@@ -652,6 +652,75 @@ pub enum ToolTaskTurnOutcome {
     },
 }
 
+/// The durable result of one explicitly composed tool-capable task turn.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ComposedToolTaskTurnOutcome<'a> {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        selected_skills: SkillSelection<'a>,
+    },
+}
+
+impl ComposedToolTaskTurnOutcome<'_> {
+    /// Borrows the durable lineage, exact composition, and prior result for one continuation.
+    pub fn continuation(&self) -> Option<ComposedToolTaskContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                tool_id,
+                input,
+                output,
+                system_policy,
+                developer_policy,
+                selected_skills,
+                ..
+            } => Some(ComposedToolTaskContinuation {
+                task_id,
+                provider: ComposedProviderToolContinuation {
+                    context: ComposedToolContext {
+                        system_policy: *system_policy,
+                        developer_policy: *developer_policy,
+                        selected_skills: selected_skills.clone(),
+                        transcript: session.turns(),
+                    },
+                    prior_result: ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                },
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed continuation bound to one task and one immutable composed request context.
+#[derive(Clone, Debug)]
+pub struct ComposedToolTaskContinuation<'a> {
+    task_id: &'a TaskId,
+    provider: ComposedProviderToolContinuation<'a>,
+}
+
+impl ComposedToolTaskContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+}
+
 impl ToolTaskTurnOutcome {
     /// Borrows the exact in-memory result needed for an explicit provider continuation.
     pub fn tool_result(&self) -> Option<ProviderToolResult<'_>> {
@@ -969,6 +1038,7 @@ impl ToolTaskCancellationContinuation<'_> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ToolTaskRuntimeError {
+    SkillSelection(SkillSelectionError),
     Session(SessionStoreError),
     Task(TaskStoreError),
     InvocationStore(ToolInvocationStoreError),
@@ -984,6 +1054,9 @@ pub enum ToolTaskRuntimeError {
 impl fmt::Display for ToolTaskRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SkillSelection(error) => {
+                write!(formatter, "tool task skill selection error: {error}")
+            }
             Self::Session(error) => write!(formatter, "tool task runtime session error: {error}"),
             Self::Task(error) => write!(formatter, "tool task runtime task error: {error}"),
             Self::InvocationStore(error) => {
@@ -1014,6 +1087,7 @@ impl fmt::Display for ToolTaskRuntimeError {
 impl Error for ToolTaskRuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::SkillSelection(error) => Some(error),
             Self::Session(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvocationStore(error) => Some(error),
@@ -1035,7 +1109,7 @@ pub struct ToolAssistantRuntime<P> {
     provider: P,
 }
 
-impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
+impl<P> ToolAssistantRuntime<P> {
     pub fn open(path: impl AsRef<Path>, provider: P) -> Result<Self, ToolTaskRuntimeError> {
         let path = path.as_ref();
         Ok(Self {
@@ -1046,7 +1120,9 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
             provider,
         })
     }
+}
 
+impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
     /// Appends one human turn and executes exactly one provider/tool step.
     ///
     /// Final content is persisted as an assistant turn and Attempt. A completed tool request
@@ -1391,7 +1467,9 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
             }),
         }
     }
+}
 
+impl<P> ToolAssistantRuntime<P> {
     fn load_active_task(&self, task_id: &TaskId) -> Result<Task, ToolTaskRuntimeError> {
         let task = self
             .tasks
@@ -1492,6 +1570,107 @@ impl<P: ToolAssistantProvider> ToolAssistantRuntime<P> {
             ),
         }
         .map_err(ToolTaskRuntimeError::Task)
+    }
+}
+
+impl<P: ComposedToolAssistantProvider> ToolAssistantRuntime<P> {
+    /// Appends one human turn and executes one explicitly composed provider/tool step.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "composed turns add explicit policies, registry, and selection inputs"
+    )]
+    pub fn execute_composed_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        skill_registry: &'a SkillRegistry,
+        selected_skill_ids: &[SkillId],
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskTurnOutcome<'a>, ToolTaskRuntimeError> {
+        let selected_skills = skill_registry
+            .select(selected_skill_ids)
+            .map_err(ToolTaskRuntimeError::SkillSelection)?;
+        let task = self.load_active_task(task_id)?;
+        let session_id =
+            task.session_id()
+                .cloned()
+                .ok_or_else(|| ToolTaskRuntimeError::TaskNotAssociated {
+                    task_id: task_id.clone(),
+                })?;
+        task.validate_observation_append(
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+        )
+        .map_err(ToolTaskRuntimeError::Task)?;
+        self.ensure_session_writable(&session_id)?;
+        self.ensure_invocation_available(&invocation_id)?;
+
+        let session = self
+            .sessions
+            .append_turn(&session_id, SessionTurnRole::Human, human_content)
+            .map_err(ToolTaskRuntimeError::Session)?;
+        let response = self
+            .provider
+            .complete_composed_with_tools(ComposedToolAssistantRequest {
+                system_policy,
+                developer_policy,
+                selected_skills: selected_skills.clone(),
+                transcript: session.turns(),
+                tools: registry.metadata(),
+            })
+            .map_err(ToolTaskRuntimeError::Provider)?;
+        let step = dispatch_provider_tool_response(
+            response,
+            registry,
+            &mut self.invocations,
+            task_id,
+            invocation_id,
+            authorizer,
+        )
+        .map_err(|error| match error {
+            ProviderToolStepError::Provider(error) => ToolTaskRuntimeError::Provider(error),
+            ProviderToolStepError::Invocation(error) => ToolTaskRuntimeError::Invocation(error),
+        })?;
+
+        match step {
+            ProviderToolStepOutcome::Final { content, .. } => {
+                let observation_text = content.as_str().to_owned();
+                let session = self
+                    .sessions
+                    .append_turn(&session_id, SessionTurnRole::Assistant, content)
+                    .map_err(ToolTaskRuntimeError::Session)?;
+                let task = self.persist_final_observation(
+                    task_id,
+                    attempt_observation_id,
+                    TaskObservationKind::Attempt,
+                    None,
+                    observation_text,
+                )?;
+                Ok(ComposedToolTaskTurnOutcome::Final { session, task })
+            }
+            ProviderToolStepOutcome::ToolCompleted {
+                tool_id,
+                input,
+                output,
+                continuation,
+            } => Ok(ComposedToolTaskTurnOutcome::ToolCompleted {
+                session,
+                task_id: task_id.clone(),
+                tool_id,
+                input,
+                output,
+                continuation,
+                system_policy,
+                developer_policy,
+                selected_skills,
+            }),
+        }
     }
 }
 
@@ -1865,6 +2044,141 @@ impl TaskTurnOutcome {
 
     pub fn task(&self) -> &Task {
         &self.task
+    }
+}
+
+impl<P: ComposedToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
+    /// Continues one task-bound composed step without permitting composition substitution.
+    pub fn continue_composed_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        continuation: ComposedToolTaskContinuation<'a>,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskTurnOutcome<'a>, ToolTaskRuntimeError> {
+        let task_id = continuation.task_id;
+        let provider_continuation = continuation.provider;
+        let context = provider_continuation.context.clone();
+        let task = self.load_active_task(task_id)?;
+        let session_id =
+            task.session_id()
+                .cloned()
+                .ok_or_else(|| ToolTaskRuntimeError::TaskNotAssociated {
+                    task_id: task_id.clone(),
+                })?;
+        let session = self
+            .sessions
+            .load(&session_id)
+            .map_err(ToolTaskRuntimeError::Session)?
+            .ok_or_else(|| {
+                ToolTaskRuntimeError::Session(SessionStoreError::NotFound {
+                    session_id: session_id.clone(),
+                })
+            })?;
+        if session.status() == SessionStatus::Closed {
+            return Err(ToolTaskRuntimeError::Session(
+                SessionStoreError::SessionClosed {
+                    session_id: session_id.clone(),
+                },
+            ));
+        }
+        if session.turns() != context.transcript {
+            return Err(ToolTaskRuntimeError::StaleContinuationTranscript {
+                task_id: task_id.clone(),
+            });
+        }
+        task.validate_observation_append(
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+        )
+        .map_err(ToolTaskRuntimeError::Task)?;
+        self.ensure_invocation_available(&invocation_id)?;
+
+        let response = self
+            .provider
+            .complete_composed_after_tool(ComposedToolAssistantContinuationRequest {
+                context: provider_continuation.context,
+                prior_result: provider_continuation.prior_result,
+                tools: registry.metadata(),
+            })
+            .map_err(ToolTaskRuntimeError::Provider)?;
+        let current_session = self
+            .sessions
+            .load(&session_id)
+            .map_err(ToolTaskRuntimeError::Session)?
+            .ok_or_else(|| {
+                ToolTaskRuntimeError::Session(SessionStoreError::NotFound {
+                    session_id: session_id.clone(),
+                })
+            })?;
+        if current_session.status() == SessionStatus::Closed {
+            return Err(ToolTaskRuntimeError::Session(
+                SessionStoreError::SessionClosed {
+                    session_id: session_id.clone(),
+                },
+            ));
+        }
+        if current_session.turns() != context.transcript {
+            return Err(ToolTaskRuntimeError::StaleContinuationTranscript {
+                task_id: task_id.clone(),
+            });
+        }
+        let step = dispatch_provider_tool_response(
+            response,
+            registry,
+            &mut self.invocations,
+            task_id,
+            invocation_id,
+            authorizer,
+        )
+        .map_err(|error| match error {
+            ProviderToolStepError::Provider(error) => ToolTaskRuntimeError::Provider(error),
+            ProviderToolStepError::Invocation(error) => ToolTaskRuntimeError::Invocation(error),
+        })?;
+
+        match step {
+            ProviderToolStepOutcome::Final { content, .. } => {
+                let observation_text = content.as_str().to_owned();
+                let session = self
+                    .sessions
+                    .append_turn_if_current_transcript(
+                        &session_id,
+                        context.transcript,
+                        SessionTurnRole::Assistant,
+                        content,
+                    )
+                    .map_err(ToolTaskRuntimeError::Session)?
+                    .ok_or_else(|| ToolTaskRuntimeError::StaleContinuationTranscript {
+                        task_id: task_id.clone(),
+                    })?;
+                let task = self.persist_final_observation(
+                    task_id,
+                    attempt_observation_id,
+                    TaskObservationKind::Attempt,
+                    None,
+                    observation_text,
+                )?;
+                Ok(ComposedToolTaskTurnOutcome::Final { session, task })
+            }
+            ProviderToolStepOutcome::ToolCompleted {
+                tool_id,
+                input,
+                output,
+                continuation,
+            } => Ok(ComposedToolTaskTurnOutcome::ToolCompleted {
+                session,
+                task_id: task_id.clone(),
+                tool_id,
+                input,
+                output,
+                continuation,
+                system_policy: context.system_policy,
+                developer_policy: context.developer_policy,
+                selected_skills: context.selected_skills,
+            }),
+        }
     }
 }
 
