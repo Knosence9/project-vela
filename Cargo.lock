@@ -1217,6 +1217,8 @@ dependencies = [
  "predicates",
  "serde",
  "serde_json",
+ "tempfile",
+ "vela-extensions",
 ]
 
 [[package]]

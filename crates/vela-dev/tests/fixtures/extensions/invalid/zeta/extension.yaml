@@ -1,0 +1,4 @@
+manifest_version: 1
+id: broken.workflow
+kind: workflow
+entrypoint: missing.md

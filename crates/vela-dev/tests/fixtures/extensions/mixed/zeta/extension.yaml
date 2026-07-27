@@ -1,0 +1,4 @@
+manifest_version: 1
+id: zeta.tool
+kind: tool
+entrypoint: bin/zeta.wasm

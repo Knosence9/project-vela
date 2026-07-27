@@ -1,0 +1,4 @@
+manifest_version: 1
+id: valid.tool
+kind: tool
+entrypoint: run.wasm
