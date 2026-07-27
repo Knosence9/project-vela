@@ -24,6 +24,7 @@ use std::{
 #[cfg(unix)]
 use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, open, openat, statat};
 use serde::Deserialize;
+use vela_kernel::skill::{RegisteredSkill, SkillId, SkillRegistry, SkillRegistryError};
 use vela_kernel::tool::{
     Tool, ToolEffect, ToolError, ToolId, ToolIdError, ToolRegistry, ToolRegistryError,
     ToolRegistryReconciliationError, ToolRegistryRemovalError, ToolRegistryReplacementError,
@@ -885,6 +886,15 @@ pub enum SkillPreparationError {
     },
 }
 
+/// A typed failure while atomically registering one selected skill batch.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum SkillRegistrationError {
+    WrongKind { id: String, actual: ExtensionKind },
+    Preparation { source: SkillPreparationError },
+    Registry { source: SkillRegistryError },
+}
+
 /// A fail-closed exact-ID registry selection error.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -1151,6 +1161,39 @@ pub fn prepare_skill_artifacts(
         })
     })
     .collect()
+}
+
+/// Revalidates and atomically registers one selected skill batch as inert process-local data.
+///
+/// Registration preserves exact UTF-8 instructions but does not select a skill for a provider
+/// request, compose a prompt, grant tool authority, persist enablement, or execute content.
+pub fn register_skill_selection(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+    registry: &mut SkillRegistry,
+) -> Result<(), SkillRegistrationError> {
+    if let Some(extension) = selection
+        .extensions()
+        .find(|extension| extension.manifest().kind() != ExtensionKind::Skill)
+    {
+        return Err(SkillRegistrationError::WrongKind {
+            id: extension.manifest().id().to_owned(),
+            actual: extension.manifest().kind(),
+        });
+    }
+
+    let skills = prepare_skill_artifacts(root, selection)
+        .map_err(|source| SkillRegistrationError::Preparation { source })?
+        .into_iter()
+        .map(|artifact| {
+            RegisteredSkill::new(
+                SkillId::new(artifact.id).expect("validated non-blank skill ID"),
+                artifact.instructions,
+            )
+        });
+    registry
+        .register_all(skills)
+        .map_err(|source| SkillRegistrationError::Registry { source })
 }
 
 /// Compiles prepared tools against the exact no-import `vela:extension/tool@0.1.0` ABI.
@@ -2016,6 +2059,33 @@ impl Error for SkillPreparationError {
             Self::WrongKind { .. } => None,
             Self::Preparation { source } => Some(source),
             Self::InvalidUtf8 { source, .. } => Some(source),
+        }
+    }
+}
+
+impl fmt::Display for SkillRegistrationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongKind { id, actual } => {
+                write!(
+                    formatter,
+                    "selected capability {id:?} is {actual:?}, not Skill"
+                )
+            }
+            Self::Preparation { .. } => formatter.write_str("failed to prepare selected skills"),
+            Self::Registry { .. } => {
+                formatter.write_str("failed to register selected skills atomically")
+            }
+        }
+    }
+}
+
+impl Error for SkillRegistrationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::WrongKind { .. } => None,
+            Self::Preparation { source } => Some(source),
+            Self::Registry { source } => Some(source),
         }
     }
 }
