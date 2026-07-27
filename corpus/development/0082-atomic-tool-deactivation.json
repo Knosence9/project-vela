@@ -37,6 +37,8 @@
       {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_registry", "status": "passed"},
       {"command": "nix develop --command cargo test --locked -p vela-extensions --test activation", "status": "passed"},
       {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command nix flake check --all-systems --no-build --show-trace", "status": "passed"},
+      {"command": "nix develop --command cargo doc --workspace --no-deps --locked", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30220902288 and resolved substantive CodeRabbit review at https://github.com/Knosence9/project-vela/pull/634#discussion_r3653452682", "status": "passed"},
       {"command": "Pull request 634 squash merge 18552a03d5d2151079bf8b2dc27b3a6da03018eb", "status": "passed"}
     ]

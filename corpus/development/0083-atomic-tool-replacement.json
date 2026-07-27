@@ -37,6 +37,7 @@
       {"command": "nix develop --command cargo test --locked -p vela-kernel --test tool_registry batch_replacement", "status": "passed"},
       {"command": "nix develop --command cargo test --locked -p vela-extensions --test activation", "status": "passed"},
       {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo doc --workspace --no-deps --locked", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30223655976 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/636", "status": "passed"},
       {"command": "Pull request 636 squash merge 1a100871548cd7bf680c082ddfa50f0b1e87a3c3", "status": "passed"}
     ]
@@ -45,7 +46,7 @@
     "Replacement should prove the new complete batch valid before discarding any working adapter.",
     "Atomic registry preflight separates adapter construction failures from missing-active-ID failures cleanly.",
     "A trapping component is useful evidence that lifecycle operations remain inert until invocation.",
-    "Duplicated activation and replacement pipelines should be consolidated in a bounded follow-up rather than expanded in the feature change."
+    "CodeRabbit identified duplicated activation and replacement pipelines in pull request 636; the bounded consolidation follow-up was tracked as issue 637 and completed by pull request 638."
   ],
   "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/636"},
   "sanitation": {"passed": true, "blockers": []},

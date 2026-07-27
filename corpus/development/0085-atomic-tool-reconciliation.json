@@ -43,7 +43,8 @@
     "Sequentially correct lifecycle operations can still expose partial state when composed across a later failure.",
     "Adapter ownership must come from explicit caller-held previous selection evidence rather than registry inference.",
     "A current-only ID needs distinct conflict handling because an existing adapter may be unrelated to the reconciled selection.",
-    "Rebuilding shared IDs uniformly keeps current-root artifact revalidation simple and avoids an unproven optimization."
+    "Rebuilding shared IDs uniformly keeps current-root artifact revalidation simple and avoids an unproven optimization.",
+    "CodeRabbit suggested renaming the public root parameter to current_root in pull request 640; the non-blocking suggestion was not applied before merge, while the API documentation retained the contract that only the complete current batch is revalidated."
   ],
   "provenance": {"repository_path": "crates/vela-extensions/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/640"},
   "sanitation": {"passed": true, "blockers": []},
