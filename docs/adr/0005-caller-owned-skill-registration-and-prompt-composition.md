@@ -6,6 +6,7 @@
 - **Related issues:** [#654](https://github.com/Knosence9/project-vela/issues/654), [#659](https://github.com/Knosence9/project-vela/issues/659)
 - **First execution issue:** [#655](https://github.com/Knosence9/project-vela/issues/655)
 - **Composed tool execution issue:** [#660](https://github.com/Knosence9/project-vela/issues/660)
+- **Durable composed attempt issue:** [#664](https://github.com/Knosence9/project-vela/issues/664)
 
 ## Context
 
@@ -31,6 +32,8 @@ The provider-neutral `ComposedAssistantRequest` preserves four distinct fields, 
 Provider adapters may lower those typed fields into provider-native roles, but may not concatenate them behind the caller's back or promote skill instructions above caller policy. `AssistantRuntime::execute_composed_turn` accepts a caller-owned exact-ID selection per request and validates it before transcript persistence. Existing runtime methods remain skill-free.
 
 The additive low-level composed tool boundary preserves that authority across explicit bounded provider/tool chains. Its initial request keeps caller system policy, caller developer policy, selected skills, durable transcript, and deterministic tool metadata structurally distinct. Tool metadata, tool input, and tool output are capability/data fields, not instruction authority. A successful tool step retains the exact policy fields, selected skill blocks, transcript, and in-memory result in an opaque continuation; later calls can refresh descriptive tool metadata but cannot replace the retained composition. Every step still calls the provider at most once, dispatches at most one tool, requires a fresh caller-owned invocation identity and authorizer, and advances only through an explicit caller operation. Skill selection never grants tool permission. Existing skill-free tool traits and operations remain unchanged.
+
+The first durable integration applies that contract only to attempt-producing task turns. Selection succeeds before any durable or provider/tool side effect. The initial operation then reuses the existing task/session/invocation preflight and ordered human-turn boundary. Final content commits an assistant turn followed by an exact Attempt; a tool result remains in memory with the immutable task, transcript, policy, and skill-selection context. Explicit continuation revalidates the active task and exact durable transcript, refreshes only tool metadata, requires a fresh invocation identity and authorizer for another tool, and conditionally appends final content before the Attempt. Existing skill-free task methods remain unchanged; correction, completion, failure, and cancellation composition require separate bounded integrations.
 
 ## Alternatives considered
 
@@ -64,7 +67,7 @@ Those policies require product evidence that the first process-local registry do
 - Callers and provider adapters must opt into the separate composed provider trait and turn method; existing turns intentionally ignore registered skills.
 - Process restart loses registrations.
 - Exact-ID ordering is deterministic but does not express dependencies or author-selected precedence.
-- Durable task-turn composition still requires separately bounded integration across attempt, correction, completion, failure, and cancellation paths.
+- Correction, completion, failure, and cancellation composition still require separately bounded integrations.
 
 ## Verification
 
@@ -74,6 +77,8 @@ The composition slice proves duplicate/missing selection rejection, skill-free d
 
 The composed tool slice proves selection failure before provider or invocation side effects, distinct policy/skill/transcript/tool fields, retained composition across continuations, fresh authorization and invocation identity for each tool, exact in-memory results, one provider call and at most one invocation per operation, and unchanged skill-free tool APIs.
 
+The durable attempt slice additionally proves selection failure before transcript persistence, exact composition across task-bound tool continuations, reuse of durable invocation evidence, and final assistant-turn/Attempt ordering.
+
 ## Revisit when
 
-Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, durable task-turn composition, replacement or hot reload, workflows, remote packages, or content-addressed identity.
+Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, composed correction or terminal task turns, replacement or hot reload, workflows, remote packages, or content-addressed identity.
