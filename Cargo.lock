@@ -1219,6 +1219,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "vela-extensions",
+ "vela-kernel",
+ "wat",
 ]
 
 [[package]]
