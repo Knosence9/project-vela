@@ -115,7 +115,7 @@ Discovery remains all-or-nothing. An unreadable or invalid root exits non-zero w
 
 `vela-dev extension invoke <ROOT> <EXACT_ID> <INPUT_JSON>` connects one explicit developer request to the existing library boundaries without adding another loader or executor. It parses the input as exactly one JSON value before touching the extension root, discovers the complete root, selects exactly one validated `Tool` ID, activates only that selection with default limits into a fresh process-local registry, and invokes it through the kernel permission protocol. The CLI-owned authorizer permits only the selected exact ID, only its version-one `Pure` effect, and only once.
 
-Success prints exactly one compact JSON value followed by a newline. Discovery, selection, activation, authorization, guest, trap, resource-limit, and malformed-output failures print no partial stdout and emit one debug-escaped single-line diagnostic. The explicit invocation is not a reusable grant: the command does not persist activation, permission, input, or output; retry; watch or refresh the root; expose host imports; or activate skills and workflows.
+Success prints exactly one compact JSON value followed by a newline. Malformed `INPUT_JSON` and discovery, selection, activation, authorization, guest, trap, resource-limit, or malformed-output failures print no partial stdout and emit one debug-escaped single-line diagnostic. The explicit invocation is not a reusable grant: the command does not persist activation, permission, input, or output; retry; watch or refresh the root; expose host imports; or activate skills and workflows.
 
 ## Ownership and trust boundary
 

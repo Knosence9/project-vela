@@ -136,7 +136,7 @@ Invoke one exact validated tool with one JSON value through the existing isolate
 nix develop --command cargo run --locked -p vela-dev -- extension invoke path/to/extensions local.search '{"query":"Vela"}'
 ```
 
-The explicit command authorizes only that one selected version-one `Pure` tool invocation. It uses a fresh process-local registry, default resource limits, and a fresh guest store; successful output is one compact JSON value. Input is validated before extension discovery, and every failure emits one escaped diagnostic without partial stdout. Invocation does not persist activation or permission, grant host capabilities, retry, or run skills and workflows.
+The explicit command authorizes only that one selected version-one `Pure` tool invocation. It uses a fresh process-local registry, default resource limits, and a fresh guest store; successful output is one compact JSON value. Malformed `INPUT_JSON` and discovery, selection, activation, authorization, guest, trap, resource-limit, or malformed-output failures emit one escaped diagnostic without partial stdout. Invocation does not persist activation or permission, grant host capabilities, retry, or run skills and workflows.
 
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
