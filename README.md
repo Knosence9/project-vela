@@ -176,6 +176,7 @@ The first milestone is the **evidence loop**:
 46. Revoke selected process-local tool adapters through atomic fail-closed deactivation. ✅
 47. Refresh selected active tool adapters through explicit atomic fail-closed replacement. ✅
 48. Reconcile previous and current selected active tool sets as one atomic remove/replace/add transition. ✅
+49. Reject non-tool activation and replacement intent before filesystem access. ✅
 
 ## Project documents
 
