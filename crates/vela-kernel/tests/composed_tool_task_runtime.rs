@@ -6,13 +6,13 @@ use vela_kernel::{
     runtime::{
         ComposedToolAssistantContinuationProvider, ComposedToolAssistantContinuationRequest,
         ComposedToolAssistantProvider, ComposedToolAssistantRequest,
-        ComposedToolTaskCorrectionOutcome, ComposedToolTaskTurnOutcome, DeveloperPolicy,
-        ProviderError, ProviderToolResponse, SystemPolicy, ToolAssistantRuntime,
-        ToolTaskRuntimeError,
+        ComposedToolTaskCompletionOutcome, ComposedToolTaskCorrectionOutcome,
+        ComposedToolTaskTurnOutcome, DeveloperPolicy, ProviderError, ProviderToolResponse,
+        SystemPolicy, ToolAssistantRuntime, ToolTaskRuntimeError,
     },
     session::{SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole},
     skill::{RegisteredSkill, SkillId, SkillRegistry, SkillSelectionError},
-    task::{TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStore},
+    task::{TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStatus, TaskStore},
     tool::{
         PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId,
         ToolInvocationStatus, ToolInvocationStore, ToolRegistry, ToolRequest,
@@ -380,6 +380,146 @@ fn composed_task_turn_retains_authority_through_tool_continuation() {
             .load(&ToolInvocationId::new("invocation-3-unused").unwrap())
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn composed_completion_can_finish_on_the_initial_provider_response() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (_, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = ToolAssistantRuntime::open(
+        &path,
+        Provider {
+            observations: observations.clone(),
+            responses: vec![ProviderToolResponse::Final(
+                SessionTurnContent::new("initial completion").unwrap(),
+            )],
+        },
+    )
+    .unwrap();
+
+    let outcome = runtime
+        .complete_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("finish now").unwrap(),
+            TaskObservationId::new("initial-completion-attempt").unwrap(),
+            ToolInvocationId::new("initial-completion-unused").unwrap(),
+            SystemPolicy::new("system policy"),
+            DeveloperPolicy::new("developer policy"),
+            &skills,
+            &[SkillId::new("skill.alpha").unwrap()],
+            &mut ToolRegistry::new(),
+            &mut Allow(0),
+        )
+        .unwrap();
+
+    let ComposedToolTaskCompletionOutcome::Final { task, .. } = outcome else {
+        panic!("expected initial composed completion")
+    };
+    assert_eq!(task.status(), TaskStatus::Completed);
+    assert_eq!(task.output().unwrap().as_str(), "initial completion");
+    assert_eq!(task.observations()[0].text().as_str(), "initial completion");
+    assert_eq!(observations.borrow().len(), 1);
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("initial-completion-unused").unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn composed_completion_retains_authority_and_completes_with_exact_output() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let provider = Provider {
+        observations: observations.clone(),
+        responses: vec![
+            ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"step": 1}),
+            },
+            ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"step": 2}),
+            },
+            ProviderToolResponse::Final(SessionTurnContent::new("completed exactly").unwrap()),
+        ],
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut tools = ToolRegistry::new();
+    tools.register(EchoTool).unwrap();
+    let selected = [
+        SkillId::new("skill.zeta").unwrap(),
+        SkillId::new("skill.alpha").unwrap(),
+    ];
+
+    let first = runtime
+        .complete_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("finish this").unwrap(),
+            TaskObservationId::new("completion-attempt").unwrap(),
+            ToolInvocationId::new("completion-invocation-1").unwrap(),
+            SystemPolicy::new("system policy"),
+            DeveloperPolicy::new("developer policy"),
+            &skills,
+            &selected,
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    let second = runtime
+        .continue_composed_completion_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("completion-attempt").unwrap(),
+            ToolInvocationId::new("completion-invocation-2").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    let final_outcome = runtime
+        .continue_composed_completion_task_turn(
+            second.continuation().unwrap(),
+            TaskObservationId::new("completion-attempt").unwrap(),
+            ToolInvocationId::new("completion-invocation-unused").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+
+    let ComposedToolTaskCompletionOutcome::Final { session, task } = final_outcome else {
+        panic!("expected final composed completion outcome")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(session.turns()[1].content().as_str(), "completed exactly");
+    assert_eq!(task.status(), TaskStatus::Completed);
+    assert_eq!(task.output().unwrap().as_str(), "completed exactly");
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].kind(), TaskObservationKind::Attempt);
+    assert_eq!(task.observations()[0].text().as_str(), "completed exactly");
+    assert_eq!(observations.borrow().len(), 3);
+    assert!(observations.borrow().iter().all(|observed| {
+        observed.system == "system policy"
+            && observed.developer == "developer policy"
+            && observed.skills
+                == vec![
+                    ("skill.alpha".into(), "alpha instructions".into()),
+                    ("skill.zeta".into(), "zeta instructions".into()),
+                ]
+            && observed.transcript == vec![(SessionTurnRole::Human, "finish this".into())]
+    }));
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap(),
+        task
     );
 }
 
