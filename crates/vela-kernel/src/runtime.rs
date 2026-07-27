@@ -1575,7 +1575,10 @@ impl<P> ToolAssistantRuntime<P> {
 
 impl<P: ComposedToolAssistantProvider> ToolAssistantRuntime<P> {
     /// Appends one human turn and executes one explicitly composed provider/tool step.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "composed turns add explicit policies, registry, and selection inputs"
+    )]
     pub fn execute_composed_task_turn<'a, A: ToolAuthorizer>(
         &mut self,
         task_id: &TaskId,
