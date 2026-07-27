@@ -634,6 +634,116 @@ fn dispatch_provider_tool_response<A: ToolAuthorizer>(
     }
 }
 
+/// The durable result of one explicitly composed correction-oriented tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ComposedToolTaskCorrectionOutcome<'a> {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        parent_attempt_id: TaskObservationId,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        selected_skills: SkillSelection<'a>,
+    },
+}
+
+impl ComposedToolTaskCorrectionOutcome<'_> {
+    /// Borrows the exact composition and caller-owned correction lineage for one continuation.
+    pub fn continuation(&self) -> Option<ComposedToolTaskCorrectionContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                parent_attempt_id,
+                tool_id,
+                input,
+                output,
+                system_policy,
+                developer_policy,
+                selected_skills,
+                ..
+            } => Some(ComposedToolTaskCorrectionContinuation {
+                task_id,
+                parent_attempt_id,
+                provider: ComposedProviderToolContinuation {
+                    context: ComposedToolContext {
+                        system_policy: *system_policy,
+                        developer_policy: *developer_policy,
+                        selected_skills: selected_skills.clone(),
+                        transcript: session.turns(),
+                    },
+                    prior_result: ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                },
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed composed continuation restricted to correction-producing operations.
+#[derive(Clone, Debug)]
+pub struct ComposedToolTaskCorrectionContinuation<'a> {
+    task_id: &'a TaskId,
+    parent_attempt_id: &'a TaskObservationId,
+    provider: ComposedProviderToolContinuation<'a>,
+}
+
+impl ComposedToolTaskCorrectionContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+
+    pub fn parent_attempt_id(&self) -> &TaskObservationId {
+        self.parent_attempt_id
+    }
+}
+
+fn composed_correction_outcome<'a>(
+    outcome: ComposedToolTaskTurnOutcome<'a>,
+    parent_attempt_id: TaskObservationId,
+) -> ComposedToolTaskCorrectionOutcome<'a> {
+    match outcome {
+        ComposedToolTaskTurnOutcome::Final { session, task } => {
+            ComposedToolTaskCorrectionOutcome::Final { session, task }
+        }
+        ComposedToolTaskTurnOutcome::ToolCompleted {
+            session,
+            task_id,
+            tool_id,
+            input,
+            output,
+            continuation,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        } => ComposedToolTaskCorrectionOutcome::ToolCompleted {
+            session,
+            task_id,
+            parent_attempt_id,
+            tool_id,
+            input,
+            output,
+            continuation,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        },
+    }
+}
+
 /// The durable result of one initial tool-capable task turn.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1592,6 +1702,80 @@ impl<P: ComposedToolAssistantProvider> ToolAssistantRuntime<P> {
         registry: &mut ToolRegistry,
         authorizer: &mut A,
     ) -> Result<ComposedToolTaskTurnOutcome<'a>, ToolTaskRuntimeError> {
+        self.execute_composed_observation_task_turn(
+            task_id,
+            human_content,
+            attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+            invocation_id,
+            system_policy,
+            developer_policy,
+            skill_registry,
+            selected_skill_ids,
+            registry,
+            authorizer,
+        )
+    }
+
+    /// Executes an explicitly composed correction turn while retaining caller-owned lineage.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "composed corrections add explicit policy, skill, parent, and evidence inputs"
+    )]
+    pub fn execute_composed_task_correction_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        parent_attempt_id: &TaskObservationId,
+        human_content: SessionTurnContent,
+        correction_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        skill_registry: &'a SkillRegistry,
+        selected_skill_ids: &[SkillId],
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskCorrectionOutcome<'a>, ToolTaskRuntimeError> {
+        let outcome = self.execute_composed_observation_task_turn(
+            task_id,
+            human_content,
+            correction_observation_id,
+            TaskObservationKind::Correction,
+            Some(parent_attempt_id),
+            invocation_id,
+            system_policy,
+            developer_policy,
+            skill_registry,
+            selected_skill_ids,
+            registry,
+            authorizer,
+        )?;
+        Ok(composed_correction_outcome(
+            outcome,
+            parent_attempt_id.clone(),
+        ))
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "private composed evidence execution retains all explicit authority inputs"
+    )]
+    fn execute_composed_observation_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        observation_id: TaskObservationId,
+        observation_kind: TaskObservationKind,
+        parent_attempt_id: Option<&TaskObservationId>,
+        invocation_id: ToolInvocationId,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        skill_registry: &'a SkillRegistry,
+        selected_skill_ids: &[SkillId],
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskTurnOutcome<'a>, ToolTaskRuntimeError> {
         let selected_skills = skill_registry
             .select(selected_skill_ids)
             .map_err(ToolTaskRuntimeError::SkillSelection)?;
@@ -1602,12 +1786,8 @@ impl<P: ComposedToolAssistantProvider> ToolAssistantRuntime<P> {
                 .ok_or_else(|| ToolTaskRuntimeError::TaskNotAssociated {
                     task_id: task_id.clone(),
                 })?;
-        task.validate_observation_append(
-            &attempt_observation_id,
-            TaskObservationKind::Attempt,
-            None,
-        )
-        .map_err(ToolTaskRuntimeError::Task)?;
+        task.validate_observation_append(&observation_id, observation_kind, parent_attempt_id)
+            .map_err(ToolTaskRuntimeError::Task)?;
         self.ensure_session_writable(&session_id)?;
         self.ensure_invocation_available(&invocation_id)?;
 
@@ -1647,9 +1827,9 @@ impl<P: ComposedToolAssistantProvider> ToolAssistantRuntime<P> {
                     .map_err(ToolTaskRuntimeError::Session)?;
                 let task = self.persist_final_observation(
                     task_id,
-                    attempt_observation_id,
-                    TaskObservationKind::Attempt,
-                    None,
+                    observation_id,
+                    observation_kind,
+                    parent_attempt_id,
                     observation_text,
                 )?;
                 Ok(ComposedToolTaskTurnOutcome::Final { session, task })
@@ -2057,6 +2237,57 @@ impl<P: ComposedToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
         registry: &mut ToolRegistry,
         authorizer: &mut A,
     ) -> Result<ComposedToolTaskTurnOutcome<'a>, ToolTaskRuntimeError> {
+        self.continue_composed_observation_task_turn(
+            continuation,
+            attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+            invocation_id,
+            registry,
+            authorizer,
+        )
+    }
+
+    /// Continues a composed correction while preserving policy, skills, and parent Attempt.
+    pub fn continue_composed_correction_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        continuation: ComposedToolTaskCorrectionContinuation<'a>,
+        correction_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskCorrectionOutcome<'a>, ToolTaskRuntimeError> {
+        let parent_attempt_id = continuation.parent_attempt_id.clone();
+        let continuation = ComposedToolTaskContinuation {
+            task_id: continuation.task_id,
+            provider: continuation.provider,
+        };
+        let outcome = self.continue_composed_observation_task_turn(
+            continuation,
+            correction_observation_id,
+            TaskObservationKind::Correction,
+            Some(&parent_attempt_id),
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        Ok(composed_correction_outcome(outcome, parent_attempt_id))
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "private composed continuation retains explicit evidence and invocation inputs"
+    )]
+    fn continue_composed_observation_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        continuation: ComposedToolTaskContinuation<'a>,
+        observation_id: TaskObservationId,
+        observation_kind: TaskObservationKind,
+        parent_attempt_id: Option<&TaskObservationId>,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskTurnOutcome<'a>, ToolTaskRuntimeError> {
         let task_id = continuation.task_id;
         let provider_continuation = continuation.provider;
         let context = provider_continuation.context.clone();
@@ -2088,12 +2319,8 @@ impl<P: ComposedToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
                 task_id: task_id.clone(),
             });
         }
-        task.validate_observation_append(
-            &attempt_observation_id,
-            TaskObservationKind::Attempt,
-            None,
-        )
-        .map_err(ToolTaskRuntimeError::Task)?;
+        task.validate_observation_append(&observation_id, observation_kind, parent_attempt_id)
+            .map_err(ToolTaskRuntimeError::Task)?;
         self.ensure_invocation_available(&invocation_id)?;
 
         let response = self
@@ -2155,9 +2382,9 @@ impl<P: ComposedToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
                     })?;
                 let task = self.persist_final_observation(
                     task_id,
-                    attempt_observation_id,
-                    TaskObservationKind::Attempt,
-                    None,
+                    observation_id,
+                    observation_kind,
+                    parent_attempt_id,
                     observation_text,
                 )?;
                 Ok(ComposedToolTaskTurnOutcome::Final { session, task })
