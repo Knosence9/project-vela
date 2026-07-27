@@ -6,6 +6,7 @@ use crate::session::{
     Session, SessionId, SessionStatus, SessionStore, SessionStoreError, SessionTurn,
     SessionTurnContent, SessionTurnRole,
 };
+use crate::skill::{RegisteredSkill, SkillId, SkillRegistry, SkillSelection, SkillSelectionError};
 use crate::task::{
     Task, TaskCancellation, TaskFailure, TaskId, TaskObservationId, TaskObservationKind,
     TaskObservationText, TaskObservationTextError, TaskOutput, TaskOutputError, TaskStatus,
@@ -21,6 +22,69 @@ pub trait AssistantProvider {
     /// Produces one assistant turn from the complete durable conversation.
     fn complete(&mut self, transcript: &[SessionTurn])
     -> Result<SessionTurnContent, ProviderError>;
+}
+
+/// Caller-owned highest-authority policy for one explicitly composed request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SystemPolicy<'a>(&'a str);
+
+impl<'a> SystemPolicy<'a> {
+    pub fn new(value: &'a str) -> Self {
+        Self(value)
+    }
+
+    pub fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
+/// Caller-owned policy below system authority for one explicitly composed request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeveloperPolicy<'a>(&'a str);
+
+impl<'a> DeveloperPolicy<'a> {
+    pub fn new(value: &'a str) -> Self {
+        Self(value)
+    }
+
+    pub fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
+/// A provider-neutral tool-free request in descending authority-field order.
+#[derive(Debug)]
+pub struct ComposedAssistantRequest<'a> {
+    system_policy: SystemPolicy<'a>,
+    developer_policy: DeveloperPolicy<'a>,
+    selected_skills: SkillSelection<'a>,
+    transcript: &'a [SessionTurn],
+}
+
+impl<'a> ComposedAssistantRequest<'a> {
+    pub fn system_policy(&self) -> SystemPolicy<'a> {
+        self.system_policy
+    }
+
+    pub fn developer_policy(&self) -> DeveloperPolicy<'a> {
+        self.developer_policy
+    }
+
+    pub fn skills(&self) -> impl Iterator<Item = &'a RegisteredSkill> + '_ {
+        self.selected_skills.skills()
+    }
+
+    pub fn transcript(&self) -> &'a [SessionTurn] {
+        self.transcript
+    }
+}
+
+/// A synchronous provider for an explicitly composed, tool-free assistant response.
+pub trait ComposedAssistantProvider {
+    fn complete_composed(
+        &mut self,
+        request: ComposedAssistantRequest<'_>,
+    ) -> Result<SessionTurnContent, ProviderError>;
 }
 
 /// A synchronous provider that may request at most one tool invocation.
@@ -1428,6 +1492,7 @@ impl Error for ProviderError {
 pub enum RuntimeError {
     Session(SessionStoreError),
     Provider(ProviderError),
+    SkillSelection(SkillSelectionError),
     Task(TaskStoreError),
     TaskNotAssociated { task_id: TaskId },
     InvalidAttemptText(TaskObservationTextError),
@@ -1440,6 +1505,9 @@ impl fmt::Display for RuntimeError {
         match self {
             Self::Session(error) => write!(formatter, "assistant runtime session error: {error}"),
             Self::Provider(error) => write!(formatter, "assistant provider error: {error}"),
+            Self::SkillSelection(error) => {
+                write!(formatter, "assistant skill selection error: {error}")
+            }
             Self::Task(error) => write!(formatter, "assistant runtime task error: {error}"),
             Self::TaskNotAssociated { task_id } => {
                 write!(formatter, "task {task_id} is not associated with a session")
@@ -1462,6 +1530,7 @@ impl Error for RuntimeError {
         match self {
             Self::Session(error) => Some(error),
             Self::Provider(error) => Some(error),
+            Self::SkillSelection(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvalidAttemptText(error) => Some(error),
             Self::InvalidTaskOutput(error) => Some(error),
@@ -1495,7 +1564,7 @@ pub struct AssistantRuntime<P> {
     provider: P,
 }
 
-impl<P: AssistantProvider> AssistantRuntime<P> {
+impl<P> AssistantRuntime<P> {
     pub fn open(path: impl AsRef<Path>, provider: P) -> Result<Self, RuntimeError> {
         let path = path.as_ref();
         let sessions = SessionStore::open(path).map_err(RuntimeError::Session)?;
@@ -1506,7 +1575,9 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
             provider,
         })
     }
+}
 
+impl<P: AssistantProvider> AssistantRuntime<P> {
     /// Durably appends the human turn, invokes the provider, then durably appends its response.
     ///
     /// Provider failure leaves the human turn committed and appends no assistant turn. The
@@ -1799,5 +1870,42 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
                     task_id: task_id.clone(),
                 })?;
         Ok((task, session_id))
+    }
+}
+
+impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
+    /// Executes one tool-free turn with explicit caller policies and selected skill blocks.
+    ///
+    /// Selection is validated before transcript persistence. After validation, this preserves the
+    /// ordinary turn contract: commit the human turn, call the provider once, then commit the
+    /// assistant turn. Existing turn and task methods remain skill-free.
+    pub fn execute_composed_turn(
+        &mut self,
+        session_id: &SessionId,
+        human_content: SessionTurnContent,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        skill_registry: &SkillRegistry,
+        selected_skill_ids: &[SkillId],
+    ) -> Result<Session, RuntimeError> {
+        let selected_skills = skill_registry
+            .select(selected_skill_ids)
+            .map_err(RuntimeError::SkillSelection)?;
+        let session = self
+            .sessions
+            .append_turn(session_id, SessionTurnRole::Human, human_content)
+            .map_err(RuntimeError::Session)?;
+        let assistant_content = self
+            .provider
+            .complete_composed(ComposedAssistantRequest {
+                system_policy,
+                developer_policy,
+                selected_skills,
+                transcript: session.turns(),
+            })
+            .map_err(RuntimeError::Provider)?;
+        self.sessions
+            .append_turn(session_id, SessionTurnRole::Assistant, assistant_content)
+            .map_err(RuntimeError::Session)
     }
 }

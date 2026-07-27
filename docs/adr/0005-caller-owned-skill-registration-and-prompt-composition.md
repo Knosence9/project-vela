@@ -20,14 +20,14 @@ Extension registration first rejects the lexicographically first selected non-sk
 
 Before registered instructions may influence a model, a caller must explicitly select registered exact IDs for each provider request. Selection will reject duplicate and absent IDs and return immutable borrowed skill blocks in exact-ID order. Merely discovering, preparing, or registering a skill will never select it automatically.
 
-The provider-neutral composed request will preserve four distinct fields, in descending authority order:
+The provider-neutral `ComposedAssistantRequest` preserves four distinct fields, in descending authority order:
 
 1. caller-owned system policy;
 2. caller-owned developer policy;
 3. explicitly selected skill blocks in deterministic exact-ID order;
 4. the durable conversation transcript.
 
-Provider adapters may lower those typed fields into provider-native roles, but may not concatenate them behind the caller's back or promote skill instructions above caller policy. Existing runtime methods remain skill-free. A later explicit composed-turn method will accept a caller-owned selection per request. Tool-capable turns require a separate contract that preserves the same composition across every continuation; this decision does not inject skills into them.
+Provider adapters may lower those typed fields into provider-native roles, but may not concatenate them behind the caller's back or promote skill instructions above caller policy. `AssistantRuntime::execute_composed_turn` accepts a caller-owned exact-ID selection per request and validates it before transcript persistence. Existing runtime methods remain skill-free. Tool-capable turns require a separate contract that preserves the same composition across every continuation; this decision does not inject skills into them.
 
 ## Alternatives considered
 
@@ -58,7 +58,7 @@ Those policies require product evidence that the first process-local registry do
 
 ### Negative
 
-- Registered skills still cannot affect a model until the explicit selection/composition slice exists.
+- Callers and provider adapters must opt into the separate composed provider trait and turn method; existing turns intentionally ignore registered skills.
 - Process restart loses registrations.
 - Exact-ID ordering is deterministic but does not express dependencies or author-selected precedence.
 - Tool-capable turns cannot use skills until continuation semantics are defined.
@@ -67,7 +67,7 @@ Those policies require product evidence that the first process-local registry do
 
 The first execution slice must use RED→GREEN tests proving exact text and ID ordering, redacted debug output, atomic internal/existing collision failures, wrong-kind rejection before filesystem access, preparation-failure atomicity, registry-collision atomicity, and filesystem-free empty registration. The complete repository quality gate must remain green.
 
-A later composition slice must prove duplicate/missing selection rejection, skill-free defaults, exact typed provider fields and authority order, exclusion of registered-but-unselected skills, and unchanged durable failure semantics.
+The composition slice proves duplicate/missing selection rejection, skill-free defaults, exact typed provider fields and authority order, exclusion of registered-but-unselected skills, and unchanged durable failure semantics.
 
 ## Revisit when
 

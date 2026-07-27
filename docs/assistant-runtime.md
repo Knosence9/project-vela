@@ -14,6 +14,14 @@ The `vela-kernel` crate provides a synchronous, provider-neutral boundary that e
 - `AssistantProvider` and `AssistantRuntime` are synchronous. The caller owns provider construction, model selection, credentials, timeout behavior, and any serialization needed to ensure only one invocation is in flight for a session.
 - Existing session event payloads and replay projections are unchanged. The provider sees existing `SessionTurn` values, so the durable transcript remains the source of truth.
 
+## Explicit composed skill turns
+
+`SkillRegistry::select` borrows only caller-supplied exact IDs for one request. It rejects the lexicographically first duplicate before checking presence, then rejects the lexicographically first absent ID; either failure leaves the process-local registry unchanged. A successful selection exposes immutable `RegisteredSkill` references in ascending exact-ID order and preserves every instruction byte. Registration alone remains inert, and an empty selection is valid.
+
+`AssistantRuntime::execute_composed_turn` is the additive tool-free composition boundary. The caller supplies typed `SystemPolicy` and `DeveloperPolicy` values, a registry, and exact IDs for that request. `ComposedAssistantRequest` exposes four structurally distinct fields in descending authority order: system policy, developer policy, selected skill blocks, and the complete durable transcript. The kernel does not concatenate those fields; a `ComposedAssistantProvider` adapter may lower them into provider-native roles without promoting skill instructions above caller policy.
+
+Selection completes before any transcript write or provider invocation. After selection, composed execution has the ordinary durable ordering: append the human turn, call the composed provider exactly once, then append its assistant response. Provider failure leaves the human turn committed, appends no assistant turn, and retains the adapter error in the existing `RuntimeError::Provider` source chain. `execute_turn` and every existing task or tool-capable method continue to use their original provider boundaries and never receive registered skills implicitly.
+
 ## Task-associated turns
 
 `AssistantRuntime::execute_task_turn` connects the same single-turn sequence to one existing task. The caller supplies the task ID, human content, and a caller-owned observation ID. The task must be active and already associated with a session; missing, completed, cancelled, failed, and unassociated tasks fail before a transcript write or provider invocation. A closed associated session is rejected by the existing session boundary before provider invocation.
@@ -77,6 +85,6 @@ Failures preserve the ordered prefix. Deterministic preflight failures leave no 
 
 ## Non-goals
 
-This slice does not add asynchronous execution, streaming, cooperative cancellation, concurrent invocation coordination, automatic retries or tool continuations, system or developer prompts, provider/model metadata, credentials, concrete external tools, model-owned permissions, token accounting, automatic task creation, association, failure or cancellation, generic caller-selected evidence kinds, runtime diagnostic or verification turns, cross-aggregate transactions, or storage migration.
+This slice does not add asynchronous execution, streaming, cooperative cancellation, concurrent invocation coordination, automatic retries or tool continuations, provider-specific policy serialization, provider/model metadata, credentials, concrete external tools, model-owned permissions, token accounting, automatic skill routing, skill persistence, precedence, dependencies, automatic task creation, association, failure or cancellation, generic caller-selected evidence kinds, runtime diagnostic or verification turns, cross-aggregate transactions, or storage migration. Skills remain unavailable to task and tool-capable turns.
 
 See [`session-lifecycle.md`](session-lifecycle.md) for transcript persistence and [`event-log.md`](event-log.md) for durability guarantees.
