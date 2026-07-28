@@ -6,7 +6,7 @@ use vela_kernel::{
         WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunFailure,
         WorkflowRunFailureError, WorkflowRunHistoryEvent, WorkflowRunId, WorkflowRunIdError,
         WorkflowRunPauseReason, WorkflowRunPauseReasonError, WorkflowRunResumeReason,
-        WorkflowRunResumeReasonError, WorkflowRunStore, WorkflowRunStoreError,
+        WorkflowRunResumeReasonError, WorkflowRunStatus, WorkflowRunStore, WorkflowRunStoreError,
     },
 };
 
@@ -240,6 +240,7 @@ fn failure_diagnostics_reject_empty_values_and_persist_exact_terminal_evidence()
     assert_eq!(failed.revision(), 2);
     assert_eq!(failed.current_phase().id(), "plan");
     assert!(failed.is_failed());
+    assert_eq!(failed.status(), WorkflowRunStatus::Failed);
     assert_eq!(
         failed.failure().map(WorkflowRunFailure::as_str),
         Some(" provider exhausted \n")
@@ -290,6 +291,7 @@ fn failed_runs_reopen_with_pause_state_and_reject_every_later_mutation() {
         )
         .unwrap();
     assert!(failed.is_paused());
+    assert_eq!(failed.status(), WorkflowRunStatus::Failed);
     assert_eq!(failed.pause_reason().unwrap().as_str(), "await recovery");
 
     assert!(matches!(
@@ -342,6 +344,7 @@ fn failed_runs_reopen_with_pause_state_and_reject_every_later_mutation() {
     assert_eq!(reopened.len(), 1);
     assert!(reopened[0].is_failed());
     assert!(reopened[0].is_paused());
+    assert_eq!(reopened[0].status(), WorkflowRunStatus::Failed);
     assert_eq!(
         reopened[0].failure().unwrap().as_str(),
         "provider unavailable"
@@ -501,14 +504,17 @@ fn lists_every_workflow_run_in_exact_id_order_with_complete_state() {
     );
     assert_eq!(runs[0].revision(), 1);
     assert_eq!(runs[0].current_phase().id(), "plan");
+    assert_eq!(runs[0].status(), WorkflowRunStatus::Active);
     assert_eq!(runs[1].revision(), 2);
     assert_eq!(
         runs[1].cancellation().map(WorkflowRunCancellation::as_str),
         Some("operator stop")
     );
+    assert_eq!(runs[1].status(), WorkflowRunStatus::Cancelled);
     assert_eq!(runs[2].revision(), 3);
     assert_eq!(runs[2].current_phase().id(), "done");
     assert!(runs[2].is_terminal());
+    assert_eq!(runs[2].status(), WorkflowRunStatus::AuthoredTerminal);
 }
 
 #[test]
@@ -596,6 +602,7 @@ fn starts_at_the_declared_phase_and_replays_the_exact_owned_topology() {
         .unwrap()
         .unwrap();
     assert_eq!(loaded.id(), &id);
+    assert_eq!(loaded.status(), WorkflowRunStatus::Active);
     assert_eq!(loaded.workflow().id().as_str(), "release.workflow");
     assert_eq!(loaded.workflow().start(), "plan");
     assert_eq!(loaded.workflow().phases().len(), 2);
@@ -734,6 +741,7 @@ fn advances_ungated_and_exact_gated_transitions_durably() {
     assert_eq!(done.current_phase().id(), "done");
     assert_eq!(done.revision(), 3);
     assert!(done.is_terminal());
+    assert_eq!(done.status(), WorkflowRunStatus::AuthoredTerminal);
 
     drop(store);
     let loaded = WorkflowRunStore::open(&path)
@@ -875,6 +883,7 @@ fn cancels_an_exact_non_terminal_revision_without_rewriting_phase_or_topology() 
         .unwrap();
     assert_eq!(loaded.current_phase().id(), "review");
     assert!(loaded.is_cancelled());
+    assert_eq!(loaded.status(), WorkflowRunStatus::Cancelled);
     assert_eq!(loaded.cancellation(), Some(&reason));
 }
 
@@ -1045,6 +1054,7 @@ fn pauses_and_resumes_an_exact_revision_without_changing_phase_or_topology() {
     assert_eq!(paused.current_phase().id(), "plan");
     assert_eq!(paused.workflow(), started.workflow());
     assert!(paused.is_paused());
+    assert_eq!(paused.status(), WorkflowRunStatus::Paused);
     assert_eq!(paused.pause_reason(), Some(&pause_reason));
     assert!(matches!(
         store.advance(&id, paused.revision(), 0, None).unwrap_err(),
@@ -1065,6 +1075,7 @@ fn pauses_and_resumes_an_exact_revision_without_changing_phase_or_topology() {
     assert_eq!(resumed.revision(), 3);
     assert_eq!(resumed.current_phase().id(), "plan");
     assert!(!resumed.is_paused());
+    assert_eq!(resumed.status(), WorkflowRunStatus::Active);
     assert_eq!(resumed.pause_reason(), None);
     assert_eq!(
         store
@@ -1117,6 +1128,7 @@ fn pause_resume_failures_are_atomic_and_paused_runs_remain_cancellable() {
         )
         .unwrap();
     assert!(cancelled.is_paused());
+    assert_eq!(cancelled.status(), WorkflowRunStatus::Cancelled);
     assert!(matches!(
         store
             .resume(

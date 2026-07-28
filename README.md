@@ -214,6 +214,7 @@ The first milestone is the **evidence loop**:
 68. Pause and resume durable workflow runs through revision-bound caller-owned reasons without changing topology. ✅
 69. Query exact durable workflow-run lifecycle history as revision-ordered typed semantic evidence. ✅
 70. Fail durable workflow runs through revision-bound caller-owned diagnostics without changing topology. ✅
+71. Classify every durable workflow run through one unified read-only lifecycle status projection. ✅
 
 ## Project documents
 

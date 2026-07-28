@@ -437,6 +437,20 @@ impl WorkflowRunHistoryEntry {
     }
 }
 
+/// The mutually exclusive lifecycle classification of a validated workflow run.
+///
+/// Cancellation and failure take precedence over a retained pause marker. Exact
+/// reasons and diagnostics remain available through [`WorkflowRun`] accessors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkflowRunStatus {
+    Active,
+    Paused,
+    AuthoredTerminal,
+    Cancelled,
+    Failed,
+}
+
 /// Read-only state projected from one durable workflow-run event stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowRun {
@@ -460,6 +474,21 @@ impl WorkflowRun {
 
     pub fn current_phase(&self) -> &RegisteredWorkflowPhase {
         &self.workflow.phases()[self.current_phase_index]
+    }
+
+    /// Classifies this validated projection without adding lifecycle evidence.
+    pub fn status(&self) -> WorkflowRunStatus {
+        if self.is_failed() {
+            WorkflowRunStatus::Failed
+        } else if self.is_cancelled() {
+            WorkflowRunStatus::Cancelled
+        } else if self.is_terminal() {
+            WorkflowRunStatus::AuthoredTerminal
+        } else if self.is_paused() {
+            WorkflowRunStatus::Paused
+        } else {
+            WorkflowRunStatus::Active
+        }
     }
 
     pub fn is_terminal(&self) -> bool {
