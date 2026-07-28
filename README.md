@@ -209,6 +209,7 @@ The first milestone is the **evidence loop**:
 63. Advance one registered workflow through a caller-owned in-memory cursor with explicit transition and gate acknowledgement. ✅
 64. Persist workflow-run starts with immutable owned topology provenance and registry-free replay. ✅
 65. Advance durable workflow runs through revision-bound explicit transitions and exact gate acknowledgement. ✅
+66. Cancel durable non-terminal workflow runs through revision-bound caller-owned reasons without rewriting topology. ✅
 
 ## Project documents
 
