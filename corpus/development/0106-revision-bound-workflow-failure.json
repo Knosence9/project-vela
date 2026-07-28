@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Fail durable workflow runs with exact diagnostics",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/708 under decision https://github.com/Knosence9/project-vela/issues/707 by persisting caller-owned unsuccessful outcomes separately from cancellation and authored terminal topology.",
+    "acceptance_criteria": [
+      "Validate and preserve one non-empty exact caller diagnostic for an active or paused non-terminal workflow run.",
+      "Require the caller-observed revision and persist exact current-phase provenance without changing immutable topology or phase.",
+      "Make failure a distinct terminal lifecycle condition that rejects every later mutation while preserving pause-at-failure evidence.",
+      "Expose failure through exact load, deterministic list, and typed history while rejecting malformed, impossible, duplicate, or post-failure evidence fail closed."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED durable-failure coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-run target failed because the failure value, store mutation, projected state, and typed history variant did not exist.",
+      "patch": "Added tests for active and paused failure, exact diagnostics and revisions, stale and invalid states, every post-failure guard, reopen, list, history, malformed provenance, and invalid event ordering."
+    },
+    {
+      "summary": "Implemented revision-bound caller-owned failure evidence.",
+      "outcome": "success",
+      "diagnostic": "A separate failure event preserved the distinction between unsuccessful work, intentional cancellation, and arrival at authored terminal topology without inferring external causes.",
+      "patch": "Added validated failure diagnostics, exact-revision fail mutation, terminal guards, strict replay and history projection, ADR-0015, and milestone documentation."
+    },
+    {
+      "summary": "Preserved the bounded failure contract through review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking correctness, integrity, scope, or documentation issue, and CodeRabbit reviewed the exact implementation head before merge.",
+      "patch": "Kept automatic detection, retries, recovery, compensation, execution binding, and scheduling outside the verified caller-evidence slice."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable workflow runs now represent exact caller-owned failure as a distinct terminal lifecycle outcome with strict replay and preserved paused-state evidence.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30393953855", "status": "passed"},
+      {"command": "Exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/709", "status": "passed"},
+      {"command": "Pull request 709 squash merge 09e2ee8746857958b4f0df9dbfc78e7a182a0b34", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Failure, cancellation, and authored terminal arrival are separate lifecycle semantics and should not be encoded through one another.",
+    "Phase-preserving terminal events still need exact phase provenance so replay can reject impossible histories.",
+    "Failure while paused must preserve the pause marker because clearing it would invent an unrecorded resume.",
+    "Exact revisions serialize caller failure intent against every other lifecycle mutation without unsafe retry.",
+    "Caller-owned failure evidence does not detect causes, execute actions, retry, recover, compensate, schedule, or grant permission."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/709"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
