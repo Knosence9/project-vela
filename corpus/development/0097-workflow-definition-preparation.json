@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Prepare declarative workflow definitions as inert topology",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/677 under decision https://github.com/Knosence9/project-vela/issues/676 by converting selected workflow YAML into bounded, descriptor-revalidated, immutable state-machine definitions without granting execution authority.",
+    "acceptance_criteria": [
+      "Parse strict workflow_version 1 YAML and preserve exact workflow, phase, transition, target, and optional gate identifiers in authored order.",
+      "Reject wrong kinds before filesystem access and revalidate package, manifest, entrypoint, and descriptor identity through the shared descriptor-anchored boundary.",
+      "Reject invalid encoding, size, starts, phase identities, topology, targets, gates, and reachability deterministically and all-or-nothing.",
+      "Keep prepared definitions inert with no registration, execution, scheduling, persistence, gate resolution, action binding, provider call, or permission grant."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED integration coverage for bounded workflow preparation and complete graph validation.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow_preparation test failed to compile because prepared workflow topology types and the preparation API did not exist.",
+      "patch": "Added coverage for exact authored order, reachable cycles with terminal exits, wrong-kind preflight, strict encoding and YAML, version and unknown-field rejection, every graph invariant, exact size bounds, descriptor changes, empty selection, and all-or-nothing failure."
+    },
+    {
+      "summary": "Implemented descriptor-anchored parsing into immutable inert definitions.",
+      "outcome": "success",
+      "diagnostic": "Separating bounded artifact loading from strict parsing and complete topology validation reused the existing filesystem trust boundary while keeping workflow semantics explicit.",
+      "patch": "Added prepared workflow, phase, and transition types; strict version-one YAML parsing; deterministic graph validation; typed sourced errors; ADR-0006; and extension documentation."
+    },
+    {
+      "summary": "Held the verified head when automated review reported a false green.",
+      "outcome": "failure",
+      "diagnostic": "CodeRabbit reported review rate limiting despite a successful-looking status, so that status was not accepted as substantive exact-head review evidence and auto-merge remained disabled.",
+      "patch": "Preserved head 70d4935d7babb54e1972d0b0802b8bec803ff287 until the cooldown and shared-budget check permitted one deliberate review resume; substantive review then covered all changed files with no actionable finding."
+    }
+  ],
+  "outcome": {
+    "summary": "Selected workflow YAML now becomes exact, bounded, statically validated inert topology suitable for later explicit admission while malformed graphs fail closed.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30327924896",
+        "status": "passed"
+      },
+      {
+        "command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/678",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 678 squash merge a704c05a20b8b0a319a5e0ae36f819175cc17c7a",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Complete graph validation belongs at the preparation boundary so malformed topology never becomes admitted workflow state.",
+    "Authored transition order and exact gate identifiers can be preserved as data without choosing an edge or evaluating a gate.",
+    "Descriptor-anchored revalidation and bounded reads are reusable filesystem trust primitives independent of artifact kind.",
+    "A successful-looking rate-limited review status is not substantive evidence; the exact head must remain unmerged through cooldown and deliberate resume.",
+    "Preparation validates inert data and grants no provider, tool, action, scheduling, persistence, or permission authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-extensions/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/678"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
