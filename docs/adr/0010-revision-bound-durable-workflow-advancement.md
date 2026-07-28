@@ -1,0 +1,68 @@
+# ADR-0010: Advance durable workflow runs with revision-bound transition events
+
+- **Status:** accepted
+- **Date:** 2026-07-28
+- **Decision owners:** Project Vela maintainers
+- **Related:** ADR-0002, ADR-0008, ADR-0009, issues #690 and #691
+
+## Context
+
+ADR-0009 persists each workflow run's immutable topology and exact starting phase, but the durable aggregate cannot progress. ADR-0008 already defines deterministic process-local transition selection by authored index, exact gate acknowledgement, terminal rejection, and fail-closed target resolution. Durable advancement must preserve those rules while preventing a racing writer from silently reinterpreting phase-relative caller intent against a newer phase.
+
+The event log supports exact-version optimistic appends. A loaded run can therefore expose the stream revision that produced its projected state and require callers to bind each transition choice to that revision.
+
+## Decision
+
+`WorkflowRun` exposes its event-stream `revision`. `WorkflowRunStore::advance` accepts an exact run ID, expected revision, authored transition index, and optional exact gate acknowledgement. It loads and projects the owning stream, rejects missing runs or stale revisions, applies the ADR-0008 cursor rules to that exact projected phase, then appends with `ExpectedVersion::Exact`.
+
+A version-one `workflow_run.advanced` event owns the authored source phase index, transition index, resolved target phase index, and optional exact gate ID acknowledged by the caller. Authored indexes refer only to the immutable topology snapshot in the run's start event. Successful append returns the newly projected run and revision.
+
+Replay requires one start event followed only by advancement events. For every advancement it checks that the persisted source is the projected current phase, reapplies exact transition and gate rules, and requires the recomputed target index to equal the persisted target. Any unsupported event, malformed payload, duplicate start, invalid transition, mismatched acknowledgement, impossible source/target, or event-order violation fails closed without partial state.
+
+A stale expected revision returns a typed concurrent-modification error. An append race does the same. The store does not retry because a transition index is relative to a phase; retrying after another transition could apply stale intent to a different phase.
+
+Gate acknowledgement records only that the caller supplied the exact authored gate ID. This boundary does not evaluate the gate or establish external evidence. Advancing changes workflow state only: it does not invoke actions, skills, tools, providers, agents, or humans; grant permissions; schedule work; or assign lifecycle meaning beyond arrival at a phase marked terminal.
+
+## Alternatives considered
+
+### Reload and retry automatically after an append conflict
+
+A task terminal intent can sometimes be revalidated against newer state, but a workflow transition index belongs to the source phase. Applying index zero again after a racing writer moved the run could select a different edge. Failing stale intent keeps caller authority explicit.
+
+### Persist only the target phase ID
+
+That would discard the selected authored edge and gate acknowledgement, and repeated targets would become indistinguishable. Source, transition, and target indexes preserve exact topology provenance and support strict replay.
+
+### Persist only the transition index
+
+Replay could derive source and target, but recording all three indexes makes corruption and impossible histories directly detectable while remaining compact. The values are validated rather than trusted.
+
+### Evaluate gates while advancing
+
+No gate evaluator, evidence schema, or permission contract exists. Treating a gate ID as executable would cross the inert topology boundary and invent authority not granted by the workflow definition.
+
+## Consequences
+
+### Positive
+
+- Durable progress survives restart without consulting a mutable registry or extension package.
+- Every accepted edge and gate acknowledgement has strict topology provenance.
+- Revision-bound calls prevent stale phase-relative intent from being reinterpreted.
+- Replay detects malformed and impossible histories deterministically.
+- Advancement remains capability-free and independently testable.
+
+### Negative
+
+- Callers must retain or reload the latest revision before advancing.
+- Concurrent conflicts require an explicit caller decision rather than automatic retry.
+- Gate acknowledgement is identity evidence only, not proof that an external condition was evaluated correctly.
+- Cyclic workflows can grow streams indefinitely; compaction remains deferred.
+- Runs still have no cancellation, pause, scheduling, action execution, or discovery lifecycle.
+
+## Verification
+
+The bounded execution slice follows RED→GREEN tests proving ungated and exactly gated durable transitions, terminal arrival, registry-free reopen and continuation, atomic rejection of missing runs and invalid transitions, stale-revision conflict behavior, and fail-closed malformed or impossible histories. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider this decision before gate evaluation or evidence binding, phase actions, scheduling, automatic transition choice, pause/resume, cancellation, retries, compensation, run discovery, snapshots or compaction, migration, deletion, definition replacement, or remote execution.
