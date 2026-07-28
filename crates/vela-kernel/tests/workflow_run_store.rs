@@ -1,6 +1,7 @@
 use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
+    task::{TaskGoal, TaskId, TaskOutput, TaskStatus, TaskStore},
     workflow::{
         RegisteredWorkflow, RegisteredWorkflowPhase, RegisteredWorkflowTransition, WorkflowId,
         WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunFailure,
@@ -9,6 +10,123 @@ use vela_kernel::{
         WorkflowRunResumeReasonError, WorkflowRunStatus, WorkflowRunStore, WorkflowRunStoreError,
     },
 };
+
+#[test]
+fn attributes_a_workflow_run_immutably_to_an_active_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("release-task").unwrap();
+    let run_id = WorkflowRunId::new("release-run").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("ship release").unwrap())
+        .unwrap();
+
+    let started = WorkflowRunStore::open(&path)
+        .unwrap()
+        .start_for_task(run_id.clone(), &task_id, &advancing_workflow())
+        .unwrap();
+    assert_eq!(started.task_id(), Some(&task_id));
+    let payload_version: u32 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_version FROM events WHERE stream_id = 'workflow-run:release-run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(payload_version, 2);
+    tasks
+        .complete(&task_id, TaskOutput::new("task complete").unwrap())
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path).unwrap().start_for_task(
+            run_id.clone(),
+            &task_id,
+            &advancing_workflow(),
+        ),
+        Err(WorkflowRunStoreError::AlreadyExists { .. })
+    ));
+
+    let reopened = WorkflowRunStore::open(&path)
+        .unwrap()
+        .load(&run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.task_id(), Some(&task_id));
+    assert_eq!(
+        WorkflowRunStore::open(&path).unwrap().list().unwrap()[0].task_id(),
+        Some(&task_id)
+    );
+    assert!(matches!(
+        WorkflowRunStore::open(&path).unwrap().history(&run_id).unwrap().unwrap()[0].event(),
+        WorkflowRunHistoryEvent::TaskStarted { task_id: history_task_id, .. }
+            if history_task_id == &task_id
+    ));
+}
+
+#[test]
+fn task_attributed_start_rejects_missing_and_terminal_tasks_atomically() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let missing_task = TaskId::new("missing-task").unwrap();
+    let missing_run = WorkflowRunId::new("missing-run").unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    assert!(matches!(
+        runs.start_for_task(missing_run.clone(), &missing_task, &advancing_workflow()),
+        Err(WorkflowRunStoreError::TaskNotFound { .. })
+    ));
+    assert!(runs.load(&missing_run).unwrap().is_none());
+
+    let task_id = TaskId::new("completed-task").unwrap();
+    let terminal_run = WorkflowRunId::new("terminal-run").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("done already").unwrap())
+        .unwrap();
+    tasks
+        .complete(&task_id, TaskOutput::new("done").unwrap())
+        .unwrap();
+    assert!(matches!(
+        runs.start_for_task(terminal_run.clone(), &task_id, &advancing_workflow()),
+        Err(WorkflowRunStoreError::TaskNotActive {
+            status: TaskStatus::Completed,
+            ..
+        })
+    ));
+    assert!(runs.load(&terminal_run).unwrap().is_none());
+}
+
+#[test]
+fn task_attributed_start_rejects_a_malformed_persisted_task_id() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("valid-task").unwrap();
+    let run_id = WorkflowRunId::new("malformed-attribution").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(task_id.clone(), TaskGoal::new("validate replay").unwrap())
+        .unwrap();
+    WorkflowRunStore::open(&path)
+        .unwrap()
+        .start_for_task(run_id.clone(), &task_id, &advancing_workflow())
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.task_id', '') AS BLOB) WHERE stream_id = 'workflow-run:malformed-attribution'",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .load(&run_id)
+            .unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+}
 
 fn workflow(start: &str) -> RegisteredWorkflow {
     RegisteredWorkflow::new(

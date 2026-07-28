@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::event_log::{
     DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
 };
+use crate::task::{TaskId, TaskStatus, TaskStore, TaskStoreError, task_stream};
 
 /// An opaque, non-blank stable identifier for one registered workflow.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -268,6 +269,7 @@ const WORKFLOW_RUN_PAUSED_EVENT_TYPE: &str = "workflow_run.paused";
 const WORKFLOW_RUN_RESUMED_EVENT_TYPE: &str = "workflow_run.resumed";
 const WORKFLOW_RUN_FAILED_EVENT_TYPE: &str = "workflow_run.failed";
 const WORKFLOW_RUN_EVENT_PAYLOAD_VERSION: u32 = 1;
+const WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION: u32 = 2;
 const WORKFLOW_RUN_STREAM_PREFIX: &str = "workflow-run:";
 
 /// An opaque, non-blank identity for one durable workflow run.
@@ -395,6 +397,11 @@ pub enum WorkflowRunHistoryEvent {
         workflow_id: WorkflowId,
         phase_id: String,
     },
+    TaskStarted {
+        workflow_id: WorkflowId,
+        phase_id: String,
+        task_id: TaskId,
+    },
     Advanced {
         source_phase_id: String,
         target_phase_id: String,
@@ -461,6 +468,7 @@ pub struct WorkflowRun {
     cancellation: Option<WorkflowRunCancellation>,
     pause_reason: Option<WorkflowRunPauseReason>,
     failure: Option<WorkflowRunFailure>,
+    task_id: Option<TaskId>,
 }
 
 impl WorkflowRun {
@@ -470,6 +478,11 @@ impl WorkflowRun {
 
     pub fn workflow(&self) -> &RegisteredWorkflow {
         &self.workflow
+    }
+
+    /// The task immutably attributed when this run started, if any.
+    pub fn task_id(&self) -> Option<&TaskId> {
+        self.task_id.as_ref()
     }
 
     pub fn current_phase(&self) -> &RegisteredWorkflowPhase {
@@ -530,6 +543,7 @@ impl WorkflowRun {
 pub enum WorkflowRunStoreError {
     EventLog(EventLogError),
     Replay(ReplayError),
+    Task(TaskStoreError),
     AlreadyExists {
         run_id: WorkflowRunId,
     },
@@ -570,6 +584,16 @@ pub enum WorkflowRunStoreError {
     InvalidHistory {
         event_count: usize,
     },
+    TaskNotFound {
+        task_id: TaskId,
+    },
+    TaskNotActive {
+        task_id: TaskId,
+        status: TaskStatus,
+    },
+    TaskChanged {
+        task_id: TaskId,
+    },
 }
 
 impl fmt::Display for WorkflowRunStoreError {
@@ -577,6 +601,7 @@ impl fmt::Display for WorkflowRunStoreError {
         match self {
             Self::EventLog(error) => write!(formatter, "workflow-run event-log error: {error}"),
             Self::Replay(error) => write!(formatter, "workflow-run replay error: {error}"),
+            Self::Task(error) => write!(formatter, "workflow-run task-store error: {error}"),
             Self::AlreadyExists { run_id } => {
                 write!(formatter, "workflow run {run_id} already exists")
             }
@@ -618,6 +643,16 @@ impl fmt::Display for WorkflowRunStoreError {
                 formatter,
                 "invalid workflow-run history with {event_count} events"
             ),
+            Self::TaskNotFound { task_id } => write!(formatter, "task {task_id} was not found"),
+            Self::TaskNotActive { task_id, status } => {
+                write!(formatter, "task {task_id} is not active: {status:?}")
+            }
+            Self::TaskChanged { task_id } => {
+                write!(
+                    formatter,
+                    "task {task_id} changed before workflow run start"
+                )
+            }
         }
     }
 }
@@ -627,6 +662,7 @@ impl Error for WorkflowRunStoreError {
         match self {
             Self::EventLog(error) => Some(error),
             Self::Replay(error) => Some(error),
+            Self::Task(error) => Some(error),
             Self::InvalidDefinition { source } | Self::InvalidTransition { source } => Some(source),
             Self::AlreadyExists { .. }
             | Self::NotFound { .. }
@@ -638,7 +674,10 @@ impl Error for WorkflowRunStoreError {
             | Self::Paused { .. }
             | Self::AlreadyTerminal { .. }
             | Self::ConcurrentModification { .. }
-            | Self::InvalidHistory { .. } => None,
+            | Self::InvalidHistory { .. }
+            | Self::TaskNotFound { .. }
+            | Self::TaskNotActive { .. }
+            | Self::TaskChanged { .. } => None,
         }
     }
 }
@@ -646,13 +685,15 @@ impl Error for WorkflowRunStoreError {
 /// A synchronous durable workflow-run store backed by the typed event log.
 pub struct WorkflowRunStore {
     event_log: EventLog,
+    tasks: TaskStore,
 }
 
 impl WorkflowRunStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, WorkflowRunStoreError> {
-        EventLog::open(path)
-            .map(|event_log| Self { event_log })
-            .map_err(WorkflowRunStoreError::EventLog)
+        let path = path.as_ref();
+        let event_log = EventLog::open(path).map_err(WorkflowRunStoreError::EventLog)?;
+        let tasks = TaskStore::open(path).map_err(WorkflowRunStoreError::Task)?;
+        Ok(Self { event_log, tasks })
     }
 
     pub fn start(
@@ -664,6 +705,7 @@ impl WorkflowRunStore {
             .map_err(|source| WorkflowRunStoreError::InvalidDefinition { source })?;
         let event = WorkflowRunEvent::Started {
             workflow: WorkflowSnapshot::from(workflow),
+            task_id: None,
         };
         match self
             .event_log
@@ -677,11 +719,86 @@ impl WorkflowRunStore {
                 cancellation: None,
                 pause_reason: None,
                 failure: None,
+                task_id: None,
             }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
                 current: Some(_),
             }) => Err(WorkflowRunStoreError::AlreadyExists { run_id: id }),
+            Err(error) => Err(WorkflowRunStoreError::EventLog(error)),
+        }
+    }
+
+    /// Starts one run with immutable attribution to an existing active task.
+    pub fn start_for_task(
+        &mut self,
+        id: WorkflowRunId,
+        task_id: &TaskId,
+        workflow: &RegisteredWorkflow,
+    ) -> Result<WorkflowRun, WorkflowRunStoreError> {
+        start_phase_index(workflow)
+            .map_err(|source| WorkflowRunStoreError::InvalidDefinition { source })?;
+        if self.load(&id)?.is_some() {
+            return Err(WorkflowRunStoreError::AlreadyExists { run_id: id });
+        }
+        let Some((task, task_version)) = self
+            .tasks
+            .load_with_version(task_id)
+            .map_err(WorkflowRunStoreError::Task)?
+        else {
+            return Err(WorkflowRunStoreError::TaskNotFound {
+                task_id: task_id.clone(),
+            });
+        };
+        if task.status() != TaskStatus::Active {
+            return Err(WorkflowRunStoreError::TaskNotActive {
+                task_id: task_id.clone(),
+                status: task.status(),
+            });
+        }
+        self.start_for_task_at_version(id, task_id, task_version, workflow)
+    }
+
+    fn start_for_task_at_version(
+        &mut self,
+        id: WorkflowRunId,
+        task_id: &TaskId,
+        task_version: u64,
+        workflow: &RegisteredWorkflow,
+    ) -> Result<WorkflowRun, WorkflowRunStoreError> {
+        let current_phase_index = start_phase_index(workflow)
+            .map_err(|source| WorkflowRunStoreError::InvalidDefinition { source })?;
+        let event = WorkflowRunEvent::Started {
+            workflow: WorkflowSnapshot::from(workflow),
+            task_id: Some(task_id.clone()),
+        };
+        match self.event_log.append_if_stream_unchanged(
+            &workflow_run_stream(&id),
+            ExpectedVersion::NoStream,
+            &task_stream(task_id),
+            ExpectedVersion::Exact(task_version),
+            &event,
+        ) {
+            Ok(_) => Ok(WorkflowRun {
+                id,
+                workflow: workflow.clone(),
+                current_phase_index,
+                revision: 1,
+                cancellation: None,
+                pause_reason: None,
+                failure: None,
+                task_id: Some(task_id.clone()),
+            }),
+            Err(EventLogError::WrongExpectedVersion {
+                expected: ExpectedVersion::NoStream,
+                current: Some(_),
+            }) => Err(WorkflowRunStoreError::AlreadyExists { run_id: id }),
+            Err(EventLogError::WrongExpectedVersion {
+                expected: ExpectedVersion::Exact(_),
+                ..
+            }) => Err(WorkflowRunStoreError::TaskChanged {
+                task_id: task_id.clone(),
+            }),
             Err(error) => Err(WorkflowRunStoreError::EventLog(error)),
         }
     }
@@ -981,7 +1098,7 @@ fn project_workflow_run(
     events: Vec<WorkflowRunEvent>,
 ) -> Result<Option<WorkflowRun>, WorkflowRunStoreError> {
     let event_count = events.len();
-    let Some(WorkflowRunEvent::Started { workflow }) = events.first().cloned() else {
+    let Some(WorkflowRunEvent::Started { workflow, task_id }) = events.first().cloned() else {
         return if events.is_empty() {
             Ok(None)
         } else {
@@ -1008,6 +1125,7 @@ fn project_workflow_run(
         cancellation: None,
         pause_reason: None,
         failure: None,
+        task_id,
     };
     for event in events.into_iter().skip(1) {
         if run.is_cancelled() || run.is_failed() {
@@ -1087,12 +1205,21 @@ fn project_workflow_run_history(
         .enumerate()
         .map(|(index, event)| {
             let event = match event {
-                WorkflowRunEvent::Started { .. } => {
+                WorkflowRunEvent::Started { task_id, .. } => {
                     let phase_index = start_phase_index(run.workflow())
                         .expect("the workflow-run projector validated the start phase");
-                    WorkflowRunHistoryEvent::Started {
-                        workflow_id: run.workflow().id().clone(),
-                        phase_id: run.workflow().phases()[phase_index].id().to_owned(),
+                    let workflow_id = run.workflow().id().clone();
+                    let phase_id = run.workflow().phases()[phase_index].id().to_owned();
+                    match task_id {
+                        Some(task_id) => WorkflowRunHistoryEvent::TaskStarted {
+                            workflow_id,
+                            phase_id,
+                            task_id,
+                        },
+                        None => WorkflowRunHistoryEvent::Started {
+                            workflow_id,
+                            phase_id,
+                        },
                     }
                 }
                 WorkflowRunEvent::Advanced {
@@ -1176,6 +1303,8 @@ fn resolve_transition(
 enum WorkflowRunEvent {
     Started {
         workflow: WorkflowSnapshot,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<TaskId>,
     },
     Advanced {
         source_phase_index: usize,
@@ -1214,11 +1343,19 @@ impl Event for WorkflowRunEvent {
     }
 
     fn payload_version(&self) -> u32 {
-        WORKFLOW_RUN_EVENT_PAYLOAD_VERSION
+        match self {
+            Self::Started {
+                task_id: Some(_), ..
+            } => WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION,
+            _ => WORKFLOW_RUN_EVENT_PAYLOAD_VERSION,
+        }
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
-        if payload_version != WORKFLOW_RUN_EVENT_PAYLOAD_VERSION {
+        if payload_version != WORKFLOW_RUN_EVENT_PAYLOAD_VERSION
+            && !(event_type == WORKFLOW_RUN_STARTED_EVENT_TYPE
+                && payload_version == WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION)
+        {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
                 payload_version,
@@ -1226,27 +1363,49 @@ impl Event for WorkflowRunEvent {
         }
         match event_type {
             WORKFLOW_RUN_STARTED_EVENT_TYPE => {
-                #[derive(Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Payload {
-                    workflow: WorkflowSnapshot,
-                }
-                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                let (workflow, task_id) = if payload_version
+                    == WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION
+                {
+                    #[derive(Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Payload {
+                        workflow: WorkflowSnapshot,
+                        task_id: String,
+                    }
+                    let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                        DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        }
+                    })?;
+                    let task_id = TaskId::new(payload.task_id).map_err(|error| {
+                        DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        }
+                    })?;
+                    (payload.workflow, Some(task_id))
+                } else {
+                    #[derive(Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Payload {
+                        workflow: WorkflowSnapshot,
+                    }
+                    let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                        DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        }
+                    })?;
+                    (payload.workflow, None)
+                };
+                let decoded_workflow = workflow
+                    .clone()
+                    .into_workflow()
+                    .map_err(|message| DecodeError::MalformedPayload { message })?;
+                start_phase_index(&decoded_workflow).map_err(|error| {
                     DecodeError::MalformedPayload {
                         message: error.to_string(),
                     }
                 })?;
-                let workflow = payload
-                    .workflow
-                    .clone()
-                    .into_workflow()
-                    .map_err(|message| DecodeError::MalformedPayload { message })?;
-                start_phase_index(&workflow).map_err(|error| DecodeError::MalformedPayload {
-                    message: error.to_string(),
-                })?;
-                Ok(Self::Started {
-                    workflow: payload.workflow,
-                })
+                Ok(Self::Started { workflow, task_id })
             }
             WORKFLOW_RUN_ADVANCED_EVENT_TYPE => {
                 #[derive(Deserialize)]
@@ -1621,5 +1780,41 @@ impl WorkflowRegistry {
     /// Iterates registered workflows in ascending exact-ID order.
     pub fn workflows(&self) -> impl Iterator<Item = &RegisteredWorkflow> {
         self.workflows.values()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::task::{TaskGoal, TaskOutput};
+
+    #[test]
+    fn task_revision_race_rejects_attributed_start_without_creating_a_run() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new("racing-task").unwrap();
+        let run_id = WorkflowRunId::new("racing-run").unwrap();
+        let mut tasks = TaskStore::open(&path).unwrap();
+        tasks
+            .start(task_id.clone(), TaskGoal::new("race start").unwrap())
+            .unwrap();
+        let mut runs = WorkflowRunStore::open(&path).unwrap();
+        let (_, observed_version) = runs.tasks.load_with_version(&task_id).unwrap().unwrap();
+        tasks
+            .complete(&task_id, TaskOutput::new("won race").unwrap())
+            .unwrap();
+        let workflow = RegisteredWorkflow::new(
+            WorkflowId::new("race.workflow").unwrap(),
+            "done",
+            vec![RegisteredWorkflowPhase::new("done", true, vec![])],
+        );
+
+        assert!(matches!(
+            runs.start_for_task_at_version(run_id.clone(), &task_id, observed_version, &workflow,),
+            Err(WorkflowRunStoreError::TaskChanged { .. })
+        ));
+        assert!(runs.load(&run_id).unwrap().is_none());
     }
 }
