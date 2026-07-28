@@ -1,0 +1,62 @@
+# ADR-0007: Register workflows in caller-owned inert registries
+
+- **Status:** accepted
+- **Date:** 2026-07-28
+- **Decision owners:** Project Vela maintainers
+- **Related:** ADR-0006, issues #679 and #680
+
+## Context
+
+ADR-0006 gives selected workflow entrypoints a bounded, descriptor-anchored preparation boundary and validates their declarative state-machine topology. Prepared definitions are immutable but remain detached values. Vela needs an explicit admission step before a definition is considered available to a caller, without conflating extension discovery with enablement or prematurely defining execution.
+
+The North Star distinguishes workflows from tools and skills, while the architecture plan places a separate workflow registry in the small kernel. The existing caller-owned skill registry establishes a useful ownership and atomicity precedent, but workflow registration must preserve structured topology rather than instruction text.
+
+## Decision
+
+The kernel owns a caller-owned, process-local `WorkflowRegistry`. It stores immutable `RegisteredWorkflow` values by non-blank exact `WorkflowId`. A registered value owns its exact start phase, authored phase order, terminal markers, authored transition order, exact targets, and optional exact gate IDs.
+
+`register_all` admits one homogeneous batch atomically. It preflights exact-ID collisions against both the existing registry and the batch, reports the lexicographically first collision, and performs no mutation on failure. Exact lookup does not trim, case-fold, normalize, or reinterpret IDs. Enumeration uses ascending exact-ID order; ordering inside each workflow remains authored order.
+
+The extension bridge `register_workflow_selection(root, selection, registry)` is the validated admission path for extension workflows. It rejects the lexicographically first selected non-workflow before filesystem access, reuses the complete ADR-0006 preparation boundary for the whole batch, converts every prepared definition to owned kernel topology, and invokes the registry mutation once. Preparation and registry failures preserve their sources. An empty selection is a filesystem-free no-op.
+
+The kernel topology constructors are inert data constructors; the extension bridge is responsible for the ADR-0006 graph validation of extension-authored definitions before registration. Registration itself does not repeat YAML or graph validation.
+
+Registration means process-local availability only. It does not select a workflow for a run, execute or schedule phases, choose transitions, evaluate gates, bind actions to skills/tools/agents/humans, compose provider requests, grant tool permission, persist state, create checkpoints, pause or resume, retry, replace or remove definitions, watch files, or hot reload.
+
+## Alternatives considered
+
+### Treat the extension registry snapshot as the workflow registry
+
+Discovery records metadata and filesystem identity, not explicit caller admission. Reusing it would make discovered workflow packages implicitly available and would leave no atomic lifecycle boundary for prepared topology.
+
+### Put the workflow registry in `vela-extensions`
+
+The extension crate owns package parsing and descriptor-anchored preparation. The process-local capability directory is a kernel primitive, consistent with the separate tool and skill registries and usable independently of one packaging format.
+
+### Add execution and gate evaluation with registration
+
+Execution requires separate contracts for run identity, transition choice, gate authority, action binding, persistence, interruption, and permissions. Combining those decisions with inert admission would unnecessarily enlarge the trust boundary.
+
+### Persist registered workflows immediately
+
+Persistence would require versioning, migration, provenance, refresh, and stale-package semantics. Process-local caller ownership keeps this slice reversible and explicit.
+
+## Consequences
+
+### Positive
+
+- Discovery, validated preparation, and explicit availability remain separate lifecycle steps.
+- Admission is deterministic and all-or-nothing.
+- Validated authored topology crosses into the kernel without losing order or exact identifiers.
+- Registration grants no execution or provider/tool authority.
+
+### Negative
+
+- Registered workflows still cannot run.
+- Definitions must be registered again after process restart.
+- Replacement, removal, selection, execution, and durable checkpoint semantics remain future work.
+- Kernel data constructors do not independently repeat extension graph validation.
+
+## Revisit when
+
+Reconsider this decision before adding workflow selection, replacement or removal, execution, scheduling, transition or gate evaluation, phase action bindings, persistent enablement, run/checkpoint persistence, pause/resume, retries, compensation, concurrency, hot reload, remote packages, signatures, or migrations.

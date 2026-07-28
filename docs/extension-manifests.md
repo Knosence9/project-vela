@@ -79,6 +79,14 @@ Each entrypoint must be UTF-8 strict YAML with `workflow_version: 1`, one exact 
 
 Prepared workflow topology is inert. The operation does not register, activate, execute, schedule, pause, resume, persist, retry, choose a transition, evaluate a gate, bind phases to skills/tools/agents/humans, compose a prompt, or grant permission. Cycles are structurally valid when reachable; this boundary validates topology but does not prove eventual termination. Workflow registry and runtime semantics remain separate decisions.
 
+## Atomic inert workflow registration
+
+The accepted registration boundary is specified by [ADR-0007](adr/0007-caller-owned-inert-workflow-registration.md). The kernel `WorkflowRegistry` is a caller-owned, process-local exact-ID directory of immutable owned workflow topology. Atomic batch registration rejects the lexicographically first collision against either the existing registry or the batch without mutation. Exact lookup preserves identity, registry enumeration uses ascending exact-ID order, and phases and transitions retain authored order internally.
+
+`register_workflow_selection(root, selection, registry)` rejects the lexicographically first selected non-workflow before filesystem access, reuses the complete descriptor-anchored preparation and graph-validation boundary, converts every successful definition to kernel topology, and mutates the registry once. Preparation and registry failures reject the whole batch and preserve their underlying sources. An empty selection is a filesystem-free no-op.
+
+Registration expresses availability only. It does not select, execute, schedule, persist, resolve gates, choose transitions, bind phase actions, compose provider requests, grant permissions, replace or remove definitions, watch files, or hot reload.
+
 ## Tool component compilation
 
 `compile_tool_components(artifacts)` is the inert compiler boundary for prepared tools. It creates a Wasmtime engine with the Component Model explicitly enabled and compiles binary component bytes without Wasmtime's text-format support. Every component must have no top-level imports and exactly one top-level export: the synchronous function `invoke(input: string) -> result<string, string>` specified structurally by `vela:extension/tool@0.1.0`. Core modules, malformed bytes, imports, missing or additional exports, and incompatible parameter or result types fail closed.
