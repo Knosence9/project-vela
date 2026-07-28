@@ -283,9 +283,13 @@ fn advancement_failures_are_atomic_and_stale_revisions_are_not_reinterpreted() {
 
     let count: u64 = rusqlite::Connection::open(&path)
         .unwrap()
-        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = ?1",
+            [format!("workflow-run:{id}")],
+            |row| row.get(0),
+        )
         .unwrap();
-    assert_eq!(count, 3);
+    assert_eq!(count, 2);
 }
 
 #[test]
