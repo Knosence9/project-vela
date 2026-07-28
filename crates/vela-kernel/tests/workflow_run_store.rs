@@ -3,7 +3,8 @@ use vela_kernel::{
     event_log::ReplayError,
     workflow::{
         RegisteredWorkflow, RegisteredWorkflowPhase, RegisteredWorkflowTransition, WorkflowId,
-        WorkflowRunId, WorkflowRunIdError, WorkflowRunStore, WorkflowRunStoreError,
+        WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunId, WorkflowRunIdError,
+        WorkflowRunStore, WorkflowRunStoreError,
     },
 };
 
@@ -54,6 +55,18 @@ fn run_ids_reject_blank_values_and_preserve_exact_non_blank_text() {
     assert_eq!(
         WorkflowRunId::new(" run:release ").unwrap().as_str(),
         " run:release "
+    );
+}
+
+#[test]
+fn cancellation_reasons_reject_empty_values_and_preserve_exact_text() {
+    assert_eq!(
+        WorkflowRunCancellation::new("").unwrap_err(),
+        WorkflowRunCancellationError
+    );
+    assert_eq!(
+        WorkflowRunCancellation::new(" \n ").unwrap().as_str(),
+        " \n "
     );
 }
 
@@ -324,4 +337,165 @@ fn terminal_and_impossible_advancement_histories_fail_closed() {
         matches!(error, WorkflowRunStoreError::InvalidHistory { .. }),
         "unexpected error: {error:?}"
     );
+}
+
+#[test]
+fn cancels_an_exact_non_terminal_revision_without_rewriting_phase_or_topology() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("release-cancel").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    let review = store.advance(&id, started.revision(), 0, None).unwrap();
+    let reason = WorkflowRunCancellation::new("operator stopped release").unwrap();
+
+    let cancelled = store
+        .cancel(&id, review.revision(), reason.clone())
+        .unwrap();
+    assert_eq!(cancelled.revision(), 3);
+    assert_eq!(cancelled.current_phase().id(), "review");
+    assert_eq!(cancelled.workflow(), review.workflow());
+    assert!(cancelled.is_cancelled());
+    assert_eq!(cancelled.cancellation(), Some(&reason));
+    assert!(!cancelled.is_terminal());
+
+    drop(store);
+    let loaded = WorkflowRunStore::open(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.current_phase().id(), "review");
+    assert!(loaded.is_cancelled());
+    assert_eq!(loaded.cancellation(), Some(&reason));
+}
+
+#[test]
+fn cancellation_failures_are_atomic_and_freeze_the_winning_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("release-cancel-race").unwrap();
+    let missing = WorkflowRunId::new("missing").unwrap();
+    let reason = WorkflowRunCancellation::new("stop").unwrap();
+    let mut first = WorkflowRunStore::open(&path).unwrap();
+    let started = first.start(id.clone(), &advancing_workflow()).unwrap();
+    let stale_revision = started.revision();
+
+    assert!(matches!(
+        first.cancel(&missing, 1, reason.clone()).unwrap_err(),
+        WorkflowRunStoreError::NotFound { run_id } if run_id == missing
+    ));
+    let review = first.advance(&id, stale_revision, 0, None).unwrap();
+    assert!(matches!(
+        first
+            .cancel(&id, stale_revision, reason.clone())
+            .unwrap_err(),
+        WorkflowRunStoreError::ConcurrentModification {
+            expected_revision: 1,
+            current_revision: 2,
+        }
+    ));
+    let mut second = WorkflowRunStore::open(&path).unwrap();
+    let cancelled = first
+        .cancel(&id, review.revision(), reason.clone())
+        .unwrap();
+    assert!(matches!(
+        second
+            .advance(&id, review.revision(), 0, Some("release.approved"))
+            .unwrap_err(),
+        WorkflowRunStoreError::ConcurrentModification {
+            expected_revision: 2,
+            current_revision: 3,
+        }
+    ));
+    assert!(matches!(
+        first
+            .cancel(&id, cancelled.revision(), reason.clone())
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyCancelled { .. }
+    ));
+    assert!(matches!(
+        first
+            .advance(&id, cancelled.revision(), 0, Some("release.approved"))
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyCancelled { .. }
+    ));
+
+    let terminal_id = WorkflowRunId::new("terminal").unwrap();
+    let terminal_started = first
+        .start(terminal_id.clone(), &advancing_workflow())
+        .unwrap();
+    let terminal_review = first
+        .advance(&terminal_id, terminal_started.revision(), 0, None)
+        .unwrap();
+    let terminal = first
+        .advance(
+            &terminal_id,
+            terminal_review.revision(),
+            0,
+            Some("release.approved"),
+        )
+        .unwrap();
+    assert!(matches!(
+        first
+            .cancel(&terminal_id, terminal.revision(), reason)
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyTerminal { .. }
+    ));
+
+    let count: u64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = ?1",
+            [format!("workflow-run:{id}")],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn malformed_and_impossible_cancellation_histories_fail_closed() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("cancel-history").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    store
+        .cancel(
+            &id,
+            started.revision(),
+            WorkflowRunCancellation::new("stop").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.source_phase_index', 1) AS BLOB) WHERE stream_id = 'workflow-run:cancel-history' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .load(&id)
+            .unwrap_err(),
+        WorkflowRunStoreError::InvalidHistory { .. }
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.source_phase_index', 0, '$.reason', '') AS BLOB) WHERE stream_id = 'workflow-run:cancel-history' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .load(&id)
+            .unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
 }

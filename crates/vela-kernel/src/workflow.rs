@@ -263,6 +263,7 @@ impl Error for WorkflowCursorError {}
 
 const WORKFLOW_RUN_STARTED_EVENT_TYPE: &str = "workflow_run.started";
 const WORKFLOW_RUN_ADVANCED_EVENT_TYPE: &str = "workflow_run.advanced";
+const WORKFLOW_RUN_CANCELLED_EVENT_TYPE: &str = "workflow_run.cancelled";
 const WORKFLOW_RUN_EVENT_PAYLOAD_VERSION: u32 = 1;
 
 /// An opaque, non-blank identity for one durable workflow run.
@@ -301,6 +302,37 @@ impl fmt::Display for WorkflowRunIdError {
 
 impl Error for WorkflowRunIdError {}
 
+/// The non-empty caller-owned reason recorded when a workflow run is cancelled.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct WorkflowRunCancellation(String);
+
+impl WorkflowRunCancellation {
+    pub fn new(value: impl Into<String>) -> Result<Self, WorkflowRunCancellationError> {
+        let value = value.into();
+        if value.is_empty() {
+            Err(WorkflowRunCancellationError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkflowRunCancellationError;
+
+impl fmt::Display for WorkflowRunCancellationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("workflow run cancellation reason must not be empty")
+    }
+}
+
+impl Error for WorkflowRunCancellationError {}
+
 /// Read-only state projected from one durable workflow-run event stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowRun {
@@ -308,6 +340,7 @@ pub struct WorkflowRun {
     workflow: RegisteredWorkflow,
     current_phase_index: usize,
     revision: u64,
+    cancellation: Option<WorkflowRunCancellation>,
 }
 
 impl WorkflowRun {
@@ -327,6 +360,14 @@ impl WorkflowRun {
         self.current_phase().is_terminal()
     }
 
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_some()
+    }
+
+    pub fn cancellation(&self) -> Option<&WorkflowRunCancellation> {
+        self.cancellation.as_ref()
+    }
+
     /// The exact event-stream revision this state projects.
     pub fn revision(&self) -> u64 {
         self.revision
@@ -342,6 +383,12 @@ pub enum WorkflowRunStoreError {
         run_id: WorkflowRunId,
     },
     NotFound {
+        run_id: WorkflowRunId,
+    },
+    AlreadyCancelled {
+        run_id: WorkflowRunId,
+    },
+    AlreadyTerminal {
         run_id: WorkflowRunId,
     },
     InvalidDefinition {
@@ -368,6 +415,15 @@ impl fmt::Display for WorkflowRunStoreError {
                 write!(formatter, "workflow run {run_id} already exists")
             }
             Self::NotFound { run_id } => write!(formatter, "workflow run {run_id} was not found"),
+            Self::AlreadyCancelled { run_id } => {
+                write!(formatter, "workflow run {run_id} is already cancelled")
+            }
+            Self::AlreadyTerminal { run_id } => {
+                write!(
+                    formatter,
+                    "workflow run {run_id} is already at a terminal phase"
+                )
+            }
             Self::InvalidDefinition { source } => {
                 write!(formatter, "workflow run definition is invalid: {source}")
             }
@@ -397,6 +453,8 @@ impl Error for WorkflowRunStoreError {
             Self::InvalidDefinition { source } | Self::InvalidTransition { source } => Some(source),
             Self::AlreadyExists { .. }
             | Self::NotFound { .. }
+            | Self::AlreadyCancelled { .. }
+            | Self::AlreadyTerminal { .. }
             | Self::ConcurrentModification { .. }
             | Self::InvalidHistory { .. } => None,
         }
@@ -434,6 +492,7 @@ impl WorkflowRunStore {
                 workflow: workflow.clone(),
                 current_phase_index,
                 revision: 1,
+                cancellation: None,
             }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
@@ -462,6 +521,9 @@ impl WorkflowRunStore {
                 current_revision: run.revision,
             });
         }
+        if run.is_cancelled() {
+            return Err(WorkflowRunStoreError::AlreadyCancelled { run_id: id.clone() });
+        }
         let source_phase_index = run.current_phase_index;
         let target_phase_index =
             resolve_transition(&run, transition_index, gate_acknowledgement)
@@ -480,6 +542,53 @@ impl WorkflowRunStore {
             Ok(revision) => {
                 run.current_phase_index = target_phase_index;
                 run.revision = revision;
+                Ok(run)
+            }
+            Err(EventLogError::WrongExpectedVersion {
+                current: Some(current_revision),
+                ..
+            }) => Err(WorkflowRunStoreError::ConcurrentModification {
+                expected_revision,
+                current_revision,
+            }),
+            Err(error) => Err(WorkflowRunStoreError::EventLog(error)),
+        }
+    }
+
+    /// Cancels one exact projected revision without changing its phase or topology.
+    pub fn cancel(
+        &mut self,
+        id: &WorkflowRunId,
+        expected_revision: u64,
+        cancellation: WorkflowRunCancellation,
+    ) -> Result<WorkflowRun, WorkflowRunStoreError> {
+        let Some(mut run) = self.load(id)? else {
+            return Err(WorkflowRunStoreError::NotFound { run_id: id.clone() });
+        };
+        if run.revision != expected_revision {
+            return Err(WorkflowRunStoreError::ConcurrentModification {
+                expected_revision,
+                current_revision: run.revision,
+            });
+        }
+        if run.is_cancelled() {
+            return Err(WorkflowRunStoreError::AlreadyCancelled { run_id: id.clone() });
+        }
+        if run.is_terminal() {
+            return Err(WorkflowRunStoreError::AlreadyTerminal { run_id: id.clone() });
+        }
+        let event = WorkflowRunEvent::Cancelled {
+            source_phase_index: run.current_phase_index,
+            reason: cancellation.clone(),
+        };
+        match self.event_log.append(
+            &workflow_run_stream(id),
+            ExpectedVersion::Exact(expected_revision),
+            &event,
+        ) {
+            Ok(revision) => {
+                run.revision = revision;
+                run.cancellation = Some(cancellation);
                 Ok(run)
             }
             Err(EventLogError::WrongExpectedVersion {
@@ -523,24 +632,45 @@ impl WorkflowRunStore {
             workflow,
             current_phase_index,
             revision: 1,
+            cancellation: None,
         };
         for event in events.into_iter().skip(1) {
-            let WorkflowRunEvent::Advanced {
-                source_phase_index,
-                transition_index,
-                target_phase_index,
-                gate_acknowledgement,
-            } = event
-            else {
-                return Err(WorkflowRunStoreError::InvalidHistory { event_count });
-            };
-            if source_phase_index != run.current_phase_index
-                || resolve_transition(&run, transition_index, gate_acknowledgement.as_deref()).ok()
-                    != Some(target_phase_index)
-            {
+            if run.is_cancelled() {
                 return Err(WorkflowRunStoreError::InvalidHistory { event_count });
             }
-            run.current_phase_index = target_phase_index;
+            match event {
+                WorkflowRunEvent::Advanced {
+                    source_phase_index,
+                    transition_index,
+                    target_phase_index,
+                    gate_acknowledgement,
+                } => {
+                    if source_phase_index != run.current_phase_index
+                        || resolve_transition(
+                            &run,
+                            transition_index,
+                            gate_acknowledgement.as_deref(),
+                        )
+                        .ok()
+                            != Some(target_phase_index)
+                    {
+                        return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+                    }
+                    run.current_phase_index = target_phase_index;
+                }
+                WorkflowRunEvent::Cancelled {
+                    source_phase_index,
+                    reason,
+                } => {
+                    if source_phase_index != run.current_phase_index || run.is_terminal() {
+                        return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+                    }
+                    run.cancellation = Some(reason);
+                }
+                WorkflowRunEvent::Started { .. } => {
+                    return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+                }
+            }
             run.revision += 1;
         }
         Ok(Some(run))
@@ -586,6 +716,10 @@ enum WorkflowRunEvent {
         target_phase_index: usize,
         gate_acknowledgement: Option<String>,
     },
+    Cancelled {
+        source_phase_index: usize,
+        reason: WorkflowRunCancellation,
+    },
 }
 
 impl Event for WorkflowRunEvent {
@@ -593,6 +727,7 @@ impl Event for WorkflowRunEvent {
         match self {
             Self::Started { .. } => WORKFLOW_RUN_STARTED_EVENT_TYPE,
             Self::Advanced { .. } => WORKFLOW_RUN_ADVANCED_EVENT_TYPE,
+            Self::Cancelled { .. } => WORKFLOW_RUN_CANCELLED_EVENT_TYPE,
         }
     }
 
@@ -650,6 +785,28 @@ impl Event for WorkflowRunEvent {
                     transition_index: payload.transition_index,
                     target_phase_index: payload.target_phase_index,
                     gate_acknowledgement: payload.gate_acknowledgement,
+                })
+            }
+            WORKFLOW_RUN_CANCELLED_EVENT_TYPE => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    source_phase_index: usize,
+                    reason: String,
+                }
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let reason = WorkflowRunCancellation::new(payload.reason).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(Self::Cancelled {
+                    source_phase_index: payload.source_phase_index,
+                    reason,
                 })
             }
             _ => Err(DecodeError::UnsupportedEvent {
