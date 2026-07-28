@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Cancel durable workflow runs with exact caller-owned reasons",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/694 under decision https://github.com/Knosence9/project-vela/issues/693 by persisting terminal caller-controlled cancellation against an exact run revision without rewriting workflow topology.",
+    "acceptance_criteria": [
+      "Validate and preserve one non-empty exact cancellation reason for a non-terminal, non-cancelled run.",
+      "Require the caller-observed revision and append one event carrying exact current-phase provenance.",
+      "Expose cancellation separately from workflow-authored terminal state while rejecting every later lifecycle event.",
+      "Reject stale, duplicate, terminal, malformed, and phase-inconsistent cancellation fail closed across reopen."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED cancellation lifecycle and replay coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow_run_store suite failed because cancellation reason values, store mutation, projected cancellation state, and typed lifecycle errors did not exist.",
+      "patch": "Added tests for exact reason preservation, revision increments, stale and racing callers, terminal and duplicate cancellation, reopen projection, and malformed provenance."
+    },
+    {
+      "summary": "Implemented revision-bound terminal cancellation state.",
+      "outcome": "success",
+      "diagnostic": "Keeping cancellation distinct from authored terminal phases preserved topology semantics while making cancellation terminal for caller-controlled execution.",
+      "patch": "Added validated cancellation reasons, version-one cancellation events, exact-revision mutation, strict replay projection, ADR-0011, and lifecycle documentation."
+    },
+    {
+      "summary": "Deferred a shared mutation-helper refactor identified by review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found duplicated load, revision-check, append, and concurrency-error mapping between advance and cancel, but classified it as a trivial maintainability nit rather than a behavioral defect.",
+      "patch": "Merged the verified bounded behavior; later pause and resume work introduced shared revision and append helpers, leaving complete adoption as an explicit follow-up observation."
+    }
+  ],
+  "outcome": {
+    "summary": "A durable workflow run can now be cancelled exactly once with preserved caller rationale and phase provenance while all later history fails closed.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30367371994", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/695", "status": "passed"},
+      {"command": "Pull request 695 squash merge d2b3777e00864f1295751ebda6156cfd0b9b8bfb", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Caller cancellation and workflow-authored terminal phases are separate semantics and should remain separately projected.",
+    "A cancellation event needs exact phase provenance so replay can reject impossible histories against immutable topology.",
+    "Cancellation is terminal for caller-controlled lifecycle even though it does not rewrite the authored current phase.",
+    "Repeated exact-revision mutation patterns should converge on shared concurrency mapping as lifecycle operations grow.",
+    "Cancellation persists rationale but grants no execution, retry, compensation, provider, tool, scheduling, or permission authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/695"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

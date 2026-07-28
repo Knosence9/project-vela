@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Discover durable workflow runs from authoritative start events",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/697 under decision https://github.com/Knosence9/project-vela/issues/696 by listing every valid workflow-run aggregate deterministically without maintaining a secondary index.",
+    "acceptance_criteria": [
+      "Discover only streams containing the exact authoritative workflow_run.started event discriminator.",
+      "Project every candidate through the same strict complete-history function used by exact-ID loading.",
+      "Return active, authored-terminal, and cancelled aggregate state once each in ascending exact run-ID order.",
+      "Fail the complete listing without partial results when a candidate stream ID or history is malformed."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED deterministic discovery coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow_run_store tests failed because WorkflowRunStore::list did not exist.",
+      "patch": "Added tests for complete mixed-state discovery, deterministic exact-ID ordering, unrelated-stream exclusion, reopen behavior, and fail-closed malformed candidate handling."
+    },
+    {
+      "summary": "Implemented authoritative full-history discovery with one shared projector.",
+      "outcome": "success",
+      "diagnostic": "Discovering from the immutable start discriminator avoided a second mutable index, while shared exact-ID projection prevented load and list replay semantics from drifting.",
+      "patch": "Added event-log candidate-stream replay, strict stream-ID recovery, deterministic list projection, ADR-0012, and milestone documentation."
+    },
+    {
+      "summary": "Accepted the documented full-scan cost after substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit confirmed the implementation was correct and noted that listing cost grows with total candidate history because pagination, indexing, and caching were deliberately deferred.",
+      "patch": "Kept the KISS full-scan boundary and recorded scaling as a trigger for a later measured pagination or indexing decision rather than adding speculative infrastructure."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can now recover every durable workflow run in deterministic order from authoritative event history with no secondary index or partial corrupt result.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30373645067", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/698", "status": "passed"},
+      {"command": "Pull request 698 squash merge fb1978f5490fdedaa2ecc324ad8b339cc8f18bb5", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "An immutable authoritative start event can serve as the discovery index while the dataset remains small enough for full replay.",
+    "Exact loading and listing should share one aggregate projector so corruption and lifecycle semantics cannot diverge.",
+    "Failing the complete list on candidate corruption is safer than returning a plausible but incomplete control-plane view.",
+    "Pagination, indexes, and caching should follow measured history growth rather than precede it speculatively.",
+    "Discovery is read-only and grants no selection, transition, gate, action, execution, scheduling, provider, tool, or permission authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/698"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

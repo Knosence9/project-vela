@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Pause and resume durable workflow runs with exact reasons",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/700 under decision https://github.com/Knosence9/project-vela/issues/699 by distinguishing an intentional recoverable hold from abandoned work through revision-bound lifecycle events.",
+    "acceptance_criteria": [
+      "Pause an active non-terminal, non-cancelled run with one non-empty exact reason and resume a paused run with separate exact rationale.",
+      "Require the caller-observed revision and persist exact current-phase provenance without changing phase or immutable topology.",
+      "Reject advancement while paused while preserving explicit cancellation eligibility and restoring advancement only after resume.",
+      "Project only current pause state while replay retains both reasons and rejects stale, duplicate, terminal, cancelled, malformed, or misordered history fail closed."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED pause and resume lifecycle coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow_run_store suite failed because pause and resume reason types, mutations, projected state, and typed lifecycle errors did not exist.",
+      "patch": "Added tests for exact reasons and revisions, reopen and list projection, advancement blocking, cancellation while paused, resume eligibility, invalid lifecycle states, and malformed replay provenance."
+    },
+    {
+      "summary": "Implemented explicit recoverable holds as revision-bound events.",
+      "outcome": "success",
+      "diagnostic": "Separating paused state from unchanged active state made advancement eligibility explicit without inventing scheduling or automatic resume authority.",
+      "patch": "Added validated pause and resume reasons, exact-revision mutations, strict event projection, advancement blocking, shared revision and append helpers, ADR-0013, and milestone documentation."
+    },
+    {
+      "summary": "Recorded an exact-head helper-adoption maintainability finding.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit substantively verified the behavior and identified that advance and cancel still inline logic now shared by pause and resume through validate_revision and append_run_event.",
+      "patch": "Classified the finding as a trivial non-blocking refactor, retained zero unresolved review threads, and preserved it as durable evidence rather than expanding the lifecycle slice after verification."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable workflow runs now expose explicit recoverable pause state with exact rationale, revision safety, blocked advancement, and cancellability while preserving topology and phase.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30377700856", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/701", "status": "passed"},
+      {"command": "Pull request 701 squash merge 093c9a366155e087b8ff4f535eb641bfc759b300", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "An unchanged active aggregate cannot distinguish intentional hold from abandonment; pause must be explicit persisted state.",
+    "Pause and resume are phase-preserving lifecycle mutations and therefore need the same exact-revision protection as advancement and cancellation.",
+    "Paused runs can remain cancellable without being advanceable because cancellation and phase transition are distinct authorities.",
+    "Shared revision and append helpers should be adopted consistently across every exact-revision workflow mutation in a bounded refactor.",
+    "Pause and resume grant no execution, scheduling, automatic wake-up, retry, action, provider, tool, actor, timestamp, or permission authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/701"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
