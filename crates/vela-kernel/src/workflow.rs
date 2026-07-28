@@ -2,6 +2,13 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
+    path::Path,
+};
+
+use serde::{Deserialize, Serialize};
+
+use crate::event_log::{
+    DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
 };
 
 /// An opaque, non-blank stable identifier for one registered workflow.
@@ -253,6 +260,322 @@ impl fmt::Display for WorkflowCursorError {
 }
 
 impl Error for WorkflowCursorError {}
+
+const WORKFLOW_RUN_STARTED_EVENT_TYPE: &str = "workflow_run.started";
+const WORKFLOW_RUN_EVENT_PAYLOAD_VERSION: u32 = 1;
+
+/// An opaque, non-blank identity for one durable workflow run.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct WorkflowRunId(String);
+
+impl WorkflowRunId {
+    pub fn new(value: impl Into<String>) -> Result<Self, WorkflowRunIdError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            Err(WorkflowRunIdError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for WorkflowRunId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkflowRunIdError;
+
+impl fmt::Display for WorkflowRunIdError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("workflow run id must not be blank")
+    }
+}
+
+impl Error for WorkflowRunIdError {}
+
+/// Read-only state restored from one immutable workflow-run start event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowRun {
+    id: WorkflowRunId,
+    workflow: RegisteredWorkflow,
+    current_phase_index: usize,
+}
+
+impl WorkflowRun {
+    pub fn id(&self) -> &WorkflowRunId {
+        &self.id
+    }
+
+    pub fn workflow(&self) -> &RegisteredWorkflow {
+        &self.workflow
+    }
+
+    pub fn current_phase(&self) -> &RegisteredWorkflowPhase {
+        &self.workflow.phases()[self.current_phase_index]
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.current_phase().is_terminal()
+    }
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkflowRunStoreError {
+    EventLog(EventLogError),
+    Replay(ReplayError),
+    AlreadyExists { run_id: WorkflowRunId },
+    InvalidDefinition { source: WorkflowCursorError },
+    InvalidHistory { event_count: usize },
+}
+
+impl fmt::Display for WorkflowRunStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EventLog(error) => write!(formatter, "workflow-run event-log error: {error}"),
+            Self::Replay(error) => write!(formatter, "workflow-run replay error: {error}"),
+            Self::AlreadyExists { run_id } => {
+                write!(formatter, "workflow run {run_id} already exists")
+            }
+            Self::InvalidDefinition { source } => {
+                write!(formatter, "workflow run definition is invalid: {source}")
+            }
+            Self::InvalidHistory { event_count } => write!(
+                formatter,
+                "invalid workflow-run history with {event_count} events"
+            ),
+        }
+    }
+}
+
+impl Error for WorkflowRunStoreError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::EventLog(error) => Some(error),
+            Self::Replay(error) => Some(error),
+            Self::InvalidDefinition { source } => Some(source),
+            Self::AlreadyExists { .. } | Self::InvalidHistory { .. } => None,
+        }
+    }
+}
+
+/// A synchronous durable workflow-run start store backed by the typed event log.
+pub struct WorkflowRunStore {
+    event_log: EventLog,
+}
+
+impl WorkflowRunStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, WorkflowRunStoreError> {
+        EventLog::open(path)
+            .map(|event_log| Self { event_log })
+            .map_err(WorkflowRunStoreError::EventLog)
+    }
+
+    pub fn start(
+        &mut self,
+        id: WorkflowRunId,
+        workflow: &RegisteredWorkflow,
+    ) -> Result<WorkflowRun, WorkflowRunStoreError> {
+        let current_phase_index = start_phase_index(workflow)
+            .map_err(|source| WorkflowRunStoreError::InvalidDefinition { source })?;
+        let event = WorkflowRunEvent::Started {
+            workflow: WorkflowSnapshot::from(workflow),
+        };
+        match self
+            .event_log
+            .append(&workflow_run_stream(&id), ExpectedVersion::NoStream, &event)
+        {
+            Ok(_) => Ok(WorkflowRun {
+                id,
+                workflow: workflow.clone(),
+                current_phase_index,
+            }),
+            Err(EventLogError::WrongExpectedVersion {
+                expected: ExpectedVersion::NoStream,
+                current: Some(_),
+            }) => Err(WorkflowRunStoreError::AlreadyExists { run_id: id }),
+            Err(error) => Err(WorkflowRunStoreError::EventLog(error)),
+        }
+    }
+
+    pub fn load(&self, id: &WorkflowRunId) -> Result<Option<WorkflowRun>, WorkflowRunStoreError> {
+        let events = self
+            .event_log
+            .replay::<WorkflowRunEvent>(&workflow_run_stream(id))
+            .map_err(WorkflowRunStoreError::Replay)?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+        if events.len() != 1 {
+            return Err(WorkflowRunStoreError::InvalidHistory {
+                event_count: events.len(),
+            });
+        }
+        let WorkflowRunEvent::Started { workflow } = events.into_iter().next().unwrap();
+        let workflow = workflow.into_workflow().map_err(|message| {
+            WorkflowRunStoreError::Replay(ReplayError::MalformedPayload {
+                stream_version: 1,
+                message,
+            })
+        })?;
+        let current_phase_index = start_phase_index(&workflow).map_err(|error| {
+            WorkflowRunStoreError::Replay(ReplayError::MalformedPayload {
+                stream_version: 1,
+                message: error.to_string(),
+            })
+        })?;
+        Ok(Some(WorkflowRun {
+            id: id.clone(),
+            workflow,
+            current_phase_index,
+        }))
+    }
+}
+
+fn workflow_run_stream(id: &WorkflowRunId) -> StreamId {
+    StreamId::new(format!("workflow-run:{id}"))
+        .expect("a prefixed workflow-run stream is never empty")
+}
+
+fn start_phase_index(workflow: &RegisteredWorkflow) -> Result<usize, WorkflowCursorError> {
+    let phase_id = WorkflowCursor::new(workflow)?.current_phase().id();
+    Ok(workflow
+        .phases()
+        .iter()
+        .position(|phase| phase.id() == phase_id)
+        .expect("the validated start phase exists"))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum WorkflowRunEvent {
+    Started { workflow: WorkflowSnapshot },
+}
+
+impl Event for WorkflowRunEvent {
+    fn event_type(&self) -> &'static str {
+        WORKFLOW_RUN_STARTED_EVENT_TYPE
+    }
+
+    fn payload_version(&self) -> u32 {
+        WORKFLOW_RUN_EVENT_PAYLOAD_VERSION
+    }
+
+    fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
+        if event_type != WORKFLOW_RUN_STARTED_EVENT_TYPE
+            || payload_version != WORKFLOW_RUN_EVENT_PAYLOAD_VERSION
+        {
+            return Err(DecodeError::UnsupportedEvent {
+                event_type: event_type.to_owned(),
+                payload_version,
+            });
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Payload {
+            workflow: WorkflowSnapshot,
+        }
+        let payload: Payload =
+            serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                message: error.to_string(),
+            })?;
+        let workflow = payload
+            .workflow
+            .clone()
+            .into_workflow()
+            .map_err(|message| DecodeError::MalformedPayload { message })?;
+        start_phase_index(&workflow).map_err(|error| DecodeError::MalformedPayload {
+            message: error.to_string(),
+        })?;
+        Ok(Self::Started {
+            workflow: payload.workflow,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowSnapshot {
+    id: String,
+    start: String,
+    phases: Vec<WorkflowPhaseSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowPhaseSnapshot {
+    id: String,
+    terminal: bool,
+    transitions: Vec<WorkflowTransitionSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowTransitionSnapshot {
+    target: String,
+    gate: Option<String>,
+}
+
+impl From<&RegisteredWorkflow> for WorkflowSnapshot {
+    fn from(workflow: &RegisteredWorkflow) -> Self {
+        Self {
+            id: workflow.id().as_str().to_owned(),
+            start: workflow.start().to_owned(),
+            phases: workflow
+                .phases()
+                .iter()
+                .map(|phase| WorkflowPhaseSnapshot {
+                    id: phase.id().to_owned(),
+                    terminal: phase.is_terminal(),
+                    transitions: phase
+                        .transitions()
+                        .iter()
+                        .map(|transition| WorkflowTransitionSnapshot {
+                            target: transition.target().to_owned(),
+                            gate: transition.gate().map(str::to_owned),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl WorkflowSnapshot {
+    fn into_workflow(self) -> Result<RegisteredWorkflow, String> {
+        let id = WorkflowId::new(self.id).map_err(|error| error.to_string())?;
+        Ok(RegisteredWorkflow::new(
+            id,
+            self.start,
+            self.phases
+                .into_iter()
+                .map(|phase| {
+                    RegisteredWorkflowPhase::new(
+                        phase.id,
+                        phase.terminal,
+                        phase
+                            .transitions
+                            .into_iter()
+                            .map(|transition| {
+                                RegisteredWorkflowTransition::new(
+                                    transition.target,
+                                    transition.gate,
+                                )
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
+        ))
+    }
+}
 
 /// A borrowed, process-local cursor advanced only by explicit caller choices.
 #[derive(Debug)]
