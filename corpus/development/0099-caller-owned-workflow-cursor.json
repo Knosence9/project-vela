@@ -57,7 +57,8 @@
     "Gate acknowledgement is exact caller-provided evidence, not external gate evaluation or permission delegation.",
     "Resolving all transition preconditions and the exact target before mutation makes cursor failures atomic.",
     "Cycles require no special executor semantics when the cursor only projects caller-selected in-memory state.",
-    "Pure advancement changes one phase index and grants no provider, tool, action, scheduling, persistence, or permission authority."
+    "Pure advancement changes one phase index and grants no provider, tool, action, scheduling, persistence, or permission authority.",
+    "Duplicated unique-phase lookup was a non-blocking maintainability nit; the bounded implementation was retained because its behavior was fully verified."
   ],
   "provenance": {
     "repository_path": "crates/vela-kernel/src/workflow.rs",
