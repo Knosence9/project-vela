@@ -71,6 +71,124 @@ fn cancellation_reasons_reject_empty_values_and_preserve_exact_text() {
 }
 
 #[test]
+fn lists_every_workflow_run_in_exact_id_order_with_complete_state() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    assert!(store.list().unwrap().is_empty());
+
+    let terminal_id = WorkflowRunId::new("z-terminal").unwrap();
+    let terminal_started = store
+        .start(terminal_id.clone(), &advancing_workflow())
+        .unwrap();
+    let terminal_review = store
+        .advance(&terminal_id, terminal_started.revision(), 0, None)
+        .unwrap();
+    store
+        .advance(
+            &terminal_id,
+            terminal_review.revision(),
+            0,
+            Some("release.approved"),
+        )
+        .unwrap();
+
+    let cancelled_id = WorkflowRunId::new("m-cancelled").unwrap();
+    let cancelled_started = store
+        .start(cancelled_id.clone(), &advancing_workflow())
+        .unwrap();
+    store
+        .cancel(
+            &cancelled_id,
+            cancelled_started.revision(),
+            WorkflowRunCancellation::new("operator stop").unwrap(),
+        )
+        .unwrap();
+
+    let active_id = WorkflowRunId::new("a-active").unwrap();
+    store
+        .start(active_id.clone(), &advancing_workflow())
+        .unwrap();
+
+    drop(store);
+    let runs = WorkflowRunStore::open(&path).unwrap().list().unwrap();
+    assert_eq!(
+        runs.iter().map(|run| run.id()).collect::<Vec<_>>(),
+        vec![&active_id, &cancelled_id, &terminal_id]
+    );
+    assert_eq!(runs[0].revision(), 1);
+    assert_eq!(runs[0].current_phase().id(), "plan");
+    assert_eq!(runs[1].revision(), 2);
+    assert_eq!(
+        runs[1].cancellation().map(WorkflowRunCancellation::as_str),
+        Some("operator stop")
+    );
+    assert_eq!(runs[2].revision(), 3);
+    assert_eq!(runs[2].current_phase().id(), "done");
+    assert!(runs[2].is_terminal());
+}
+
+#[test]
+fn listing_ignores_unrelated_streams_and_fails_closed_on_a_malformed_candidate() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    store
+        .start(WorkflowRunId::new("valid").unwrap(), &workflow("plan"))
+        .unwrap();
+    store
+        .start(WorkflowRunId::new("broken").unwrap(), &advancing_workflow())
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events (stream_id, stream_version, event_type, payload_version, payload) VALUES ('unrelated', 1, 'other.started', 1, X'7B7D')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        WorkflowRunStore::open(&path).unwrap().list().unwrap().len(),
+        2
+    );
+
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'workflow-run:broken'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path).unwrap().list().unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+}
+
+#[test]
+fn listing_rejects_a_malformed_candidate_stream_id() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    WorkflowRunStore::open(&path)
+        .unwrap()
+        .start(WorkflowRunId::new("valid").unwrap(), &workflow("plan"))
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET stream_id = 'not-a-workflow-run' WHERE stream_id = 'workflow-run:valid'",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        WorkflowRunStore::open(&path).unwrap().list().unwrap_err(),
+        WorkflowRunStoreError::InvalidStreamId { stream_id }
+            if stream_id == "not-a-workflow-run"
+    ));
+}
+
+#[test]
 fn starts_at_the_declared_phase_and_replays_the_exact_owned_topology() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
