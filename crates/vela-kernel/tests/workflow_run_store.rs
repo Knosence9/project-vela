@@ -3,10 +3,10 @@ use vela_kernel::{
     event_log::ReplayError,
     workflow::{
         RegisteredWorkflow, RegisteredWorkflowPhase, RegisteredWorkflowTransition, WorkflowId,
-        WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunHistoryEvent,
-        WorkflowRunId, WorkflowRunIdError, WorkflowRunPauseReason, WorkflowRunPauseReasonError,
-        WorkflowRunResumeReason, WorkflowRunResumeReasonError, WorkflowRunStore,
-        WorkflowRunStoreError,
+        WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunFailure,
+        WorkflowRunFailureError, WorkflowRunHistoryEvent, WorkflowRunId, WorkflowRunIdError,
+        WorkflowRunPauseReason, WorkflowRunPauseReasonError, WorkflowRunResumeReason,
+        WorkflowRunResumeReasonError, WorkflowRunStore, WorkflowRunStoreError,
     },
 };
 
@@ -219,6 +219,238 @@ fn cancellation_reasons_reject_empty_values_and_preserve_exact_text() {
         WorkflowRunCancellation::new(" \n ").unwrap().as_str(),
         " \n "
     );
+}
+
+#[test]
+fn failure_diagnostics_reject_empty_values_and_persist_exact_terminal_evidence() {
+    assert_eq!(
+        WorkflowRunFailure::new("").unwrap_err(),
+        WorkflowRunFailureError
+    );
+    let failure = WorkflowRunFailure::new(" provider exhausted \n").unwrap();
+    assert_eq!(failure.as_str(), " provider exhausted \n");
+
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("failed-release").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    let failed = store.fail(&id, started.revision(), failure).unwrap();
+
+    assert_eq!(failed.revision(), 2);
+    assert_eq!(failed.current_phase().id(), "plan");
+    assert!(failed.is_failed());
+    assert_eq!(
+        failed.failure().map(WorkflowRunFailure::as_str),
+        Some(" provider exhausted \n")
+    );
+    assert!(matches!(
+        store.history(&id).unwrap().unwrap()[1].event(),
+        WorkflowRunHistoryEvent::Failed { phase_id, failure }
+            if phase_id == "plan" && failure.as_str() == " provider exhausted \n"
+    ));
+}
+
+#[test]
+fn failed_runs_reopen_with_pause_state_and_reject_every_later_mutation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("paused-failure").unwrap();
+    let missing = WorkflowRunId::new("missing-failure").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    assert!(matches!(
+        store
+            .fail(&missing, 1, WorkflowRunFailure::new("missing").unwrap())
+            .unwrap_err(),
+        WorkflowRunStoreError::NotFound { .. }
+    ));
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    let paused = store
+        .pause(
+            &id,
+            started.revision(),
+            WorkflowRunPauseReason::new("await recovery").unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .fail(
+                &id,
+                started.revision(),
+                WorkflowRunFailure::new("stale").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::ConcurrentModification { .. }
+    ));
+    let failed = store
+        .fail(
+            &id,
+            paused.revision(),
+            WorkflowRunFailure::new("provider unavailable").unwrap(),
+        )
+        .unwrap();
+    assert!(failed.is_paused());
+    assert_eq!(failed.pause_reason().unwrap().as_str(), "await recovery");
+
+    assert!(matches!(
+        store.advance(&id, failed.revision(), 0, None).unwrap_err(),
+        WorkflowRunStoreError::AlreadyFailed { .. }
+    ));
+    assert!(matches!(
+        store
+            .pause(
+                &id,
+                failed.revision(),
+                WorkflowRunPauseReason::new("again").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyFailed { .. }
+    ));
+    assert!(matches!(
+        store
+            .resume(
+                &id,
+                failed.revision(),
+                WorkflowRunResumeReason::new("again").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyFailed { .. }
+    ));
+    assert!(matches!(
+        store
+            .cancel(
+                &id,
+                failed.revision(),
+                WorkflowRunCancellation::new("again").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyFailed { .. }
+    ));
+    assert!(matches!(
+        store
+            .fail(
+                &id,
+                failed.revision(),
+                WorkflowRunFailure::new("again").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyFailed { .. }
+    ));
+
+    drop(store);
+    let reopened = WorkflowRunStore::open(&path).unwrap().list().unwrap();
+    assert_eq!(reopened.len(), 1);
+    assert!(reopened[0].is_failed());
+    assert!(reopened[0].is_paused());
+    assert_eq!(
+        reopened[0].failure().unwrap().as_str(),
+        "provider unavailable"
+    );
+}
+
+#[test]
+fn failure_rejects_cancelled_and_authored_terminal_runs_and_malformed_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+
+    let cancelled_id = WorkflowRunId::new("cancelled-failure").unwrap();
+    let cancelled = store
+        .start(cancelled_id.clone(), &advancing_workflow())
+        .unwrap();
+    let cancelled = store
+        .cancel(
+            &cancelled_id,
+            cancelled.revision(),
+            WorkflowRunCancellation::new("stop").unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .fail(
+                &cancelled_id,
+                cancelled.revision(),
+                WorkflowRunFailure::new("late").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyCancelled { .. }
+    ));
+
+    let terminal_id = WorkflowRunId::new("terminal-failure").unwrap();
+    let started = store.start(terminal_id.clone(), &workflow("plan")).unwrap();
+    let terminal = store
+        .advance(&terminal_id, started.revision(), 0, Some("plan.approved"))
+        .unwrap();
+    assert!(matches!(
+        store
+            .fail(
+                &terminal_id,
+                terminal.revision(),
+                WorkflowRunFailure::new("late").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyTerminal { .. }
+    ));
+
+    let corrupt_id = WorkflowRunId::new("corrupt-failure").unwrap();
+    let started = store
+        .start(corrupt_id.clone(), &advancing_workflow())
+        .unwrap();
+    store
+        .fail(
+            &corrupt_id,
+            started.revision(),
+            WorkflowRunFailure::new("broken").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.source_phase_index', 1) AS BLOB) WHERE stream_id = 'workflow-run:corrupt-failure' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .history(&corrupt_id)
+            .unwrap_err(),
+        WorkflowRunStoreError::InvalidHistory { .. }
+    ));
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.source_phase_index', 0, '$.failure', '') AS BLOB) WHERE stream_id = 'workflow-run:corrupt-failure' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .load(&corrupt_id)
+            .unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.failure', 'broken') AS BLOB) WHERE stream_id = 'workflow-run:corrupt-failure' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events (stream_id, stream_version, event_type, payload_version, payload) SELECT stream_id, 3, event_type, payload_version, payload FROM events WHERE stream_id = 'workflow-run:corrupt-failure' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .load(&corrupt_id)
+            .unwrap_err(),
+        WorkflowRunStoreError::InvalidHistory { event_count: 3 }
+    ));
 }
 
 #[test]

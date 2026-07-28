@@ -213,6 +213,7 @@ The first milestone is the **evidence loop**:
 67. Discover every durable workflow run in deterministic order from authoritative start events without a separate index. ✅
 68. Pause and resume durable workflow runs through revision-bound caller-owned reasons without changing topology. ✅
 69. Query exact durable workflow-run lifecycle history as revision-ordered typed semantic evidence. ✅
+70. Fail durable workflow runs through revision-bound caller-owned diagnostics without changing topology. ✅
 
 ## Project documents
 
