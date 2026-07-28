@@ -206,6 +206,7 @@ The first milestone is the **evidence loop**:
 60. Preserve explicit skill composition and caller-owned reasons across durable cancellation tool turns. ✅
 61. Prepare selected declarative workflow definitions as inert validated state machines. ✅
 62. Register prepared workflows into caller-owned process-local registries atomically without execution. ✅
+63. Advance one registered workflow through a caller-owned in-memory cursor with explicit transition and gate acknowledgement. ✅
 
 ## Project documents
 

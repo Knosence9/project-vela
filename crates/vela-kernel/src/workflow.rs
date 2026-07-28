@@ -143,6 +143,236 @@ impl fmt::Debug for RegisteredWorkflow {
     }
 }
 
+/// A deterministic failure to begin or advance one borrowed workflow cursor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkflowCursorError {
+    StartNotFound {
+        phase_id: String,
+    },
+    StartAmbiguous {
+        phase_id: String,
+    },
+    TerminalPhase {
+        phase_id: String,
+    },
+    TransitionNotFound {
+        phase_id: String,
+        transition_index: usize,
+    },
+    GateAcknowledgementMissing {
+        phase_id: String,
+        transition_index: usize,
+        gate_id: String,
+    },
+    GateAcknowledgementUnexpected {
+        phase_id: String,
+        transition_index: usize,
+        gate_id: String,
+    },
+    GateAcknowledgementMismatch {
+        phase_id: String,
+        transition_index: usize,
+        expected_gate_id: String,
+        actual_gate_id: String,
+    },
+    TargetNotFound {
+        phase_id: String,
+        transition_index: usize,
+        target_phase_id: String,
+    },
+    TargetAmbiguous {
+        phase_id: String,
+        transition_index: usize,
+        target_phase_id: String,
+    },
+}
+
+impl fmt::Display for WorkflowCursorError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StartNotFound { phase_id } => {
+                write!(formatter, "workflow start phase {phase_id} was not found")
+            }
+            Self::StartAmbiguous { phase_id } => {
+                write!(formatter, "workflow start phase {phase_id} is ambiguous")
+            }
+            Self::TerminalPhase { phase_id } => {
+                write!(formatter, "workflow phase {phase_id} is terminal")
+            }
+            Self::TransitionNotFound {
+                phase_id,
+                transition_index,
+            } => write!(
+                formatter,
+                "workflow phase {phase_id} has no transition at index {transition_index}"
+            ),
+            Self::GateAcknowledgementMissing {
+                phase_id,
+                transition_index,
+                gate_id,
+            } => write!(
+                formatter,
+                "workflow phase {phase_id} transition {transition_index} requires gate acknowledgement {gate_id}"
+            ),
+            Self::GateAcknowledgementUnexpected {
+                phase_id,
+                transition_index,
+                gate_id,
+            } => write!(
+                formatter,
+                "workflow phase {phase_id} transition {transition_index} does not accept gate acknowledgement {gate_id}"
+            ),
+            Self::GateAcknowledgementMismatch {
+                phase_id,
+                transition_index,
+                expected_gate_id,
+                actual_gate_id,
+            } => write!(
+                formatter,
+                "workflow phase {phase_id} transition {transition_index} requires gate acknowledgement {expected_gate_id}, not {actual_gate_id}"
+            ),
+            Self::TargetNotFound {
+                phase_id,
+                transition_index,
+                target_phase_id,
+            } => write!(
+                formatter,
+                "workflow phase {phase_id} transition {transition_index} target {target_phase_id} was not found"
+            ),
+            Self::TargetAmbiguous {
+                phase_id,
+                transition_index,
+                target_phase_id,
+            } => write!(
+                formatter,
+                "workflow phase {phase_id} transition {transition_index} target {target_phase_id} is ambiguous"
+            ),
+        }
+    }
+}
+
+impl Error for WorkflowCursorError {}
+
+/// A borrowed, process-local cursor advanced only by explicit caller choices.
+#[derive(Debug)]
+pub struct WorkflowCursor<'a> {
+    workflow: &'a RegisteredWorkflow,
+    current_phase_index: usize,
+}
+
+impl<'a> WorkflowCursor<'a> {
+    /// Begins at the workflow's exact declared start phase without advancing it.
+    pub fn new(workflow: &'a RegisteredWorkflow) -> Result<Self, WorkflowCursorError> {
+        let mut matches = workflow
+            .phases()
+            .iter()
+            .enumerate()
+            .filter(|(_, phase)| phase.id() == workflow.start());
+        let current_phase_index = matches.next().map(|(index, _)| index).ok_or_else(|| {
+            WorkflowCursorError::StartNotFound {
+                phase_id: workflow.start().to_owned(),
+            }
+        })?;
+        if matches.next().is_some() {
+            return Err(WorkflowCursorError::StartAmbiguous {
+                phase_id: workflow.start().to_owned(),
+            });
+        }
+        Ok(Self {
+            workflow,
+            current_phase_index,
+        })
+    }
+
+    pub fn workflow(&self) -> &'a RegisteredWorkflow {
+        self.workflow
+    }
+
+    pub fn current_phase(&self) -> &'a RegisteredWorkflowPhase {
+        &self.workflow.phases()[self.current_phase_index]
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.current_phase().is_terminal()
+    }
+
+    /// Advances through one authored transition after exact gate acknowledgement.
+    ///
+    /// Every failure is checked before the cursor's current phase changes.
+    pub fn advance(
+        &mut self,
+        transition_index: usize,
+        gate_acknowledgement: Option<&str>,
+    ) -> Result<(), WorkflowCursorError> {
+        let phase = self.current_phase();
+        if phase.is_terminal() {
+            return Err(WorkflowCursorError::TerminalPhase {
+                phase_id: phase.id().to_owned(),
+            });
+        }
+        let transition = phase.transitions().get(transition_index).ok_or_else(|| {
+            WorkflowCursorError::TransitionNotFound {
+                phase_id: phase.id().to_owned(),
+                transition_index,
+            }
+        })?;
+
+        match (transition.gate(), gate_acknowledgement) {
+            (Some(gate_id), None) => {
+                return Err(WorkflowCursorError::GateAcknowledgementMissing {
+                    phase_id: phase.id().to_owned(),
+                    transition_index,
+                    gate_id: gate_id.to_owned(),
+                });
+            }
+            (None, Some(gate_id)) => {
+                return Err(WorkflowCursorError::GateAcknowledgementUnexpected {
+                    phase_id: phase.id().to_owned(),
+                    transition_index,
+                    gate_id: gate_id.to_owned(),
+                });
+            }
+            (Some(expected_gate_id), Some(actual_gate_id))
+                if expected_gate_id != actual_gate_id =>
+            {
+                return Err(WorkflowCursorError::GateAcknowledgementMismatch {
+                    phase_id: phase.id().to_owned(),
+                    transition_index,
+                    expected_gate_id: expected_gate_id.to_owned(),
+                    actual_gate_id: actual_gate_id.to_owned(),
+                });
+            }
+            (Some(_), Some(_)) | (None, None) => {}
+        }
+
+        let target_phase_id = transition.target();
+        let mut targets = self
+            .workflow
+            .phases()
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.id() == target_phase_id);
+        let target_index = targets.next().map(|(index, _)| index).ok_or_else(|| {
+            WorkflowCursorError::TargetNotFound {
+                phase_id: phase.id().to_owned(),
+                transition_index,
+                target_phase_id: target_phase_id.to_owned(),
+            }
+        })?;
+        if targets.next().is_some() {
+            return Err(WorkflowCursorError::TargetAmbiguous {
+                phase_id: phase.id().to_owned(),
+                transition_index,
+                target_phase_id: target_phase_id.to_owned(),
+            });
+        }
+
+        self.current_phase_index = target_index;
+        Ok(())
+    }
+}
+
 /// A duplicate exact workflow identity rejected during atomic registration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
