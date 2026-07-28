@@ -6,16 +6,16 @@ use vela_kernel::{
     runtime::{
         ComposedToolAssistantContinuationProvider, ComposedToolAssistantContinuationRequest,
         ComposedToolAssistantProvider, ComposedToolAssistantRequest,
-        ComposedToolTaskCompletionOutcome, ComposedToolTaskCorrectionOutcome,
-        ComposedToolTaskFailureOutcome, ComposedToolTaskTurnOutcome, DeveloperPolicy,
-        ProviderError, ProviderToolResponse, SystemPolicy, ToolAssistantRuntime,
-        ToolTaskRuntimeError,
+        ComposedToolTaskCancellationOutcome, ComposedToolTaskCompletionOutcome,
+        ComposedToolTaskCorrectionOutcome, ComposedToolTaskFailureOutcome,
+        ComposedToolTaskTurnOutcome, DeveloperPolicy, ProviderError, ProviderToolResponse,
+        SystemPolicy, ToolAssistantRuntime, ToolTaskRuntimeError,
     },
     session::{SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole},
     skill::{RegisteredSkill, SkillId, SkillRegistry, SkillSelectionError},
     task::{
-        TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStatus,
-        TaskStore,
+        TaskCancellation, TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind,
+        TaskStatus, TaskStore,
     },
     tool::{
         PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId,
@@ -1071,4 +1071,227 @@ fn composed_correction_rejects_a_stale_transcript_before_continuation_provider_w
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn composed_cancellation_can_finish_on_the_initial_response() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (_, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = ToolAssistantRuntime::open(
+        &path,
+        Provider {
+            observations,
+            responses: vec![ProviderToolResponse::Final(
+                SessionTurnContent::new("model attempt only").unwrap(),
+            )],
+        },
+    )
+    .unwrap();
+    let cancellation = TaskCancellation::new("caller changed direction").unwrap();
+    let outcome = runtime
+        .cancel_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("finish then stop").unwrap(),
+            TaskObservationId::new("initial-cancellation-attempt").unwrap(),
+            cancellation.clone(),
+            ToolInvocationId::new("initial-cancellation-unused").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &skills,
+            &[SkillId::new("skill.alpha").unwrap()],
+            &mut ToolRegistry::new(),
+            &mut Allow(0),
+        )
+        .unwrap();
+
+    let ComposedToolTaskCancellationOutcome::Final { task, .. } = outcome else {
+        panic!("expected initial composed cancellation")
+    };
+    assert_eq!(task.status(), TaskStatus::Cancelled);
+    assert_eq!(task.cancellation(), Some(&cancellation));
+    assert_eq!(task.observations()[0].kind(), TaskObservationKind::Attempt);
+    assert_eq!(task.observations()[0].text().as_str(), "model attempt only");
+    assert!(task.output().is_none());
+}
+
+#[test]
+fn composed_cancellation_retains_authority_and_reason_across_a_tool() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = ToolAssistantRuntime::open(
+        &path,
+        Provider {
+            observations: observations.clone(),
+            responses: vec![
+                ProviderToolResponse::ToolRequest {
+                    tool_id: ToolId::new("tool.echo").unwrap(),
+                    input: json!({"step": 1}),
+                },
+                ProviderToolResponse::Final(SessionTurnContent::new("last attempt").unwrap()),
+            ],
+        },
+    )
+    .unwrap();
+    let mut tools = ToolRegistry::new();
+    tools.register(EchoTool).unwrap();
+    let cancellation = TaskCancellation::new("request superseded").unwrap();
+    let selected = [
+        SkillId::new("skill.zeta").unwrap(),
+        SkillId::new("skill.alpha").unwrap(),
+    ];
+
+    let first = runtime
+        .cancel_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("stop after checking").unwrap(),
+            TaskObservationId::new("cancellation-attempt").unwrap(),
+            cancellation.clone(),
+            ToolInvocationId::new("cancellation-invocation-1").unwrap(),
+            SystemPolicy::new("system policy"),
+            DeveloperPolicy::new("developer policy"),
+            &skills,
+            &selected,
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    assert_eq!(first.continuation().unwrap().cancellation(), &cancellation);
+    let outcome = runtime
+        .continue_composed_cancellation_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("cancellation-attempt").unwrap(),
+            ToolInvocationId::new("cancellation-invocation-unused").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+
+    let ComposedToolTaskCancellationOutcome::Final { session, task } = outcome else {
+        panic!("expected final composed cancellation")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(task.status(), TaskStatus::Cancelled);
+    assert_eq!(task.cancellation(), Some(&cancellation));
+    assert_eq!(task.observations()[0].text().as_str(), "last attempt");
+    assert!(task.output().is_none());
+    assert!(observations.borrow().iter().all(|observed| {
+        observed.system == "system policy"
+            && observed.developer == "developer policy"
+            && observed.skills
+                == vec![
+                    ("skill.alpha".into(), "alpha instructions".into()),
+                    ("skill.zeta".into(), "zeta instructions".into()),
+                ]
+            && observed.transcript == vec![(SessionTurnRole::Human, "stop after checking".into())]
+    }));
+}
+
+#[test]
+fn composed_cancellation_rejects_selection_and_stale_or_terminal_continuations_before_side_effects()
+{
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = ToolAssistantRuntime::open(
+        &path,
+        Provider {
+            observations: observations.clone(),
+            responses: vec![ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"probe": true}),
+            }],
+        },
+    )
+    .unwrap();
+    let duplicate = SkillId::new("skill.alpha").unwrap();
+    let error = runtime
+        .cancel_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("must not persist").unwrap(),
+            TaskObservationId::new("cancellation-unused").unwrap(),
+            TaskCancellation::new("validated reason").unwrap(),
+            ToolInvocationId::new("cancellation-selection-unused").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &skills,
+            &[duplicate.clone(), duplicate],
+            &mut ToolRegistry::new(),
+            &mut Allow(0),
+        )
+        .unwrap_err();
+    assert!(matches!(error, ToolTaskRuntimeError::SkillSelection(_)));
+    assert!(observations.borrow().is_empty());
+    assert!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+
+    let mut tools = ToolRegistry::new();
+    tools.register(EchoTool).unwrap();
+    let first = runtime
+        .cancel_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("persist once").unwrap(),
+            TaskObservationId::new("cancellation-final").unwrap(),
+            TaskCancellation::new("validated reason").unwrap(),
+            ToolInvocationId::new("cancellation-invocation-1").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &skills,
+            &[SkillId::new("skill.alpha").unwrap()],
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .append_turn(
+            &session_id,
+            SessionTurnRole::Human,
+            SessionTurnContent::new("racing turn").unwrap(),
+        )
+        .unwrap();
+    let error = runtime
+        .continue_composed_cancellation_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("cancellation-final").unwrap(),
+            ToolInvocationId::new("cancellation-stale-unused").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ToolTaskRuntimeError::StaleContinuationTranscript { task_id: stale } if stale == task_id
+    ));
+    assert_eq!(observations.borrow().len(), 1);
+
+    TaskStore::open(&path)
+        .unwrap()
+        .cancel(
+            &task_id,
+            TaskCancellation::new("racing cancellation").unwrap(),
+        )
+        .unwrap();
+    let error = runtime
+        .continue_composed_cancellation_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("cancellation-final").unwrap(),
+            ToolInvocationId::new("cancellation-terminal-unused").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap_err();
+    assert!(matches!(error, ToolTaskRuntimeError::Task(_)));
+    assert_eq!(observations.borrow().len(), 1);
 }

@@ -969,6 +969,120 @@ fn fail_composed_outcome<'a>(
     }
 }
 
+/// The durable result of one explicitly composed cancellation-oriented tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ComposedToolTaskCancellationOutcome<'a> {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        cancellation: TaskCancellation,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        selected_skills: SkillSelection<'a>,
+    },
+}
+
+impl ComposedToolTaskCancellationOutcome<'_> {
+    /// Borrows the exact composition and caller-owned cancellation intent for one continuation.
+    pub fn continuation(&self) -> Option<ComposedToolTaskCancellationContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                cancellation,
+                tool_id,
+                input,
+                output,
+                system_policy,
+                developer_policy,
+                selected_skills,
+                ..
+            } => Some(ComposedToolTaskCancellationContinuation {
+                task_id,
+                cancellation,
+                provider: ComposedProviderToolContinuation {
+                    context: ComposedToolContext {
+                        system_policy: *system_policy,
+                        developer_policy: *developer_policy,
+                        selected_skills: selected_skills.clone(),
+                        transcript: session.turns(),
+                    },
+                    prior_result: ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                },
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed composed continuation restricted to cancellation-producing operations.
+#[derive(Clone, Debug)]
+pub struct ComposedToolTaskCancellationContinuation<'a> {
+    task_id: &'a TaskId,
+    cancellation: &'a TaskCancellation,
+    provider: ComposedProviderToolContinuation<'a>,
+}
+
+impl ComposedToolTaskCancellationContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+
+    pub fn cancellation(&self) -> &TaskCancellation {
+        self.cancellation
+    }
+}
+
+fn cancel_composed_outcome<'a>(
+    tasks: &mut TaskStore,
+    outcome: ComposedToolTaskTurnOutcome<'a>,
+    cancellation: TaskCancellation,
+) -> Result<ComposedToolTaskCancellationOutcome<'a>, ToolTaskRuntimeError> {
+    match outcome {
+        ComposedToolTaskTurnOutcome::Final { session, task } => {
+            let task = tasks
+                .cancel(task.id(), cancellation)
+                .map_err(ToolTaskRuntimeError::Task)?;
+            Ok(ComposedToolTaskCancellationOutcome::Final { session, task })
+        }
+        ComposedToolTaskTurnOutcome::ToolCompleted {
+            session,
+            task_id,
+            tool_id,
+            input,
+            output,
+            continuation,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        } => Ok(ComposedToolTaskCancellationOutcome::ToolCompleted {
+            session,
+            task_id,
+            cancellation,
+            tool_id,
+            input,
+            output,
+            continuation,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        }),
+    }
+}
+
 /// The durable result of one initial tool-capable task turn.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -2013,6 +2127,43 @@ impl<P: ComposedToolAssistantProvider> ToolAssistantRuntime<P> {
         fail_composed_outcome(&mut self.tasks, outcome, failure)
     }
 
+    /// Executes one explicitly composed cancellation turn with a caller-owned reason.
+    ///
+    /// A tool request remains non-terminal and retains the exact cancellation intent. A final
+    /// response commits the assistant turn and Attempt before cancelling with the supplied reason.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "composed cancellation retains explicit policy, skill, evidence, reason, and tool inputs"
+    )]
+    pub fn cancel_composed_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        cancellation: TaskCancellation,
+        invocation_id: ToolInvocationId,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        skill_registry: &'a SkillRegistry,
+        selected_skill_ids: &[SkillId],
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskCancellationOutcome<'a>, ToolTaskRuntimeError> {
+        let outcome = self.execute_composed_task_turn(
+            task_id,
+            human_content,
+            attempt_observation_id,
+            invocation_id,
+            system_policy,
+            developer_policy,
+            skill_registry,
+            selected_skill_ids,
+            registry,
+            authorizer,
+        )?;
+        cancel_composed_outcome(&mut self.tasks, outcome, cancellation)
+    }
+
     /// Executes an explicitly composed correction turn while retaining caller-owned lineage.
     #[allow(
         clippy::too_many_arguments,
@@ -2588,6 +2739,30 @@ impl<P: ComposedToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
             authorizer,
         )?;
         fail_composed_outcome(&mut self.tasks, outcome, failure)
+    }
+
+    /// Continues a composed cancellation while preserving immutable authority and cancellation intent.
+    pub fn continue_composed_cancellation_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        continuation: ComposedToolTaskCancellationContinuation<'a>,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskCancellationOutcome<'a>, ToolTaskRuntimeError> {
+        let cancellation = continuation.cancellation.clone();
+        let continuation = ComposedToolTaskContinuation {
+            task_id: continuation.task_id,
+            provider: continuation.provider,
+        };
+        let outcome = self.continue_composed_task_turn(
+            continuation,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        cancel_composed_outcome(&mut self.tasks, outcome, cancellation)
     }
 
     /// Continues a composed correction while preserving policy, skills, and parent Attempt.
