@@ -7,12 +7,16 @@ use vela_kernel::{
         ComposedToolAssistantContinuationProvider, ComposedToolAssistantContinuationRequest,
         ComposedToolAssistantProvider, ComposedToolAssistantRequest,
         ComposedToolTaskCompletionOutcome, ComposedToolTaskCorrectionOutcome,
-        ComposedToolTaskTurnOutcome, DeveloperPolicy, ProviderError, ProviderToolResponse,
-        SystemPolicy, ToolAssistantRuntime, ToolTaskRuntimeError,
+        ComposedToolTaskFailureOutcome, ComposedToolTaskTurnOutcome, DeveloperPolicy,
+        ProviderError, ProviderToolResponse, SystemPolicy, ToolAssistantRuntime,
+        ToolTaskRuntimeError,
     },
     session::{SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole},
     skill::{RegisteredSkill, SkillId, SkillRegistry, SkillSelectionError},
-    task::{TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStatus, TaskStore},
+    task::{
+        TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskStatus,
+        TaskStore,
+    },
     tool::{
         PermissionDecision, Tool, ToolAuthorizer, ToolEffect, ToolError, ToolId, ToolInvocationId,
         ToolInvocationStatus, ToolInvocationStore, ToolRegistry, ToolRequest,
@@ -520,6 +524,294 @@ fn composed_completion_retains_authority_and_completes_with_exact_output() {
             .unwrap()
             .unwrap(),
         task
+    );
+}
+
+#[test]
+fn composed_failure_can_finish_initially_with_the_exact_caller_diagnostic() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (_, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = ToolAssistantRuntime::open(
+        &path,
+        Provider {
+            observations: observations.clone(),
+            responses: vec![ProviderToolResponse::Final(
+                SessionTurnContent::new("model attempt only").unwrap(),
+            )],
+        },
+    )
+    .unwrap();
+    let failure = TaskFailure::new(" caller-owned diagnostic ").unwrap();
+
+    let outcome = runtime
+        .fail_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("make a final attempt").unwrap(),
+            TaskObservationId::new("initial-failure-attempt").unwrap(),
+            failure.clone(),
+            ToolInvocationId::new("initial-failure-unused").unwrap(),
+            SystemPolicy::new("system policy"),
+            DeveloperPolicy::new("developer policy"),
+            &skills,
+            &[SkillId::new("skill.alpha").unwrap()],
+            &mut ToolRegistry::new(),
+            &mut Allow(0),
+        )
+        .unwrap();
+
+    let ComposedToolTaskFailureOutcome::Final { task, .. } = outcome else {
+        panic!("expected initial composed failure")
+    };
+    assert_eq!(task.status(), TaskStatus::Failed);
+    assert_eq!(task.failure(), Some(&failure));
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].kind(), TaskObservationKind::Attempt);
+    assert_eq!(task.observations()[0].text().as_str(), "model attempt only");
+    assert!(task.output().is_none());
+    assert_eq!(observations.borrow().len(), 1);
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("initial-failure-unused").unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn composed_failure_retains_authority_and_diagnostic_across_multiple_tools() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let provider = Provider {
+        observations: observations.clone(),
+        responses: vec![
+            ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"step": 1}),
+            },
+            ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"step": 2}),
+            },
+            ProviderToolResponse::Final(SessionTurnContent::new("attempt evidence").unwrap()),
+        ],
+    };
+    let mut runtime = ToolAssistantRuntime::open(&path, provider).unwrap();
+    let mut tools = ToolRegistry::new();
+    tools.register(EchoTool).unwrap();
+    let selected = [
+        SkillId::new("skill.zeta").unwrap(),
+        SkillId::new("skill.alpha").unwrap(),
+    ];
+    let failure = TaskFailure::new("dependency stayed unavailable").unwrap();
+
+    let first = runtime
+        .fail_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("try before failing").unwrap(),
+            TaskObservationId::new("failure-attempt").unwrap(),
+            failure.clone(),
+            ToolInvocationId::new("failure-invocation-1").unwrap(),
+            SystemPolicy::new("system policy"),
+            DeveloperPolicy::new("developer policy"),
+            &skills,
+            &selected,
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    assert_eq!(first.continuation().unwrap().failure(), &failure);
+    let second = runtime
+        .continue_composed_failure_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("failure-attempt").unwrap(),
+            ToolInvocationId::new("failure-invocation-2").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    assert_eq!(second.continuation().unwrap().failure(), &failure);
+    let final_outcome = runtime
+        .continue_composed_failure_task_turn(
+            second.continuation().unwrap(),
+            TaskObservationId::new("failure-attempt").unwrap(),
+            ToolInvocationId::new("failure-invocation-unused").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+
+    let ComposedToolTaskFailureOutcome::Final { session, task } = final_outcome else {
+        panic!("expected final composed failure outcome")
+    };
+    assert_eq!(session.id(), &session_id);
+    assert_eq!(session.turns()[1].content().as_str(), "attempt evidence");
+    assert_eq!(task.status(), TaskStatus::Failed);
+    assert_eq!(task.failure(), Some(&failure));
+    assert!(task.output().is_none());
+    assert_eq!(task.observations()[0].text().as_str(), "attempt evidence");
+    assert_eq!(observations.borrow().len(), 3);
+    assert!(observations.borrow().iter().all(|observed| {
+        observed.system == "system policy"
+            && observed.developer == "developer policy"
+            && observed.skills
+                == vec![
+                    ("skill.alpha".into(), "alpha instructions".into()),
+                    ("skill.zeta".into(), "zeta instructions".into()),
+                ]
+            && observed.transcript == vec![(SessionTurnRole::Human, "try before failing".into())]
+    }));
+    assert_eq!(observations.borrow()[0].prior, None);
+    assert_eq!(
+        observations.borrow()[1].prior,
+        Some((
+            "tool.echo".into(),
+            json!({"step": 1}),
+            json!({"echo": {"step": 1}}),
+        ))
+    );
+    assert_eq!(
+        observations.borrow()[2].prior,
+        Some((
+            "tool.echo".into(),
+            json!({"step": 2}),
+            json!({"echo": {"step": 2}}),
+        ))
+    );
+}
+
+#[test]
+fn composed_failure_rejects_selection_and_stale_or_terminal_continuations_before_side_effects() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let (session_id, task_id, skills) = setup(&path);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = ToolAssistantRuntime::open(
+        &path,
+        Provider {
+            observations: observations.clone(),
+            responses: vec![ProviderToolResponse::ToolRequest {
+                tool_id: ToolId::new("tool.echo").unwrap(),
+                input: json!({"probe": true}),
+            }],
+        },
+    )
+    .unwrap();
+    assert!(TaskFailure::new("").is_err());
+    assert!(observations.borrow().is_empty());
+    assert!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+    let failure = TaskFailure::new("validated diagnostic").unwrap();
+    let duplicate = SkillId::new("skill.alpha").unwrap();
+
+    let error = runtime
+        .fail_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("must not persist").unwrap(),
+            TaskObservationId::new("failure-unused").unwrap(),
+            failure.clone(),
+            ToolInvocationId::new("failure-selection-unused").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &skills,
+            &[duplicate.clone(), duplicate],
+            &mut ToolRegistry::new(),
+            &mut Allow(0),
+        )
+        .unwrap_err();
+    assert!(matches!(error, ToolTaskRuntimeError::SkillSelection(_)));
+    assert!(observations.borrow().is_empty());
+    assert!(
+        SessionStore::open(&path)
+            .unwrap()
+            .load(&session_id)
+            .unwrap()
+            .unwrap()
+            .turns()
+            .is_empty()
+    );
+
+    let mut tools = ToolRegistry::new();
+    tools.register(EchoTool).unwrap();
+    let first = runtime
+        .fail_composed_task_turn(
+            &task_id,
+            SessionTurnContent::new("persist once").unwrap(),
+            TaskObservationId::new("failure-final").unwrap(),
+            failure,
+            ToolInvocationId::new("failure-invocation-1").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &skills,
+            &[SkillId::new("skill.alpha").unwrap()],
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap();
+    SessionStore::open(&path)
+        .unwrap()
+        .append_turn(
+            &session_id,
+            SessionTurnRole::Human,
+            SessionTurnContent::new("racing turn").unwrap(),
+        )
+        .unwrap();
+
+    let stale_error = runtime
+        .continue_composed_failure_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("failure-final").unwrap(),
+            ToolInvocationId::new("failure-stale-unused").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        stale_error,
+        ToolTaskRuntimeError::StaleContinuationTranscript { task_id: stale } if stale == task_id
+    ));
+    assert_eq!(observations.borrow().len(), 1);
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("failure-stale-unused").unwrap())
+            .unwrap()
+            .is_none()
+    );
+
+    TaskStore::open(&path)
+        .unwrap()
+        .fail(&task_id, TaskFailure::new("racing failure").unwrap())
+        .unwrap();
+
+    let error = runtime
+        .continue_composed_failure_task_turn(
+            first.continuation().unwrap(),
+            TaskObservationId::new("failure-final").unwrap(),
+            ToolInvocationId::new("failure-terminal-unused").unwrap(),
+            &mut tools,
+            &mut Allow(0),
+        )
+        .unwrap_err();
+    assert!(matches!(error, ToolTaskRuntimeError::Task(_)));
+    assert_eq!(observations.borrow().len(), 1);
+    assert!(
+        ToolInvocationStore::open(&path)
+            .unwrap()
+            .load(&ToolInvocationId::new("failure-terminal-unused").unwrap())
+            .unwrap()
+            .is_none()
     );
 }
 

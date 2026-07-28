@@ -855,6 +855,120 @@ fn complete_composed_outcome<'a>(
     }
 }
 
+/// The durable result of one explicitly composed failure-oriented tool step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ComposedToolTaskFailureOutcome<'a> {
+    Final {
+        session: Session,
+        task: Task,
+    },
+    ToolCompleted {
+        session: Session,
+        task_id: TaskId,
+        failure: TaskFailure,
+        tool_id: ToolId,
+        input: Value,
+        output: Value,
+        continuation: ToolStepContinuation,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        selected_skills: SkillSelection<'a>,
+    },
+}
+
+impl ComposedToolTaskFailureOutcome<'_> {
+    /// Borrows the exact composition and caller-owned failure intent for one continuation.
+    pub fn continuation(&self) -> Option<ComposedToolTaskFailureContinuation<'_>> {
+        match self {
+            Self::ToolCompleted {
+                session,
+                task_id,
+                failure,
+                tool_id,
+                input,
+                output,
+                system_policy,
+                developer_policy,
+                selected_skills,
+                ..
+            } => Some(ComposedToolTaskFailureContinuation {
+                task_id,
+                failure,
+                provider: ComposedProviderToolContinuation {
+                    context: ComposedToolContext {
+                        system_policy: *system_policy,
+                        developer_policy: *developer_policy,
+                        selected_skills: selected_skills.clone(),
+                        transcript: session.turns(),
+                    },
+                    prior_result: ProviderToolResult {
+                        tool_id,
+                        input,
+                        output,
+                    },
+                },
+            }),
+            Self::Final { .. } => None,
+        }
+    }
+}
+
+/// A borrowed composed continuation restricted to failure-producing operations.
+#[derive(Clone, Debug)]
+pub struct ComposedToolTaskFailureContinuation<'a> {
+    task_id: &'a TaskId,
+    failure: &'a TaskFailure,
+    provider: ComposedProviderToolContinuation<'a>,
+}
+
+impl ComposedToolTaskFailureContinuation<'_> {
+    pub fn task_id(&self) -> &TaskId {
+        self.task_id
+    }
+
+    pub fn failure(&self) -> &TaskFailure {
+        self.failure
+    }
+}
+
+fn fail_composed_outcome<'a>(
+    tasks: &mut TaskStore,
+    outcome: ComposedToolTaskTurnOutcome<'a>,
+    failure: TaskFailure,
+) -> Result<ComposedToolTaskFailureOutcome<'a>, ToolTaskRuntimeError> {
+    match outcome {
+        ComposedToolTaskTurnOutcome::Final { session, task } => {
+            let task = tasks
+                .fail(task.id(), failure)
+                .map_err(ToolTaskRuntimeError::Task)?;
+            Ok(ComposedToolTaskFailureOutcome::Final { session, task })
+        }
+        ComposedToolTaskTurnOutcome::ToolCompleted {
+            session,
+            task_id,
+            tool_id,
+            input,
+            output,
+            continuation,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        } => Ok(ComposedToolTaskFailureOutcome::ToolCompleted {
+            session,
+            task_id,
+            failure,
+            tool_id,
+            input,
+            output,
+            continuation,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        }),
+    }
+}
+
 /// The durable result of one initial tool-capable task turn.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1862,6 +1976,43 @@ impl<P: ComposedToolAssistantProvider> ToolAssistantRuntime<P> {
         complete_composed_outcome(&mut self.tasks, outcome)
     }
 
+    /// Executes one explicitly composed failure turn with a caller-owned diagnostic.
+    ///
+    /// A tool request remains non-terminal and retains the exact failure intent. A final response
+    /// commits the assistant turn and Attempt before failing the task with the supplied diagnostic.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "composed failure retains explicit policy, skill, evidence, diagnostic, and tool inputs"
+    )]
+    pub fn fail_composed_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        failure: TaskFailure,
+        invocation_id: ToolInvocationId,
+        system_policy: SystemPolicy<'a>,
+        developer_policy: DeveloperPolicy<'a>,
+        skill_registry: &'a SkillRegistry,
+        selected_skill_ids: &[SkillId],
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskFailureOutcome<'a>, ToolTaskRuntimeError> {
+        let outcome = self.execute_composed_task_turn(
+            task_id,
+            human_content,
+            attempt_observation_id,
+            invocation_id,
+            system_policy,
+            developer_policy,
+            skill_registry,
+            selected_skill_ids,
+            registry,
+            authorizer,
+        )?;
+        fail_composed_outcome(&mut self.tasks, outcome, failure)
+    }
+
     /// Executes an explicitly composed correction turn while retaining caller-owned lineage.
     #[allow(
         clippy::too_many_arguments,
@@ -2413,6 +2564,30 @@ impl<P: ComposedToolAssistantContinuationProvider> ToolAssistantRuntime<P> {
             authorizer,
         )?;
         complete_composed_outcome(&mut self.tasks, outcome)
+    }
+
+    /// Continues a composed failure while preserving immutable authority and failure intent.
+    pub fn continue_composed_failure_task_turn<'a, A: ToolAuthorizer>(
+        &mut self,
+        continuation: ComposedToolTaskFailureContinuation<'a>,
+        attempt_observation_id: TaskObservationId,
+        invocation_id: ToolInvocationId,
+        registry: &mut ToolRegistry,
+        authorizer: &mut A,
+    ) -> Result<ComposedToolTaskFailureOutcome<'a>, ToolTaskRuntimeError> {
+        let failure = continuation.failure.clone();
+        let continuation = ComposedToolTaskContinuation {
+            task_id: continuation.task_id,
+            provider: continuation.provider,
+        };
+        let outcome = self.continue_composed_task_turn(
+            continuation,
+            attempt_observation_id,
+            invocation_id,
+            registry,
+            authorizer,
+        )?;
+        fail_composed_outcome(&mut self.tasks, outcome, failure)
     }
 
     /// Continues a composed correction while preserving policy, skills, and parent Attempt.
