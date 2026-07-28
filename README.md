@@ -207,6 +207,7 @@ The first milestone is the **evidence loop**:
 61. Prepare selected declarative workflow definitions as inert validated state machines. ✅
 62. Register prepared workflows into caller-owned process-local registries atomically without execution. ✅
 63. Advance one registered workflow through a caller-owned in-memory cursor with explicit transition and gate acknowledgement. ✅
+64. Persist workflow-run starts with immutable owned topology provenance and registry-free replay. ✅
 
 ## Project documents
 
