@@ -265,6 +265,7 @@ const WORKFLOW_RUN_STARTED_EVENT_TYPE: &str = "workflow_run.started";
 const WORKFLOW_RUN_ADVANCED_EVENT_TYPE: &str = "workflow_run.advanced";
 const WORKFLOW_RUN_CANCELLED_EVENT_TYPE: &str = "workflow_run.cancelled";
 const WORKFLOW_RUN_EVENT_PAYLOAD_VERSION: u32 = 1;
+const WORKFLOW_RUN_STREAM_PREFIX: &str = "workflow-run:";
 
 /// An opaque, non-blank identity for one durable workflow run.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -385,6 +386,9 @@ pub enum WorkflowRunStoreError {
     NotFound {
         run_id: WorkflowRunId,
     },
+    InvalidStreamId {
+        stream_id: String,
+    },
     AlreadyCancelled {
         run_id: WorkflowRunId,
     },
@@ -415,6 +419,9 @@ impl fmt::Display for WorkflowRunStoreError {
                 write!(formatter, "workflow run {run_id} already exists")
             }
             Self::NotFound { run_id } => write!(formatter, "workflow run {run_id} was not found"),
+            Self::InvalidStreamId { stream_id } => {
+                write!(formatter, "invalid workflow-run stream id {stream_id:?}")
+            }
             Self::AlreadyCancelled { run_id } => {
                 write!(formatter, "workflow run {run_id} is already cancelled")
             }
@@ -453,6 +460,7 @@ impl Error for WorkflowRunStoreError {
             Self::InvalidDefinition { source } | Self::InvalidTransition { source } => Some(source),
             Self::AlreadyExists { .. }
             | Self::NotFound { .. }
+            | Self::InvalidStreamId { .. }
             | Self::AlreadyCancelled { .. }
             | Self::AlreadyTerminal { .. }
             | Self::ConcurrentModification { .. }
@@ -607,78 +615,108 @@ impl WorkflowRunStore {
             .event_log
             .replay::<WorkflowRunEvent>(&workflow_run_stream(id))
             .map_err(WorkflowRunStoreError::Replay)?;
-        let event_count = events.len();
-        let Some(WorkflowRunEvent::Started { workflow }) = events.first().cloned() else {
-            return if events.is_empty() {
-                Ok(None)
-            } else {
-                Err(WorkflowRunStoreError::InvalidHistory { event_count })
+        project_workflow_run(id, events)
+    }
+
+    /// Replays every persisted workflow run in ascending run-ID order.
+    pub fn list(&self) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type::<WorkflowRunEvent>(WORKFLOW_RUN_STARTED_EVENT_TYPE)
+            .map_err(WorkflowRunStoreError::Replay)?;
+        let mut runs = Vec::with_capacity(streams.len());
+
+        for (stream_id, events) in streams {
+            let Some(external_id) = stream_id.strip_prefix(WORKFLOW_RUN_STREAM_PREFIX) else {
+                return Err(WorkflowRunStoreError::InvalidStreamId { stream_id });
             };
-        };
-        let workflow = workflow.into_workflow().map_err(|message| {
-            WorkflowRunStoreError::Replay(ReplayError::MalformedPayload {
-                stream_version: 1,
-                message,
-            })
-        })?;
-        let current_phase_index = start_phase_index(&workflow).map_err(|error| {
-            WorkflowRunStoreError::Replay(ReplayError::MalformedPayload {
-                stream_version: 1,
-                message: error.to_string(),
-            })
-        })?;
-        let mut run = WorkflowRun {
-            id: id.clone(),
-            workflow,
-            current_phase_index,
-            revision: 1,
-            cancellation: None,
-        };
-        for event in events.into_iter().skip(1) {
-            if run.is_cancelled() {
-                return Err(WorkflowRunStoreError::InvalidHistory { event_count });
-            }
-            match event {
-                WorkflowRunEvent::Advanced {
-                    source_phase_index,
-                    transition_index,
-                    target_phase_index,
-                    gate_acknowledgement,
-                } => {
-                    if source_phase_index != run.current_phase_index
-                        || resolve_transition(
-                            &run,
-                            transition_index,
-                            gate_acknowledgement.as_deref(),
-                        )
-                        .ok()
-                            != Some(target_phase_index)
-                    {
-                        return Err(WorkflowRunStoreError::InvalidHistory { event_count });
-                    }
-                    run.current_phase_index = target_phase_index;
+            let id = WorkflowRunId::new(external_id).map_err(|_| {
+                WorkflowRunStoreError::InvalidStreamId {
+                    stream_id: stream_id.clone(),
                 }
-                WorkflowRunEvent::Cancelled {
-                    source_phase_index,
-                    reason,
-                } => {
-                    if source_phase_index != run.current_phase_index || run.is_terminal() {
-                        return Err(WorkflowRunStoreError::InvalidHistory { event_count });
-                    }
-                    run.cancellation = Some(reason);
-                }
-                WorkflowRunEvent::Started { .. } => {
-                    return Err(WorkflowRunStoreError::InvalidHistory { event_count });
-                }
-            }
-            run.revision += 1;
+            })?;
+            let Some(run) = project_workflow_run(&id, events)? else {
+                return Err(WorkflowRunStoreError::InvalidHistory { event_count: 0 });
+            };
+            runs.push(run);
         }
-        Ok(Some(run))
+
+        runs.sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
+        Ok(runs)
     }
 }
 
+fn project_workflow_run(
+    id: &WorkflowRunId,
+    events: Vec<WorkflowRunEvent>,
+) -> Result<Option<WorkflowRun>, WorkflowRunStoreError> {
+    let event_count = events.len();
+    let Some(WorkflowRunEvent::Started { workflow }) = events.first().cloned() else {
+        return if events.is_empty() {
+            Ok(None)
+        } else {
+            Err(WorkflowRunStoreError::InvalidHistory { event_count })
+        };
+    };
+    let workflow = workflow.into_workflow().map_err(|message| {
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            message,
+        })
+    })?;
+    let current_phase_index = start_phase_index(&workflow).map_err(|error| {
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            message: error.to_string(),
+        })
+    })?;
+    let mut run = WorkflowRun {
+        id: id.clone(),
+        workflow,
+        current_phase_index,
+        revision: 1,
+        cancellation: None,
+    };
+    for event in events.into_iter().skip(1) {
+        if run.is_cancelled() {
+            return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+        }
+        match event {
+            WorkflowRunEvent::Advanced {
+                source_phase_index,
+                transition_index,
+                target_phase_index,
+                gate_acknowledgement,
+            } => {
+                if source_phase_index != run.current_phase_index
+                    || resolve_transition(&run, transition_index, gate_acknowledgement.as_deref())
+                        .ok()
+                        != Some(target_phase_index)
+                {
+                    return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+                }
+                run.current_phase_index = target_phase_index;
+            }
+            WorkflowRunEvent::Cancelled {
+                source_phase_index,
+                reason,
+            } => {
+                if source_phase_index != run.current_phase_index || run.is_terminal() {
+                    return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+                }
+                run.cancellation = Some(reason);
+            }
+            WorkflowRunEvent::Started { .. } => {
+                return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+            }
+        }
+        run.revision += 1;
+    }
+    Ok(Some(run))
+}
+
 fn workflow_run_stream(id: &WorkflowRunId) -> StreamId {
-    StreamId::new(format!("workflow-run:{id}"))
+    StreamId::new(format!("{WORKFLOW_RUN_STREAM_PREFIX}{id}"))
         .expect("a prefixed workflow-run stream is never empty")
 }
 

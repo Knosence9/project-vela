@@ -1,0 +1,56 @@
+# ADR-0012: Discover durable workflow runs from authoritative start events
+
+- **Status:** accepted
+- **Date:** 2026-07-28
+- **Decision owners:** Project Vela maintainers
+- **Related:** ADR-0002, ADR-0009, ADR-0010, ADR-0011, issues #696 and #697
+
+## Context
+
+Workflow runs can start, advance, cancel, and replay durably, but a caller can load a run only when it already knows the exact run ID. The task, session, and tool-invocation stores already provide deterministic discovery without maintaining a second mutable index. Workflow-run discovery needs the same availability boundary while retaining the existing strict projector and registry-free replay contract.
+
+The typed event log can identify streams containing an exact event type and replay each complete stream. The `workflow_run.started` event is the authoritative creation marker for a run and owns its immutable topology provenance.
+
+## Decision
+
+`WorkflowRunStore::list` discovers streams containing an exact `workflow_run.started` event, decodes each complete candidate stream through the existing version-one event contract, derives the exact run ID from the required `workflow-run:` stream prefix, and projects the history through the same function used by exact-ID loading.
+
+The result contains every valid active, workflow-terminal, and cancelled run exactly once. Each aggregate preserves its exact ID, immutable topology snapshot, current phase, stream revision, and cancellation state. Results are sorted by ascending exact run-ID text independently of storage query order.
+
+Discovery is all-or-nothing. An invalid candidate stream ID, malformed or unsupported event, version gap, impossible history, or storage failure returns a typed error and no result vector. Streams without an exact start marker are not candidates, even if their IDs resemble workflow-run streams. A misleading start marker in an unrelated or malformed stream makes that stream a candidate and therefore fails closed rather than being silently ignored.
+
+Listing is read-only and registry-free. It does not consult extension manifests or files, create or mutate runs, select transitions, evaluate gates, invoke capabilities, grant permission, schedule work, or introduce a secondary index.
+
+## Alternatives considered
+
+### Enumerate streams only by the `workflow-run:` prefix
+
+A prefix is naming convention, not authoritative creation evidence. Prefix-only discovery could admit unrelated or partially written streams without first proving the run's creation event.
+
+### Maintain a workflow-run index table
+
+A second mutable index would add consistency and recovery obligations while the event log can already discover authoritative creation markers. The current scale does not justify that complexity.
+
+### Skip malformed candidates and return valid runs
+
+Partial success would hide durable corruption and make the visible set depend on error handling. Failing the whole operation keeps discovery consistent with exact-ID fail-closed replay.
+
+### Return storage order
+
+Storage order is an implementation detail. Sorting by exact external run ID provides a stable caller contract and matches existing aggregate listing boundaries.
+
+## Consequences
+
+- Callers can recover all durable workflow runs without retaining their IDs externally.
+- Active, terminal, and cancelled runs share one deterministic complete projection.
+- Exact loading and listing cannot drift because both reuse one projector.
+- Corrupt candidate history prevents partial discovery and remains visible as an error.
+- Discovery scans and replays complete candidate streams; pagination, filtering, indexing, caching, snapshots, and compaction remain deferred.
+
+## Verification
+
+The bounded execution slice follows RED→GREEN tests proving empty listing, ascending exact-ID ordering, complete active/terminal/cancelled projection, registry-free reopen, unrelated-stream exclusion, and all-or-nothing malformed-candidate failure. Existing exact-load and lifecycle tests and the complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider this decision before adding pagination, filtering, secondary indexes, caching, deletion, migration, snapshots or compaction, scheduling, actors, timestamps, remote execution, or partial-availability semantics.

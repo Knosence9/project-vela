@@ -210,6 +210,7 @@ The first milestone is the **evidence loop**:
 64. Persist workflow-run starts with immutable owned topology provenance and registry-free replay. ✅
 65. Advance durable workflow runs through revision-bound explicit transitions and exact gate acknowledgement. ✅
 66. Cancel durable non-terminal workflow runs through revision-bound caller-owned reasons without rewriting topology. ✅
+67. Discover every durable workflow run in deterministic order from authoritative start events without a separate index. ✅
 
 ## Project documents
 
