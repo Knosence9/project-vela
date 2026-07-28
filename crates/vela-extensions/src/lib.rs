@@ -29,6 +29,10 @@ use vela_kernel::tool::{
     Tool, ToolEffect, ToolError, ToolId, ToolIdError, ToolRegistry, ToolRegistryError,
     ToolRegistryReconciliationError, ToolRegistryRemovalError, ToolRegistryReplacementError,
 };
+use vela_kernel::workflow::{
+    RegisteredWorkflow, RegisteredWorkflowPhase, RegisteredWorkflowTransition, WorkflowId,
+    WorkflowRegistry, WorkflowRegistryError,
+};
 use wasmtime::component::{
     Component, Linker,
     types::{ComponentItem, Type},
@@ -1014,6 +1018,15 @@ pub enum SkillRegistrationError {
     Registry { source: SkillRegistryError },
 }
 
+/// A typed failure while atomically registering one selected workflow batch.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkflowRegistrationError {
+    WrongKind { id: String, actual: ExtensionKind },
+    Preparation { source: WorkflowPreparationError },
+    Registry { source: WorkflowRegistryError },
+}
+
 /// A fail-closed exact-ID registry selection error.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -1369,6 +1382,57 @@ pub fn register_skill_selection(
     registry
         .register_all(skills)
         .map_err(|source| SkillRegistrationError::Registry { source })
+}
+
+/// Revalidates, prepares, and atomically registers one selected workflow batch.
+///
+/// Registration preserves validated authored topology but remains inert: it does not select,
+/// execute, schedule, persist, resolve gates, bind actions, compose prompts, or grant authority.
+pub fn register_workflow_selection(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+    registry: &mut WorkflowRegistry,
+) -> Result<(), WorkflowRegistrationError> {
+    if let Some(extension) = selection
+        .extensions()
+        .find(|extension| extension.manifest().kind() != ExtensionKind::Workflow)
+    {
+        return Err(WorkflowRegistrationError::WrongKind {
+            id: extension.manifest().id().to_owned(),
+            actual: extension.manifest().kind(),
+        });
+    }
+
+    let workflows = prepare_workflow_definitions(root, selection)
+        .map_err(|source| WorkflowRegistrationError::Preparation { source })?
+        .into_iter()
+        .map(|definition| {
+            let phases = definition
+                .phases()
+                .iter()
+                .map(|phase| {
+                    let transitions = phase
+                        .transitions()
+                        .iter()
+                        .map(|transition| {
+                            RegisteredWorkflowTransition::new(
+                                transition.target(),
+                                transition.gate().map(str::to_owned),
+                            )
+                        })
+                        .collect();
+                    RegisteredWorkflowPhase::new(phase.id(), phase.is_terminal(), transitions)
+                })
+                .collect();
+            RegisteredWorkflow::new(
+                WorkflowId::new(definition.id()).expect("validated non-blank workflow ID"),
+                definition.start(),
+                phases,
+            )
+        });
+    registry
+        .register_all(workflows)
+        .map_err(|source| WorkflowRegistrationError::Registry { source })
 }
 
 /// Compiles prepared tools against the exact no-import `vela:extension/tool@0.1.0` ABI.
@@ -2444,6 +2508,33 @@ impl fmt::Display for SkillRegistrationError {
 }
 
 impl Error for SkillRegistrationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::WrongKind { .. } => None,
+            Self::Preparation { source } => Some(source),
+            Self::Registry { source } => Some(source),
+        }
+    }
+}
+
+impl fmt::Display for WorkflowRegistrationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongKind { id, actual } => {
+                write!(
+                    formatter,
+                    "selected capability {id:?} is {actual:?}, not Workflow"
+                )
+            }
+            Self::Preparation { .. } => formatter.write_str("failed to prepare selected workflows"),
+            Self::Registry { .. } => {
+                formatter.write_str("failed to register selected workflows atomically")
+            }
+        }
+    }
+}
+
+impl Error for WorkflowRegistrationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::WrongKind { .. } => None,
