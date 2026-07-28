@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compose selected skills into durable completion tool turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/668 by preserving explicit skill composition and caller-owned completion intent through bounded provider and tool continuations.",
+    "acceptance_criteria": [
+      "Reject invalid selection and stale or terminal continuation state before forbidden side effects.",
+      "Retain exact caller policy, selected skills, transcript, prior tool result, task identity, and completion intent across continuations.",
+      "Keep every tool step non-terminal and independently authorized with a fresh invocation identity.",
+      "Commit final assistant content, an exact Attempt, and completion in order with unchanged final content as task output."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED composed completion coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused completion integration test failed because no composed completion outcome or initial and continuation entrypoints existed.",
+      "patch": "Added tests for direct and continued completion, exact authority and result retention, ordered persistence, output equality, and invalid continuation rejection."
+    },
+    {
+      "summary": "Implemented completion-specific composition around the shared bounded path.",
+      "outcome": "success",
+      "diagnostic": "A typed completion continuation retained terminal intent while shared composed task execution handled provider and tool work; one small finalizer converted final content into Attempt evidence and exact task output.",
+      "patch": "Added completion outcomes and operations, reused the established attempt path, documented persistence ordering and non-goals, and updated milestone status."
+    },
+    {
+      "summary": "Verified the bounded implementation without speculative refactoring.",
+      "outcome": "success",
+      "diagnostic": "Independent pre-commit review found no actionable or blocking issue, and the cooldown-delayed substantive exact-head review generated no actionable comments.",
+      "patch": "Retained the symmetric terminal helper, complete integration coverage, and explicit separation between model output and deterministic verification evidence."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable composed completion turns now retain explicit selected-skill authority through bounded tool work and complete with final provider content as both exact Attempt evidence and task output.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30307794206", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/669", "status": "passed"},
+      {"command": "Pull request 669 squash merge a26d901f407065614eebc2579565816d5d8146db", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Completion intent belongs in a typed continuation so generic attempt progression cannot discard terminal ownership.",
+    "Final provider content may be both Attempt evidence and output, but it is not deterministic verification.",
+    "Assistant turn, Attempt, and completion ordering must remain explicit because they are separate durable commits.",
+    "Refreshing descriptive tool metadata cannot replace retained policy, skill, transcript, or prior-result context.",
+    "A small symmetric terminal adapter is preferable to duplicating the complete provider and tool execution path."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/669"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
