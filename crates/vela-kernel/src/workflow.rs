@@ -381,6 +381,52 @@ workflow_run_reason!(
     "workflow run resume reason must not be empty"
 );
 
+/// One semantic lifecycle event from a validated durable workflow-run history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkflowRunHistoryEvent {
+    Started {
+        workflow_id: WorkflowId,
+        phase_id: String,
+    },
+    Advanced {
+        source_phase_id: String,
+        target_phase_id: String,
+        transition_index: usize,
+        gate_acknowledgement: Option<String>,
+    },
+    Cancelled {
+        phase_id: String,
+        reason: WorkflowRunCancellation,
+    },
+    Paused {
+        phase_id: String,
+        reason: WorkflowRunPauseReason,
+    },
+    Resumed {
+        phase_id: String,
+        reason: WorkflowRunResumeReason,
+    },
+}
+
+/// One revision-bearing entry from a validated durable workflow-run history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowRunHistoryEntry {
+    revision: u64,
+    event: WorkflowRunHistoryEvent,
+}
+
+impl WorkflowRunHistoryEntry {
+    /// The one-based event-stream revision occupied by this lifecycle event.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn event(&self) -> &WorkflowRunHistoryEvent {
+        &self.event
+    }
+}
+
 /// Read-only state projected from one durable workflow-run event stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowRun {
@@ -752,6 +798,21 @@ impl WorkflowRunStore {
         project_workflow_run(id, events)
     }
 
+    /// Returns one exact run's validated semantic lifecycle history in revision order.
+    pub fn history(
+        &self,
+        id: &WorkflowRunId,
+    ) -> Result<Option<Vec<WorkflowRunHistoryEntry>>, WorkflowRunStoreError> {
+        let events = self
+            .event_log
+            .replay::<WorkflowRunEvent>(&workflow_run_stream(id))
+            .map_err(WorkflowRunStoreError::Replay)?;
+        let Some(run) = project_workflow_run(id, events.clone())? else {
+            return Ok(None);
+        };
+        Ok(Some(project_workflow_run_history(&run, events)))
+    }
+
     /// Replays every persisted workflow run in ascending run-ID order.
     pub fn list(&self) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
         let streams = self
@@ -907,6 +968,65 @@ fn project_workflow_run(
         run.revision += 1;
     }
     Ok(Some(run))
+}
+
+fn project_workflow_run_history(
+    run: &WorkflowRun,
+    events: Vec<WorkflowRunEvent>,
+) -> Vec<WorkflowRunHistoryEntry> {
+    events
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let event = match event {
+                WorkflowRunEvent::Started { .. } => {
+                    let phase_index = start_phase_index(run.workflow())
+                        .expect("the workflow-run projector validated the start phase");
+                    WorkflowRunHistoryEvent::Started {
+                        workflow_id: run.workflow().id().clone(),
+                        phase_id: run.workflow().phases()[phase_index].id().to_owned(),
+                    }
+                }
+                WorkflowRunEvent::Advanced {
+                    source_phase_index,
+                    transition_index,
+                    target_phase_index,
+                    gate_acknowledgement,
+                } => WorkflowRunHistoryEvent::Advanced {
+                    source_phase_id: run.workflow().phases()[source_phase_index].id().to_owned(),
+                    target_phase_id: run.workflow().phases()[target_phase_index].id().to_owned(),
+                    transition_index,
+                    gate_acknowledgement,
+                },
+                WorkflowRunEvent::Cancelled {
+                    source_phase_index,
+                    reason,
+                } => WorkflowRunHistoryEvent::Cancelled {
+                    phase_id: run.workflow().phases()[source_phase_index].id().to_owned(),
+                    reason,
+                },
+                WorkflowRunEvent::Paused {
+                    source_phase_index,
+                    reason,
+                } => WorkflowRunHistoryEvent::Paused {
+                    phase_id: run.workflow().phases()[source_phase_index].id().to_owned(),
+                    reason,
+                },
+                WorkflowRunEvent::Resumed {
+                    source_phase_index,
+                    reason,
+                } => WorkflowRunHistoryEvent::Resumed {
+                    phase_id: run.workflow().phases()[source_phase_index].id().to_owned(),
+                    reason,
+                },
+            };
+            WorkflowRunHistoryEntry {
+                revision: u64::try_from(index + 1)
+                    .expect("an in-memory event count fits the persisted revision type"),
+                event,
+            }
+        })
+        .collect()
 }
 
 fn workflow_run_stream(id: &WorkflowRunId) -> StreamId {

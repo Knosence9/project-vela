@@ -3,9 +3,10 @@ use vela_kernel::{
     event_log::ReplayError,
     workflow::{
         RegisteredWorkflow, RegisteredWorkflowPhase, RegisteredWorkflowTransition, WorkflowId,
-        WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunId, WorkflowRunIdError,
-        WorkflowRunPauseReason, WorkflowRunPauseReasonError, WorkflowRunResumeReason,
-        WorkflowRunResumeReasonError, WorkflowRunStore, WorkflowRunStoreError,
+        WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunHistoryEvent,
+        WorkflowRunId, WorkflowRunIdError, WorkflowRunPauseReason, WorkflowRunPauseReasonError,
+        WorkflowRunResumeReason, WorkflowRunResumeReasonError, WorkflowRunStore,
+        WorkflowRunStoreError,
     },
 };
 
@@ -48,6 +49,155 @@ fn advancing_workflow() -> RegisteredWorkflow {
             RegisteredWorkflowPhase::new("done", true, vec![]),
         ],
     )
+}
+
+#[test]
+fn queries_exact_typed_lifecycle_history_after_reopen() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("release-history").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    let review = store.advance(&id, started.revision(), 0, None).unwrap();
+    let paused = store
+        .pause(
+            &id,
+            review.revision(),
+            WorkflowRunPauseReason::new(" waiting for operator \n").unwrap(),
+        )
+        .unwrap();
+    let resumed = store
+        .resume(
+            &id,
+            paused.revision(),
+            WorkflowRunResumeReason::new(" operator approved \t").unwrap(),
+        )
+        .unwrap();
+    store
+        .cancel(
+            &id,
+            resumed.revision(),
+            WorkflowRunCancellation::new(" deployment withdrawn ").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let history = WorkflowRunStore::open(&path)
+        .unwrap()
+        .history(&id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| entry.revision())
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5]
+    );
+    assert!(matches!(
+        history[0].event(),
+        WorkflowRunHistoryEvent::Started {
+            workflow_id,
+            phase_id,
+        } if workflow_id.as_str() == "release.workflow" && phase_id == "plan"
+    ));
+    assert!(matches!(
+        history[1].event(),
+        WorkflowRunHistoryEvent::Advanced {
+            source_phase_id,
+            target_phase_id,
+            transition_index: 0,
+            gate_acknowledgement: None,
+        } if source_phase_id == "plan" && target_phase_id == "review"
+    ));
+    assert!(matches!(
+        history[2].event(),
+        WorkflowRunHistoryEvent::Paused { phase_id, reason }
+            if phase_id == "review" && reason.as_str() == " waiting for operator \n"
+    ));
+    assert!(matches!(
+        history[3].event(),
+        WorkflowRunHistoryEvent::Resumed { phase_id, reason }
+            if phase_id == "review" && reason.as_str() == " operator approved \t"
+    ));
+    assert!(matches!(
+        history[4].event(),
+        WorkflowRunHistoryEvent::Cancelled { phase_id, reason }
+            if phase_id == "review" && reason.as_str() == " deployment withdrawn "
+    ));
+}
+
+#[test]
+fn history_preserves_exact_gate_evidence_and_missing_run_semantics() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("gated-history").unwrap();
+    let missing = WorkflowRunId::new("missing-history").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    assert!(store.history(&missing).unwrap().is_none());
+    let started = store.start(id.clone(), &workflow("plan")).unwrap();
+    store
+        .advance(&id, started.revision(), 0, Some("plan.approved"))
+        .unwrap();
+
+    let history = store.history(&id).unwrap().unwrap();
+    assert!(matches!(
+        history[1].event(),
+        WorkflowRunHistoryEvent::Advanced {
+            source_phase_id,
+            target_phase_id,
+            transition_index: 0,
+            gate_acknowledgement: Some(gate),
+        } if source_phase_id == "plan" && target_phase_id == "done" && gate == "plan.approved"
+    ));
+}
+
+#[test]
+fn history_rejects_corrupt_payloads_and_impossible_lifecycle_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let unsupported_id = WorkflowRunId::new("unsupported-history").unwrap();
+    let impossible_id = WorkflowRunId::new("impossible-history").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    store
+        .start(unsupported_id.clone(), &advancing_workflow())
+        .unwrap();
+    let started = store
+        .start(impossible_id.clone(), &advancing_workflow())
+        .unwrap();
+    store
+        .advance(&impossible_id, started.revision(), 0, None)
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'workflow_run.unknown' WHERE stream_id = 'workflow-run:unsupported-history'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .history(&unsupported_id)
+            .unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.target_phase_index', 0) AS BLOB) WHERE stream_id = 'workflow-run:impossible-history' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .history(&impossible_id)
+            .unwrap_err(),
+        WorkflowRunStoreError::InvalidHistory { .. }
+    ));
 }
 
 #[test]
@@ -315,6 +465,13 @@ fn extra_start_events_are_rejected_as_invalid_history() {
         WorkflowRunStore::open(&path)
             .unwrap()
             .load(&id)
+            .unwrap_err(),
+        WorkflowRunStoreError::InvalidHistory { event_count: 2 }
+    ));
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .history(&id)
             .unwrap_err(),
         WorkflowRunStoreError::InvalidHistory { event_count: 2 }
     ));
