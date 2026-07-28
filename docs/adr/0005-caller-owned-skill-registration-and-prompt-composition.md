@@ -10,6 +10,7 @@
 - **Durable composed correction issue:** [#666](https://github.com/Knosence9/project-vela/issues/666)
 - **Durable composed completion issue:** [#668](https://github.com/Knosence9/project-vela/issues/668)
 - **Durable composed failure issue:** [#670](https://github.com/Knosence9/project-vela/issues/670)
+- **Durable composed cancellation issue:** [#672](https://github.com/Knosence9/project-vela/issues/672)
 
 ## Context
 
@@ -42,7 +43,9 @@ The additive correction integration retains the caller-selected parent Attempt i
 
 The additive completion integration retains explicit caller completion intent with the same immutable composition and in-memory result context. It validates selection before task, session, invocation, provider, or tool side effects; continuations revalidate the active task and exact transcript. Final content commits an assistant turn, exact Attempt, and completion in order, with that content used unchanged as task output. Existing skill-free completion methods remain unchanged.
 
-The additive failure integration retains a validated caller-owned `TaskFailure` with the immutable composition and in-memory result context. Skill selection and diagnostic construction complete before durable, provider, or tool side effects; continuations revalidate the active task and exact transcript before work. Final content commits an assistant turn and exact Attempt before the retained diagnostic fails the task. Provider output is never terminal detail or verification evidence. Existing skill-free failure methods remain unchanged; composed cancellation requires a separate bounded integration.
+The additive failure integration retains a validated caller-owned `TaskFailure` with the immutable composition and in-memory result context. Skill selection and diagnostic construction complete before durable, provider, or tool side effects; continuations revalidate the active task and exact transcript before work. Final content commits an assistant turn and exact Attempt before the retained diagnostic fails the task. Provider output is never terminal detail or verification evidence. Existing skill-free failure methods remain unchanged.
+
+The additive cancellation integration symmetrically retains a validated caller-owned `TaskCancellation`. Selection and reason construction complete before side effects, and continuations preserve the reason with the immutable authority and in-memory result context. Final content commits an assistant turn and exact Attempt before the retained reason cancels the task. This records explicit caller intent after bounded work; it does not interrupt an in-flight provider or tool call. Provider output is never the cancellation reason or other terminal evidence, and existing skill-free cancellation methods remain unchanged.
 
 ## Alternatives considered
 
@@ -76,7 +79,7 @@ Those policies require product evidence that the first process-local registry do
 - Callers and provider adapters must opt into the separate composed provider trait and turn method; existing turns intentionally ignore registered skills.
 - Process restart loses registrations.
 - Exact-ID ordering is deterministic but does not express dependencies or author-selected precedence.
-- Cancellation composition still requires a separately bounded integration.
+- Each terminal intent has a distinct composed outcome and continuation type, increasing the public API surface.
 
 ## Verification
 
@@ -94,6 +97,8 @@ The durable completion slice additionally proves exact composition across comple
 
 The durable failure slice additionally proves exact composition and caller-owned diagnostic retention across failure continuations, assistant-turn/Attempt/failure ordering, exclusion of model output from terminal detail and verification evidence, and selection or stale/terminal rejection before forbidden side effects.
 
+The durable cancellation slice additionally proves exact composition and caller-owned reason retention across cancellation continuations, assistant-turn/Attempt/cancellation ordering, exclusion of model output from the cancellation reason, and selection or stale/terminal rejection before forbidden side effects.
+
 ## Revisit when
 
-Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, composed cancellation turns, replacement or hot reload, workflows, remote packages, or content-addressed identity.
+Reconsider this decision before persisted enablement, precedence or dependency rules, token budgeting, provider-specific serialization, automatic skill routing, skill-authored tool grants, replacement or hot reload, workflows, remote packages, or content-addressed identity.
