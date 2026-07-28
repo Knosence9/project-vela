@@ -46,6 +46,9 @@ pub const MAX_ENTRYPOINT_BYTES: u64 = 16 * 1024 * 1024;
 /// Maximum accepted UTF-8 instruction size during skill artifact preparation.
 pub const MAX_SKILL_INSTRUCTION_BYTES: u64 = 1024 * 1024;
 
+/// Maximum accepted UTF-8 YAML size during workflow definition preparation.
+pub const MAX_WORKFLOW_DEFINITION_BYTES: u64 = 1024 * 1024;
+
 /// Default maximum bytes available to each guest linear memory during one invocation.
 pub const DEFAULT_TOOL_MEMORY_BYTES: usize = 16 * 1024 * 1024;
 /// Default maximum elements available to each guest table during one invocation.
@@ -237,6 +240,78 @@ impl PreparedSkillArtifact {
 
     pub fn instructions(&self) -> &str {
         &self.instructions
+    }
+}
+
+/// One validated transition in an inert workflow definition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowTransition {
+    target: String,
+    gate: Option<String>,
+}
+
+impl WorkflowTransition {
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    pub fn gate(&self) -> Option<&str> {
+        self.gate.as_deref()
+    }
+}
+
+/// One validated phase in an inert workflow definition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowPhase {
+    id: String,
+    terminal: bool,
+    transitions: Vec<WorkflowTransition>,
+}
+
+impl WorkflowPhase {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.terminal
+    }
+
+    pub fn transitions(&self) -> &[WorkflowTransition] {
+        &self.transitions
+    }
+}
+
+/// One immutable, validated, non-executing workflow state-machine definition.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PreparedWorkflowDefinition {
+    id: String,
+    start: String,
+    phases: Vec<WorkflowPhase>,
+}
+
+impl fmt::Debug for PreparedWorkflowDefinition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedWorkflowDefinition")
+            .field("id", &self.id)
+            .field("start", &self.start)
+            .field("phases_len", &self.phases.len())
+            .finish()
+    }
+}
+
+impl PreparedWorkflowDefinition {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn start(&self) -> &str {
+        &self.start
+    }
+
+    pub fn phases(&self) -> &[WorkflowPhase] {
+        &self.phases
     }
 }
 
@@ -886,6 +961,50 @@ pub enum SkillPreparationError {
     },
 }
 
+/// A deterministic structural workflow-definition validation failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkflowDefinitionError {
+    UnsupportedVersion { version: u64 },
+    BlankStart,
+    EmptyPhases,
+    NoTerminalPhase,
+    BlankPhaseId { index: usize },
+    DuplicatePhaseId { phase_id: String },
+    StartNotFound { phase_id: String },
+    TerminalHasTransitions { phase_id: String },
+    NonTerminalHasNoTransitions { phase_id: String },
+    BlankTransitionTarget { phase_id: String, index: usize },
+    TransitionTargetNotFound { phase_id: String, target: String },
+    BlankGate { phase_id: String, index: usize },
+    UnreachablePhase { phase_id: String },
+}
+
+/// A fail-closed selected-workflow preparation error.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkflowPreparationError {
+    WrongKind {
+        id: String,
+        actual: ExtensionKind,
+    },
+    Preparation {
+        source: ExtensionPreparationError,
+    },
+    InvalidUtf8 {
+        id: String,
+        source: std::str::Utf8Error,
+    },
+    Parse {
+        id: String,
+        source: serde_norway::Error,
+    },
+    Definition {
+        id: String,
+        source: WorkflowDefinitionError,
+    },
+}
+
 /// A typed failure while atomically registering one selected skill batch.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1159,6 +1278,62 @@ pub fn prepare_skill_artifacts(
             id: artifact.id,
             instructions,
         })
+    })
+    .collect()
+}
+
+/// Reopens selected workflow packages and validates bounded, inert YAML state machines.
+///
+/// Preparation is exact-kind, descriptor-anchored, and all-or-nothing. It does not register,
+/// execute, schedule, persist, resolve gates, or grant capability authority.
+pub fn prepare_workflow_definitions(
+    root: impl AsRef<Path>,
+    selection: &ExtensionSelection<'_>,
+) -> Result<Vec<PreparedWorkflowDefinition>, WorkflowPreparationError> {
+    if let Some(extension) = selection
+        .extensions()
+        .find(|extension| extension.manifest().kind() != ExtensionKind::Workflow)
+    {
+        return Err(WorkflowPreparationError::WrongKind {
+            id: extension.manifest().id().to_owned(),
+            actual: extension.manifest().kind(),
+        });
+    }
+
+    if selection.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    prepare_artifact_bytes_platform(
+        root.as_ref(),
+        selection,
+        ExtensionKind::Workflow,
+        MAX_WORKFLOW_DEFINITION_BYTES,
+    )
+    .map_err(|source| WorkflowPreparationError::Preparation { source })?
+    .into_iter()
+    .map(|artifact| {
+        let text = String::from_utf8(artifact.bytes).map_err(|source| {
+            WorkflowPreparationError::InvalidUtf8 {
+                id: artifact.id.clone(),
+                source: source.utf8_error(),
+            }
+        })?;
+        let raw: RawWorkflowDefinition =
+            serde_norway::from_str(&text).map_err(|source| WorkflowPreparationError::Parse {
+                id: artifact.id.clone(),
+                source,
+            })?;
+        validate_workflow_definition(raw)
+            .map_err(|source| WorkflowPreparationError::Definition {
+                id: artifact.id.clone(),
+                source,
+            })
+            .map(|(start, phases)| PreparedWorkflowDefinition {
+                id: artifact.id,
+                start,
+                phases,
+            })
     })
     .collect()
 }
@@ -1951,6 +2126,147 @@ struct RawExtensionManifest {
     description: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWorkflowDefinition {
+    workflow_version: u64,
+    start: String,
+    phases: Vec<RawWorkflowPhase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWorkflowPhase {
+    id: String,
+    #[serde(default)]
+    terminal: bool,
+    #[serde(default)]
+    transitions: Vec<RawWorkflowTransition>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWorkflowTransition {
+    to: String,
+    gate: Option<String>,
+}
+
+fn validate_workflow_definition(
+    raw: RawWorkflowDefinition,
+) -> Result<(String, Vec<WorkflowPhase>), WorkflowDefinitionError> {
+    if raw.workflow_version != 1 {
+        return Err(WorkflowDefinitionError::UnsupportedVersion {
+            version: raw.workflow_version,
+        });
+    }
+    if raw.start.trim().is_empty() {
+        return Err(WorkflowDefinitionError::BlankStart);
+    }
+    if raw.phases.is_empty() {
+        return Err(WorkflowDefinitionError::EmptyPhases);
+    }
+
+    let mut phase_indices = BTreeMap::new();
+    for (index, phase) in raw.phases.iter().enumerate() {
+        if phase.id.trim().is_empty() {
+            return Err(WorkflowDefinitionError::BlankPhaseId { index });
+        }
+        if phase_indices.insert(phase.id.as_str(), index).is_some() {
+            return Err(WorkflowDefinitionError::DuplicatePhaseId {
+                phase_id: phase.id.clone(),
+            });
+        }
+    }
+    if !phase_indices.contains_key(raw.start.as_str()) {
+        return Err(WorkflowDefinitionError::StartNotFound {
+            phase_id: raw.start,
+        });
+    }
+
+    for phase in &raw.phases {
+        if phase.terminal && !phase.transitions.is_empty() {
+            return Err(WorkflowDefinitionError::TerminalHasTransitions {
+                phase_id: phase.id.clone(),
+            });
+        }
+        if !phase.terminal && phase.transitions.is_empty() {
+            return Err(WorkflowDefinitionError::NonTerminalHasNoTransitions {
+                phase_id: phase.id.clone(),
+            });
+        }
+        for (index, transition) in phase.transitions.iter().enumerate() {
+            if transition.to.trim().is_empty() {
+                return Err(WorkflowDefinitionError::BlankTransitionTarget {
+                    phase_id: phase.id.clone(),
+                    index,
+                });
+            }
+            if transition
+                .gate
+                .as_ref()
+                .is_some_and(|gate| gate.trim().is_empty())
+            {
+                return Err(WorkflowDefinitionError::BlankGate {
+                    phase_id: phase.id.clone(),
+                    index,
+                });
+            }
+            if !phase_indices.contains_key(transition.to.as_str()) {
+                return Err(WorkflowDefinitionError::TransitionTargetNotFound {
+                    phase_id: phase.id.clone(),
+                    target: transition.to.clone(),
+                });
+            }
+        }
+    }
+
+    let mut reachable = BTreeSet::new();
+    let mut pending = vec![raw.start.as_str()];
+    while let Some(id) = pending.pop() {
+        if reachable.insert(id) {
+            let phase = &raw.phases[*phase_indices
+                .get(id)
+                .expect("phase identities were validated")];
+            pending.extend(
+                phase
+                    .transitions
+                    .iter()
+                    .map(|transition| transition.to.as_str()),
+            );
+        }
+    }
+    if let Some(phase) = raw
+        .phases
+        .iter()
+        .find(|phase| !reachable.contains(phase.id.as_str()))
+    {
+        return Err(WorkflowDefinitionError::UnreachablePhase {
+            phase_id: phase.id.clone(),
+        });
+    }
+    if !raw.phases.iter().any(|phase| phase.terminal) {
+        return Err(WorkflowDefinitionError::NoTerminalPhase);
+    }
+
+    let phases = raw
+        .phases
+        .into_iter()
+        .map(|phase| WorkflowPhase {
+            id: phase.id,
+            terminal: phase.terminal,
+            transitions: phase
+                .transitions
+                .into_iter()
+                .map(|transition| WorkflowTransition {
+                    target: transition.to,
+                    gate: transition.gate,
+                })
+                .collect(),
+        })
+        .collect();
+    Ok((raw.start, phases))
+}
+
 impl fmt::Display for ExtensionPreparationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2059,6 +2375,53 @@ impl Error for SkillPreparationError {
             Self::WrongKind { .. } => None,
             Self::Preparation { source } => Some(source),
             Self::InvalidUtf8 { source, .. } => Some(source),
+        }
+    }
+}
+
+impl fmt::Display for WorkflowDefinitionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid workflow topology: {self:?}")
+    }
+}
+
+impl Error for WorkflowDefinitionError {}
+
+impl fmt::Display for WorkflowPreparationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongKind { id, actual } => write!(
+                formatter,
+                "selected capability {id:?} is {actual:?}, not Workflow"
+            ),
+            Self::Preparation { .. } => formatter.write_str("failed to prepare selected workflows"),
+            Self::InvalidUtf8 { id, .. } => {
+                write!(formatter, "selected workflow {id:?} is not valid UTF-8")
+            }
+            Self::Parse { id, .. } => {
+                write!(
+                    formatter,
+                    "selected workflow {id:?} is not valid workflow YAML"
+                )
+            }
+            Self::Definition { id, source } => {
+                write!(
+                    formatter,
+                    "selected workflow {id:?} has an invalid definition: {source}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for WorkflowPreparationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::WrongKind { .. } => None,
+            Self::Preparation { source } => Some(source),
+            Self::InvalidUtf8 { source, .. } => Some(source),
+            Self::Parse { source, .. } => Some(source),
+            Self::Definition { source, .. } => Some(source),
         }
     }
 }
