@@ -25,6 +25,29 @@ fn workflow(start: &str) -> RegisteredWorkflow {
     )
 }
 
+fn advancing_workflow() -> RegisteredWorkflow {
+    RegisteredWorkflow::new(
+        WorkflowId::new("release.workflow").unwrap(),
+        "plan",
+        vec![
+            RegisteredWorkflowPhase::new(
+                "plan",
+                false,
+                vec![RegisteredWorkflowTransition::new("review", None)],
+            ),
+            RegisteredWorkflowPhase::new(
+                "review",
+                false,
+                vec![RegisteredWorkflowTransition::new(
+                    "done",
+                    Some("release.approved".to_owned()),
+                )],
+            ),
+            RegisteredWorkflowPhase::new("done", true, vec![]),
+        ],
+    )
+}
+
 #[test]
 fn run_ids_reject_blank_values_and_preserve_exact_non_blank_text() {
     assert_eq!(WorkflowRunId::new(" \n ").unwrap_err(), WorkflowRunIdError);
@@ -49,6 +72,7 @@ fn starts_at_the_declared_phase_and_replays_the_exact_owned_topology() {
     assert_eq!(run.id(), &id);
     assert_eq!(run.workflow(), &definition);
     assert_eq!(run.current_phase().id(), "plan");
+    assert_eq!(run.revision(), 1);
     assert!(!run.is_terminal());
     drop(definition);
 
@@ -162,4 +186,138 @@ fn extra_start_events_are_rejected_as_invalid_history() {
             .unwrap_err(),
         WorkflowRunStoreError::InvalidHistory { event_count: 2 }
     ));
+}
+
+#[test]
+fn advances_ungated_and_exact_gated_transitions_durably() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("release-advance").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+
+    let review = store.advance(&id, started.revision(), 0, None).unwrap();
+    assert_eq!(review.current_phase().id(), "review");
+    assert_eq!(review.revision(), 2);
+    assert!(!review.is_terminal());
+
+    drop(store);
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let reopened = store.load(&id).unwrap().unwrap();
+    assert_eq!(reopened.current_phase().id(), "review");
+    assert_eq!(reopened.revision(), 2);
+
+    let done = store
+        .advance(&id, reopened.revision(), 0, Some("release.approved"))
+        .unwrap();
+    assert_eq!(done.current_phase().id(), "done");
+    assert_eq!(done.revision(), 3);
+    assert!(done.is_terminal());
+
+    drop(store);
+    let loaded = WorkflowRunStore::open(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.current_phase().id(), "done");
+    assert_eq!(loaded.revision(), 3);
+}
+
+#[test]
+fn advancement_failures_are_atomic_and_stale_revisions_are_not_reinterpreted() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("release-race").unwrap();
+    let missing = WorkflowRunId::new("missing").unwrap();
+    let mut first = WorkflowRunStore::open(&path).unwrap();
+    let started = first.start(id.clone(), &advancing_workflow()).unwrap();
+    let stale_revision = started.revision();
+
+    assert!(matches!(
+        first.advance(&missing, 1, 0, None).unwrap_err(),
+        WorkflowRunStoreError::NotFound { run_id } if run_id == missing
+    ));
+    assert!(matches!(
+        first.advance(&id, stale_revision, 1, None).unwrap_err(),
+        WorkflowRunStoreError::InvalidTransition { .. }
+    ));
+    assert!(matches!(
+        first
+            .advance(&id, stale_revision, 0, Some("unexpected"))
+            .unwrap_err(),
+        WorkflowRunStoreError::InvalidTransition { .. }
+    ));
+
+    let review = first.advance(&id, stale_revision, 0, None).unwrap();
+    let malformed_id = WorkflowRunId::new("malformed-target").unwrap();
+    let malformed = RegisteredWorkflow::new(
+        WorkflowId::new("malformed.workflow").unwrap(),
+        "start",
+        vec![RegisteredWorkflowPhase::new(
+            "start",
+            false,
+            vec![RegisteredWorkflowTransition::new("missing", None)],
+        )],
+    );
+    let malformed_run = first.start(malformed_id.clone(), &malformed).unwrap();
+    assert!(matches!(
+        first
+            .advance(&malformed_id, malformed_run.revision(), 0, None)
+            .unwrap_err(),
+        WorkflowRunStoreError::InvalidTransition { .. }
+    ));
+
+    let mut second = WorkflowRunStore::open(&path).unwrap();
+    assert!(matches!(
+        second.advance(&id, stale_revision, 0, None).unwrap_err(),
+        WorkflowRunStoreError::ConcurrentModification {
+            expected_revision: 1,
+            current_revision: 2,
+        }
+    ));
+    assert!(matches!(
+        first.advance(&id, review.revision(), 0, None).unwrap_err(),
+        WorkflowRunStoreError::InvalidTransition { .. }
+    ));
+
+    let count: u64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn terminal_and_impossible_advancement_histories_fail_closed() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("release-history").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    let review = store.advance(&id, started.revision(), 0, None).unwrap();
+    let done = store
+        .advance(&id, review.revision(), 0, Some("release.approved"))
+        .unwrap();
+    assert!(matches!(
+        store.advance(&id, done.revision(), 0, None).unwrap_err(),
+        WorkflowRunStoreError::InvalidTransition { .. }
+    ));
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.target_phase_index', 0) AS BLOB) WHERE stream_id = 'workflow-run:release-history' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    let error = WorkflowRunStore::open(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap_err();
+    assert!(
+        matches!(error, WorkflowRunStoreError::InvalidHistory { .. }),
+        "unexpected error: {error:?}"
+    );
 }

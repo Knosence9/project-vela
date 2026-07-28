@@ -208,6 +208,7 @@ The first milestone is the **evidence loop**:
 62. Register prepared workflows into caller-owned process-local registries atomically without execution. ✅
 63. Advance one registered workflow through a caller-owned in-memory cursor with explicit transition and gate acknowledgement. ✅
 64. Persist workflow-run starts with immutable owned topology provenance and registry-free replay. ✅
+65. Advance durable workflow runs through revision-bound explicit transitions and exact gate acknowledgement. ✅
 
 ## Project documents
 

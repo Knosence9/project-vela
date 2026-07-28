@@ -262,6 +262,7 @@ impl fmt::Display for WorkflowCursorError {
 impl Error for WorkflowCursorError {}
 
 const WORKFLOW_RUN_STARTED_EVENT_TYPE: &str = "workflow_run.started";
+const WORKFLOW_RUN_ADVANCED_EVENT_TYPE: &str = "workflow_run.advanced";
 const WORKFLOW_RUN_EVENT_PAYLOAD_VERSION: u32 = 1;
 
 /// An opaque, non-blank identity for one durable workflow run.
@@ -300,12 +301,13 @@ impl fmt::Display for WorkflowRunIdError {
 
 impl Error for WorkflowRunIdError {}
 
-/// Read-only state restored from one immutable workflow-run start event.
+/// Read-only state projected from one durable workflow-run event stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowRun {
     id: WorkflowRunId,
     workflow: RegisteredWorkflow,
     current_phase_index: usize,
+    revision: u64,
 }
 
 impl WorkflowRun {
@@ -324,6 +326,11 @@ impl WorkflowRun {
     pub fn is_terminal(&self) -> bool {
         self.current_phase().is_terminal()
     }
+
+    /// The exact event-stream revision this state projects.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
 }
 
 #[derive(Debug)]
@@ -331,9 +338,25 @@ impl WorkflowRun {
 pub enum WorkflowRunStoreError {
     EventLog(EventLogError),
     Replay(ReplayError),
-    AlreadyExists { run_id: WorkflowRunId },
-    InvalidDefinition { source: WorkflowCursorError },
-    InvalidHistory { event_count: usize },
+    AlreadyExists {
+        run_id: WorkflowRunId,
+    },
+    NotFound {
+        run_id: WorkflowRunId,
+    },
+    InvalidDefinition {
+        source: WorkflowCursorError,
+    },
+    InvalidTransition {
+        source: WorkflowCursorError,
+    },
+    ConcurrentModification {
+        expected_revision: u64,
+        current_revision: u64,
+    },
+    InvalidHistory {
+        event_count: usize,
+    },
 }
 
 impl fmt::Display for WorkflowRunStoreError {
@@ -344,9 +367,20 @@ impl fmt::Display for WorkflowRunStoreError {
             Self::AlreadyExists { run_id } => {
                 write!(formatter, "workflow run {run_id} already exists")
             }
+            Self::NotFound { run_id } => write!(formatter, "workflow run {run_id} was not found"),
             Self::InvalidDefinition { source } => {
                 write!(formatter, "workflow run definition is invalid: {source}")
             }
+            Self::InvalidTransition { source } => {
+                write!(formatter, "workflow run transition is invalid: {source}")
+            }
+            Self::ConcurrentModification {
+                expected_revision,
+                current_revision,
+            } => write!(
+                formatter,
+                "workflow run changed concurrently: expected revision {expected_revision}, current revision is {current_revision}"
+            ),
             Self::InvalidHistory { event_count } => write!(
                 formatter,
                 "invalid workflow-run history with {event_count} events"
@@ -360,13 +394,16 @@ impl Error for WorkflowRunStoreError {
         match self {
             Self::EventLog(error) => Some(error),
             Self::Replay(error) => Some(error),
-            Self::InvalidDefinition { source } => Some(source),
-            Self::AlreadyExists { .. } | Self::InvalidHistory { .. } => None,
+            Self::InvalidDefinition { source } | Self::InvalidTransition { source } => Some(source),
+            Self::AlreadyExists { .. }
+            | Self::NotFound { .. }
+            | Self::ConcurrentModification { .. }
+            | Self::InvalidHistory { .. } => None,
         }
     }
 }
 
-/// A synchronous durable workflow-run start store backed by the typed event log.
+/// A synchronous durable workflow-run store backed by the typed event log.
 pub struct WorkflowRunStore {
     event_log: EventLog,
 }
@@ -396,6 +433,7 @@ impl WorkflowRunStore {
                 id,
                 workflow: workflow.clone(),
                 current_phase_index,
+                revision: 1,
             }),
             Err(EventLogError::WrongExpectedVersion {
                 expected: ExpectedVersion::NoStream,
@@ -405,20 +443,69 @@ impl WorkflowRunStore {
         }
     }
 
+    /// Advances one exact projected revision through a caller-selected authored edge.
+    ///
+    /// Stale revisions fail without retry so phase-relative intent is never reinterpreted.
+    pub fn advance(
+        &mut self,
+        id: &WorkflowRunId,
+        expected_revision: u64,
+        transition_index: usize,
+        gate_acknowledgement: Option<&str>,
+    ) -> Result<WorkflowRun, WorkflowRunStoreError> {
+        let Some(mut run) = self.load(id)? else {
+            return Err(WorkflowRunStoreError::NotFound { run_id: id.clone() });
+        };
+        if run.revision != expected_revision {
+            return Err(WorkflowRunStoreError::ConcurrentModification {
+                expected_revision,
+                current_revision: run.revision,
+            });
+        }
+        let source_phase_index = run.current_phase_index;
+        let target_phase_index =
+            resolve_transition(&run, transition_index, gate_acknowledgement)
+                .map_err(|source| WorkflowRunStoreError::InvalidTransition { source })?;
+        let event = WorkflowRunEvent::Advanced {
+            source_phase_index,
+            transition_index,
+            target_phase_index,
+            gate_acknowledgement: gate_acknowledgement.map(str::to_owned),
+        };
+        match self.event_log.append(
+            &workflow_run_stream(id),
+            ExpectedVersion::Exact(expected_revision),
+            &event,
+        ) {
+            Ok(revision) => {
+                run.current_phase_index = target_phase_index;
+                run.revision = revision;
+                Ok(run)
+            }
+            Err(EventLogError::WrongExpectedVersion {
+                current: Some(current_revision),
+                ..
+            }) => Err(WorkflowRunStoreError::ConcurrentModification {
+                expected_revision,
+                current_revision,
+            }),
+            Err(error) => Err(WorkflowRunStoreError::EventLog(error)),
+        }
+    }
+
     pub fn load(&self, id: &WorkflowRunId) -> Result<Option<WorkflowRun>, WorkflowRunStoreError> {
         let events = self
             .event_log
             .replay::<WorkflowRunEvent>(&workflow_run_stream(id))
             .map_err(WorkflowRunStoreError::Replay)?;
-        if events.is_empty() {
-            return Ok(None);
-        }
-        if events.len() != 1 {
-            return Err(WorkflowRunStoreError::InvalidHistory {
-                event_count: events.len(),
-            });
-        }
-        let WorkflowRunEvent::Started { workflow } = events.into_iter().next().unwrap();
+        let event_count = events.len();
+        let Some(WorkflowRunEvent::Started { workflow }) = events.first().cloned() else {
+            return if events.is_empty() {
+                Ok(None)
+            } else {
+                Err(WorkflowRunStoreError::InvalidHistory { event_count })
+            };
+        };
         let workflow = workflow.into_workflow().map_err(|message| {
             WorkflowRunStoreError::Replay(ReplayError::MalformedPayload {
                 stream_version: 1,
@@ -431,11 +518,32 @@ impl WorkflowRunStore {
                 message: error.to_string(),
             })
         })?;
-        Ok(Some(WorkflowRun {
+        let mut run = WorkflowRun {
             id: id.clone(),
             workflow,
             current_phase_index,
-        }))
+            revision: 1,
+        };
+        for event in events.into_iter().skip(1) {
+            let WorkflowRunEvent::Advanced {
+                source_phase_index,
+                transition_index,
+                target_phase_index,
+                gate_acknowledgement,
+            } = event
+            else {
+                return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+            };
+            if source_phase_index != run.current_phase_index
+                || resolve_transition(&run, transition_index, gate_acknowledgement.as_deref()).ok()
+                    != Some(target_phase_index)
+            {
+                return Err(WorkflowRunStoreError::InvalidHistory { event_count });
+            }
+            run.current_phase_index = target_phase_index;
+            run.revision += 1;
+        }
+        Ok(Some(run))
     }
 }
 
@@ -453,15 +561,39 @@ fn start_phase_index(workflow: &RegisteredWorkflow) -> Result<usize, WorkflowCur
         .expect("the validated start phase exists"))
 }
 
-#[derive(Debug, Serialize)]
+fn resolve_transition(
+    run: &WorkflowRun,
+    transition_index: usize,
+    gate_acknowledgement: Option<&str>,
+) -> Result<usize, WorkflowCursorError> {
+    let mut cursor = WorkflowCursor {
+        workflow: &run.workflow,
+        current_phase_index: run.current_phase_index,
+    };
+    cursor.advance(transition_index, gate_acknowledgement)?;
+    Ok(cursor.current_phase_index)
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 enum WorkflowRunEvent {
-    Started { workflow: WorkflowSnapshot },
+    Started {
+        workflow: WorkflowSnapshot,
+    },
+    Advanced {
+        source_phase_index: usize,
+        transition_index: usize,
+        target_phase_index: usize,
+        gate_acknowledgement: Option<String>,
+    },
 }
 
 impl Event for WorkflowRunEvent {
     fn event_type(&self) -> &'static str {
-        WORKFLOW_RUN_STARTED_EVENT_TYPE
+        match self {
+            Self::Started { .. } => WORKFLOW_RUN_STARTED_EVENT_TYPE,
+            Self::Advanced { .. } => WORKFLOW_RUN_ADVANCED_EVENT_TYPE,
+        }
     }
 
     fn payload_version(&self) -> u32 {
@@ -469,34 +601,62 @@ impl Event for WorkflowRunEvent {
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
-        if event_type != WORKFLOW_RUN_STARTED_EVENT_TYPE
-            || payload_version != WORKFLOW_RUN_EVENT_PAYLOAD_VERSION
-        {
+        if payload_version != WORKFLOW_RUN_EVENT_PAYLOAD_VERSION {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
                 payload_version,
             });
         }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Payload {
-            workflow: WorkflowSnapshot,
+        match event_type {
+            WORKFLOW_RUN_STARTED_EVENT_TYPE => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    workflow: WorkflowSnapshot,
+                }
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let workflow = payload
+                    .workflow
+                    .clone()
+                    .into_workflow()
+                    .map_err(|message| DecodeError::MalformedPayload { message })?;
+                start_phase_index(&workflow).map_err(|error| DecodeError::MalformedPayload {
+                    message: error.to_string(),
+                })?;
+                Ok(Self::Started {
+                    workflow: payload.workflow,
+                })
+            }
+            WORKFLOW_RUN_ADVANCED_EVENT_TYPE => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    source_phase_index: usize,
+                    transition_index: usize,
+                    target_phase_index: usize,
+                    gate_acknowledgement: Option<String>,
+                }
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(Self::Advanced {
+                    source_phase_index: payload.source_phase_index,
+                    transition_index: payload.transition_index,
+                    target_phase_index: payload.target_phase_index,
+                    gate_acknowledgement: payload.gate_acknowledgement,
+                })
+            }
+            _ => Err(DecodeError::UnsupportedEvent {
+                event_type: event_type.to_owned(),
+                payload_version,
+            }),
         }
-        let payload: Payload =
-            serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
-                message: error.to_string(),
-            })?;
-        let workflow = payload
-            .workflow
-            .clone()
-            .into_workflow()
-            .map_err(|message| DecodeError::MalformedPayload { message })?;
-        start_phase_index(&workflow).map_err(|error| DecodeError::MalformedPayload {
-            message: error.to_string(),
-        })?;
-        Ok(Self::Started {
-            workflow: payload.workflow,
-        })
     }
 }
 
