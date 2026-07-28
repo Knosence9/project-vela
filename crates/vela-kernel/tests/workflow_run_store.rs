@@ -4,7 +4,8 @@ use vela_kernel::{
     workflow::{
         RegisteredWorkflow, RegisteredWorkflowPhase, RegisteredWorkflowTransition, WorkflowId,
         WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunId, WorkflowRunIdError,
-        WorkflowRunStore, WorkflowRunStoreError,
+        WorkflowRunPauseReason, WorkflowRunPauseReasonError, WorkflowRunResumeReason,
+        WorkflowRunResumeReasonError, WorkflowRunStore, WorkflowRunStoreError,
     },
 };
 
@@ -606,6 +607,205 @@ fn malformed_and_impossible_cancellation_histories_fail_closed() {
     connection
         .execute(
             "UPDATE events SET payload = CAST(json_set(payload, '$.source_phase_index', 0, '$.reason', '') AS BLOB) WHERE stream_id = 'workflow-run:cancel-history' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .load(&id)
+            .unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+}
+
+#[test]
+fn pause_and_resume_reasons_reject_empty_values_and_preserve_exact_text() {
+    assert_eq!(
+        WorkflowRunPauseReason::new("").unwrap_err(),
+        WorkflowRunPauseReasonError
+    );
+    assert_eq!(
+        WorkflowRunResumeReason::new("").unwrap_err(),
+        WorkflowRunResumeReasonError
+    );
+    assert_eq!(
+        WorkflowRunPauseReason::new(" \n ").unwrap().as_str(),
+        " \n "
+    );
+    assert_eq!(
+        WorkflowRunResumeReason::new("operator ready")
+            .unwrap()
+            .as_str(),
+        "operator ready"
+    );
+}
+
+#[test]
+fn pauses_and_resumes_an_exact_revision_without_changing_phase_or_topology() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("release-pause").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    let pause_reason = WorkflowRunPauseReason::new("await operator").unwrap();
+    let paused = store
+        .pause(&id, started.revision(), pause_reason.clone())
+        .unwrap();
+    assert_eq!(paused.revision(), 2);
+    assert_eq!(paused.current_phase().id(), "plan");
+    assert_eq!(paused.workflow(), started.workflow());
+    assert!(paused.is_paused());
+    assert_eq!(paused.pause_reason(), Some(&pause_reason));
+    assert!(matches!(
+        store.advance(&id, paused.revision(), 0, None).unwrap_err(),
+        WorkflowRunStoreError::Paused { .. }
+    ));
+
+    drop(store);
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let listed = store.list().unwrap();
+    assert_eq!(listed[0].pause_reason(), Some(&pause_reason));
+    let resumed = store
+        .resume(
+            &id,
+            listed[0].revision(),
+            WorkflowRunResumeReason::new("operator ready").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(resumed.revision(), 3);
+    assert_eq!(resumed.current_phase().id(), "plan");
+    assert!(!resumed.is_paused());
+    assert_eq!(resumed.pause_reason(), None);
+    assert_eq!(
+        store
+            .advance(&id, resumed.revision(), 0, None)
+            .unwrap()
+            .current_phase()
+            .id(),
+        "review"
+    );
+}
+
+#[test]
+fn pause_resume_failures_are_atomic_and_paused_runs_remain_cancellable() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("pause-state").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    let pause = WorkflowRunPauseReason::new("hold").unwrap();
+    assert!(matches!(
+        store
+            .resume(
+                &id,
+                started.revision(),
+                WorkflowRunResumeReason::new("no hold").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::NotPaused { .. }
+    ));
+    let paused = store.pause(&id, started.revision(), pause.clone()).unwrap();
+    assert!(matches!(
+        store.pause(&id, paused.revision(), pause).unwrap_err(),
+        WorkflowRunStoreError::AlreadyPaused { .. }
+    ));
+    assert!(matches!(
+        store
+            .resume(
+                &id,
+                started.revision(),
+                WorkflowRunResumeReason::new("stale").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::ConcurrentModification { .. }
+    ));
+    let cancelled = store
+        .cancel(
+            &id,
+            paused.revision(),
+            WorkflowRunCancellation::new("stop while held").unwrap(),
+        )
+        .unwrap();
+    assert!(cancelled.is_paused());
+    assert!(matches!(
+        store
+            .resume(
+                &id,
+                cancelled.revision(),
+                WorkflowRunResumeReason::new("too late").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyCancelled { .. }
+    ));
+
+    let terminal_id = WorkflowRunId::new("pause-terminal").unwrap();
+    let terminal_started = store
+        .start(terminal_id.clone(), &advancing_workflow())
+        .unwrap();
+    let terminal_review = store
+        .advance(&terminal_id, terminal_started.revision(), 0, None)
+        .unwrap();
+    let terminal = store
+        .advance(
+            &terminal_id,
+            terminal_review.revision(),
+            0,
+            Some("release.approved"),
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .pause(
+                &terminal_id,
+                terminal.revision(),
+                WorkflowRunPauseReason::new("impossible").unwrap()
+            )
+            .unwrap_err(),
+        WorkflowRunStoreError::AlreadyTerminal { .. }
+    ));
+}
+
+#[test]
+fn malformed_pause_and_resume_histories_fail_closed() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = WorkflowRunId::new("pause-history").unwrap();
+    let mut store = WorkflowRunStore::open(&path).unwrap();
+    let started = store.start(id.clone(), &advancing_workflow()).unwrap();
+    let paused = store
+        .pause(
+            &id,
+            started.revision(),
+            WorkflowRunPauseReason::new("hold").unwrap(),
+        )
+        .unwrap();
+    store
+        .resume(
+            &id,
+            paused.revision(),
+            WorkflowRunResumeReason::new("continue").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.source_phase_index', 1) AS BLOB) WHERE stream_id = 'workflow-run:pause-history' AND stream_version = 3",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .load(&id)
+            .unwrap_err(),
+        WorkflowRunStoreError::InvalidHistory { .. }
+    ));
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.source_phase_index', 0, '$.reason', '') AS BLOB) WHERE stream_id = 'workflow-run:pause-history' AND stream_version = 2",
             [],
         )
         .unwrap();

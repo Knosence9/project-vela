@@ -211,6 +211,7 @@ The first milestone is the **evidence loop**:
 65. Advance durable workflow runs through revision-bound explicit transitions and exact gate acknowledgement. ✅
 66. Cancel durable non-terminal workflow runs through revision-bound caller-owned reasons without rewriting topology. ✅
 67. Discover every durable workflow run in deterministic order from authoritative start events without a separate index. ✅
+68. Pause and resume durable workflow runs through revision-bound caller-owned reasons without changing topology. ✅
 
 ## Project documents
 
