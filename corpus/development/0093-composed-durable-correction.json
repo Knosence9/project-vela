@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compose selected skills into durable correction tool turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/666 by retaining explicit composition and caller-selected parent Attempt lineage across bounded correction continuations.",
+    "acceptance_criteria": [
+      "Reject invalid skill selection and missing or invalid parent Attempt lineage before downstream side effects.",
+      "Retain exact policies, selected skills, transcript, prior tool result, task identity, and parent Attempt in an opaque continuation.",
+      "Require fresh invocation identity and authorization while preserving metadata-only durable tool evidence.",
+      "Persist final provider content as a linked Correction without adding an Attempt or changing terminal task state."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED correction composition coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused composed tool task target failed on missing correction-specific outcome and initial and continuation methods.",
+      "patch": "Added tests for exact authority and result retention, linked Correction persistence, selection and lineage preflight, durable invocation evidence, and stale transcript rejection."
+    },
+    {
+      "summary": "Implemented parent-preserving composed correction orchestration.",
+      "outcome": "success",
+      "diagnostic": "Correction-specific outcomes could retain caller-owned parent lineage while shared private observation helpers kept attempt and correction provider and tool sequencing DRY.",
+      "patch": "Added correction outcomes and entrypoints, generalized observation routing, documented correction ordering and compatibility, and updated the ADR and milestone."
+    },
+    {
+      "summary": "Strengthened the exact continuation contract before review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found stale ADR wording and insufficiently exact assertions for the prior in-memory tool result and invocation evidence.",
+      "patch": "Corrected the ADR, strengthened exact result and invocation assertions, reran pinned verification, and completed substantive exact-head review with no unresolved threads."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable correction tool turns now preserve selected-skill authority and exact parent Attempt lineage across explicit continuations before appending linked Correction evidence.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30303716303 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/667", "status": "passed"},
+      {"command": "Pull request 667 squash merge 77312feebdf2b7257639e68032cd9fc15ce92e91", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Correction lineage is caller-owned context and must survive every non-terminal provider and tool step unchanged.",
+    "A final correction is linked evidence, not a new Attempt or a task lifecycle transition.",
+    "Selection and lineage checks belong before provider, tool, and durable side effects, while stale transcript checks protect continuation replay.",
+    "Shared observation helpers can remove sequencing duplication without erasing distinct Attempt and Correction persistence semantics.",
+    "Exact prior-result and invocation assertions are needed to prove an opaque continuation did not substitute data."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/667"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

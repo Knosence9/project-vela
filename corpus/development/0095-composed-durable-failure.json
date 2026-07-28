@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compose selected skills into durable failure tool turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/670 by retaining explicit skill composition and an exact caller-owned failure diagnostic through bounded provider and tool continuations.",
+    "acceptance_criteria": [
+      "Construct the caller failure and validate selected skills before durable, provider, authorization, or tool side effects.",
+      "Retain exact policy, selected skills, transcript, prior tool result, task identity, and TaskFailure across opaque continuations.",
+      "Reject stale or terminal continuations before further work and require fresh permission for every tool invocation.",
+      "Commit final assistant content and an exact Attempt before failing with the retained diagnostic, never provider-authored terminal detail."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED composed failure coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused integration target failed because failure-specific composed outcomes and runtime entrypoints did not exist.",
+      "patch": "Added tests for immediate and multi-tool failure, exact diagnostic retention, authority fields, persistence ordering, and selection, stale, and terminal rejection."
+    },
+    {
+      "summary": "Implemented diagnostic-preserving composed failure orchestration.",
+      "outcome": "success",
+      "diagnostic": "Failure-specific continuations retained the validated caller diagnostic while delegating bounded provider and tool work to the shared composed attempt path.",
+      "patch": "Added failure outcomes and operations, a small terminal conversion helper, runtime and lifecycle documentation, ADR verification, and milestone status."
+    },
+    {
+      "summary": "Fixed contradictory scope wording during substantive review.",
+      "outcome": "success",
+      "diagnostic": "Review found that assistant runtime documentation described composed failure as delivered while a stale non-goal still listed composed failure as unsupported.",
+      "patch": "Removed failure from the non-goal, left cancellation as the remaining slice, resolved the thread, reran pinned verification, and waited for exact-head review capacity before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable composed failure turns now retain explicit skill authority and caller-owned diagnostics through bounded tool work while model output remains Attempt evidence only.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30314588019 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/671", "status": "passed"},
+      {"command": "Pull request 671 squash merge 8e8c69150fec6fe6b860ac119eabe165ea931f9e", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Failure classification and diagnostic ownership remain with the caller even when provider and tool work precede the terminal transition.",
+    "Provider output is Attempt evidence and must never replace the retained TaskFailure detail or verification evidence.",
+    "Terminal intent can reuse shared bounded execution when only the retained value and final state application differ.",
+    "Stale non-goals are correctness defects when they contradict the public API described in the same document.",
+    "After a review fix, exact-head review capacity and resolved threads remain mandatory merge gates."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/671"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compose selected skills into durable cancellation tool turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/672 by retaining explicit skill composition and an exact caller-owned cancellation reason through bounded provider and tool continuations.",
+    "acceptance_criteria": [
+      "Construct the caller cancellation and validate selected skills before durable, provider, authorization, or tool side effects.",
+      "Retain exact policy, selected skills, transcript, prior tool result, task identity, and TaskCancellation across opaque continuations.",
+      "Reject stale or terminal continuations before further work and require fresh permission for every tool invocation.",
+      "Commit final assistant content and an exact Attempt before cancelling with the retained reason without claiming in-flight interruption."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED composed cancellation coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused cancellation integration test failed because cancellation-specific composed outcomes and runtime entrypoints were absent.",
+      "patch": "Added tests for direct and continued cancellation, exact reason and authority retention, observation composition, persistence ordering, and selection, stale, and terminal rejection."
+    },
+    {
+      "summary": "Implemented reason-preserving composed cancellation orchestration.",
+      "outcome": "success",
+      "diagnostic": "Cancellation-specific continuations retained validated caller intent while delegating provider and tool work to the established bounded attempt path and varying only final state application.",
+      "patch": "Added cancellation outcomes and operations, a symmetric terminal helper, runtime and ADR documentation, complete integration coverage, and milestone status."
+    },
+    {
+      "summary": "Completed independent and substantive review without follow-up changes.",
+      "outcome": "success",
+      "diagnostic": "Independent pre-commit review found no blocking issue, the Rust gate passed on exact head, substantive review covered all five changed files, and no review threads remained.",
+      "patch": "Preserved the minimal terminal conversion, explicit non-interruption contract, and completed ADR-0005 composition boundary."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable composed cancellation turns now retain explicit skill authority and caller-owned reasons through bounded tool work before recording cancellation after final Attempt evidence.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30318277659 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/673", "status": "passed"},
+      {"command": "Pull request 673 squash merge 2c25171b3f0d9f4011eb775536f80ac33f845d1d", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A cancellation state transition records caller intent after bounded work; it does not interrupt an in-flight provider or tool call.",
+    "Provider output remains Attempt evidence and must never become the cancellation reason.",
+    "Typed continuations prevent caller-owned terminal intent from being lost or replaced between explicit steps.",
+    "The symmetric completion, failure, and cancellation flows stay simple when they share execution and vary only retained intent and finalization.",
+    "Completing an architecture decision should include executable coverage for every terminal path rather than relying on structural analogy."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/673"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

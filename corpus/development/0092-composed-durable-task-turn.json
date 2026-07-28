@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compose selected skills into durable task tool turns",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/664 by retaining explicit caller policy and selected skills across bounded attempt-producing provider and tool continuations.",
+    "acceptance_criteria": [
+      "Reject duplicate or absent skill selections before durable, provider, authorization, or tool side effects.",
+      "Preserve exact policy, selected skill blocks, transcript lineage, and in-memory tool results across opaque task scoped continuations.",
+      "Require fresh invocation identity and authorization for each requested tool and persist metadata-only invocation evidence.",
+      "Commit final assistant content followed by an exact Attempt while leaving existing skill-free runtime operations unchanged."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED durable composition coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused composed tool task target failed because no durable composed task outcome, initial operation, or continuation operation existed.",
+      "patch": "Added tests for selection preflight, exact authority retention, authorization, invocation evidence, provider observations, multi-step continuation, and final Attempt ordering."
+    },
+    {
+      "summary": "Implemented bounded attempt-producing composed task orchestration.",
+      "outcome": "success",
+      "diagnostic": "Opaque task scoped continuations retained immutable composition and transcript context while the existing durable dispatch boundary preserved one-provider and at-most-one-tool work per explicit call.",
+      "patch": "Added composed task outcomes and runtime entrypoints, reused observation-oriented persistence, documented the additive contract, and updated milestone status."
+    },
+    {
+      "summary": "Corrected stale documentation and audited a review-gate process failure.",
+      "outcome": "success",
+      "diagnostic": "Review found a stale statement claiming skills were unavailable to every durable task turn, which was fixed. A post-merge audit then confirmed the CodeRabbit status still reported Review rate limited, so the pull request had merged without the required conclusive exact-head review evidence.",
+      "patch": "Narrowed the non-goal to skill-free paths, resolved the review thread, and recorded the merge-policy discrepancy transparently on pull request 665 rather than misclassifying the false-green status as substantive review."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable task tool turns now preserve explicit selected-skill authority through caller-driven bounded continuations and append final provider content as exact Attempt evidence.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30297555826", "status": "passed"},
+      {"command": "Pull request 665 squash merge 0bec01adae683f35f3b0419cf164fcffe8e7eb75 and transparent review-gate audit at https://github.com/Knosence9/project-vela/pull/665#issuecomment-5095955693", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A durable continuation must retain the originating task and exact transcript as well as policy and selected instructions.",
+    "Skill authority never grants tool capability; each tool request still needs fresh caller-owned identity and permission.",
+    "Final provider content becomes Attempt evidence only after continuation state is revalidated against durable state.",
+    "Documentation must distinguish additive composed operations from conservative skill-free defaults.",
+    "A successful-looking rate-limited review status is not substantive review evidence, and a mistaken merge must be recorded rather than normalized."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/665"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
