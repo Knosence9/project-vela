@@ -35,7 +35,8 @@
     "verified": true,
     "verification": [
       {"command": "nix develop --command just verify", "status": "passed"},
-      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30307794206 and substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/669", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30307794206", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/669", "status": "passed"},
       {"command": "Pull request 669 squash merge a26d901f407065614eebc2579565816d5d8146db", "status": "passed"}
     ]
   },
