@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist workflow-run starts with immutable topology provenance",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/688 under decision https://github.com/Knosence9/project-vela/issues/687 by starting one durable workflow run from an owned topology snapshot that can replay without a registry.",
+    "acceptance_criteria": [
+      "Store each exact non-blank run ID in its own event stream and reject duplicate starts atomically.",
+      "Persist one strict version-one start event containing exact workflow identity, authored phases, transitions, gates, and start topology.",
+      "Load the immutable workflow snapshot and exact starting phase without consulting a registry, package, manifest, or filesystem.",
+      "Reject malformed payloads, unsupported events, invalid topology, and impossible history without returning partial state or granting execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED durable workflow-run coverage before adding production APIs.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow_run_store test target failed because durable workflow-run identity, start, load, projection, and replay contracts did not exist.",
+      "patch": "Added tests for exact start projection, duplicate atomicity, reopen without a registry, malformed payloads, unsupported events, and invalid history."
+    },
+    {
+      "summary": "Implemented strict start-event persistence and registry-free replay.",
+      "outcome": "success",
+      "diagnostic": "Owning the complete validated topology in the first event made the durable aggregate independent of later registry or extension changes.",
+      "patch": "Added workflow-run IDs, snapshots, version-one event encoding, start and load operations, typed errors, ADR-0009, and milestone documentation."
+    },
+    {
+      "summary": "Addressed substantive review feedback without changing the replay contract.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found a redundant validated workflow-to-snapshot reconstruction during decode, but classified it as a trivial performance nit with no correctness impact.",
+      "patch": "Retained the already-decoded owned snapshot after validation, reran focused and repository verification, and preserved incremental review coverage through final head 1229001488a5df0ed9992722dc653536840bebe9."
+    }
+  ],
+  "outcome": {
+    "summary": "Durable workflow runs now begin from one immutable owned topology snapshot and replay their exact starting state without ambient registry authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30352594614", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/689", "status": "passed"},
+      {"command": "Pull request 689 squash merge 7454a0325abd8973bc22afdb0d965125423c3ae6", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A durable aggregate needs owned immutable definition provenance rather than a reference to mutable process-local registry state.",
+    "Revalidating start resolution during replay prevents malformed persisted topology from becoming partial state.",
+    "Exact per-run streams make duplicate creation an atomic expected-version decision.",
+    "Review-driven simplification can remove redundant replay work without broadening the durable state contract.",
+    "Starting and loading state grants no transition, gate, action, provider, tool, scheduling, or permission authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/689"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Advance durable workflow runs through revision-bound transitions",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/691 under decision https://github.com/Knosence9/project-vela/issues/690 by persisting one explicit authored transition against the caller-observed run revision.",
+    "acceptance_criteria": [
+      "Require the exact projected stream revision, authored transition index, and exact optional gate acknowledgement for every advancement.",
+      "Persist source, edge, resolved target, and gate provenance in one version-one event while retaining immutable topology.",
+      "Return typed stale-revision failures without retry or reinterpretation and preserve atomicity across append races.",
+      "Replay progress without a registry and reject terminal, malformed, duplicate-start, or topology-inconsistent history fail closed."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED revision-bound advancement coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow_run_store suite failed because run revisions, durable advancement, and its typed concurrency and transition errors did not exist.",
+      "patch": "Added tests for exact progression, gate acknowledgement, stale callers and append races, terminal rejection, reopen projection, and impossible event history."
+    },
+    {
+      "summary": "Implemented explicit exact-revision transition events.",
+      "outcome": "success",
+      "diagnostic": "Binding phase-relative edge intent to the caller-observed revision prevented a concurrent writer from silently changing the meaning of the requested authored edge.",
+      "patch": "Added projected revisions, durable advance, exact-version appends, strict advancement replay, shared cursor transition resolution, ADR-0010, and behavior documentation."
+    },
+    {
+      "summary": "Resolved and dispositioned substantive review test-maintainability observations.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit requested explicit duplicate-start coverage and stream-scoped event-count assertions; both were trivial test-hardening observations rather than defects in the verified advancement contract.",
+      "patch": "Scoped the event-count assertion to the exact run stream; documented that extra_start_events_are_rejected_as_invalid_history already covered a valid duplicate start; reran focused and repository verification at final head ed304f605ec4fb19e1e87d2756416fc090021cf2."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can now advance durable workflow runs by exact authored edge and gate evidence without stale intent being retried or reinterpreted.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30361589417", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/692", "status": "passed"},
+      {"command": "Pull request 692 squash merge 3e194124de16505500ead7a6b5626e67d300d6c4", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Phase-relative intent must be revision-bound so racing writers cannot alter the meaning of an authored transition index.",
+    "Persisting source, edge, target, and gate provenance lets replay validate history against the immutable topology snapshot.",
+    "Exact-version appends surface both observed staleness and append races through one typed concurrency contract.",
+    "Review findings should be fixed when local and non-duplicative, while already-covered cases should receive an explicit evidence-backed disposition.",
+    "Advancement records caller choice but does not choose an edge, evaluate a gate, execute an action, invoke a provider or tool, or schedule work."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/692"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
