@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Query exact typed workflow-run lifecycle history",
+    "objective": "Complete issues https://github.com/Knosence9/project-vela/issues/704 and https://github.com/Knosence9/project-vela/issues/705 by exposing validated revision-ordered semantic workflow-run evidence without leaking private storage payloads or indexes.",
+    "acceptance_criteria": [
+      "Return typed started, advanced, paused, resumed, and cancelled entries in exact one-based revision order.",
+      "Translate persisted topology indexes to exact workflow and phase identities while preserving transition, gate, and reason evidence.",
+      "Return no history for a missing run and preserve exact evidence after reopen.",
+      "Validate the complete stream through the authoritative projector and reject malformed or impossible history without partial results."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED typed-history coverage before production APIs.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-run target failed because public history entry and event types and WorkflowRunStore::history did not exist.",
+      "patch": "Added tests for every supported lifecycle event, exact UTF-8 evidence, missing runs, reopen, corrupt decoding, and impossible lifecycle evidence."
+    },
+    {
+      "summary": "Implemented one strict semantic history projection.",
+      "outcome": "success",
+      "diagnostic": "Projecting public evidence only after complete authoritative replay kept load, list, and history corruption semantics aligned while hiding storage indexes.",
+      "patch": "Added typed lifecycle history values, exact revision projection, semantic workflow and phase identities, ADR-0014, and milestone documentation."
+    },
+    {
+      "summary": "Closed a fail-closed test gap found by independent review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found that history rejection relied on indirect coverage for unsupported events and impossible transitions.",
+      "patch": "Added direct unsupported-event and impossible-transition history tests, reran the complete gate, and retained a substantive exact-head CodeRabbit review with no actionable comments."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can inspect exact revision-ordered workflow-run lifecycle evidence through typed semantic values after complete fail-closed validation.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30388195333", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/706", "status": "passed"},
+      {"command": "Pull request 706 squash merge 4e0f4e93f29e2d586ee831a6b1b2251e4cc7697d", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Public audit evidence should use semantic workflow and phase identities rather than exposing private storage indexes.",
+    "A read-only history query must reuse the complete authoritative projector so it cannot return a plausible prefix from corrupt state.",
+    "Exact caller reasons and gate acknowledgements remain evidence, not proof that an external condition was evaluated.",
+    "Independent review should add direct boundary tests when fail-closed behavior is only indirectly exercised.",
+    "History inspection grants no transition, execution, scheduling, provider, tool, or permission authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/706"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

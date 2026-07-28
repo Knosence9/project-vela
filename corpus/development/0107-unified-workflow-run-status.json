@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Project one unified workflow-run lifecycle status",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/712 under decision https://github.com/Knosence9/project-vela/issues/711 by classifying validated workflow-run state without changing persistence or evidence accessors.",
+    "acceptance_criteria": [
+      "Expose evidence-free Active, Paused, AuthoredTerminal, Cancelled, and Failed classifications through one read-only accessor.",
+      "Classify failure and cancellation ahead of retained pause markers while preserving every exact reason and diagnostic accessor.",
+      "Preserve existing topology-specific terminal and lifecycle predicates without schema, replay, storage, or mutation changes.",
+      "Return exact classifications after reopen and through deterministic listing."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED lifecycle-status coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-run target failed because WorkflowRunStatus and WorkflowRun::status did not exist.",
+      "patch": "Added assertions for active, paused, resumed, authored-terminal, cancelled, active-failed, paused-failed, exact reopen, and deterministic listing states."
+    },
+    {
+      "summary": "Implemented one deterministic evidence-free classifier.",
+      "outcome": "success",
+      "diagnostic": "Deriving status from validated projected state avoided duplicate persisted authority and retained distinct topology, cancellation, pause, and failure semantics.",
+      "patch": "Added the non-exhaustive copyable status enum, read-only accessor, explicit precedence, ADR-0016, and milestone documentation."
+    },
+    {
+      "summary": "Hardened paused cancellation coverage before commit.",
+      "outcome": "success",
+      "diagnostic": "Independent review identified one low-severity precedence coverage gap for cancellation retaining a pause marker.",
+      "patch": "Asserted that cancellation while paused classifies as Cancelled, reran verification, and preserved the exact head until the Rust gate, substantive CodeRabbit review, and zero unresolved threads were confirmed."
+    }
+  ],
+  "outcome": {
+    "summary": "Every durable workflow run now exposes one deterministic lifecycle status while exact underlying reasons, diagnostics, and retained pause evidence remain separately available.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30397222469", "status": "passed"},
+      {"command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/713", "status": "passed"},
+      {"command": "Pull request 713 squash merge 6b92a990ae7cd9a51fab3ca0b2c798b48540c5c2", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A lifecycle classifier should be a projection when validated state already contains all authoritative evidence.",
+    "Authored terminal arrival must remain distinct from success because topology currently declares no outcome semantics.",
+    "Failure and cancellation override retained pause markers for classification without erasing the underlying evidence.",
+    "A successful-looking rate-limited review is insufficient; merge must wait for substantive exact-head coverage and zero unresolved threads.",
+    "Read-only status classification grants no scheduling, execution, retry, recovery, compensation, or permission authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/713"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
