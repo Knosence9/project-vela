@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Advance registered workflows through a caller-owned cursor",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/683 under decision https://github.com/Knosence9/project-vela/issues/682 by adding pure in-memory advancement through an explicit authored transition index and exact gate acknowledgement.",
+    "acceptance_criteria": [
+      "Start at the exact declared phase and expose the borrowed workflow and current phase without copying or mutating registry topology.",
+      "Make authored zero-based transition index and exact caller gate acknowledgement the only advancement authority.",
+      "Reject terminal, out-of-range, acknowledgement, missing start or target, and ambiguous start or target failures before cursor mutation.",
+      "Support cycles and repeated visits while adding no action invocation, automatic edge choice, external gate evaluation, provider or tool authority, scheduling, or persistence."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED kernel coverage for pure workflow advancement.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow_cursor test failed to compile because WorkflowCursor and WorkflowCursorError did not exist.",
+      "patch": "Added tests for exact borrowed start and current phase, repeated-target authored edges, gated and ungated acknowledgement, typed atomic failures, malformed topology resolution, terminal phases, and cyclic repeated visits."
+    },
+    {
+      "summary": "Implemented fail-closed caller-driven phase advancement.",
+      "outcome": "success",
+      "diagnostic": "Resolving the selected authored edge, acknowledgement contract, and exact target before updating the phase index made every failure atomic and kept the cursor a pure process-local state projection.",
+      "patch": "Added borrowed WorkflowCursor, typed start, transition, gate, and target errors, ADR-0008, behavior documentation, and milestone evidence."
+    },
+    {
+      "summary": "Preserved the exact head through a rate-limited false green and recorded substantive review rationale.",
+      "outcome": "success",
+      "diagnostic": "The initial review status was rate limited and therefore insufficient; after cooldown and one budget-checked resume, CodeRabbit substantively identified duplicated unique-phase lookup as a non-blocking maintainability nit rather than a correctness defect.",
+      "patch": "Kept head c34b8cbc3120a3e6f6a5e35757726563aeb8231c unmerged until the Rust gate, substantive exact-head review, and zero unresolved threads were confirmed; retained the bounded implementation because the suggested helper refactor was optional and behavior was fully verified."
+    }
+  ],
+  "outcome": {
+    "summary": "A caller can now move one borrowed process-local cursor through exact authored transitions with explicit gate acknowledgement while every invalid move leaves the current phase unchanged.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30335178095",
+        "status": "passed"
+      },
+      {
+        "command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/684",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 684 squash merge d7d69bb03a6680fbe956501c82c8ebeacd9cd12f",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Authored transition indexes preserve duplicate-target edge identity without inventing target-text selection semantics.",
+    "Gate acknowledgement is exact caller-provided evidence, not external gate evaluation or permission delegation.",
+    "Resolving all transition preconditions and the exact target before mutation makes cursor failures atomic.",
+    "Cycles require no special executor semantics when the cursor only projects caller-selected in-memory state.",
+    "Pure advancement changes one phase index and grants no provider, tool, action, scheduling, persistence, or permission authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/workflow.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/684"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

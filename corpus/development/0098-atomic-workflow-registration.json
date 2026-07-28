@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Register prepared workflows atomically as inert availability",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/680 under decision https://github.com/Knosence9/project-vela/issues/679 by admitting validated topology to a caller-owned process-local registry without making workflows selected or executable.",
+    "acceptance_criteria": [
+      "Provide exact workflow identity, immutable owned topology, exact lookup, and deterministic exact-ID enumeration while retaining authored topology order internally.",
+      "Register one homogeneous batch atomically and reject the lexicographically first internal or existing exact-ID collision without mutation.",
+      "Reject the first selected non-workflow before filesystem access, reuse complete descriptor-anchored preparation, and mutate the registry only after every conversion succeeds.",
+      "Keep registration inert with no selection, transition choice, gate evaluation, action binding, provider call, tool authority, persistence, replacement, or execution."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established separate RED coverage for the kernel registry and extension admission bridge.",
+      "outcome": "failure",
+      "diagnostic": "The focused kernel test failed because the workflow module and registry contracts did not exist, and the extension test failed because no registration bridge existed.",
+      "patch": "Added tests for exact topology preservation and ordering, deterministic lookup, internal and existing collisions, complete atomicity, wrong-kind preflight, sourced preparation failures, and empty filesystem-free registration."
+    },
+    {
+      "summary": "Implemented one caller-owned registry mutation after complete preparation and conversion.",
+      "outcome": "success",
+      "diagnostic": "Building the full homogeneous batch before collision validation and mutation preserved prior registry state across selection, filesystem, topology, conversion, and collision failures.",
+      "patch": "Added immutable kernel workflow topology, WorkflowRegistry::register_all, typed errors, the extension registration bridge, ADR-0007, behavior documentation, and milestone evidence."
+    },
+    {
+      "summary": "Rejected a rate-limited CodeRabbit false green before merge.",
+      "outcome": "failure",
+      "diagnostic": "The initial CodeRabbit result said Review rate limited with a 12-minute cooldown, so its green status could not satisfy the substantive review gate even though local verification and the independent review had passed.",
+      "patch": "Kept auto-merge disabled at head d330bd31c5d245fdaf8cf4f749d62138622d366b, waited through cooldown, checked the shared review budget, resumed review once, and merged only after substantive no-actionable-comment coverage and zero unresolved threads."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can now admit exact validated workflow batches atomically into their own deterministic process-local registry while registration remains availability rather than execution authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30331861917",
+        "status": "passed"
+      },
+      {
+        "command": "Substantive exact-head CodeRabbit review at https://github.com/Knosence9/project-vela/pull/681",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 681 squash merge 9e7d08fc36a286789cc907729da8002ef98d3fbb",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Explicit caller-owned registration separates validated availability from discovered metadata and ambient execution behavior.",
+    "Atomic admission requires preparing and converting the complete batch before the registry's single mutation point.",
+    "Deterministic exact-ID registry order and authored internal topology order serve different contracts and should both be preserved.",
+    "A rate-limited green status must not race auto-merge; cooldown, budget check, substantive exact-head review, and zero threads remain mandatory.",
+    "Registration grants no provider, tool, action, gate, transition, persistence, replacement, or permission authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/workflow.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/681"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
