@@ -488,13 +488,14 @@ impl Event for WorkflowRunEvent {
             })?;
         let workflow = payload
             .workflow
+            .clone()
             .into_workflow()
             .map_err(|message| DecodeError::MalformedPayload { message })?;
         start_phase_index(&workflow).map_err(|error| DecodeError::MalformedPayload {
             message: error.to_string(),
         })?;
         Ok(Self::Started {
-            workflow: WorkflowSnapshot::from(&workflow),
+            workflow: payload.workflow,
         })
     }
 }
