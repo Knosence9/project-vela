@@ -28,9 +28,13 @@ diff-check:
 secrets-check:
     bash tests/secretspec-integration.sh
 
+# Test the fail-closed merge-readiness process boundary.
+process-test:
+    bash tests/merge-readiness.sh
+
 # Run a command with Vela's declared secrets resolved by SecretSpec.
 with-secrets *command:
     secretspec run -- {{command}}
 
 # Run the complete local quality gate.
-verify: fmt-check check test clippy secrets-check diff-check
+verify: fmt-check check test clippy secrets-check process-test diff-check

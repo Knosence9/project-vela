@@ -1,0 +1,48 @@
+{
+  "pr": {
+    "number": 724,
+    "state": "OPEN",
+    "head_sha": "1e9d69b9446c1b4ff8f65e6863affdb483822ab9"
+  },
+  "expected_head": "1e9d69b9446c1b4ff8f65e6863affdb483822ab9",
+  "reviews": [
+    {
+      "author": "coderabbitai[bot]",
+      "commit_id": "9c00e9330a9828832d4b2023743313cafcb3c771",
+      "body": "Actionable comments posted: 1\n\nFiles selected for processing (4)."
+    },
+    {
+      "author": "coderabbitai[bot]",
+      "commit_id": "1e9d69b9446c1b4ff8f65e6863affdb483822ab9",
+      "body": ""
+    }
+  ],
+  "reviews_truncated": false,
+  "review_threads": {
+    "has_next_page": false,
+    "nodes": [
+      { "is_resolved": true }
+    ]
+  },
+  "check_runs": [
+    {
+      "name": "Rust quality gate",
+      "conclusion": "success",
+      "head_sha": "1e9d69b9446c1b4ff8f65e6863affdb483822ab9"
+    }
+  ],
+  "check_runs_truncated": false,
+  "statuses": [
+    {
+      "context": "CodeRabbit",
+      "state": "success",
+      "description": "Review rate limited"
+    },
+    {
+      "context": "CodeRabbit",
+      "state": "pending",
+      "description": "Review in progress"
+    }
+  ],
+  "statuses_truncated": false
+}

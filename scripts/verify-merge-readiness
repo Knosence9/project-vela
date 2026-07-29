@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'USAGE'
+usage:
+  verify-merge-readiness PR_NUMBER EXPECTED_HEAD [OWNER/REPO]
+  verify-merge-readiness --fixture PATH
+
+Run the live form through the repository's pinned environment:
+  head=$(nix develop --command git rev-parse HEAD)
+  nix develop --command scripts/verify-merge-readiness 123 "$head"
+USAGE
+  exit 2
+}
+
+collect_live() {
+  local pr_number=$1
+  local expected_head=$2
+  local repo=${3:-}
+  local owner name pr reviews checks statuses threads
+
+  if [[ -z $repo ]]; then
+    repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  fi
+  [[ $repo == */* ]] || usage
+  owner=${repo%%/*}
+  name=${repo#*/}
+
+  reviews=$(gh api "repos/$repo/pulls/$pr_number/reviews?per_page=100")
+  checks=$(gh api "repos/$repo/commits/$expected_head/check-runs?per_page=100")
+  statuses=$(gh api "repos/$repo/statuses/$expected_head?per_page=100")
+  # The GraphQL variables are intentionally passed literally to gh.
+  # shellcheck disable=SC2016
+  threads=$(gh api graphql \
+    -F owner="$owner" \
+    -F name="$name" \
+    -F number="$pr_number" \
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage}nodes{isResolved}}}}}' \
+    --jq '.data.repository.pullRequest.reviewThreads')
+  # Read mutable PR state last so a head change during evidence collection is
+  # observed before a READY result.
+  pr=$(gh api "repos/$repo/pulls/$pr_number")
+
+  jq -n \
+    --argjson pr "$pr" \
+    --argjson reviews "$reviews" \
+    --argjson checks "$checks" \
+    --argjson statuses "$statuses" \
+    --argjson threads "$threads" \
+    --arg expected_head "$expected_head" \
+    '{
+      pr: {number: $pr.number, state: $pr.state, head_sha: $pr.head.sha},
+      expected_head: $expected_head,
+      reviews: ($reviews | map({author: .user.login, commit_id, body})),
+      reviews_truncated: (($reviews | length) == 100),
+      review_threads: {
+        has_next_page: $threads.pageInfo.hasNextPage,
+        nodes: ($threads.nodes | map({is_resolved: .isResolved}))
+      },
+      check_runs: ($checks.check_runs | map({name, conclusion, head_sha})),
+      check_runs_truncated: ($checks.total_count > ($checks.check_runs | length)),
+      statuses: ($statuses | map({context, state, description})),
+      statuses_truncated: (($statuses | length) == 100)
+    }'
+}
+
+if [[ ${1:-} == --fixture ]]; then
+  [[ $# -eq 2 ]] || usage
+  data=$(jq -c . "$2")
+elif [[ $# -eq 2 || $# -eq 3 ]]; then
+  data=$(collect_live "$@")
+else
+  usage
+fi
+
+diagnostic=$(jq -er '
+  . as $root |
+  def coderabbit:
+    ((.author // "" | ascii_downcase) as $author |
+     ($author == "coderabbitai[bot]" or $author == "coderabbitai"));
+  def latest_coderabbit_status:
+    first(.statuses[]? | select((.context // "" | ascii_downcase) == "coderabbit")) // null;
+  def substantive_review:
+    any(.reviews[]?; (coderabbit and ((.body // "" | gsub("\\s"; "") | length) > 0)));
+  def exact_head_review:
+    any(.reviews[]?; (coderabbit and .commit_id == $root.expected_head));
+  def exact_review_failure:
+    first(
+      .reviews[]? |
+      select(coderabbit and .commit_id == $root.expected_head) |
+      (.body // "" | match("review (rate limited|limit reached|failed)"; "i").string)
+    ) // null;
+  def exact_quality:
+    any(.check_runs[]?;
+      (.name == "Rust quality gate" and
+       (.conclusion // "" | ascii_downcase) == "success" and
+       .head_sha == $root.expected_head));
+  def unresolved_count:
+    [.review_threads.nodes[]? | select(.is_resolved != true)] | length;
+
+  if (.pr.head_sha != .expected_head) then
+    "expected head \(.expected_head) does not match PR head \(.pr.head_sha)"
+  elif ((.pr.state // "" | ascii_upcase) != "OPEN") then
+    "PR #\(.pr.number) is \(.pr.state | ascii_upcase), not OPEN"
+  elif (.reviews_truncated == true) then
+    "review data is truncated"
+  elif (.review_threads.has_next_page == true) then
+    "review-thread data is truncated"
+  elif (.check_runs_truncated == true) then
+    "check-run data is truncated"
+  elif (.statuses_truncated == true) then
+    "commit-status data is truncated"
+  elif (exact_quality | not) then
+    "successful Rust quality gate is missing for exact head \(.expected_head)"
+  elif (unresolved_count > 0) then
+    "\(unresolved_count) unresolved review thread\(if unresolved_count == 1 then "" else "s" end)"
+  elif (substantive_review | not) then
+    "no substantive CodeRabbit review exists"
+  elif (exact_head_review | not) then
+    "CodeRabbit has not submitted a review for exact head \(.expected_head)"
+  elif (exact_review_failure != null) then
+    "exact-head CodeRabbit review reports \(exact_review_failure)"
+  elif (latest_coderabbit_status == null) then
+    "CodeRabbit status is missing for exact head \(.expected_head)"
+  elif ((latest_coderabbit_status.description // "") | test("review (rate limited|limit reached|failed)|closed"; "i")) then
+    "latest CodeRabbit status is \(latest_coderabbit_status.description)"
+  elif (((latest_coderabbit_status.state // "" | ascii_downcase) != "success") or
+        (((latest_coderabbit_status.description // "") | test("^review (completed|finished)$"; "i")) | not)) then
+    "latest CodeRabbit status is not a completed substantive review: \(latest_coderabbit_status.state // "missing") / \(latest_coderabbit_status.description // "missing")"
+  else
+    "__READY__"
+  end
+' <<<"$data")
+if [[ $diagnostic != __READY__ ]]; then
+  printf 'BLOCKED: %s\n' "$diagnostic" >&2
+  exit 1
+fi
+
+pr_number=$(jq -r '.pr.number' <<<"$data")
+head_sha=$(jq -r '.expected_head' <<<"$data")
+printf 'READY: PR #%s head %s satisfies exact-head merge requirements\n' "$pr_number" "$head_sha"
