@@ -49,6 +49,9 @@ jq '
 ' "$ready" > "$tmp/exact-head-summary.json"
 expect_ready "$tmp/exact-head-summary.json"
 
+jq '.reviews = []' "$tmp/exact-head-summary.json" > "$tmp/comment-only-summary.json"
+expect_ready "$tmp/comment-only-summary.json"
+
 jq '.review_comments[0].author = "coderabbitai-impostor"' "$tmp/exact-head-summary.json" > "$tmp/impostor-summary.json"
 expect_blocked "impostor exact-head summary" "$tmp/impostor-summary.json" "CodeRabbit has not submitted a review for exact head"
 
@@ -58,7 +61,10 @@ expect_blocked "unbound summary head" "$tmp/unbound-summary-head.json" "CodeRabb
 jq '.review_comments[0].body += "\nReview rate limited"' "$tmp/exact-head-summary.json" > "$tmp/rate-limited-summary.json"
 expect_blocked "rate-limited exact-head summary" "$tmp/rate-limited-summary.json" "exact-head CodeRabbit review reports Review rate limited"
 
-jq '.reviews[0].body = "Review triggered"' "$tmp/exact-head-summary.json" > "$tmp/generic-substantive-review.json"
+jq '
+  .reviews[0].body = "Review triggered" |
+  .review_comments = []
+' "$tmp/exact-head-summary.json" > "$tmp/generic-substantive-review.json"
 expect_blocked "generic substantive review" "$tmp/generic-substantive-review.json" "no substantive CodeRabbit review exists"
 
 jq '.review_comments[0].body += "\nReview: rate-limited"' "$tmp/exact-head-summary.json" > "$tmp/hyphenated-rate-limit.json"

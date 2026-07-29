@@ -94,10 +94,11 @@ diagnostic=$(jq -er '
   def latest_coderabbit_status:
     first(.statuses[]? | select((.context // "" | ascii_downcase) == "coderabbit")) // null;
   def substantive_review:
-    any(.reviews[]?;
+    (any(.reviews[]?;
       (coderabbit and
        ((.body // "") | contains("**Run ID**")) and
-       ((.body // "") | test("Reviewing files that changed"; "i"))));
+       ((.body // "") | test("Reviewing files that changed"; "i")))) or
+     any((.review_comments // [])[]?; exact_head_summary));
   def exact_head_review:
     (any(.reviews[]?; (coderabbit and .commit_id == $root.expected_head)) or
      any((.review_comments // [])[]?; exact_head_summary));
