@@ -48,7 +48,7 @@ Storage order is an implementation detail. Sorting by exact external run ID prov
 - Active, paused, authored-terminal, cancelled, and failed runs share one deterministic complete projection.
 - Exact loading and listing cannot drift because both reuse one projector.
 - Corrupt candidate history prevents partial discovery and remains visible as an error.
-- Discovery scans and replays complete candidate streams; pagination, filtering, indexing, caching, snapshots, and compaction remain deferred.
+- Discovery scans and replays complete candidate streams; pagination, additional or compound filtering, indexing, caching, snapshots, and compaction remain deferred.
 
 ## Verification
 
