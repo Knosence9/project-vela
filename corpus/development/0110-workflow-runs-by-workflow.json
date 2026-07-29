@@ -37,7 +37,8 @@
       {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_run_store", "status": "passed"},
       {"command": "nix develop --command just verify", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30418767948", "status": "passed"},
-      {"command": "Pull request 724 squash merge ed869ee450c6757811986ce93fe217eedd127678", "status": "passed"}
+      {"command": "Pull request 724 squash merge ed869ee450c6757811986ce93fe217eedd127678 violated the substantive exact-head review gate", "status": "failed"},
+      {"command": "nix develop --command cargo run --locked -q -p vela-dev -- record validate corpus/development/0110-workflow-runs-by-workflow.json", "status": "passed"}
     ]
   },
   "lessons": [
