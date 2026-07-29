@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-07-28
 - **Decision owners:** Project Vela maintainers
-- **Related:** ADR-0009, ADR-0012, ADR-0014, issues #716 and #717
+- **Related:** ADR-0009, ADR-0012, ADR-0014, issues #716, #717, #719, and #720
 
 ## Context
 
@@ -18,6 +18,8 @@ Keep `WorkflowRunStore::start` for unassociated runs and add `start_for_task` fo
 An associated start persists the exact task ID with the immutable workflow snapshot in payload version 2 of `workflow_run.started`. Payload-version-1 unassociated starts remain replayable without migration. `WorkflowRun::task_id` exposes the optional exact identity. Typed history preserves the existing `Started` shape for unassociated runs and adds `TaskStarted` for associated runs; exact loading and deterministic listing reuse the same fail-closed projector. A malformed persisted task ID fails replay.
 
 Attribution is immutable because it is part of the authoritative start event and no reassociation event exists. After start, task and workflow-run lifecycles remain independent. Completing, cancelling, or failing either aggregate does not transition the other.
+
+`WorkflowRunStore::list_for_task` provides a read-only exact-attribution query. It reuses the authoritative fail-closed projection and ascending run-ID order, excludes unassociated and differently attributed runs, and does not require the task to exist or remain active. This is historical provenance rather than execution authorization; malformed workflow-run history fails the whole query instead of returning partial results.
 
 This boundary does not invoke phase actions, skills, tools, providers, agents, or humans; schedule work; choose transitions; evaluate gates; grant permission; create child tasks; synchronize lifecycle outcomes; retry; compensate; or infer success.
 
@@ -40,12 +42,13 @@ The aggregates have different semantics: authored workflow termination is not ta
 - Orchestration can discover exact task provenance after restart without a secondary index.
 - Active-task validation and atomic revision guarding prevent attribution races.
 - Legacy unassociated workflow runs remain valid.
+- Callers can discover one task's attributed runs deterministically without a secondary index or caller-defined filtering semantics.
 - Opening a workflow-run store also opens the task store over the same database.
 - Callers remain responsible for both lifecycles after creation.
 
 ## Verification
 
-The bounded execution slice follows RED→GREEN tests for active-task attribution, exact reopen/list/history projection, legacy unassociated replay, missing and terminal task rejection, and a deterministic task-revision race that leaves no run stream. The complete repository quality gate must remain green.
+The bounded execution slices follow RED→GREEN tests for active-task attribution, exact reopen/list/history projection, legacy unassociated replay, missing and terminal task rejection, a deterministic task-revision race that leaves no run stream, and exact task-filtered discovery after task termination and reopen. The complete repository quality gate must remain green.
 
 ## Revisit when
 

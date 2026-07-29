@@ -1054,6 +1054,20 @@ impl WorkflowRunStore {
         runs.sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
         Ok(runs)
     }
+
+    /// Replays runs attributed to one exact task in ascending run-ID order.
+    ///
+    /// This historical query does not require the task to exist or remain active.
+    pub fn list_for_task(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|run| run.task_id() == Some(task_id))
+            .collect())
+    }
 }
 
 fn validate_revision(
