@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Attribute workflow-run starts to active tasks",
+    "objective": "Complete issues https://github.com/Knosence9/project-vela/issues/716 and https://github.com/Knosence9/project-vela/issues/717 by recording immutable task provenance without coupling task and workflow-run lifecycles.",
+    "acceptance_criteria": [
+      "Require an exact existing active task before creating an attributed workflow run.",
+      "Atomically reject a task revision race without creating the run stream.",
+      "Persist and replay exact task identity while preserving payload-version-1 unassociated starts.",
+      "Expose attribution through exact load, deterministic list, and typed history without adding execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED active-task attribution coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-run target failed to compile because the attributed start API, task projection, typed precondition errors, and task started history variant did not exist.",
+      "patch": "Added tests for active, missing, terminal, malformed, legacy, reopen, listing, history, and deterministic task revision race behavior."
+    },
+    {
+      "summary": "Implemented immutable start-time task provenance.",
+      "outcome": "success",
+      "diagnostic": "Reusing the event log guarded append primitive allowed run creation to depend atomically on the observed active-task revision without a secondary association stream.",
+      "patch": "Added start_for_task, payload version 2 task identity, fail-closed replay, task aware history, typed errors, ADR-0017, and milestone documentation."
+    },
+    {
+      "summary": "Preserved lifecycle and compatibility boundaries through review.",
+      "outcome": "success",
+      "diagnostic": "Independent and CodeRabbit review found no actionable implementation issue at the reviewed head.",
+      "patch": "Kept legacy unassociated starts replayable and left task completion, workflow execution, lifecycle synchronization, retries, and scheduling outside the slice."
+    }
+  ],
+  "outcome": {
+    "summary": "Workflow-run starts can now carry immutable, atomically validated active-task provenance while both aggregate lifecycles remain independent.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30408667962", "status": "passed"},
+      {"command": "CodeRabbit no-actionable-findings summary at https://github.com/Knosence9/project-vela/pull/718", "status": "passed"},
+      {"command": "Pull request 718 squash merge cd9939c842375350ecbf6df2ab905c5e8dbdfe06", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Provenance is strongest when persisted at the authorization boundary rather than attached later.",
+    "A guarded cross-stream append prevents attribution to work that became terminal during run creation.",
+    "Payload versioning can add immutable provenance while retaining exact legacy replay.",
+    "Attribution does not imply lifecycle synchronization, execution ownership, scheduling, or permission."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/718"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

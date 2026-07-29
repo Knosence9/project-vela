@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Accept authenticated comment-only review summaries",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/729 by recognizing authenticated CodeRabbit no-finding summaries exposed only as generated issue comments while retaining exact-head and anti-spoofing checks.",
+    "acceptance_criteria": [
+      "Accept a substantive authenticated CodeRabbit generated summary when no qualifying pull-request review object exists.",
+      "Keep exact-head commit-range checks and authenticated bot authorship mandatory.",
+      "Continue rejecting rate-limited, paused, failed, contradictory, stale, or spoofed evidence.",
+      "Cover the regression through the offline merge-readiness test suite."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Reproduced the comment-only summary false negative.",
+      "outcome": "failure",
+      "diagnostic": "The substantive-review predicate examined only pull-request review objects, so a genuine authenticated no-finding summary exposed only as an issue comment remained BLOCKED.",
+      "patch": "Added a regression fixture with no qualifying review object and an authenticated generated summary comment containing exact-head no-actionable-findings evidence."
+    },
+    {
+      "summary": "Recognized authenticated generated summary comments.",
+      "outcome": "success",
+      "diagnostic": "A generated summary comment can establish substantive exact-head coverage when CodeRabbit publishes no corresponding pull-request review object.",
+      "patch": "Reused the authenticated exact-head summary predicate for substantive evidence while retaining commit-range binding, contradiction checks, and every fail-closed rate-limit rule."
+    },
+    {
+      "summary": "Verified the narrow process correction.",
+      "outcome": "success",
+      "diagnostic": "Independent review and hosted checks found no scope expansion beyond the observed CodeRabbit response shape.",
+      "patch": "Kept the fix to a small verifier predicate and one focused regression case."
+    }
+  ],
+  "outcome": {
+    "summary": "The exact-head readiness verifier now accepts genuine authenticated comment-only no-finding summaries without weakening rate-limit, stale-head, spoofing, or unresolved-thread defenses.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command tests/merge-readiness.sh", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30446588900", "status": "passed"},
+      {"command": "Pull request 730 squash merge 6cba85f61a39638d83f34326248fccfd90f260bc", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "External review systems may expose a completed no-finding review only as a substantive authenticated generated summary comment.",
+    "Evidence correlation should tolerate an absent review object without relaxing identity or exact-head requirements.",
+    "A focused real-shape regression is safer than broadening acceptance heuristics.",
+    "Contradictory rate-limit or failure text must continue to override positive summary phrases."
+  ],
+  "provenance": {"repository_path": "scripts/verify-merge-readiness", "url": "https://github.com/Knosence9/project-vela/pull/730"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

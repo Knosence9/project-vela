@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Discover workflow runs by exact lifecycle status",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/727 with a deterministic recovery query over the unified workflow-run status projection.",
+    "acceptance_criteria": [
+      "Return only exact WorkflowRunStatus matches in ascending exact run-ID order.",
+      "Cover active, paused, authored-terminal, cancelled, and failed runs with mixed task attribution.",
+      "Remain deterministic after reopen and return an empty result when no run has the requested status.",
+      "Fail the complete query on malformed candidate history without mutating runs or inferring external state."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED status-filtered discovery coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-run-store target failed because WorkflowRunStore::list_by_status did not exist.",
+      "patch": "Added every-status, exact-filter, ascending-order, mixed-attribution, reopen, empty-match, and malformed-history tests."
+    },
+    {
+      "summary": "Implemented status discovery over authoritative projections.",
+      "outcome": "success",
+      "diagnostic": "Reusing list and WorkflowRun::status preserved validated lifecycle precedence and all-or-nothing replay without adding an index or another classifier.",
+      "patch": "Added list_by_status and documented exact query semantics and non-authority boundaries in ADR-0016 and the milestone list."
+    },
+    {
+      "summary": "Held the exact head through false-green review limits.",
+      "outcome": "blocked",
+      "diagnostic": "Several successful CodeRabbit statuses explicitly reported Review limit reached or lacked genuine substantive review evidence, so the repository verifier correctly kept auto-merge unarmed.",
+      "patch": "Preserved the verified branch, rebased onto the merge-readiness process fix, waited for genuine exact-head summary evidence, then required successful Rust quality and zero unresolved threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can deterministically recover workflow runs in one exact projected lifecycle status, and the slice demonstrated fail-closed exact-head review gating under repeated false-green rate limits.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_run_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30446994450", "status": "passed"},
+      {"command": "Pull request 728 squash merge 4be426b1dbbcce75f90a0d8fe7521439c11584ef", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Status queries should reuse the authoritative aggregate projector rather than duplicate lifecycle precedence.",
+    "Exact status filtering remains historical read authority and does not imply execution, scheduling, retry, or recovery authority.",
+    "Associated and unassociated runs belong in the same lifecycle query because attribution is independent of status.",
+    "Preserving a verified exact head is preferable to racing a review cooldown or treating a false-green status as substantive evidence.",
+    "A repository-owned readiness verifier makes the review policy observable and fail closed."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/728"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
