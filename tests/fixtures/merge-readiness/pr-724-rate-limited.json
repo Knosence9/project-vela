@@ -36,12 +36,14 @@
     {
       "context": "CodeRabbit",
       "state": "success",
-      "description": "Review rate limited"
+      "description": "Review rate limited",
+      "creator": { "login": "coderabbitai[bot]" }
     },
     {
       "context": "CodeRabbit",
       "state": "pending",
-      "description": "Review in progress"
+      "description": "Review in progress",
+      "creator": { "login": "coderabbitai[bot]" }
     }
   ],
   "statuses_truncated": false

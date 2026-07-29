@@ -60,7 +60,7 @@ collect_live() {
       },
       check_runs: ($checks.check_runs | map({name, conclusion, head_sha})),
       check_runs_truncated: ($checks.total_count > ($checks.check_runs | length)),
-      statuses: ($statuses | map({context, state, description})),
+      statuses: ($statuses | map({context, state, description, creator: {login: .creator.login}})),
       statuses_truncated: (($statuses | length) == 100)
     }'
 }
@@ -76,9 +76,11 @@ fi
 
 diagnostic=$(jq -er '
   . as $root |
+  def coderabbit_login($login):
+    (($login // "" | ascii_downcase) as $normalized |
+     ($normalized == "coderabbitai[bot]" or $normalized == "coderabbitai"));
   def coderabbit:
-    ((.author // "" | ascii_downcase) as $author |
-     ($author == "coderabbitai[bot]" or $author == "coderabbitai"));
+    coderabbit_login(.author);
   def latest_coderabbit_status:
     first(.statuses[]? | select((.context // "" | ascii_downcase) == "coderabbit")) // null;
   def substantive_review:
@@ -123,6 +125,8 @@ diagnostic=$(jq -er '
     "exact-head CodeRabbit review reports \(exact_review_failure)"
   elif (latest_coderabbit_status == null) then
     "CodeRabbit status is missing for exact head \(.expected_head)"
+  elif (coderabbit_login(latest_coderabbit_status.creator.login) | not) then
+    "latest CodeRabbit status has untrusted creator \(latest_coderabbit_status.creator.login // "missing")"
   elif ((latest_coderabbit_status.description // "") | test("review (rate limited|limit reached|failed)|closed"; "i")) then
     "latest CodeRabbit status is \(latest_coderabbit_status.description)"
   elif (((latest_coderabbit_status.state // "" | ascii_downcase) != "success") or

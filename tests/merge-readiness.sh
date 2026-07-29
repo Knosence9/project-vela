@@ -43,11 +43,14 @@ expect_blocked "PR 724 false green" "$fixtures/pr-724-rate-limited.json" "latest
 jq '.statuses[0].description = "Review limit reached"' "$ready" > "$tmp/limit.json"
 expect_blocked "review limit" "$tmp/limit.json" "latest CodeRabbit status is Review limit reached"
 
-jq '.statuses[0] = {"context":"CodeRabbit","state":"failure","description":"Review failed"}' "$ready" > "$tmp/failed.json"
+jq '.statuses[0] = {"context":"CodeRabbit","state":"failure","description":"Review failed","creator":{"login":"coderabbitai[bot]"}}' "$ready" > "$tmp/failed.json"
 expect_blocked "failed review" "$tmp/failed.json" "latest CodeRabbit status is Review failed"
 
 jq '(.reviews[] | .author) = "coderabbitai-impostor"' "$ready" > "$tmp/impostor.json"
 expect_blocked "impostor review" "$tmp/impostor.json" "no substantive CodeRabbit review exists"
+
+jq '.statuses[0].creator.login = "coderabbitai-impostor"' "$ready" > "$tmp/impostor-status.json"
+expect_blocked "impostor status" "$tmp/impostor-status.json" "latest CodeRabbit status has untrusted creator coderabbitai-impostor"
 
 jq '.reviews[1].body = "Review rate limited"' "$ready" > "$tmp/body-rate-limited.json"
 expect_blocked "review-body rate limit" "$tmp/body-rate-limited.json" "exact-head CodeRabbit review reports Review rate limited"
