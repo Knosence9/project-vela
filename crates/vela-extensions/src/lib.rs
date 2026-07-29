@@ -269,6 +269,7 @@ impl WorkflowTransition {
 pub struct WorkflowPhase {
     id: String,
     terminal: bool,
+    skills: Vec<String>,
     transitions: Vec<WorkflowTransition>,
 }
 
@@ -279,6 +280,10 @@ impl WorkflowPhase {
 
     pub fn is_terminal(&self) -> bool {
         self.terminal
+    }
+
+    pub fn skills(&self) -> &[String] {
+        &self.skills
     }
 
     pub fn transitions(&self) -> &[WorkflowTransition] {
@@ -977,6 +982,10 @@ pub enum WorkflowDefinitionError {
     DuplicatePhaseId { phase_id: String },
     StartNotFound { phase_id: String },
     TerminalHasTransitions { phase_id: String },
+    TerminalHasSkills { phase_id: String },
+    SkillsRequireVersionTwo { phase_id: String },
+    BlankSkillId { phase_id: String, index: usize },
+    DuplicateSkillId { phase_id: String, skill_id: String },
     NonTerminalHasNoTransitions { phase_id: String },
     BlankTransitionTarget { phase_id: String, index: usize },
     TransitionTargetNotFound { phase_id: String, target: String },
@@ -1422,6 +1431,7 @@ pub fn register_workflow_selection(
                         })
                         .collect();
                     RegisteredWorkflowPhase::new(phase.id(), phase.is_terminal(), transitions)
+                        .with_skills(phase.skills().iter().cloned())
                 })
                 .collect();
             RegisteredWorkflow::new(
@@ -2204,6 +2214,8 @@ struct RawWorkflowPhase {
     id: String,
     #[serde(default)]
     terminal: bool,
+    #[serde(default, deserialize_with = "deserialize_workflow_skills")]
+    skills: Option<Vec<String>>,
     #[serde(default)]
     transitions: Vec<RawWorkflowTransition>,
 }
@@ -2215,10 +2227,17 @@ struct RawWorkflowTransition {
     gate: Option<String>,
 }
 
+fn deserialize_workflow_skills<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<String>::deserialize(deserializer).map(Some)
+}
+
 fn validate_workflow_definition(
     raw: RawWorkflowDefinition,
 ) -> Result<(String, Vec<WorkflowPhase>), WorkflowDefinitionError> {
-    if raw.workflow_version != 1 {
+    if !matches!(raw.workflow_version, 1 | 2) {
         return Err(WorkflowDefinitionError::UnsupportedVersion {
             version: raw.workflow_version,
         });
@@ -2248,6 +2267,32 @@ fn validate_workflow_definition(
     }
 
     for phase in &raw.phases {
+        if raw.workflow_version == 1 && phase.skills.is_some() {
+            return Err(WorkflowDefinitionError::SkillsRequireVersionTwo {
+                phase_id: phase.id.clone(),
+            });
+        }
+        let skills = phase.skills.as_deref().unwrap_or_default();
+        if phase.terminal && phase.skills.is_some() {
+            return Err(WorkflowDefinitionError::TerminalHasSkills {
+                phase_id: phase.id.clone(),
+            });
+        }
+        let mut skill_ids = BTreeSet::new();
+        for (index, skill_id) in skills.iter().enumerate() {
+            if skill_id.trim().is_empty() {
+                return Err(WorkflowDefinitionError::BlankSkillId {
+                    phase_id: phase.id.clone(),
+                    index,
+                });
+            }
+            if !skill_ids.insert(skill_id) {
+                return Err(WorkflowDefinitionError::DuplicateSkillId {
+                    phase_id: phase.id.clone(),
+                    skill_id: skill_id.clone(),
+                });
+            }
+        }
         if phase.terminal && !phase.transitions.is_empty() {
             return Err(WorkflowDefinitionError::TerminalHasTransitions {
                 phase_id: phase.id.clone(),
@@ -2318,6 +2363,7 @@ fn validate_workflow_definition(
         .map(|phase| WorkflowPhase {
             id: phase.id,
             terminal: phase.terminal,
+            skills: phase.skills.unwrap_or_default(),
             transitions: phase
                 .transitions
                 .into_iter()

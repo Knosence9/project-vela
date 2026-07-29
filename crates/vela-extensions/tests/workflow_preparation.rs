@@ -21,6 +21,19 @@ phases:
     terminal: true
 "#;
 
+const VALID_V2: &str = r#"workflow_version: 2
+start: plan
+phases:
+  - id: plan
+    skills:
+      - research.skill
+      - review.skill
+    transitions:
+      - to: done
+  - id: done
+    terminal: true
+"#;
+
 #[test]
 fn prepares_exact_workflow_topology_in_extension_id_order() {
     let root = tempdir().expect("temporary extension root");
@@ -59,10 +72,27 @@ fn prepares_exact_workflow_topology_in_extension_id_order() {
     );
     assert!(workflow.phases()[2].is_terminal());
     assert!(workflow.phases()[2].transitions().is_empty());
+    assert!(
+        workflow
+            .phases()
+            .iter()
+            .all(|phase| phase.skills().is_empty())
+    );
     assert_eq!(
         format!("{workflow:?}"),
         "PreparedWorkflowDefinition { id: \"alpha.workflow\", start: \"plan\", phases_len: 3 }"
     );
+}
+
+#[test]
+fn prepares_version_two_phase_skills_in_exact_authored_order() {
+    let workflow = prepare_one(VALID_V2).expect("version two workflow");
+
+    assert_eq!(
+        workflow[0].phases()[0].skills(),
+        ["research.skill", "review.skill"]
+    );
+    assert!(workflow[0].phases()[1].skills().is_empty());
 }
 
 #[test]
@@ -103,8 +133,8 @@ fn rejects_encoding_yaml_version_and_unknown_fields_with_sources_where_applicabl
         ("yaml", b"workflow_version: [", |error| {
             matches!(error, WorkflowPreparationError::Parse { .. }) && error.source().is_some()
         }),
-        ("version", b"workflow_version: 2\nstart: done\nphases:\n  - id: done\n    terminal: true\n", |error| {
-            matches!(error, WorkflowPreparationError::Definition { source: WorkflowDefinitionError::UnsupportedVersion { version: 2 }, .. })
+        ("version", b"workflow_version: 3\nstart: done\nphases:\n  - id: done\n    terminal: true\n", |error| {
+            matches!(error, WorkflowPreparationError::Definition { source: WorkflowDefinitionError::UnsupportedVersion { version: 3 }, .. })
         }),
         ("unknown", b"workflow_version: 1\nstart: done\nunknown: true\nphases:\n  - id: done\n    terminal: true\n", |error| {
             matches!(error, WorkflowPreparationError::Parse { .. }) && error.source().is_some()
@@ -215,6 +245,50 @@ fn rejects_invalid_graph_invariants_deterministically() {
         assert!(matches!(error, WorkflowPreparationError::Definition { .. }));
         let WorkflowPreparationError::Definition { source, .. } = error else {
             unreachable!()
+        };
+        assert_eq!(source, expected, "wrong invariant for {name}");
+    }
+}
+
+#[test]
+fn rejects_invalid_version_two_skill_bindings_deterministically() {
+    let cases = [
+        (
+            "blank skill",
+            "workflow_version: 2\nstart: start\nphases:\n  - id: start\n    skills: [' ']\n    transitions: [{to: done}]\n  - id: done\n    terminal: true\n",
+            WorkflowDefinitionError::BlankSkillId {
+                phase_id: "start".into(),
+                index: 0,
+            },
+        ),
+        (
+            "duplicate skill",
+            "workflow_version: 2\nstart: start\nphases:\n  - id: start\n    skills: [review.skill, review.skill]\n    transitions: [{to: done}]\n  - id: done\n    terminal: true\n",
+            WorkflowDefinitionError::DuplicateSkillId {
+                phase_id: "start".into(),
+                skill_id: "review.skill".into(),
+            },
+        ),
+        (
+            "terminal skills",
+            "workflow_version: 2\nstart: done\nphases:\n  - id: done\n    terminal: true\n    skills: []\n",
+            WorkflowDefinitionError::TerminalHasSkills {
+                phase_id: "done".into(),
+            },
+        ),
+        (
+            "version one skills",
+            "workflow_version: 1\nstart: start\nphases:\n  - id: start\n    skills: []\n    transitions: [{to: done}]\n  - id: done\n    terminal: true\n",
+            WorkflowDefinitionError::SkillsRequireVersionTwo {
+                phase_id: "start".into(),
+            },
+        ),
+    ];
+
+    for (name, definition, expected) in cases {
+        let error = prepare_one(definition).expect_err("invalid skills must fail");
+        let WorkflowPreparationError::Definition { source, .. } = error else {
+            panic!("unexpected {name} error")
         };
         assert_eq!(source, expected, "wrong invariant for {name}");
     }
