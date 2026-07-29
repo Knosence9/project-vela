@@ -1068,6 +1068,20 @@ impl WorkflowRunStore {
             .filter(|run| run.task_id() == Some(task_id))
             .collect())
     }
+
+    /// Replays runs that snapshot one exact workflow identity in ascending run-ID order.
+    ///
+    /// This historical query does not require the workflow to remain registered.
+    pub fn list_for_workflow(
+        &self,
+        workflow_id: &WorkflowId,
+    ) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|run| run.workflow().id() == workflow_id)
+            .collect())
+    }
 }
 
 fn validate_revision(

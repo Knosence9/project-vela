@@ -217,6 +217,7 @@ The first milestone is the **evidence loop**:
 71. Classify every durable workflow run through one unified read-only lifecycle status projection. ✅
 72. Attribute workflow-run starts immutably to active tasks with atomic task-revision validation. ✅
 73. Discover task-attributed workflow runs through an exact deterministic historical query. ✅
+74. Discover runs for one exact immutable workflow identity through a deterministic historical query. ✅
 
 ## Project documents
 
