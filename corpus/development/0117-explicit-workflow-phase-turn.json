@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Execute an explicit workflow-phase provider turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/743 by composing one caller-selected phase through the existing tool-free assistant authority boundary.",
+    "acceptance_criteria": [
+      "Deliver only selected phase skills to the provider in deterministic exact-ID order.",
+      "Exclude unrelated registrations and fail malformed or missing bindings before transcript or provider side effects.",
+      "Persist successful human and assistant turns durably.",
+      "Do not mutate workflow lifecycle or grant tools."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED runtime composition coverage.",
+      "outcome": "failure",
+      "diagnostic": "The runtime had explicit composed turns but no method accepting and resolving a workflow phase.",
+      "patch": "Added provider-order, unrelated-skill, missing-binding, malformed-binding, terminal-phase, and side-effect tests."
+    },
+    {
+      "summary": "Composed phase resolution with the existing turn path.",
+      "outcome": "success",
+      "diagnostic": "Resolving before transcript persistence and then reusing composed tool-free completion preserved fail-closed ordering and existing authority semantics.",
+      "patch": "Added execute_workflow_phase_turn and ADR-0020."
+    },
+    {
+      "summary": "Strengthened durable success evidence during review.",
+      "outcome": "success",
+      "diagnostic": "The original test asserted the returned session but did not independently prove storage-backed replay.",
+      "patch": "Reloaded the session from SessionStore and asserted both persisted turns before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "A caller-selected phase can influence one tool-free provider turn through explicit registered skills, without becoming workflow execution or lifecycle authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_phase_runtime --test composed_skill_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30483696469", "status": "passed"},
+      {"command": "Pull request 744 squash merge 6e4bdca904ab07fcb5bfc277f41bb65d409cd959", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Resolve caller-selected phase bindings before any transcript or provider side effect.",
+    "Provider prompt authority can reuse existing explicit composition without coupling workflow lifecycle.",
+    "Storage-backed reload assertions distinguish durable behavior from returned in-memory state."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/744"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

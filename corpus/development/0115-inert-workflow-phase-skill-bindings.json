@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve inert workflow-phase skill bindings",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/737 by carrying authored skill IDs through workflow topology and durable snapshots without granting execution authority.",
+    "acceptance_criteria": [
+      "Accept legacy version-one definitions unchanged and strict version-two phase bindings.",
+      "Reject blank, duplicate, and terminal-phase bindings with typed errors.",
+      "Preserve exact authored order through preparation, registration, cursor, start, load, reopen, and listing.",
+      "Replay legacy start payloads while emitting the new payload version for new runs."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED preparation and replay coverage.",
+      "outcome": "failure",
+      "diagnostic": "Existing phase topology and durable start payloads had no representation for skill bindings.",
+      "patch": "Added version compatibility, invalid-binding, topology-preservation, and durable replay tests."
+    },
+    {
+      "summary": "Added versioned inert binding metadata.",
+      "outcome": "success",
+      "diagnostic": "A new definition version and backward-compatible start payload kept legacy data readable while preserving new authored metadata exactly.",
+      "patch": "Extended prepared and registered phases, cursors, and durable snapshots; documented ADR-0018."
+    }
+  ],
+  "outcome": {
+    "summary": "Workflow phases retain validated skill IDs as inert authored metadata without discovering, selecting, composing, executing, or authorizing skills or tools.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo doc --workspace --no-deps --locked", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30471826666", "status": "passed"},
+      {"command": "Pull request 738 squash merge e49cd178b2dfe80833d7877b6c66d62d479188a9", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Authored extension metadata must remain inert until a separate caller-owned resolution boundary exists.",
+    "Payload versioning can preserve old snapshots without destructive migration.",
+    "Exact authored order is data provenance, not precedence or permission semantics."
+  ],
+  "provenance": {"repository_path": "docs/adr/0018-inert-workflow-phase-skill-bindings.md", "url": "https://github.com/Knosence9/project-vela/pull/738"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
