@@ -18,7 +18,7 @@ collect_live() {
   local pr_number=$1
   local expected_head=$2
   local repo=${3:-}
-  local owner name pr reviews checks statuses threads
+  local owner name pr reviews review_comments checks statuses threads
 
   if [[ -z $repo ]]; then
     repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
@@ -28,6 +28,7 @@ collect_live() {
   name=${repo#*/}
 
   reviews=$(gh api "repos/$repo/pulls/$pr_number/reviews?per_page=100")
+  review_comments=$(gh api "repos/$repo/issues/$pr_number/comments?per_page=100")
   checks=$(gh api "repos/$repo/commits/$expected_head/check-runs?per_page=100")
   statuses=$(gh api "repos/$repo/statuses/$expected_head?per_page=100")
   # The GraphQL variables are intentionally passed literally to gh.
@@ -45,6 +46,7 @@ collect_live() {
   jq -n \
     --argjson pr "$pr" \
     --argjson reviews "$reviews" \
+    --argjson review_comments "$review_comments" \
     --argjson checks "$checks" \
     --argjson statuses "$statuses" \
     --argjson threads "$threads" \
@@ -54,6 +56,8 @@ collect_live() {
       expected_head: $expected_head,
       reviews: ($reviews | map({author: .user.login, commit_id, body})),
       reviews_truncated: (($reviews | length) == 100),
+      review_comments: ($review_comments | map({author: .user.login, body})),
+      review_comments_truncated: (($review_comments | length) == 100),
       review_threads: {
         has_next_page: $threads.pageInfo.hasNextPage,
         nodes: ($threads.nodes | map({is_resolved: .isResolved}))
@@ -81,18 +85,30 @@ diagnostic=$(jq -er '
      ($normalized == "coderabbitai[bot]" or $normalized == "coderabbitai"));
   def coderabbit:
     coderabbit_login(.author);
+  def exact_head_summary:
+    (coderabbit and
+     ((.body // "") | contains("<!-- review_stack_entry_start -->")) and
+     ((.body // "") | contains("**Run ID**")) and
+     ((.body // "") |
+      test("Reviewing files that changed[^\\n]*" + $root.expected_head; "i")));
   def latest_coderabbit_status:
     first(.statuses[]? | select((.context // "" | ascii_downcase) == "coderabbit")) // null;
   def substantive_review:
     any(.reviews[]?; (coderabbit and ((.body // "" | gsub("\\s"; "") | length) > 0)));
   def exact_head_review:
-    any(.reviews[]?; (coderabbit and .commit_id == $root.expected_head));
+    (any(.reviews[]?; (coderabbit and .commit_id == $root.expected_head)) or
+     any((.review_comments // [])[]?; exact_head_summary));
   def exact_review_failure:
-    first(
-      .reviews[]? |
-      select(coderabbit and .commit_id == $root.expected_head) |
-      (.body // "" | match("review (rate limited|limit reached|failed)"; "i").string)
-    ) // null;
+    (first(
+       .reviews[]? |
+       select(coderabbit and .commit_id == $root.expected_head) |
+       (.body // "" | match("review (rate limited|limit reached|failed)"; "i").string)
+     ) //
+     first(
+       (.review_comments // [])[]? |
+       select(exact_head_summary) |
+       (.body // "" | match("review (rate limited|limit reached|failed)"; "i").string)
+     )) // null;
   def exact_quality:
     any(.check_runs[]?;
       (.name == "Rust quality gate" and
@@ -107,6 +123,8 @@ diagnostic=$(jq -er '
     "PR #\(.pr.number) is \(.pr.state | ascii_upcase), not OPEN"
   elif (.reviews_truncated == true) then
     "review data is truncated"
+  elif (.review_comments_truncated == true) then
+    "review-comment data is truncated"
   elif (.review_threads.has_next_page == true) then
     "review-thread data is truncated"
   elif (.check_runs_truncated == true) then

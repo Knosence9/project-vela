@@ -38,6 +38,28 @@ expect_blocked() {
 
 ready="$fixtures/ready.json"
 expect_ready "$ready"
+
+jq '
+  .reviews[1].commit_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" |
+  .review_comments = [{
+    "author": "coderabbitai[bot]",
+    "body": "<!-- review_stack_entry_start -->\n**Run ID**: `run-123`\nReviewing files that changed between aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb."
+  }] |
+  .review_comments_truncated = false
+' "$ready" > "$tmp/exact-head-summary.json"
+expect_ready "$tmp/exact-head-summary.json"
+
+jq '.review_comments[0].author = "coderabbitai-impostor"' "$tmp/exact-head-summary.json" > "$tmp/impostor-summary.json"
+expect_blocked "impostor exact-head summary" "$tmp/impostor-summary.json" "CodeRabbit has not submitted a review for exact head"
+
+jq '.review_comments[0].body = "<!-- review_stack_entry_start -->\n**Run ID**: `run-123`\nReviewing files that changed through aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.\nUnrelated fixture bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' "$tmp/exact-head-summary.json" > "$tmp/unbound-summary-head.json"
+expect_blocked "unbound summary head" "$tmp/unbound-summary-head.json" "CodeRabbit has not submitted a review for exact head"
+
+jq '.review_comments[0].body += "\nReview rate limited"' "$tmp/exact-head-summary.json" > "$tmp/rate-limited-summary.json"
+expect_blocked "rate-limited exact-head summary" "$tmp/rate-limited-summary.json" "exact-head CodeRabbit review reports Review rate limited"
+
+jq '.review_comments_truncated = true' "$tmp/exact-head-summary.json" > "$tmp/truncated-comments.json"
+expect_blocked "truncated review comments" "$tmp/truncated-comments.json" "review-comment data is truncated"
 expect_blocked "PR 724 false green" "$fixtures/pr-724-rate-limited.json" "latest CodeRabbit status is Review rate limited"
 
 jq '.statuses[0].description = "Review limit reached"' "$ready" > "$tmp/limit.json"

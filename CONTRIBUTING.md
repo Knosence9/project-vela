@@ -80,10 +80,13 @@ head=$(nix develop --command git rev-parse HEAD)
 nix develop --command scripts/verify-merge-readiness <pr-number> "$head"
 ```
 
-Run this immediately before arming auto-merge. The command performs no merge and
-fails closed for stale heads, missing or truncated evidence, unresolved threads,
-and CodeRabbit statuses such as `Review rate limited`, `Review limit reached`,
-or `Review failed`. A green status alone is not sufficient.
+Run this immediately before arming auto-merge. Exact-head coverage may be a
+CodeRabbit review record or its authenticated generated review summary naming the
+exact SHA and run ID; this handles successful no-finding incremental reviews that
+GitHub exposes only as issue comments. The command performs no merge and fails
+closed for stale heads, missing or truncated evidence, unresolved threads, and
+CodeRabbit statuses such as `Review rate limited`, `Review limit reached`, or
+`Review failed`. A green status alone is not sufficient.
 
 ## Development evidence
 
