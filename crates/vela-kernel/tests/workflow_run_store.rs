@@ -66,6 +66,69 @@ fn attributes_a_workflow_run_immutably_to_an_active_task() {
 }
 
 #[test]
+fn lists_exact_task_attribution_in_run_id_order_after_task_completion_and_reopen() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("release-task").unwrap();
+    let other_task_id = TaskId::new("other-task").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    for (id, goal) in [
+        (task_id.clone(), "ship release"),
+        (other_task_id.clone(), "other work"),
+    ] {
+        tasks.start(id, TaskGoal::new(goal).unwrap()).unwrap();
+    }
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    runs.start_for_task(
+        WorkflowRunId::new("zulu").unwrap(),
+        &task_id,
+        &advancing_workflow(),
+    )
+    .unwrap();
+    runs.start_for_task(
+        WorkflowRunId::new("alpha").unwrap(),
+        &task_id,
+        &advancing_workflow(),
+    )
+    .unwrap();
+    runs.start_for_task(
+        WorkflowRunId::new("other").unwrap(),
+        &other_task_id,
+        &advancing_workflow(),
+    )
+    .unwrap();
+    runs.start(
+        WorkflowRunId::new("unassociated").unwrap(),
+        &advancing_workflow(),
+    )
+    .unwrap();
+    tasks
+        .complete(&task_id, TaskOutput::new("task complete").unwrap())
+        .unwrap();
+    drop(runs);
+
+    let listed = WorkflowRunStore::open(&path)
+        .unwrap()
+        .list_for_task(&task_id)
+        .unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|run| run.id().as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "zulu"]
+    );
+    assert!(listed.iter().all(|run| run.task_id() == Some(&task_id)));
+    assert!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .list_for_task(&TaskId::new("no-runs").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn task_attributed_start_rejects_missing_and_terminal_tasks_atomically() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -98,6 +161,44 @@ fn task_attributed_start_rejects_missing_and_terminal_tasks_atomically() {
 }
 
 #[test]
+fn task_filtered_listing_fails_closed_on_unrelated_malformed_run_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("valid-task").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(task_id.clone(), TaskGoal::new("query runs").unwrap())
+        .unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    runs.start_for_task(
+        WorkflowRunId::new("valid-attribution").unwrap(),
+        &task_id,
+        &advancing_workflow(),
+    )
+    .unwrap();
+    runs.start(
+        WorkflowRunId::new("unrelated-malformed").unwrap(),
+        &advancing_workflow(),
+    )
+    .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'workflow-run:unrelated-malformed'",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .list_for_task(&task_id)
+            .unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+}
+
+#[test]
 fn task_attributed_start_rejects_a_malformed_persisted_task_id() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -123,6 +224,13 @@ fn task_attributed_start_rejects_a_malformed_persisted_task_id() {
         WorkflowRunStore::open(&path)
             .unwrap()
             .load(&run_id)
+            .unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .list_for_task(&task_id)
             .unwrap_err(),
         WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
     ));
