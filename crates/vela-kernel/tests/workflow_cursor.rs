@@ -24,7 +24,8 @@ fn begins_at_the_exact_start_without_advancing_or_copying_topology() {
     let workflow = workflow(
         "  plan ",
         vec![
-            phase("  plan ", false, vec![transition("done", None)]),
+            phase("  plan ", false, vec![transition("done", None)])
+                .with_skills(["research.skill", "review.skill"]),
             phase("done", true, vec![]),
         ],
     );
@@ -33,6 +34,10 @@ fn begins_at_the_exact_start_without_advancing_or_copying_topology() {
 
     assert!(std::ptr::eq(cursor.workflow(), &workflow));
     assert_eq!(cursor.current_phase().id(), "  plan ");
+    assert_eq!(
+        cursor.current_phase().skills(),
+        ["research.skill", "review.skill"]
+    );
     assert!(!cursor.is_terminal());
     assert_eq!(cursor.current_phase().transitions()[0].target(), "done");
 }

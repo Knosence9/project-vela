@@ -77,6 +77,7 @@ impl RegisteredWorkflowTransition {
 pub struct RegisteredWorkflowPhase {
     id: String,
     terminal: bool,
+    skills: Vec<String>,
     transitions: Vec<RegisteredWorkflowTransition>,
 }
 
@@ -89,8 +90,19 @@ impl RegisteredWorkflowPhase {
         Self {
             id: id.into(),
             terminal,
+            skills: Vec::new(),
             transitions,
         }
+    }
+
+    /// Adds authored-order inert skill identities without resolving or composing them.
+    pub fn with_skills<I, S>(mut self, skills: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.skills = skills.into_iter().map(Into::into).collect();
+        self
     }
 
     pub fn id(&self) -> &str {
@@ -99,6 +111,10 @@ impl RegisteredWorkflowPhase {
 
     pub fn is_terminal(&self) -> bool {
         self.terminal
+    }
+
+    pub fn skills(&self) -> &[String] {
+        &self.skills
     }
 
     pub fn transitions(&self) -> &[RegisteredWorkflowTransition] {
@@ -161,6 +177,17 @@ pub enum WorkflowCursorError {
     StartAmbiguous {
         phase_id: String,
     },
+    BlankSkillId {
+        phase_id: String,
+        index: usize,
+    },
+    DuplicateSkillId {
+        phase_id: String,
+        skill_id: String,
+    },
+    TerminalPhaseHasSkills {
+        phase_id: String,
+    },
     TerminalPhase {
         phase_id: String,
     },
@@ -205,6 +232,18 @@ impl fmt::Display for WorkflowCursorError {
             Self::StartAmbiguous { phase_id } => {
                 write!(formatter, "workflow start phase {phase_id} is ambiguous")
             }
+            Self::BlankSkillId { phase_id, index } => write!(
+                formatter,
+                "workflow phase {phase_id} skill at index {index} must not be blank"
+            ),
+            Self::DuplicateSkillId { phase_id, skill_id } => write!(
+                formatter,
+                "workflow phase {phase_id} repeats skill {skill_id}"
+            ),
+            Self::TerminalPhaseHasSkills { phase_id } => write!(
+                formatter,
+                "workflow terminal phase {phase_id} must not bind skills"
+            ),
             Self::TerminalPhase { phase_id } => {
                 write!(formatter, "workflow phase {phase_id} is terminal")
             }
@@ -270,6 +309,7 @@ const WORKFLOW_RUN_RESUMED_EVENT_TYPE: &str = "workflow_run.resumed";
 const WORKFLOW_RUN_FAILED_EVENT_TYPE: &str = "workflow_run.failed";
 const WORKFLOW_RUN_EVENT_PAYLOAD_VERSION: u32 = 1;
 const WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION: u32 = 2;
+const WORKFLOW_RUN_SKILLED_STARTED_PAYLOAD_VERSION: u32 = 3;
 const WORKFLOW_RUN_STREAM_PREFIX: &str = "workflow-run:";
 
 /// An opaque, non-blank identity for one durable workflow run.
@@ -1428,9 +1468,7 @@ impl Event for WorkflowRunEvent {
 
     fn payload_version(&self) -> u32 {
         match self {
-            Self::Started {
-                task_id: Some(_), ..
-            } => WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION,
+            Self::Started { .. } => WORKFLOW_RUN_SKILLED_STARTED_PAYLOAD_VERSION,
             _ => WORKFLOW_RUN_EVENT_PAYLOAD_VERSION,
         }
     }
@@ -1438,7 +1476,11 @@ impl Event for WorkflowRunEvent {
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
         if payload_version != WORKFLOW_RUN_EVENT_PAYLOAD_VERSION
             && !(event_type == WORKFLOW_RUN_STARTED_EVENT_TYPE
-                && payload_version == WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION)
+                && matches!(
+                    payload_version,
+                    WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION
+                        | WORKFLOW_RUN_SKILLED_STARTED_PAYLOAD_VERSION
+                ))
         {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
@@ -1448,12 +1490,33 @@ impl Event for WorkflowRunEvent {
         match event_type {
             WORKFLOW_RUN_STARTED_EVENT_TYPE => {
                 let (workflow, task_id) = if payload_version
-                    == WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION
+                    == WORKFLOW_RUN_SKILLED_STARTED_PAYLOAD_VERSION
                 {
                     #[derive(Deserialize)]
                     #[serde(deny_unknown_fields)]
                     struct Payload {
                         workflow: WorkflowSnapshot,
+                        task_id: Option<String>,
+                    }
+                    let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                        DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        }
+                    })?;
+                    let task_id =
+                        payload
+                            .task_id
+                            .map(TaskId::new)
+                            .transpose()
+                            .map_err(|error| DecodeError::MalformedPayload {
+                                message: error.to_string(),
+                            })?;
+                    (payload.workflow, task_id)
+                } else if payload_version == WORKFLOW_RUN_TASK_STARTED_PAYLOAD_VERSION {
+                    #[derive(Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Payload {
+                        workflow: LegacyWorkflowSnapshot,
                         task_id: String,
                     }
                     let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
@@ -1466,19 +1529,19 @@ impl Event for WorkflowRunEvent {
                             message: error.to_string(),
                         }
                     })?;
-                    (payload.workflow, Some(task_id))
+                    (payload.workflow.into_current(), Some(task_id))
                 } else {
                     #[derive(Deserialize)]
                     #[serde(deny_unknown_fields)]
                     struct Payload {
-                        workflow: WorkflowSnapshot,
+                        workflow: LegacyWorkflowSnapshot,
                     }
                     let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
                         DecodeError::MalformedPayload {
                             message: error.to_string(),
                         }
                     })?;
-                    (payload.workflow, None)
+                    (payload.workflow.into_current(), None)
                 };
                 let decoded_workflow = workflow
                     .clone()
@@ -1621,7 +1684,43 @@ struct WorkflowSnapshot {
 struct WorkflowPhaseSnapshot {
     id: String,
     terminal: bool,
+    skills: Vec<String>,
     transitions: Vec<WorkflowTransitionSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyWorkflowSnapshot {
+    id: String,
+    start: String,
+    phases: Vec<LegacyWorkflowPhaseSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyWorkflowPhaseSnapshot {
+    id: String,
+    terminal: bool,
+    transitions: Vec<WorkflowTransitionSnapshot>,
+}
+
+impl LegacyWorkflowSnapshot {
+    fn into_current(self) -> WorkflowSnapshot {
+        WorkflowSnapshot {
+            id: self.id,
+            start: self.start,
+            phases: self
+                .phases
+                .into_iter()
+                .map(|phase| WorkflowPhaseSnapshot {
+                    id: phase.id,
+                    terminal: phase.terminal,
+                    skills: Vec::new(),
+                    transitions: phase.transitions,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1642,6 +1741,7 @@ impl From<&RegisteredWorkflow> for WorkflowSnapshot {
                 .map(|phase| WorkflowPhaseSnapshot {
                     id: phase.id().to_owned(),
                     terminal: phase.is_terminal(),
+                    skills: phase.skills().to_vec(),
                     transitions: phase
                         .transitions()
                         .iter()
@@ -1679,6 +1779,7 @@ impl WorkflowSnapshot {
                             })
                             .collect(),
                     )
+                    .with_skills(phase.skills)
                 })
                 .collect(),
         ))
@@ -1695,6 +1796,28 @@ pub struct WorkflowCursor<'a> {
 impl<'a> WorkflowCursor<'a> {
     /// Begins at the workflow's exact declared start phase without advancing it.
     pub fn new(workflow: &'a RegisteredWorkflow) -> Result<Self, WorkflowCursorError> {
+        for phase in workflow.phases() {
+            if phase.is_terminal() && !phase.skills().is_empty() {
+                return Err(WorkflowCursorError::TerminalPhaseHasSkills {
+                    phase_id: phase.id().to_owned(),
+                });
+            }
+            let mut skill_ids = BTreeSet::new();
+            for (index, skill_id) in phase.skills().iter().enumerate() {
+                if skill_id.trim().is_empty() {
+                    return Err(WorkflowCursorError::BlankSkillId {
+                        phase_id: phase.id().to_owned(),
+                        index,
+                    });
+                }
+                if !skill_ids.insert(skill_id) {
+                    return Err(WorkflowCursorError::DuplicateSkillId {
+                        phase_id: phase.id().to_owned(),
+                        skill_id: skill_id.clone(),
+                    });
+                }
+            }
+        }
         let mut matches = workflow
             .phases()
             .iter()

@@ -232,6 +232,7 @@ The first milestone is the **evidence loop**:
 74. Discover runs for one exact immutable workflow identity through a deterministic historical query. ✅
 75. Discover workflow runs in one exact lifecycle status through a deterministic historical query. ✅
 76. Compose exact task, workflow, and lifecycle constraints through one deterministic workflow-run filter. ✅
+77. Preserve inert authored-order skill bindings through workflow preparation, registration, and durable run replay. ✅
 
 ## Project documents
 

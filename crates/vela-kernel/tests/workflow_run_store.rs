@@ -36,7 +36,7 @@ fn attributes_a_workflow_run_immutably_to_an_active_task() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(payload_version, 2);
+    assert_eq!(payload_version, 3);
     tasks
         .complete(&task_id, TaskOutput::new("task complete").unwrap())
         .unwrap();
@@ -64,6 +64,179 @@ fn attributes_a_workflow_run_immutably_to_an_active_task() {
         WorkflowRunHistoryEvent::TaskStarted { task_id: history_task_id, .. }
             if history_task_id == &task_id
     ));
+}
+
+#[test]
+fn preserves_inert_phase_skills_through_start_load_and_listing() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let run_id = WorkflowRunId::new("skilled-run").unwrap();
+    let workflow = RegisteredWorkflow::new(
+        WorkflowId::new("skilled.workflow").unwrap(),
+        "plan",
+        vec![
+            RegisteredWorkflowPhase::new(
+                "plan",
+                false,
+                vec![RegisteredWorkflowTransition::new("done", None)],
+            )
+            .with_skills(["research.skill", "review.skill"]),
+            RegisteredWorkflowPhase::new("done", true, vec![]),
+        ],
+    );
+
+    let started = WorkflowRunStore::open(&path)
+        .unwrap()
+        .start(run_id.clone(), &workflow)
+        .unwrap();
+    assert_eq!(
+        started.current_phase().skills(),
+        ["research.skill", "review.skill"]
+    );
+
+    let reopened = WorkflowRunStore::open(&path).unwrap();
+    assert_eq!(
+        reopened
+            .load(&run_id)
+            .unwrap()
+            .unwrap()
+            .current_phase()
+            .skills(),
+        ["research.skill", "review.skill"]
+    );
+    assert_eq!(
+        reopened.list().unwrap()[0].current_phase().skills(),
+        ["research.skill", "review.skill"]
+    );
+}
+
+#[test]
+fn replays_legacy_started_payloads_without_skill_bindings() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("legacy-task").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(task_id.clone(), TaskGoal::new("legacy work").unwrap())
+        .unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    let plain_id = WorkflowRunId::new("legacy-v1").unwrap();
+    let task_run_id = WorkflowRunId::new("legacy-v2").unwrap();
+    runs.start(plain_id.clone(), &advancing_workflow()).unwrap();
+    runs.start_for_task(task_run_id.clone(), &task_id, &advancing_workflow())
+        .unwrap();
+    drop(runs);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    for (stream_id, payload_version) in [
+        ("workflow-run:legacy-v1", 1_u32),
+        ("workflow-run:legacy-v2", 2_u32),
+    ] {
+        let payload: Vec<u8> = connection
+            .query_row(
+                "SELECT payload FROM events WHERE stream_id = ?1",
+                [stream_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut payload: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        for phase in payload["workflow"]["phases"].as_array_mut().unwrap() {
+            phase.as_object_mut().unwrap().remove("skills");
+        }
+        connection
+            .execute(
+                "UPDATE events SET payload_version = ?1, payload = ?2 WHERE stream_id = ?3",
+                rusqlite::params![
+                    payload_version,
+                    serde_json::to_vec(&payload).unwrap(),
+                    stream_id
+                ],
+            )
+            .unwrap();
+    }
+
+    let reopened = WorkflowRunStore::open(&path).unwrap();
+    let plain = reopened.load(&plain_id).unwrap().unwrap();
+    assert!(
+        plain
+            .workflow()
+            .phases()
+            .iter()
+            .all(|phase| phase.skills().is_empty())
+    );
+    assert!(plain.task_id().is_none());
+    let attributed = reopened.load(&task_run_id).unwrap().unwrap();
+    assert!(
+        attributed
+            .workflow()
+            .phases()
+            .iter()
+            .all(|phase| phase.skills().is_empty())
+    );
+    assert_eq!(attributed.task_id(), Some(&task_id));
+}
+
+#[test]
+fn started_payload_versions_reject_cross_version_skill_shapes() {
+    for (run_id, mutate) in [
+        ("v3-without-skills", "remove-skills"),
+        ("v1-with-skills", "legacy-version"),
+        ("v3-blank-skill", "blank-skill"),
+        ("v3-terminal-skill", "terminal-skill"),
+    ] {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let run_id = WorkflowRunId::new(run_id).unwrap();
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .start(run_id.clone(), &advancing_workflow())
+            .unwrap();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let mut payload: serde_json::Value = serde_json::from_slice(
+            &connection
+                .query_row("SELECT payload FROM events", [], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        let payload_version = match mutate {
+            "remove-skills" => {
+                for phase in payload["workflow"]["phases"].as_array_mut().unwrap() {
+                    phase.as_object_mut().unwrap().remove("skills");
+                }
+                3_u32
+            }
+            "legacy-version" => 1_u32,
+            "blank-skill" => {
+                payload["workflow"]["phases"][0]["skills"] =
+                    serde_json::Value::Array(vec![serde_json::Value::String(" ".into())]);
+                3_u32
+            }
+            "terminal-skill" => {
+                payload["workflow"]["phases"][2]["skills"] =
+                    serde_json::Value::Array(vec![serde_json::Value::String(
+                        "review.skill".into(),
+                    )]);
+                3_u32
+            }
+            _ => unreachable!(),
+        };
+        connection
+            .execute(
+                "UPDATE events SET payload_version = ?1, payload = ?2",
+                rusqlite::params![payload_version, serde_json::to_vec(&payload).unwrap()],
+            )
+            .unwrap();
+
+        assert!(matches!(
+            WorkflowRunStore::open(&path)
+                .unwrap()
+                .load(&run_id)
+                .unwrap_err(),
+            WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+        ));
+    }
 }
 
 #[test]

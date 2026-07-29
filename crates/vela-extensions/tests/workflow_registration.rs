@@ -45,6 +45,10 @@ fn registers_prepared_workflows_atomically_with_exact_topology() {
         .unwrap();
     assert_eq!(zeta.start(), "plan");
     assert_eq!(zeta.phases()[0].id(), "plan");
+    assert_eq!(
+        zeta.phases()[0].skills(),
+        ["research.skill", "review.skill"]
+    );
     assert_eq!(zeta.phases()[0].transitions()[0].target(), "done");
     assert_eq!(zeta.phases()[0].transitions()[0].gate(), Some("approved"));
     assert!(zeta.phases()[1].is_terminal());
@@ -144,7 +148,7 @@ fn empty_selection_needs_no_filesystem_and_does_not_mutate_registry() {
 fn workflow_yaml(start: &str) -> &'static str {
     match start {
         "plan" => {
-            "workflow_version: 1\nstart: plan\nphases:\n  - id: plan\n    transitions:\n      - to: done\n        gate: approved\n  - id: done\n    terminal: true\n"
+            "workflow_version: 2\nstart: plan\nphases:\n  - id: plan\n    skills:\n      - research.skill\n      - review.skill\n    transitions:\n      - to: done\n        gate: approved\n  - id: done\n    terminal: true\n"
         }
         _ => {
             "workflow_version: 1\nstart: start\nphases:\n  - id: start\n    transitions:\n      - to: done\n        gate: approved\n  - id: done\n    terminal: true\n"
