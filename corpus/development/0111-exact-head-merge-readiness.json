@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Verify exact-head merge readiness fail closed",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/725 by turning the Rust, CodeRabbit, and unresolved-thread merge policy into one deterministic read-only verifier.",
+    "acceptance_criteria": [
+      "Require the requested expected head to equal both the live PR head and the successful Rust quality gate head.",
+      "Authenticate CodeRabbit evidence and reject rate-limited, limit-reached, paused, failed, or stale exact-head results even when their status is green.",
+      "Require a substantive exact-head review object or authenticated no-finding summary and zero unresolved review threads.",
+      "Emit deterministic READY or BLOCKED diagnostics without mutating or merging the pull request."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Converted the PR 724 incident into RED verifier fixtures.",
+      "outcome": "failure",
+      "diagnostic": "The repository had prose merge rules but no executable check preventing auto-merge from accepting stale review evidence or false-green exact-head rate-limit text.",
+      "patch": "Added offline fixtures and shell tests for a ready PR and the real sanitized PR 724 rate-limited exact-head shape."
+    },
+    {
+      "summary": "Implemented an authenticated exact-head readiness verifier.",
+      "outcome": "success",
+      "diagnostic": "GitHub GraphQL review objects, check runs, status contexts, comments, and review threads provided enough evidence for a deterministic fail-closed decision without write authority.",
+      "patch": "Added scripts/verify-merge-readiness, just verify-merge-readiness, stable diagnostics, documentation, and tests covering head mismatch, Rust failure, stale or spoofed reviews, rate limits, and unresolved threads."
+    },
+    {
+      "summary": "Hardened evidence parsing during independent and CodeRabbit review.",
+      "outcome": "success",
+      "diagnostic": "Review exposed authentication and exact-head summary edge cases that could otherwise accept creator-spoofed status or reject genuine summary-only evidence.",
+      "patch": "Authenticated status creators and bot authors, constrained exact-head commit ranges, rejected contradictory failure text, and added regression fixtures before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Merge readiness now has a repository-owned, deterministic, read-only fail-closed verifier that binds Rust and substantive CodeRabbit evidence to the requested exact head and rejects unresolved threads.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command tests/merge-readiness.sh", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30431017456", "status": "passed"},
+      {"command": "Pull request 726 squash merge 67fea80376674480c20ee5056b5cd4b4e35dc0d8", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "High-consequence process rules should become executable checks rather than remain prose conventions.",
+    "A successful status conclusion is not enough when its authenticated body reports review rate limiting or failure.",
+    "Review evidence must be bound to the exact PR head and an authenticated bot identity.",
+    "Read-only verification should report blockers deterministically and remain separate from merge authority.",
+    "Real sanitized incident payloads make process regressions reproducible without preserving secrets or developer paths."
+  ],
+  "provenance": {"repository_path": "scripts/verify-merge-readiness", "url": "https://github.com/Knosence9/project-vela/pull/726"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Discover workflow runs by immutable workflow identity",
+    "objective": "Complete issues https://github.com/Knosence9/project-vela/issues/722 and https://github.com/Knosence9/project-vela/issues/723 with a registry-independent historical query while preserving honest merge-gate evidence.",
+    "acceptance_criteria": [
+      "Return exact workflow-ID matches in ascending run-ID order across every lifecycle and attribution state.",
+      "Remain deterministic after reopen and return an empty result when no run snapshots the identity.",
+      "Fail closed on malformed candidate history without consulting a current workflow registry.",
+      "Record the exact-head CodeRabbit rate-limit merge incident without treating the false green as sufficient review."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED workflow-identity query coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused target failed to compile because WorkflowRunStore::list_for_workflow did not exist; the initial test also used an incorrect existing start accessor and was corrected before GREEN.",
+      "patch": "Added exact identity, ordering, lifecycle, attribution, reopen, empty-match, and unrelated malformed-history tests."
+    },
+    {
+      "summary": "Implemented registry-free exact workflow discovery.",
+      "outcome": "success",
+      "diagnostic": "Filtering authoritative projections by the immutable workflow ID captured in each start snapshot preserved historical provenance without current registration authority.",
+      "patch": "Added list_for_workflow and updated ADR-0012 and milestone documentation; CodeRabbit's wording finding was fixed by distinguishing additional or compound filtering."
+    },
+    {
+      "summary": "Diagnosed a merge-readiness process violation.",
+      "outcome": "failure",
+      "diagnostic": "PR 724 merged after its reviewed commit's sole finding was fixed, but before a substantive exact-head CodeRabbit review replaced the false-green rate-limited incremental status.",
+      "patch": "Recorded the incident on issue 723 and opened follow-up issue 725 for a repository-owned fail-closed exact-head readiness verifier rather than claiming the rate-limited status was sufficient."
+    }
+  ],
+  "outcome": {
+    "summary": "Exact workflow-identity discovery is implemented and verified, while its premature merge is retained as negative process evidence that motivated an enforceable readiness check.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_run_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30418767948", "status": "passed"},
+      {"command": "Pull request 724 squash merge ed869ee450c6757811986ce93fe217eedd127678 violated the substantive exact-head review gate", "status": "failed"},
+      {"command": "nix develop --command cargo run --locked -q -p vela-dev -- record validate corpus/development/0110-workflow-runs-by-workflow.json", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Immutable snapshot identity supports historical queries even after process-local registry definitions disappear.",
+    "Authoritative replay plus exact filtering preserves deterministic all-or-nothing semantics with minimal code.",
+    "A substantive review of an earlier commit does not satisfy an exact-head review gate after its finding is fixed.",
+    "A green status carrying rate-limit text is false evidence and must never race auto-merge.",
+    "Process failures should produce a deterministic guard rather than be normalized as successful precedent."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/724"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "negative", "rejection_rationale": "The implementation is valid, but merging without substantive exact-head CodeRabbit evidence violated the required readiness contract."}
+}

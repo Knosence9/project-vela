@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Discover workflow runs by exact task attribution",
+    "objective": "Complete issues https://github.com/Knosence9/project-vela/issues/719 and https://github.com/Knosence9/project-vela/issues/720 with a deterministic historical query over immutable task provenance.",
+    "acceptance_criteria": [
+      "Return only runs attributed to one exact task in ascending exact run-ID order.",
+      "Include every lifecycle status after task termination and store reopen.",
+      "Return an empty result for no matches without requiring the task to exist.",
+      "Fail the complete query on any malformed workflow-run candidate history."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED exact-task discovery coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-run target failed to compile because WorkflowRunStore::list_for_task did not exist.",
+      "patch": "Added exact filtering, ordering, lifecycle, task termination, reopen, empty-match, and malformed unrelated-history tests."
+    },
+    {
+      "summary": "Implemented the historical task query over authoritative replay.",
+      "outcome": "success",
+      "diagnostic": "Filtering the complete validated list by exact TaskId reused deterministic projection and avoided a secondary index or duplicate replay path.",
+      "patch": "Added list_for_task and documented its historical, registry-free, non-authorizing semantics in ADR-0017 and the milestone list."
+    },
+    {
+      "summary": "Strengthened fail-closed behavior before commit.",
+      "outcome": "success",
+      "diagnostic": "Independent review identified that unrelated malformed candidate history needed explicit regression coverage.",
+      "patch": "Added the missing malformed-history case, retained all-or-nothing replay, and reran the focused and complete pinned gates."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can deterministically recover every workflow run historically attributed to one exact task without current task validation or a secondary index.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_run_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30413428430", "status": "passed"},
+      {"command": "Pull request 721 squash merge 13bdb0213f80adb79f66664f6c3208399526233f", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A historical attribution query should not reinterpret current task existence or status as authorization.",
+    "Filtering an authoritative deterministic projection is safer than maintaining a second index before scale requires one.",
+    "Fail-closed discovery means malformed unrelated candidates invalidate the whole result rather than producing a plausible partial list.",
+    "Exact identity and existing order make the query deterministic without pagination or scheduling semantics."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/721"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
