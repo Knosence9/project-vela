@@ -94,7 +94,10 @@ diagnostic=$(jq -er '
   def latest_coderabbit_status:
     first(.statuses[]? | select((.context // "" | ascii_downcase) == "coderabbit")) // null;
   def substantive_review:
-    any(.reviews[]?; (coderabbit and ((.body // "" | gsub("\\s"; "") | length) > 0)));
+    any(.reviews[]?;
+      (coderabbit and
+       ((.body // "") | contains("**Run ID**")) and
+       ((.body // "") | test("Reviewing files that changed"; "i"))));
   def exact_head_review:
     (any(.reviews[]?; (coderabbit and .commit_id == $root.expected_head)) or
      any((.review_comments // [])[]?; exact_head_summary));
@@ -102,12 +105,14 @@ diagnostic=$(jq -er '
     (first(
        .reviews[]? |
        select(coderabbit and .commit_id == $root.expected_head) |
-       (.body // "" | match("review (rate limited|limit reached|failed)"; "i").string)
+       (.body // "" |
+        match("review[[:space:]:-]+(rate[- ]limited|limit[- ]reached|failed)"; "i").string)
      ) //
      first(
        (.review_comments // [])[]? |
        select(exact_head_summary) |
-       (.body // "" | match("review (rate limited|limit reached|failed)"; "i").string)
+       (.body // "" |
+        match("review[[:space:]:-]+(rate[- ]limited|limit[- ]reached|failed)"; "i").string)
      )) // null;
   def exact_quality:
     any(.check_runs[]?;
