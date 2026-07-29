@@ -87,6 +87,14 @@ The accepted registration boundary is specified by [ADR-0007](adr/0007-caller-ow
 
 Registration expresses availability only. It does not select, execute, schedule, persist, resolve gates, choose transitions, bind phase actions, compose provider requests, grant permissions, replace or remove definitions, watch files, or hot reload.
 
+## Explicit current-phase skill resolution
+
+The caller-owned resolution boundary is specified by [ADR-0019](adr/0019-explicit-current-phase-skill-resolution.md). `RegisteredWorkflowPhase::resolve_skills(registry)` explicitly resolves one caller-chosen borrowed phase against one borrowed process-local `SkillRegistry`. Exact inert binding strings are validated as `SkillId` values before the complete batch reuses `SkillRegistry::select`. Success returns borrowed registered instruction blocks in deterministic ascending exact-ID order; authored binding order remains unchanged in workflow topology and does not imply precedence. Empty bindings select nothing, including when unrelated skills are registered.
+
+Malformed direct terminal bindings fail with `WorkflowPhaseSkillResolutionError::TerminalHasBindings`, and malformed direct IDs fail with a source-preserving `WorkflowPhaseSkillResolutionError::InvalidId`. Duplicate or missing registrations preserve the existing typed `SkillSelectionError` through `WorkflowPhaseSkillResolutionError::Selection`, and no failure returns a partial selection. Missing process-local registrations do not prevent workflow preparation, registration, start, replay, discovery, or advancement; they affect only this explicit resolution attempt.
+
+Resolution is read-only and provider-neutral. It does not invoke a provider, compose or mutate a request by itself, persist selection evidence, infer workflow lifecycle eligibility, advance a cursor or durable run, evaluate a gate, schedule work, grant tool permission, or infer that selected instructions are safe.
+
 ## Tool component compilation
 
 `compile_tool_components(artifacts)` is the inert compiler boundary for prepared tools. It creates a Wasmtime engine with the Component Model explicitly enabled and compiles binary component bytes without Wasmtime's text-format support. Every component must have no top-level imports and exactly one top-level export: the synchronous function `invoke(input: string) -> result<string, string>` specified structurally by `vela:extension/tool@0.1.0`. Core modules, malformed bytes, imports, missing or additional exports, and incompatible parameter or result types fail closed.

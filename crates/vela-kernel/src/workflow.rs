@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::event_log::{
     DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
 };
+use crate::skill::{SkillId, SkillIdError, SkillRegistry, SkillSelection, SkillSelectionError};
 use crate::task::{TaskId, TaskStatus, TaskStore, TaskStoreError, task_stream};
 
 /// An opaque, non-blank stable identifier for one registered workflow.
@@ -117,8 +118,85 @@ impl RegisteredWorkflowPhase {
         &self.skills
     }
 
+    /// Explicitly resolves this phase's inert bindings through one caller-owned registry.
+    ///
+    /// This operation only borrows registered instruction blocks. It does not compose a
+    /// provider request, mutate the workflow, or grant any permission.
+    pub fn resolve_skills<'a>(
+        &self,
+        registry: &'a SkillRegistry,
+    ) -> Result<SkillSelection<'a>, WorkflowPhaseSkillResolutionError> {
+        if self.terminal && !self.skills.is_empty() {
+            return Err(WorkflowPhaseSkillResolutionError::TerminalHasBindings {
+                phase_id: self.id.clone(),
+            });
+        }
+        let skill_ids = self
+            .skills
+            .iter()
+            .enumerate()
+            .map(|(index, skill_id)| {
+                SkillId::new(skill_id.clone()).map_err(|source| {
+                    WorkflowPhaseSkillResolutionError::InvalidId {
+                        phase_id: self.id.clone(),
+                        index,
+                        source,
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        registry
+            .select(&skill_ids)
+            .map_err(WorkflowPhaseSkillResolutionError::Selection)
+    }
+
     pub fn transitions(&self) -> &[RegisteredWorkflowTransition] {
         &self.transitions
+    }
+}
+
+/// A fail-closed error resolving one workflow phase's inert skill bindings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkflowPhaseSkillResolutionError {
+    TerminalHasBindings {
+        phase_id: String,
+    },
+    InvalidId {
+        phase_id: String,
+        index: usize,
+        source: SkillIdError,
+    },
+    Selection(SkillSelectionError),
+}
+
+impl fmt::Display for WorkflowPhaseSkillResolutionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TerminalHasBindings { phase_id } => {
+                write!(
+                    formatter,
+                    "terminal workflow phase {phase_id} has skill bindings"
+                )
+            }
+            Self::InvalidId {
+                phase_id, index, ..
+            } => write!(
+                formatter,
+                "workflow phase {phase_id} skill binding {index} has an invalid id"
+            ),
+            Self::Selection(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for WorkflowPhaseSkillResolutionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::TerminalHasBindings { .. } => None,
+            Self::InvalidId { source, .. } => Some(source),
+            Self::Selection(error) => Some(error),
+        }
     }
 }
 

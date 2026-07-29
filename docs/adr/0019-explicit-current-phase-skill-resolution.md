@@ -1,0 +1,55 @@
+# ADR-0019: Require explicit current-phase skill resolution
+
+- **Status:** accepted
+- **Date:** 2026-07-29
+- **Decision owners:** Project Vela maintainers
+- **Related:** ADR-0005, ADR-0018, issues #739 and #740
+
+## Context
+
+ADR-0018 lets workflows preserve inert authored-order skill bindings through registration and durable replay. ADR-0005 separately requires every skill selection that may influence a model request to be explicit, caller-owned, registry-validated, and provider-neutral. Automatically resolving bindings on workflow registration, start, load, or advancement would let topology movement or ambient registry state alter later prompt authority.
+
+Callers nevertheless need one narrow bridge from the current phase they chose to inspect to the existing skill-selection contract. The bridge must also remain safe for manually constructed kernel topology, which has not passed extension-definition validation.
+
+## Decision
+
+`RegisteredWorkflowPhase::resolve_skills(registry)` is the explicit, read-only resolution boundary. The caller chooses the phase and supplies one borrowed caller-owned `SkillRegistry`. Resolution converts every exact inert binding to a validated `SkillId`, then delegates the complete batch to `SkillRegistry::select`.
+
+Success returns a borrowed `SkillSelection` in ADR-0005's deterministic ascending exact-ID order. It selects only bound registered skills. Empty bindings, including every valid terminal phase, return an empty selection and never include unrelated registered skills. The topology continues to preserve authored binding order; resolution order does not establish dependency or precedence semantics.
+
+A malformed direct terminal phase containing bindings fails before registry selection with `WorkflowPhaseSkillResolutionError::TerminalHasBindings`. A malformed direct phase containing a blank ID similarly fails with `WorkflowPhaseSkillResolutionError::InvalidId`, identifying the exact phase and authored binding index while preserving `SkillIdError` as its source. Duplicate or absent IDs fail all-or-nothing through `WorkflowPhaseSkillResolutionError::Selection`, preserving the existing typed `SkillSelectionError`. No partial selection is returned.
+
+Resolution is inert. It does not run or mutate a provider request, persist a selection, register a skill, advance or authorize a workflow, evaluate a gate, schedule work, infer lifecycle eligibility, grant tool permission, or infer that instructions are safe. Provider execution remains a separate caller operation under ADR-0005.
+
+## Alternatives considered
+
+### Resolve automatically when a run starts, loads, or advances
+
+That would make persistence or topology movement choose prompt authority and would make a missing process-local registration alter unrelated workflow lifecycle operations.
+
+### Preserve authored binding order in the returned selection
+
+ADR-0005 intentionally gives selected prompt blocks deterministic exact-ID order and assigns no authored precedence semantics. Reusing that contract avoids a second composition ordering rule while the workflow still retains its exact authored metadata for inspection.
+
+### Return owned instruction strings
+
+Copying instruction bodies would weaken the registry lifetime boundary and create another prompt-composition representation. Borrowing the existing `SkillSelection` keeps registration, selection, and model influence distinct.
+
+### Assume every kernel phase was extension-validated
+
+`RegisteredWorkflowPhase` has public constructors and durable replay is intentionally defensive. Explicit ID validation keeps manually constructed malformed topology fail-closed without changing its existing inert constructors.
+
+## Consequences
+
+- Cursor and durable-run callers use the same phase-level resolver.
+- Missing registrations affect only the explicit resolution attempt, never workflow replay or movement.
+- Resolution can feed a later explicit provider operation without itself invoking a model.
+- The operation does not yet define lifecycle eligibility, task/session routing, token budgets, dependencies, precedence, or automatic execution.
+
+## Verification
+
+The bounded execution slice follows RED→GREEN tests proving cursor current-phase resolution, deterministic exact-ID selection with unrelated skills excluded, replayed durable-run resolution, typed all-or-nothing missing-skill failure, malformed direct-ID rejection with a source, malformed direct terminal-binding rejection, and empty-binding success. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider this decision before adding a workflow-aware provider turn, lifecycle authorization for phase work, persisted selection evidence, dependency or precedence rules, token budgeting, automatic routing, skill-authored tool grants, or scheduled workflow execution.

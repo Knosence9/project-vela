@@ -233,6 +233,7 @@ The first milestone is the **evidence loop**:
 75. Discover workflow runs in one exact lifecycle status through a deterministic historical query. ✅
 76. Compose exact task, workflow, and lifecycle constraints through one deterministic workflow-run filter. ✅
 77. Preserve inert authored-order skill bindings through workflow preparation, registration, and durable run replay. ✅
+78. Resolve one caller-chosen current phase's inert skill bindings explicitly through the existing skill registry selection boundary. ✅
 
 ## Project documents
 
