@@ -1082,6 +1082,18 @@ impl WorkflowRunStore {
             .filter(|run| run.workflow().id() == workflow_id)
             .collect())
     }
+
+    /// Replays runs with one exact lifecycle status in ascending run-ID order.
+    pub fn list_by_status(
+        &self,
+        status: WorkflowRunStatus,
+    ) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|run| run.status() == status)
+            .collect())
+    }
 }
 
 fn validate_revision(

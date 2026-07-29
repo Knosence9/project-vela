@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-07-28
 - **Decision owners:** Project Vela maintainers
-- **Related:** ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0015, issues #711 and #712
+- **Related:** ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0015, issues #711, #712, and #727
 
 ## Context
 
@@ -25,7 +25,13 @@ Add an evidence-free, non-exhaustive `WorkflowRunStatus` enum with exactly five 
 
 The enum is `Copy` and carries no reason or diagnostic. Callers needing exact evidence use the existing typed accessors or lifecycle history. Existing `is_terminal`, `is_paused`, `is_cancelled`, and `is_failed` predicates retain their established semantics.
 
-This projection does not schedule, execute, retry, compensate, infer outcomes, bind tasks or capabilities, grant permission, or add timestamps or actors.
+`WorkflowRunStore::list_by_status` reuses authoritative complete run replay and
+filters by one exact status. Results preserve ascending exact run-ID order and
+include both task-attributed and unassociated runs. An empty match is successful.
+Malformed history in any candidate run fails the whole query rather than returning
+a partial lifecycle view.
+
+This projection and query do not schedule, execute, retry, compensate, infer outcomes, bind tasks or capabilities, grant permission, or add timestamps, actors, pagination, or secondary indexes.
 
 ## Alternatives considered
 
@@ -48,6 +54,7 @@ A terminal phase is authored topology. Calling it success would infer outcome se
 ## Consequences
 
 - Exact loads and deterministic lists expose one machine-checkable lifecycle classifier.
+- Recovery callers can discover one exact lifecycle class without duplicating filter semantics.
 - `AuthoredTerminal` keeps topology termination distinct from caller-owned cancellation and failure.
 - Paused-at-failure evidence remains intact while classification is unambiguous.
 - Existing storage, replay, mutation, and evidence contracts remain unchanged.
@@ -56,7 +63,7 @@ A terminal phase is authored topology. Calling it success would infer outcome se
 
 ## Verification
 
-The bounded execution slice follows RED→GREEN tests proving active, paused, resumed, authored-terminal, cancelled, active-failed, and paused-failed classification. Exact reopen and deterministic list paths must expose the same classifier, existing predicates and evidence must remain unchanged, and the complete repository quality gate must stay green.
+The bounded execution slices follow RED→GREEN tests proving active, paused, resumed, authored-terminal, cancelled, active-failed, and paused-failed classification. Exact reopen and deterministic complete and status-filtered list paths must expose the same classifier; status-filtered discovery covers every current status, mixed attribution, ascending run-ID order, empty matches, and fail-closed malformed history. Existing predicates and evidence must remain unchanged, and the complete repository quality gate must stay green.
 
 ## Revisit when
 

@@ -214,6 +214,133 @@ fn lists_exact_workflow_identity_in_run_id_order_across_lifecycle_and_attributio
 }
 
 #[test]
+fn lists_exact_lifecycle_status_in_run_id_order_across_attribution_and_reopen() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("release-task").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(task_id.clone(), TaskGoal::new("ship release").unwrap())
+        .unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+
+    runs.start_for_task(
+        WorkflowRunId::new("zulu-active").unwrap(),
+        &task_id,
+        &advancing_workflow(),
+    )
+    .unwrap();
+    runs.start(
+        WorkflowRunId::new("alpha-active").unwrap(),
+        &advancing_workflow(),
+    )
+    .unwrap();
+    let cancelled_id = WorkflowRunId::new("cancelled").unwrap();
+    let cancelled = runs
+        .start(cancelled_id.clone(), &advancing_workflow())
+        .unwrap();
+    runs.cancel(
+        &cancelled_id,
+        cancelled.revision(),
+        WorkflowRunCancellation::new("operator stopped").unwrap(),
+    )
+    .unwrap();
+    let failed_id = WorkflowRunId::new("failed").unwrap();
+    let failed = runs
+        .start(failed_id.clone(), &advancing_workflow())
+        .unwrap();
+    runs.fail(
+        &failed_id,
+        failed.revision(),
+        WorkflowRunFailure::new("release failed").unwrap(),
+    )
+    .unwrap();
+    let paused_id = WorkflowRunId::new("paused").unwrap();
+    let paused = runs
+        .start(paused_id.clone(), &advancing_workflow())
+        .unwrap();
+    runs.pause(
+        &paused_id,
+        paused.revision(),
+        WorkflowRunPauseReason::new("await approval").unwrap(),
+    )
+    .unwrap();
+    let terminal_id = WorkflowRunId::new("terminal").unwrap();
+    let terminal = runs
+        .start(terminal_id.clone(), &advancing_workflow())
+        .unwrap();
+    let review = runs
+        .advance(&terminal_id, terminal.revision(), 0, None)
+        .unwrap();
+    runs.advance(&terminal_id, review.revision(), 0, Some("release.approved"))
+        .unwrap();
+    drop(runs);
+
+    let reopened = WorkflowRunStore::open(&path).unwrap();
+    for (status, expected_ids) in [
+        (
+            WorkflowRunStatus::Active,
+            vec!["alpha-active", "zulu-active"],
+        ),
+        (WorkflowRunStatus::Paused, vec!["paused"]),
+        (WorkflowRunStatus::AuthoredTerminal, vec!["terminal"]),
+        (WorkflowRunStatus::Cancelled, vec!["cancelled"]),
+        (WorkflowRunStatus::Failed, vec!["failed"]),
+    ] {
+        let listed = reopened.list_by_status(status).unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|run| run.id().as_str())
+                .collect::<Vec<_>>(),
+            expected_ids
+        );
+        assert!(listed.iter().all(|run| run.status() == status));
+    }
+    let active = reopened.list_by_status(WorkflowRunStatus::Active).unwrap();
+    assert!(active.iter().any(|run| run.task_id() == Some(&task_id)));
+    assert!(
+        WorkflowRunStore::open(directory.path().join("empty.sqlite3"))
+            .unwrap()
+            .list_by_status(WorkflowRunStatus::Active)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn status_filtered_listing_fails_closed_on_unrelated_malformed_run_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    runs.start(
+        WorkflowRunId::new("valid-active").unwrap(),
+        &advancing_workflow(),
+    )
+    .unwrap();
+    runs.start(
+        WorkflowRunId::new("unrelated-malformed").unwrap(),
+        &advancing_workflow(),
+    )
+    .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'workflow-run:unrelated-malformed'",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .list_by_status(WorkflowRunStatus::Active)
+            .unwrap_err(),
+        WorkflowRunStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+}
+
+#[test]
 fn workflow_filtered_listing_fails_closed_on_unrelated_malformed_run_history() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
