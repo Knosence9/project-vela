@@ -344,6 +344,83 @@ impl EventLog {
         )
     }
 
+    /// Atomically appends one event to each of two distinct streams.
+    pub(crate) fn append_pair<E1: Event, E2: Event>(
+        &mut self,
+        first_stream: &StreamId,
+        first_expected: ExpectedVersion,
+        first_event: &E1,
+        second_stream: &StreamId,
+        second_expected: ExpectedVersion,
+        second_event: &E2,
+    ) -> Result<(u64, u64), EventLogError> {
+        if matches!(first_expected, ExpectedVersion::Exact(0))
+            || matches!(second_expected, ExpectedVersion::Exact(0))
+        {
+            return Err(EventLogError::InvalidExpectedVersion(0));
+        }
+        let first_type = first_event.event_type();
+        let second_type = second_event.event_type();
+        if first_type.is_empty() || second_type.is_empty() {
+            return Err(EventLogError::InvalidEventType);
+        }
+        let first_payload_version = first_event.payload_version();
+        let second_payload_version = second_event.payload_version();
+        if first_payload_version == 0 {
+            return Err(EventLogError::InvalidPayloadVersion(first_payload_version));
+        }
+        if second_payload_version == 0 {
+            return Err(EventLogError::InvalidPayloadVersion(second_payload_version));
+        }
+        let first_payload = serde_json::to_vec(first_event)?;
+        let second_payload = serde_json::to_vec(second_event)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let first_current = current_stream_version(&transaction, first_stream)?;
+        if !expected_version_matches(first_expected, first_current) {
+            return Err(EventLogError::WrongExpectedVersion {
+                expected: first_expected,
+                current: first_current,
+            });
+        }
+        let second_current = current_stream_version(&transaction, second_stream)?;
+        if !expected_version_matches(second_expected, second_current) {
+            return Err(EventLogError::WrongExpectedVersion {
+                expected: second_expected,
+                current: second_current,
+            });
+        }
+        let (first_version, first_stored_version) = next_stream_version(first_current)?;
+        let (second_version, second_stored_version) = next_stream_version(second_current)?;
+        transaction.execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                first_stream.as_str(),
+                first_stored_version,
+                first_type,
+                first_payload_version,
+                first_payload
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                second_stream.as_str(),
+                second_stored_version,
+                second_type,
+                second_payload_version,
+                second_payload
+            ],
+        )?;
+        transaction.commit()?;
+        Ok((first_version, second_version))
+    }
+
     fn append_guarded<E: Event>(
         &mut self,
         stream: &StreamId,

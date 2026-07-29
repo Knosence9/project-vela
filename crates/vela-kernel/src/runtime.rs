@@ -2950,6 +2950,64 @@ impl<P> AssistantRuntime<P> {
             provider,
         })
     }
+
+    fn ensure_session_writable(&self, session_id: &SessionId) -> Result<(), RuntimeError> {
+        let session = self
+            .sessions
+            .load(session_id)
+            .map_err(RuntimeError::Session)?
+            .ok_or_else(|| {
+                RuntimeError::Session(SessionStoreError::NotFound {
+                    session_id: session_id.clone(),
+                })
+            })?;
+        if session.status() == SessionStatus::Closed {
+            return Err(RuntimeError::Session(SessionStoreError::SessionClosed {
+                session_id: session_id.clone(),
+            }));
+        }
+        Ok(())
+    }
+
+    fn load_active_associated_task(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<(Task, SessionId), RuntimeError> {
+        let task = self
+            .tasks
+            .load(task_id)
+            .map_err(RuntimeError::Task)?
+            .ok_or_else(|| {
+                RuntimeError::Task(TaskStoreError::NotFound {
+                    task_id: task_id.clone(),
+                })
+            })?;
+        match task.status() {
+            TaskStatus::Active => {}
+            TaskStatus::Completed => {
+                return Err(RuntimeError::Task(TaskStoreError::AlreadyCompleted {
+                    task_id: task_id.clone(),
+                }));
+            }
+            TaskStatus::Cancelled => {
+                return Err(RuntimeError::Task(TaskStoreError::AlreadyCancelled {
+                    task_id: task_id.clone(),
+                }));
+            }
+            TaskStatus::Failed => {
+                return Err(RuntimeError::Task(TaskStoreError::AlreadyFailed {
+                    task_id: task_id.clone(),
+                }));
+            }
+        }
+        let session_id =
+            task.session_id()
+                .cloned()
+                .ok_or_else(|| RuntimeError::TaskNotAssociated {
+                    task_id: task_id.clone(),
+                })?;
+        Ok((task, session_id))
+    }
 }
 
 impl<P: AssistantProvider> AssistantRuntime<P> {
@@ -3188,64 +3246,6 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
 
         Ok(TaskTurnOutcome { session, task })
     }
-
-    fn ensure_session_writable(&self, session_id: &SessionId) -> Result<(), RuntimeError> {
-        let session = self
-            .sessions
-            .load(session_id)
-            .map_err(RuntimeError::Session)?
-            .ok_or_else(|| {
-                RuntimeError::Session(SessionStoreError::NotFound {
-                    session_id: session_id.clone(),
-                })
-            })?;
-        if session.status() == SessionStatus::Closed {
-            return Err(RuntimeError::Session(SessionStoreError::SessionClosed {
-                session_id: session_id.clone(),
-            }));
-        }
-        Ok(())
-    }
-
-    fn load_active_associated_task(
-        &self,
-        task_id: &TaskId,
-    ) -> Result<(Task, SessionId), RuntimeError> {
-        let task = self
-            .tasks
-            .load(task_id)
-            .map_err(RuntimeError::Task)?
-            .ok_or_else(|| {
-                RuntimeError::Task(TaskStoreError::NotFound {
-                    task_id: task_id.clone(),
-                })
-            })?;
-        match task.status() {
-            TaskStatus::Active => {}
-            TaskStatus::Completed => {
-                return Err(RuntimeError::Task(TaskStoreError::AlreadyCompleted {
-                    task_id: task_id.clone(),
-                }));
-            }
-            TaskStatus::Cancelled => {
-                return Err(RuntimeError::Task(TaskStoreError::AlreadyCancelled {
-                    task_id: task_id.clone(),
-                }));
-            }
-            TaskStatus::Failed => {
-                return Err(RuntimeError::Task(TaskStoreError::AlreadyFailed {
-                    task_id: task_id.clone(),
-                }));
-            }
-        }
-        let session_id =
-            task.session_id()
-                .cloned()
-                .ok_or_else(|| RuntimeError::TaskNotAssociated {
-                    task_id: task_id.clone(),
-                })?;
-        Ok((task, session_id))
-    }
 }
 
 impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
@@ -3273,6 +3273,63 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
             developer_policy,
             selected_skills,
         )
+    }
+
+    /// Executes one caller-selected workflow phase as a task-associated tool-free composed turn.
+    ///
+    /// The active associated task, fresh Attempt identity, writable session, and phase bindings are
+    /// validated before transcript or provider side effects. A successful provider response is
+    /// committed atomically as an assistant turn and Attempt evidence. This operation neither
+    /// proves phase/run provenance nor mutates workflow lifecycle state.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "phase task turns retain explicit task evidence, policies, registry, and phase"
+    )]
+    pub fn execute_workflow_phase_task_turn(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        skill_registry: &SkillRegistry,
+        phase: &RegisteredWorkflowPhase,
+    ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (task, session_id) = self.load_active_associated_task(task_id)?;
+        task.validate_observation_append(
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+        )
+        .map_err(RuntimeError::Task)?;
+        self.ensure_session_writable(&session_id)?;
+        let selected_skills = phase
+            .resolve_skills(skill_registry)
+            .map_err(RuntimeError::WorkflowPhaseSkills)?;
+
+        let (assistant_content, attempt_text) = self.complete_selected_composed_turn_validated(
+            &session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+            |assistant_content| {
+                TaskObservationText::new(assistant_content.as_str())
+                    .map_err(RuntimeError::InvalidAttemptText)
+            },
+        )?;
+        let (session, task) = self
+            .tasks
+            .append_attempt_with_assistant_turn(
+                task_id,
+                &session_id,
+                attempt_observation_id,
+                attempt_text,
+                assistant_content,
+            )
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
     }
 
     /// Executes one caller-selected workflow phase as an explicit tool-free composed turn.
@@ -3308,6 +3365,50 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         developer_policy: DeveloperPolicy<'_>,
         selected_skills: SkillSelection<'_>,
     ) -> Result<Session, RuntimeError> {
+        self.execute_selected_composed_turn_validated(
+            session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+            |_| Ok(()),
+        )
+        .map(|(session, ())| session)
+    }
+
+    fn execute_selected_composed_turn_validated<T>(
+        &mut self,
+        session_id: &SessionId,
+        human_content: SessionTurnContent,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        selected_skills: SkillSelection<'_>,
+        validate_assistant: impl FnOnce(&SessionTurnContent) -> Result<T, RuntimeError>,
+    ) -> Result<(Session, T), RuntimeError> {
+        let (assistant_content, validated) = self.complete_selected_composed_turn_validated(
+            session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+            validate_assistant,
+        )?;
+        let session = self
+            .sessions
+            .append_turn(session_id, SessionTurnRole::Assistant, assistant_content)
+            .map_err(RuntimeError::Session)?;
+        Ok((session, validated))
+    }
+
+    fn complete_selected_composed_turn_validated<T>(
+        &mut self,
+        session_id: &SessionId,
+        human_content: SessionTurnContent,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        selected_skills: SkillSelection<'_>,
+        validate_assistant: impl FnOnce(&SessionTurnContent) -> Result<T, RuntimeError>,
+    ) -> Result<(SessionTurnContent, T), RuntimeError> {
         let session = self
             .sessions
             .append_turn(session_id, SessionTurnRole::Human, human_content)
@@ -3321,9 +3422,8 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
                 transcript: session.turns(),
             })
             .map_err(RuntimeError::Provider)?;
-        self.sessions
-            .append_turn(session_id, SessionTurnRole::Assistant, assistant_content)
-            .map_err(RuntimeError::Session)
+        let validated = validate_assistant(&assistant_content)?;
+        Ok((assistant_content, validated))
     }
 }
 
