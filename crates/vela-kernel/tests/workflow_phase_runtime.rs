@@ -65,7 +65,7 @@ fn explicitly_executes_one_caller_selected_phase_with_only_its_bound_skills() {
     let phase = RegisteredWorkflowPhase::new("review", false, vec![])
         .with_skills(["zeta.skill", "alpha.skill"]);
 
-    let session = runtime
+    runtime
         .execute_workflow_phase_turn(
             &session_id,
             SessionTurnContent::new("review this").unwrap(),
@@ -80,8 +80,13 @@ fn explicitly_executes_one_caller_selected_phase_with_only_its_bound_skills() {
         calls.borrow().as_slice(),
         &[vec!["alpha.skill", "zeta.skill"]]
     );
-    assert_eq!(session.turns().len(), 2);
-    assert_eq!(session.turns()[1].content().as_str(), "phase answer");
+    let persisted = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.turns().len(), 2);
+    assert_eq!(persisted.turns()[1].content().as_str(), "phase answer");
     assert_eq!(phase.skills(), ["zeta.skill", "alpha.skill"]);
 }
 
