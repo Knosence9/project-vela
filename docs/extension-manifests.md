@@ -95,6 +95,12 @@ Malformed direct terminal bindings fail with `WorkflowPhaseSkillResolutionError:
 
 Resolution is read-only and provider-neutral. It does not invoke a provider, compose or mutate a request by itself, persist selection evidence, infer workflow lifecycle eligibility, advance a cursor or durable run, evaluate a gate, schedule work, grant tool permission, or infer that selected instructions are safe.
 
+## Explicit workflow-phase provider composition
+
+The tool-free composition bridge is specified by [ADR-0020](adr/0020-explicit-workflow-phase-provider-composition.md). `AssistantRuntime::execute_workflow_phase_turn` requires the caller to supply one exact borrowed phase together with the session, human content, system policy, developer policy, and caller-owned skill registry. It resolves the phase through the boundary above before any transcript or provider side effect, then reuses the existing composed-turn authority structure. The provider receives system policy, developer policy, phase-bound registered skills in deterministic ascending exact-ID order, and the durable transcript as distinct fields. Registered but unbound skills are excluded.
+
+Resolution failures surface as typed `RuntimeError::WorkflowPhaseSkills` errors before the human turn is persisted or the provider is called. After resolution succeeds, existing composed-turn session and provider durability semantics remain unchanged. The operation does not infer a current phase, load or mutate a workflow run, choose a transition, evaluate a gate, schedule work, persist selection evidence, grant tool permission, or invoke a tool; the caller remains responsible for explicitly choosing the phase.
+
 ## Tool component compilation
 
 `compile_tool_components(artifacts)` is the inert compiler boundary for prepared tools. It creates a Wasmtime engine with the Component Model explicitly enabled and compiles binary component bytes without Wasmtime's text-format support. Every component must have no top-level imports and exactly one top-level export: the synchronous function `invoke(input: string) -> result<string, string>` specified structurally by `vela:extension/tool@0.1.0`. Core modules, malformed bytes, imports, missing or additional exports, and incompatible parameter or result types fail closed.
