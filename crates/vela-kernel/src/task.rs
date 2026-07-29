@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::event_log::{
     DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
 };
-use crate::session::{SessionId, SessionStatus, SessionStore, SessionStoreError, session_stream};
+use crate::session::{
+    Session, SessionEvent, SessionId, SessionStatus, SessionStore, SessionStoreError,
+    SessionTurnContent, SessionTurnRole, session_stream,
+};
 
 const TASK_STARTED_EVENT_TYPE: &str = "task.started";
 const TASK_COMPLETED_EVENT_TYPE: &str = "task.completed";
@@ -614,6 +617,79 @@ impl TaskStore {
         text: TaskObservationText,
     ) -> Result<Task, TaskStoreError> {
         self.append_observation_with_parent(id, observation_id, kind, text, None)
+    }
+
+    /// Atomically appends one assistant turn and its matching task Attempt evidence.
+    pub(crate) fn append_attempt_with_assistant_turn(
+        &mut self,
+        id: &TaskId,
+        session_id: &SessionId,
+        observation_id: TaskObservationId,
+        text: TaskObservationText,
+        assistant_content: SessionTurnContent,
+    ) -> Result<(Session, Task), TaskStoreError> {
+        loop {
+            let Some(mut loaded_task) = self.load_versioned(id)? else {
+                return Err(TaskStoreError::NotFound {
+                    task_id: id.clone(),
+                });
+            };
+            loaded_task.task.validate_observation_append(
+                &observation_id,
+                TaskObservationKind::Attempt,
+                None,
+            )?;
+            if loaded_task.task.session_id() != Some(session_id) {
+                return Err(TaskStoreError::SessionNotFound {
+                    session_id: session_id.clone(),
+                });
+            }
+            let Some((mut session, session_version)) = self
+                .sessions
+                .load_with_version(session_id)
+                .map_err(TaskStoreError::Session)?
+            else {
+                return Err(TaskStoreError::SessionNotFound {
+                    session_id: session_id.clone(),
+                });
+            };
+            if session.status() == SessionStatus::Closed {
+                return Err(TaskStoreError::SessionClosed {
+                    session_id: session_id.clone(),
+                });
+            }
+            let session_event = SessionEvent::TurnAppended {
+                role: SessionTurnRole::Assistant,
+                content: assistant_content.clone(),
+            };
+            let task_event = TaskEvent::ObservationAppended {
+                id: observation_id.clone(),
+                kind: TaskObservationKind::Attempt,
+                text: text.clone(),
+                parent_attempt_id: None,
+            };
+            match self.event_log.append_pair(
+                &session_stream(session_id),
+                ExpectedVersion::Exact(session_version),
+                &session_event,
+                &task_stream(id),
+                ExpectedVersion::Exact(loaded_task.stream_version),
+                &task_event,
+            ) {
+                Ok(_) => {
+                    session.apply_appended_turn(SessionTurnRole::Assistant, assistant_content);
+                    loaded_task.task.observations.push(TaskObservation {
+                        id: observation_id,
+                        kind: TaskObservationKind::Attempt,
+                        text,
+                        parent_attempt_id: None,
+                    });
+                    return Ok((session, loaded_task.task));
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(TaskStoreError::EventLog(error)),
+            }
+        }
     }
 
     /// Appends non-attempt evidence related to one earlier attempt in the same task.

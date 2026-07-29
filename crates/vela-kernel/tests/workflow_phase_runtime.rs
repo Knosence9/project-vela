@@ -1,4 +1,4 @@
-use std::{cell::RefCell, error::Error, fmt, rc::Rc};
+use std::{cell::RefCell, error::Error, fmt, path::PathBuf, rc::Rc};
 
 use tempfile::tempdir;
 use vela_kernel::{
@@ -331,6 +331,79 @@ impl ComposedAssistantProvider for BlankProvider {
     ) -> Result<SessionTurnContent, ProviderError> {
         Ok(SessionTurnContent::new(" \n ").unwrap())
     }
+}
+
+struct RacingAttemptProvider {
+    path: PathBuf,
+    task_id: TaskId,
+    attempt_id: TaskObservationId,
+}
+
+impl ComposedAssistantProvider for RacingAttemptProvider {
+    fn complete_composed(
+        &mut self,
+        _request: ComposedAssistantRequest<'_>,
+    ) -> Result<SessionTurnContent, ProviderError> {
+        TaskStore::open(&self.path)
+            .unwrap()
+            .append_observation(
+                &self.task_id,
+                self.attempt_id.clone(),
+                TaskObservationKind::Attempt,
+                TaskObservationText::new("racing attempt").unwrap(),
+            )
+            .unwrap();
+        Ok(SessionTurnContent::new("orphan-prone answer").unwrap())
+    }
+}
+
+#[test]
+fn racing_attempt_rejection_does_not_persist_an_orphan_assistant_turn() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("racing-phase-task-session").unwrap();
+    let task_id = TaskId::new("racing-phase-task").unwrap();
+    let attempt_id = TaskObservationId::new("attempt-1").unwrap();
+    create_associated_task(&path, &task_id, &session_id);
+    let mut runtime = AssistantRuntime::open(
+        &path,
+        RacingAttemptProvider {
+            path: path.clone(),
+            task_id: task_id.clone(),
+            attempt_id: attempt_id.clone(),
+        },
+    )
+    .unwrap();
+
+    let error = runtime
+        .execute_workflow_phase_task_turn(
+            &task_id,
+            SessionTurnContent::new("persist this question").unwrap(),
+            attempt_id,
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &registry(&["review.skill"]),
+            &RegisteredWorkflowPhase::new("review", false, vec![]).with_skills(["review.skill"]),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::Task(TaskStoreError::DuplicateObservation { .. })
+    ));
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 1);
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "racing attempt");
 }
 
 #[test]

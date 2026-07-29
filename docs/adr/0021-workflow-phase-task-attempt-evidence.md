@@ -15,7 +15,7 @@ ADR-0020 lets a caller explicitly apply one chosen workflow phase's registered s
 
 Before transcript persistence or provider invocation, the runtime validates the task is active and associated, the Attempt identity is fresh and legal, the associated session is writable, and the phase bindings resolve through ADR-0019. The provider then receives ADR-0020's authority structure: system policy, developer policy, deterministic phase-bound registered skills, and the durable transcript after the human turn.
 
-On success, durability is ordered: human transcript turn, provider call, response validation, assistant transcript turn, then task Attempt. The Attempt text is the exact successful provider response. A provider failure or blank-only response therefore preserves the committed human turn and no assistant turn or Attempt; a later assistant or Attempt persistence failure preserves every earlier commit. Racing task changes remain authoritative and can reject the final Attempt append.
+On success, durability is ordered: human transcript turn, provider call, response validation, then one SQLite transaction that appends both the assistant transcript turn and task Attempt. The Attempt text is the exact successful provider response. A provider failure or blank-only response therefore preserves the committed human turn and no assistant turn or Attempt. Racing task or session changes remain authoritative; if either rejects the final transaction, neither response record is appended.
 
 The Attempt records provider response evidence only. It does not prove that the supplied phase belongs to any registered definition or durable run, persist the phase ID or selected skill IDs, authorize workflow work, establish workflow-run/task attribution, infer success, complete the task, or transition a workflow.
 
@@ -35,14 +35,14 @@ A provider response is not verification, transition selection, gate acknowledgem
 
 ## Consequences
 
-- Callers can preserve one explicit phase-assisted response in both the associated session and the task's ordered evidence.
+- Callers preserve one explicit phase-assisted response in both the associated session and the task's ordered evidence, or in neither aggregate when final persistence fails.
 - Deterministic task, Attempt, session, and phase errors precede provider effects.
 - Workflow-run lifecycle and task lifecycle remain independent.
 - No durable phase provenance is claimed; callers needing that evidence require a later explicit schema and execution identity decision.
 
 ## Verification
 
-The bounded slice follows RED→GREEN tests proving deterministic selected skills, durable session and Attempt evidence, duplicate Attempt and invalid phase rejection before side effects, and provider-failure partial-commit semantics. The complete repository quality gate must remain green.
+The bounded slice follows RED→GREEN tests proving deterministic selected skills, durable session and Attempt evidence, duplicate Attempt and invalid phase rejection before side effects, provider-failure partial-commit semantics, and atomic rejection when an Attempt races the provider response. The complete repository quality gate must remain green.
 
 ## Revisit when
 

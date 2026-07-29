@@ -277,6 +277,14 @@ impl Session {
     pub fn turns(&self) -> &[SessionTurn] {
         &self.turns
     }
+
+    pub(crate) fn apply_appended_turn(
+        &mut self,
+        role: SessionTurnRole,
+        content: SessionTurnContent,
+    ) {
+        self.turns.push(SessionTurn { role, content });
+    }
 }
 
 #[derive(Debug)]
@@ -735,7 +743,7 @@ pub(crate) fn session_stream(id: &SessionId) -> StreamId {
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
-enum SessionEvent {
+pub(crate) enum SessionEvent {
     Created {
         title: SessionTitle,
     },
