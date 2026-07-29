@@ -231,6 +231,7 @@ The first milestone is the **evidence loop**:
 73. Discover task-attributed workflow runs through an exact deterministic historical query. ✅
 74. Discover runs for one exact immutable workflow identity through a deterministic historical query. ✅
 75. Discover workflow runs in one exact lifecycle status through a deterministic historical query. ✅
+76. Compose exact task, workflow, and lifecycle constraints through one deterministic workflow-run filter. ✅
 
 ## Project documents
 
