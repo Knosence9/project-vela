@@ -16,6 +16,7 @@ use crate::tool::{
     DurableToolInvocationError, DurableToolRegistryInvocationError, ToolAuthorizer, ToolId,
     ToolInvocationId, ToolInvocationStore, ToolInvocationStoreError, ToolMetadata, ToolRegistry,
 };
+use crate::workflow::{RegisteredWorkflowPhase, WorkflowPhaseSkillResolutionError};
 
 /// A synchronous, provider-neutral source for one assistant response.
 pub trait AssistantProvider {
@@ -2609,6 +2610,7 @@ pub enum RuntimeError {
     Session(SessionStoreError),
     Provider(ProviderError),
     SkillSelection(SkillSelectionError),
+    WorkflowPhaseSkills(WorkflowPhaseSkillResolutionError),
     Task(TaskStoreError),
     TaskNotAssociated { task_id: TaskId },
     InvalidAttemptText(TaskObservationTextError),
@@ -2623,6 +2625,9 @@ impl fmt::Display for RuntimeError {
             Self::Provider(error) => write!(formatter, "assistant provider error: {error}"),
             Self::SkillSelection(error) => {
                 write!(formatter, "assistant skill selection error: {error}")
+            }
+            Self::WorkflowPhaseSkills(error) => {
+                write!(formatter, "assistant workflow phase skill error: {error}")
             }
             Self::Task(error) => write!(formatter, "assistant runtime task error: {error}"),
             Self::TaskNotAssociated { task_id } => {
@@ -2647,6 +2652,7 @@ impl Error for RuntimeError {
             Self::Session(error) => Some(error),
             Self::Provider(error) => Some(error),
             Self::SkillSelection(error) => Some(error),
+            Self::WorkflowPhaseSkills(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvalidAttemptText(error) => Some(error),
             Self::InvalidTaskOutput(error) => Some(error),
@@ -3260,6 +3266,48 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         let selected_skills = skill_registry
             .select(selected_skill_ids)
             .map_err(RuntimeError::SkillSelection)?;
+        self.execute_selected_composed_turn(
+            session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        )
+    }
+
+    /// Executes one caller-selected workflow phase as an explicit tool-free composed turn.
+    ///
+    /// Phase bindings are resolved before transcript or provider side effects. This operation
+    /// neither chooses nor mutates workflow lifecycle state.
+    pub fn execute_workflow_phase_turn(
+        &mut self,
+        session_id: &SessionId,
+        human_content: SessionTurnContent,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        skill_registry: &SkillRegistry,
+        phase: &RegisteredWorkflowPhase,
+    ) -> Result<Session, RuntimeError> {
+        let selected_skills = phase
+            .resolve_skills(skill_registry)
+            .map_err(RuntimeError::WorkflowPhaseSkills)?;
+        self.execute_selected_composed_turn(
+            session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+        )
+    }
+
+    fn execute_selected_composed_turn(
+        &mut self,
+        session_id: &SessionId,
+        human_content: SessionTurnContent,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        selected_skills: SkillSelection<'_>,
+    ) -> Result<Session, RuntimeError> {
         let session = self
             .sessions
             .append_turn(session_id, SessionTurnRole::Human, human_content)
