@@ -458,6 +458,47 @@ pub enum WorkflowRunStatus {
     Failed,
 }
 
+/// Optional exact constraints for authoritative workflow-run discovery.
+///
+/// Supplied constraints compose with logical AND. An unconstrained filter matches
+/// every valid run.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WorkflowRunFilter<'a> {
+    task_id: Option<&'a TaskId>,
+    workflow_id: Option<&'a WorkflowId>,
+    status: Option<WorkflowRunStatus>,
+}
+
+impl<'a> WorkflowRunFilter<'a> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn for_task(mut self, task_id: &'a TaskId) -> Self {
+        self.task_id = Some(task_id);
+        self
+    }
+
+    pub fn for_workflow(mut self, workflow_id: &'a WorkflowId) -> Self {
+        self.workflow_id = Some(workflow_id);
+        self
+    }
+
+    pub fn with_status(mut self, status: WorkflowRunStatus) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    fn matches(self, run: &WorkflowRun) -> bool {
+        self.task_id
+            .is_none_or(|task_id| run.task_id() == Some(task_id))
+            && self
+                .workflow_id
+                .is_none_or(|workflow_id| run.workflow().id() == workflow_id)
+            && self.status.is_none_or(|status| run.status() == status)
+    }
+}
+
 /// Read-only state projected from one durable workflow-run event stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowRun {
@@ -1055,6 +1096,21 @@ impl WorkflowRunStore {
         Ok(runs)
     }
 
+    /// Replays runs matching every supplied exact constraint in ascending run-ID order.
+    ///
+    /// Complete authoritative replay occurs before filtering, so malformed history
+    /// fails the whole query even when that run would not match.
+    pub fn list_filtered(
+        &self,
+        filter: WorkflowRunFilter<'_>,
+    ) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|run| filter.matches(run))
+            .collect())
+    }
+
     /// Replays runs attributed to one exact task in ascending run-ID order.
     ///
     /// This historical query does not require the task to exist or remain active.
@@ -1062,11 +1118,7 @@ impl WorkflowRunStore {
         &self,
         task_id: &TaskId,
     ) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
-        Ok(self
-            .list()?
-            .into_iter()
-            .filter(|run| run.task_id() == Some(task_id))
-            .collect())
+        self.list_filtered(WorkflowRunFilter::new().for_task(task_id))
     }
 
     /// Replays runs that snapshot one exact workflow identity in ascending run-ID order.
@@ -1076,11 +1128,7 @@ impl WorkflowRunStore {
         &self,
         workflow_id: &WorkflowId,
     ) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
-        Ok(self
-            .list()?
-            .into_iter()
-            .filter(|run| run.workflow().id() == workflow_id)
-            .collect())
+        self.list_filtered(WorkflowRunFilter::new().for_workflow(workflow_id))
     }
 
     /// Replays runs with one exact lifecycle status in ascending run-ID order.
@@ -1088,11 +1136,7 @@ impl WorkflowRunStore {
         &self,
         status: WorkflowRunStatus,
     ) -> Result<Vec<WorkflowRun>, WorkflowRunStoreError> {
-        Ok(self
-            .list()?
-            .into_iter()
-            .filter(|run| run.status() == status)
-            .collect())
+        self.list_filtered(WorkflowRunFilter::new().with_status(status))
     }
 }
 

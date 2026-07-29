@@ -5,9 +5,10 @@ use vela_kernel::{
     workflow::{
         RegisteredWorkflow, RegisteredWorkflowPhase, RegisteredWorkflowTransition, WorkflowId,
         WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunFailure,
-        WorkflowRunFailureError, WorkflowRunHistoryEvent, WorkflowRunId, WorkflowRunIdError,
-        WorkflowRunPauseReason, WorkflowRunPauseReasonError, WorkflowRunResumeReason,
-        WorkflowRunResumeReasonError, WorkflowRunStatus, WorkflowRunStore, WorkflowRunStoreError,
+        WorkflowRunFailureError, WorkflowRunFilter, WorkflowRunHistoryEvent, WorkflowRunId,
+        WorkflowRunIdError, WorkflowRunPauseReason, WorkflowRunPauseReasonError,
+        WorkflowRunResumeReason, WorkflowRunResumeReasonError, WorkflowRunStatus, WorkflowRunStore,
+        WorkflowRunStoreError,
     },
 };
 
@@ -306,6 +307,159 @@ fn lists_exact_lifecycle_status_in_run_id_order_across_attribution_and_reopen() 
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn composes_workflow_run_filters_with_and_semantics_after_reopen() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("release-task").unwrap();
+    let other_task_id = TaskId::new("other-task").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    for id in [task_id.clone(), other_task_id.clone()] {
+        tasks
+            .start(id, TaskGoal::new("ship release").unwrap())
+            .unwrap();
+    }
+    let target = advancing_workflow();
+    let workflow_id = target.id().clone();
+    let other = RegisteredWorkflow::new(
+        WorkflowId::new("other.workflow").unwrap(),
+        target.start(),
+        target.phases().to_vec(),
+    );
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    runs.start_for_task(
+        WorkflowRunId::new("alpha-active").unwrap(),
+        &task_id,
+        &target,
+    )
+    .unwrap();
+    for (id, owning_task, workflow) in [
+        ("bravo-match", &task_id, &target),
+        ("charlie-other-workflow", &task_id, &other),
+        ("delta-other-task", &other_task_id, &target),
+    ] {
+        let run_id = WorkflowRunId::new(id).unwrap();
+        let started = runs
+            .start_for_task(run_id.clone(), owning_task, workflow)
+            .unwrap();
+        runs.pause(
+            &run_id,
+            started.revision(),
+            WorkflowRunPauseReason::new("await approval").unwrap(),
+        )
+        .unwrap();
+    }
+    let unassociated_id = WorkflowRunId::new("echo-unassociated").unwrap();
+    let unassociated = runs.start(unassociated_id.clone(), &target).unwrap();
+    runs.pause(
+        &unassociated_id,
+        unassociated.revision(),
+        WorkflowRunPauseReason::new("await approval").unwrap(),
+    )
+    .unwrap();
+    drop(runs);
+
+    let reopened = WorkflowRunStore::open(&path).unwrap();
+    let all = reopened.list_filtered(WorkflowRunFilter::new()).unwrap();
+    assert_eq!(
+        all.iter().map(|run| run.id().as_str()).collect::<Vec<_>>(),
+        reopened
+            .list()
+            .unwrap()
+            .iter()
+            .map(|run| run.id().as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let paused_target = reopened
+        .list_filtered(
+            WorkflowRunFilter::new()
+                .for_workflow(&workflow_id)
+                .with_status(WorkflowRunStatus::Paused),
+        )
+        .unwrap();
+    assert_eq!(
+        paused_target
+            .iter()
+            .map(|run| run.id().as_str())
+            .collect::<Vec<_>>(),
+        ["bravo-match", "delta-other-task", "echo-unassociated"]
+    );
+
+    let exact_intersection = reopened
+        .list_filtered(
+            WorkflowRunFilter::new()
+                .for_task(&task_id)
+                .for_workflow(&workflow_id)
+                .with_status(WorkflowRunStatus::Paused),
+        )
+        .unwrap();
+    assert_eq!(
+        exact_intersection
+            .iter()
+            .map(|run| run.id().as_str())
+            .collect::<Vec<_>>(),
+        ["bravo-match"]
+    );
+    assert!(
+        reopened
+            .list_filtered(
+                WorkflowRunFilter::new()
+                    .for_task(&task_id)
+                    .for_workflow(&workflow_id)
+                    .with_status(WorkflowRunStatus::Failed),
+            )
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn compound_filtered_listing_fails_closed_on_nonmatching_malformed_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("release-task").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(task_id.clone(), TaskGoal::new("ship release").unwrap())
+        .unwrap();
+    let target = advancing_workflow();
+    let workflow_id = target.id().clone();
+    let other = RegisteredWorkflow::new(
+        WorkflowId::new("other.workflow").unwrap(),
+        target.start(),
+        target.phases().to_vec(),
+    );
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    runs.start_for_task(
+        WorkflowRunId::new("valid-match").unwrap(),
+        &task_id,
+        &target,
+    )
+    .unwrap();
+    runs.start(WorkflowRunId::new("nonmatching-malformed").unwrap(), &other)
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'workflow-run:nonmatching-malformed'",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        WorkflowRunStore::open(&path).unwrap().list_filtered(
+            WorkflowRunFilter::new()
+                .for_task(&task_id)
+                .for_workflow(&workflow_id)
+                .with_status(WorkflowRunStatus::Active),
+        ),
+        Err(WorkflowRunStoreError::Replay(
+            ReplayError::MalformedPayload { .. }
+        ))
+    ));
 }
 
 #[test]
