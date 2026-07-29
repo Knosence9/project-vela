@@ -322,6 +322,56 @@ impl ComposedAssistantProvider for FailingProvider {
     }
 }
 
+struct BlankProvider;
+
+impl ComposedAssistantProvider for BlankProvider {
+    fn complete_composed(
+        &mut self,
+        _request: ComposedAssistantRequest<'_>,
+    ) -> Result<SessionTurnContent, ProviderError> {
+        Ok(SessionTurnContent::new(" \n ").unwrap())
+    }
+}
+
+#[test]
+fn blank_workflow_phase_task_response_preserves_only_the_human_turn() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("blank-phase-task-session").unwrap();
+    let task_id = TaskId::new("blank-phase-task").unwrap();
+    create_associated_task(&path, &task_id, &session_id);
+    let mut runtime = AssistantRuntime::open(&path, BlankProvider).unwrap();
+
+    let error = runtime
+        .execute_workflow_phase_task_turn(
+            &task_id,
+            SessionTurnContent::new("persist this question").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &registry(&["review.skill"]),
+            &RegisteredWorkflowPhase::new("review", false, vec![]).with_skills(["review.skill"]),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, RuntimeError::InvalidAttemptText(_)));
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 1);
+    assert!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .observations()
+            .is_empty()
+    );
+}
+
 #[test]
 fn workflow_phase_task_provider_failure_preserves_only_the_human_turn() {
     let directory = tempdir().unwrap();

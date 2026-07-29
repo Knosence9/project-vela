@@ -3307,20 +3307,17 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
             .resolve_skills(skill_registry)
             .map_err(RuntimeError::WorkflowPhaseSkills)?;
 
-        let session = self.execute_selected_composed_turn(
+        let (session, attempt_text) = self.execute_selected_composed_turn_validated(
             &session_id,
             human_content,
             system_policy,
             developer_policy,
             selected_skills,
+            |assistant_content| {
+                TaskObservationText::new(assistant_content.as_str())
+                    .map_err(RuntimeError::InvalidAttemptText)
+            },
         )?;
-        let assistant_content = session
-            .turns()
-            .last()
-            .expect("a successful assistant turn has a final turn")
-            .content();
-        let attempt_text = TaskObservationText::new(assistant_content.as_str())
-            .map_err(RuntimeError::InvalidAttemptText)?;
         let task = self
             .tasks
             .append_observation(
@@ -3367,6 +3364,26 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         developer_policy: DeveloperPolicy<'_>,
         selected_skills: SkillSelection<'_>,
     ) -> Result<Session, RuntimeError> {
+        self.execute_selected_composed_turn_validated(
+            session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+            |_| Ok(()),
+        )
+        .map(|(session, ())| session)
+    }
+
+    fn execute_selected_composed_turn_validated<T>(
+        &mut self,
+        session_id: &SessionId,
+        human_content: SessionTurnContent,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        selected_skills: SkillSelection<'_>,
+        validate_assistant: impl FnOnce(&SessionTurnContent) -> Result<T, RuntimeError>,
+    ) -> Result<(Session, T), RuntimeError> {
         let session = self
             .sessions
             .append_turn(session_id, SessionTurnRole::Human, human_content)
@@ -3380,9 +3397,12 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
                 transcript: session.turns(),
             })
             .map_err(RuntimeError::Provider)?;
-        self.sessions
+        let validated = validate_assistant(&assistant_content)?;
+        let session = self
+            .sessions
             .append_turn(session_id, SessionTurnRole::Assistant, assistant_content)
-            .map_err(RuntimeError::Session)
+            .map_err(RuntimeError::Session)?;
+        Ok((session, validated))
     }
 }
 

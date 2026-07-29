@@ -15,7 +15,7 @@ ADR-0020 lets a caller explicitly apply one chosen workflow phase's registered s
 
 Before transcript persistence or provider invocation, the runtime validates the task is active and associated, the Attempt identity is fresh and legal, the associated session is writable, and the phase bindings resolve through ADR-0019. The provider then receives ADR-0020's authority structure: system policy, developer policy, deterministic phase-bound registered skills, and the durable transcript after the human turn.
 
-On success, durability is ordered: human transcript turn, provider call, assistant transcript turn, then task Attempt. The Attempt text is the exact successful provider response. A provider failure therefore preserves the committed human turn and no Attempt; a later assistant or Attempt persistence failure preserves every earlier commit. Racing task changes remain authoritative and can reject the final Attempt append.
+On success, durability is ordered: human transcript turn, provider call, response validation, assistant transcript turn, then task Attempt. The Attempt text is the exact successful provider response. A provider failure or blank-only response therefore preserves the committed human turn and no assistant turn or Attempt; a later assistant or Attempt persistence failure preserves every earlier commit. Racing task changes remain authoritative and can reject the final Attempt append.
 
 The Attempt records provider response evidence only. It does not prove that the supplied phase belongs to any registered definition or durable run, persist the phase ID or selected skill IDs, authorize workflow work, establish workflow-run/task attribution, infer success, complete the task, or transition a workflow.
 
