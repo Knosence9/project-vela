@@ -80,6 +80,18 @@ Run the complete local quality gate with:
 nix develop --command just verify
 ```
 
+Before arming squash auto-merge for a pull request, verify its exact head and
+review evidence with:
+
+```bash
+head=$(nix develop --command git rev-parse HEAD)
+nix develop --command scripts/verify-merge-readiness <pr-number> "$head"
+```
+
+The read-only verifier reports deterministic `READY` or `BLOCKED` diagnostics;
+it never merges the pull request. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for
+the fail-closed review contract.
+
 ## Secret management
 
 Vela commits secret **declarations** in [`secretspec.toml`](secretspec.toml), but

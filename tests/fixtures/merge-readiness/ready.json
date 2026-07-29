@@ -1,0 +1,50 @@
+{
+  "pr": {
+    "number": 726,
+    "state": "OPEN",
+    "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "expected_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "reviews": [
+    {
+      "author": "coderabbitai[bot]",
+      "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "body": "Actionable comments posted: 1\n\n**Run ID**: `run-base`\n\nReviewing files that changed through the base review."
+    },
+    {
+      "author": "coderabbitai[bot]",
+      "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "body": ""
+    }
+  ],
+  "reviews_truncated": false,
+  "review_threads": {
+    "has_next_page": false,
+    "nodes": [
+      { "is_resolved": true }
+    ]
+  },
+  "check_runs": [
+    {
+      "name": "Rust quality gate",
+      "conclusion": "success",
+      "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "check_runs_truncated": false,
+  "statuses": [
+    {
+      "context": "CodeRabbit",
+      "state": "success",
+      "description": "Review completed",
+      "creator": { "login": "coderabbitai[bot]" }
+    },
+    {
+      "context": "CodeRabbit",
+      "state": "pending",
+      "description": "Review in progress",
+      "creator": { "login": "coderabbitai[bot]" }
+    }
+  ],
+  "statuses_truncated": false
+}
