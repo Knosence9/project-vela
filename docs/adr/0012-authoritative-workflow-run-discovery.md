@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-07-28
 - **Decision owners:** Project Vela maintainers
-- **Related:** ADR-0002, ADR-0009, ADR-0010, ADR-0011, issues #696 and #697
+- **Related:** ADR-0002, ADR-0009, ADR-0010, ADR-0011, ADR-0017, issues #696, #697, #722, and #723
 
 ## Context
 
@@ -15,11 +15,13 @@ The typed event log can identify streams containing an exact event type and repl
 
 `WorkflowRunStore::list` discovers streams containing an exact `workflow_run.started` event, decodes each complete candidate stream through the existing version-one event contract, derives the exact run ID from the required `workflow-run:` stream prefix, and projects the history through the same function used by exact-ID loading.
 
-The result contains every valid active, workflow-terminal, and cancelled run exactly once. Each aggregate preserves its exact ID, immutable topology snapshot, current phase, stream revision, and cancellation state. Results are sorted by ascending exact run-ID text independently of storage query order.
+The result contains every valid active, paused, authored-terminal, cancelled, and failed run exactly once. Each aggregate preserves its exact ID, immutable topology snapshot, current phase, stream revision, lifecycle evidence, and optional task attribution. Results are sorted by ascending exact run-ID text independently of storage query order.
+
+`WorkflowRunStore::list_for_workflow` provides a read-only exact-identity query over the immutable `WorkflowId` captured in each start snapshot. It reuses the complete authoritative `list` projection, preserves ascending run-ID order, includes every lifecycle status plus attributed and unassociated runs, and does not require a matching definition to remain registered. This is historical provenance rather than execution authorization. A malformed candidate anywhere in workflow-run history fails the complete query instead of returning partial matches.
 
 Discovery is all-or-nothing. An invalid candidate stream ID, malformed or unsupported event, version gap, impossible history, or storage failure returns a typed error and no result vector. Streams without an exact start marker are not candidates, even if their IDs resemble workflow-run streams. A misleading start marker in an unrelated or malformed stream makes that stream a candidate and therefore fails closed rather than being silently ignored.
 
-Listing is read-only and registry-free. It does not consult extension manifests or files, create or mutate runs, select transitions, evaluate gates, invoke capabilities, grant permission, schedule work, or introduce a secondary index.
+Listing and exact-workflow filtering are read-only and registry-free. They do not consult extension manifests or files, create or mutate runs, select transitions, evaluate gates, invoke capabilities, grant permission, schedule work, or introduce a secondary index.
 
 ## Alternatives considered
 
@@ -42,15 +44,16 @@ Storage order is an implementation detail. Sorting by exact external run ID prov
 ## Consequences
 
 - Callers can recover all durable workflow runs without retaining their IDs externally.
-- Active, terminal, and cancelled runs share one deterministic complete projection.
+- Callers can recover the historical runs for one exact workflow identity without duplicating snapshot-filtering semantics.
+- Active, paused, authored-terminal, cancelled, and failed runs share one deterministic complete projection.
 - Exact loading and listing cannot drift because both reuse one projector.
 - Corrupt candidate history prevents partial discovery and remains visible as an error.
-- Discovery scans and replays complete candidate streams; pagination, filtering, indexing, caching, snapshots, and compaction remain deferred.
+- Discovery scans and replays complete candidate streams; pagination, additional or compound filtering, indexing, caching, snapshots, and compaction remain deferred.
 
 ## Verification
 
-The bounded execution slice follows RED→GREEN tests proving empty listing, ascending exact-ID ordering, complete active/terminal/cancelled projection, registry-free reopen, unrelated-stream exclusion, and all-or-nothing malformed-candidate failure. Existing exact-load and lifecycle tests and the complete repository quality gate must remain green.
+The bounded execution slices follow RED→GREEN tests proving empty listing, ascending exact-ID ordering, complete lifecycle projection, registry-free reopen, unrelated-stream exclusion, exact workflow-identity filtering across lifecycle and attribution states, and all-or-nothing malformed-candidate failure. Existing exact-load, unfiltered listing, task-filtered listing, and lifecycle tests and the complete repository quality gate must remain green.
 
 ## Revisit when
 
-Reconsider this decision before adding pagination, filtering, secondary indexes, caching, deletion, migration, snapshots or compaction, scheduling, actors, timestamps, remote execution, or partial-availability semantics.
+Reconsider this decision before adding pagination, indexed or compound filtering, version ranges, caching, deletion, migration, snapshots or compaction, scheduling, actors, timestamps, remote execution, or partial-availability semantics.
