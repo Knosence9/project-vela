@@ -101,6 +101,12 @@ The tool-free composition bridge is specified by [ADR-0020](adr/0020-explicit-wo
 
 Resolution failures surface as typed `RuntimeError::WorkflowPhaseSkills` errors before the human turn is persisted or the provider is called. After resolution succeeds, existing composed-turn session and provider durability semantics remain unchanged. The operation does not infer a current phase, load or mutate a workflow run, choose a transition, evaluate a gate, schedule work, persist selection evidence, grant tool permission, or invoke a tool; the caller remains responsible for explicitly choosing the phase.
 
+## Explicit workflow-phase task Attempt evidence
+
+The task-evidence bridge is specified by [ADR-0021](adr/0021-workflow-phase-task-attempt-evidence.md). `AssistantRuntime::execute_workflow_phase_task_turn` requires an exact active task already associated with a writable session, a fresh Attempt observation ID, and the same explicit phase, registry, human content, and policy inputs as the session-only operation. Before transcript or provider effects, it validates the task association and lifecycle, Attempt identity, session writability, and phase bindings. A successful response is committed first as the assistant transcript turn and then as the task's exact Attempt text.
+
+Provider failure preserves the committed human turn and appends no Attempt; later persistence failures preserve earlier commits. The Attempt is response evidence only: the operation does not accept or infer a workflow-run ID, prove phase provenance, persist phase or skill-selection identity, synchronize task and workflow lifecycles, infer success, complete either aggregate, choose or apply a transition, schedule work, grant tools, or invoke tools.
+
 ## Tool component compilation
 
 `compile_tool_components(artifacts)` is the inert compiler boundary for prepared tools. It creates a Wasmtime engine with the Component Model explicitly enabled and compiles binary component bytes without Wasmtime's text-format support. Every component must have no top-level imports and exactly one top-level export: the synchronous function `invoke(input: string) -> result<string, string>` specified structurally by `vela:extension/tool@0.1.0`. Core modules, malformed bytes, imports, missing or additional exports, and incompatible parameter or result types fail closed.
