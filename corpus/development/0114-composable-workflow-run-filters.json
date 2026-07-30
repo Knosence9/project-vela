@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compose exact workflow-run discovery filters",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/734 with one read-only filter over authoritative workflow-run projections.",
+    "acceptance_criteria": [
+      "Combine optional exact task, workflow, and lifecycle constraints with logical AND.",
+      "Preserve ascending run-ID order, deterministic reopen behavior, and empty results.",
+      "Fail the complete query on malformed candidate history.",
+      "Keep existing discovery APIs behavior-compatible."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED compound-filter coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused tests failed to compile because WorkflowRunFilter and list_filtered did not exist.",
+      "patch": "Added unconstrained, single-constraint, compound, reopen, empty-match, and malformed-history cases."
+    },
+    {
+      "summary": "Implemented one shared authoritative filter boundary.",
+      "outcome": "success",
+      "diagnostic": "Filtering complete projected runs reused existing replay validation and avoided divergent indexes or lifecycle classifiers.",
+      "patch": "Added WorkflowRunFilter and delegated existing task, workflow, and status queries through list_filtered."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can compose exact workflow-run recovery constraints without gaining mutation, scheduling, execution, or authorization authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_run_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30463218155", "status": "passed"},
+      {"command": "Pull request 735 squash merge a6cde5fe303e8c5242c30e507211a6590d7f8cae", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Composable recovery queries should share authoritative replay rather than duplicate projection rules.",
+    "All supplied exact constraints form an AND predicate while an unconstrained filter remains equivalent to list.",
+    "Historical discovery does not imply execution or lifecycle authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/735"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Resolve workflow-phase skills explicitly",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/740 with a read-only bridge from one caller-chosen phase to the existing caller-owned skill registry.",
+    "acceptance_criteria": [
+      "Return only exact phase-bound registered skills in deterministic exact-ID order.",
+      "Fail closed on malformed, duplicate, or missing bindings without partial selection.",
+      "Resolve empty bindings successfully without selecting unrelated skills.",
+      "Use the same operation for cursor and replayed durable-run phases."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED explicit-resolution coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused suite failed because RegisteredWorkflowPhase::resolve_skills did not exist.",
+      "patch": "Added cursor, replayed-run, missing-registration, empty-binding, terminal-binding, and malformed-topology tests."
+    },
+    {
+      "summary": "Reused the typed skill-selection boundary.",
+      "outcome": "success",
+      "diagnostic": "Converting exact bindings to SkillId and calling SkillRegistry::select preserved all-or-nothing errors and deterministic ordering without a second registry.",
+      "patch": "Added resolve_skills and ADR-0019 while keeping duplicate-selection and empty-selection behavior delegated to the existing registry boundary."
+    }
+  ],
+  "outcome": {
+    "summary": "A caller can explicitly resolve one borrowed phase to registered skills, while provider invocation, prompt mutation, tools, workflow movement, and lifecycle authorization remain out of scope.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_phase_skill_resolution", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30475487239", "status": "passed"},
+      {"command": "Pull request 741 squash merge f9275aecddd37500164d7e93cd437f05e11a459e", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Reuse caller-owned registries and typed selection errors instead of creating workflow-specific authority.",
+    "Deterministic exact-ID output order is independent of authored binding order.",
+    "Resolution is read-only selection and does not itself compose a prompt or execute a phase."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/741"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

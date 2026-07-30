@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve workflow-phase responses as task Attempt evidence",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/746 with an explicit tool-free task turn boundary that preserves a phase-assisted response in both session and task evidence.",
+    "acceptance_criteria": [
+      "Prevalidate the active associated task, fresh Attempt ID, writable session, and phase bindings before provider work.",
+      "Persist a valid provider response as both an assistant turn and Attempt evidence.",
+      "Preserve only the human turn on provider failure or blank response.",
+      "Commit assistant and Attempt events atomically when a duplicate Attempt races after provider completion."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED task turn behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused suite failed because execute_workflow_phase_task_turn did not exist.",
+      "patch": "Added success, invalid preflight, provider failure, and durability-order tests."
+    },
+    {
+      "summary": "Rejected blank provider evidence before assistant persistence.",
+      "outcome": "success",
+      "diagnostic": "Substantive review found that session text accepted whitespace that TaskObservationText rejected, which could orphan an assistant turn.",
+      "patch": "Validated TaskObservationText before assistant append and added a whitespace-only regression."
+    },
+    {
+      "summary": "Closed the post-provider Attempt race atomically.",
+      "outcome": "success",
+      "diagnostic": "Review identified a TOCTOU window where a concurrent duplicate Attempt could leave transcript content without matching task evidence.",
+      "patch": "Added a version-guarded two-stream SQLite transaction and a race regression proving both-or-neither assistant and Attempt persistence."
+    },
+    {
+      "summary": "Held merge through false-green review limits.",
+      "outcome": "blocked",
+      "diagnostic": "Successful CodeRabbit statuses repeatedly reported review limiting and were not accepted as substantive exact-head evidence.",
+      "patch": "Kept auto-merge unarmed until cooldowns elapsed and the repository verifier reported READY for the exact reviewed head."
+    }
+  ],
+  "outcome": {
+    "summary": "Valid phase-assisted responses become atomic transcript and task Attempt evidence while workflow lookup, provenance, transition, lifecycle mutation, and tool authority remain caller-owned or out of scope.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_phase_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command scripts/verify-merge-readiness 747 8f5332bac056293f6e9a562d9cfec72d2c7375cf Knosence9/project-vela", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30497083496", "status": "passed"},
+      {"command": "Pull request 747 squash merge a2ea78c7ab35388971546a3ea325ba9886bc289c", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Cross-aggregate evidence that must agree belongs in one storage transaction, not adjacent fallible appends.",
+    "Validate the stricter evidence type before persisting a provider response to a more permissive transcript type.",
+    "Preflight checks improve failure ordering but do not replace in-transaction concurrency guards.",
+    "A green rate-limited review status is not substantive exact-head review evidence."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/747"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
