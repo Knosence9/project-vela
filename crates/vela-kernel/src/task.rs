@@ -660,6 +660,27 @@ impl TaskStore {
         )
     }
 
+    /// Atomically appends one assistant turn and its matching task Diagnostic evidence.
+    pub(crate) fn append_diagnostic_with_assistant_turn(
+        &mut self,
+        id: &TaskId,
+        session_id: &SessionId,
+        observation_id: TaskObservationId,
+        text: TaskObservationText,
+        parent_attempt_id: TaskObservationId,
+        assistant_content: SessionTurnContent,
+    ) -> Result<(Session, Task), TaskStoreError> {
+        self.append_observation_with_assistant_turn(
+            id,
+            session_id,
+            observation_id,
+            TaskObservationKind::Diagnostic,
+            text,
+            Some(parent_attempt_id),
+            assistant_content,
+        )
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "the atomic boundary retains both stream identities and complete evidence"
