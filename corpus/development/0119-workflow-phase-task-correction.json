@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve workflow-phase corrections as linked task evidence",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/751 with an explicit phase-assisted turn that records the provider response as a Correction linked to one caller-selected Attempt.",
+    "acceptance_criteria": [
+      "Validate the active association, fresh Correction ID, exact parent Attempt, writable session, and phase bindings before provider work.",
+      "Persist a valid response atomically as assistant content and linked Correction evidence.",
+      "Preserve only the human turn on provider failure or blank response.",
+      "Do not create an Attempt, Verification, workflow transition, or tool grant."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED correction behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-phase runtime suite failed because execute_workflow_phase_task_correction_turn did not exist.",
+      "patch": "Added selected-skill, exact-lineage, invalid-preflight, provider-failure, and durability tests."
+    },
+    {
+      "summary": "Implemented the explicit linked-Correction boundary.",
+      "outcome": "success",
+      "diagnostic": "The task aggregate already owned parent-Attempt validation, while the phase runtime already owned fail-closed skill composition.",
+      "patch": "Composed the existing boundaries and generalized atomic assistant/evidence persistence without widening provider authority."
+    },
+    {
+      "summary": "Completed substantive review without actionable findings.",
+      "outcome": "success",
+      "diagnostic": "Hosted review covered the runtime, task store, tests, and decision documentation at the exact implementation head.",
+      "patch": "Preserved the reviewed single-commit implementation unchanged."
+    }
+  ],
+  "outcome": {
+    "summary": "One explicitly selected phase can produce durable Correction evidence linked to an exact Attempt, while task terminal state and workflow lifecycle remain caller-owned.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-kernel --test workflow_phase_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30505066887", "status": "passed"},
+      {"command": "Pull request 752 squash merge 3394f431c38dfb016bf103a0c774f321d7cb2277", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Corrective model output should preserve exact attempt lineage rather than be flattened into another Attempt.",
+    "The stricter evidence type must be validated before a provider response reaches durable transcript state.",
+    "Phase composition can remain explicit and useful without implying workflow execution provenance."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/752"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

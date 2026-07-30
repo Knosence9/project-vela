@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Cancel tasks through an explicit workflow-phase turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/761 with a phase-assisted cancellation that preserves provider output as Attempt evidence and the exact caller-owned cancellation reason.",
+    "acceptance_criteria": [
+      "Validate task association, fresh Attempt identity, writable session, and phase skills before provider effects.",
+      "Persist a valid assistant response and Attempt atomically before cancellation.",
+      "Apply the exact caller cancellation reason without deriving it from provider content.",
+      "Preserve ordered provider-failure and terminal-race prefixes without changing workflow lifecycle."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED cancellation behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused suite failed with missing-method errors because cancel_workflow_phase_task_turn did not exist.",
+      "patch": "Added selected-skill, Attempt, exact-reason, preflight, provider-failure, and terminal-race tests."
+    },
+    {
+      "summary": "Implemented symmetric caller-owned cancellation.",
+      "outcome": "success",
+      "diagnostic": "The shared phase-task preflight and existing cancellation semantics supplied the required narrow composition points.",
+      "patch": "Added one phase-assisted cancellation method that retains TaskCancellation, commits assistant/Attempt evidence, then applies the caller reason."
+    },
+    {
+      "summary": "Prevented rate-limited review from racing merge.",
+      "outcome": "blocked",
+      "diagnostic": "The exact head passed Rust CI while CodeRabbit reported a cooldown and no substantive review.",
+      "patch": "Preserved the head with auto-merge disarmed and deliberately resumed review after cooldown and cross-repository budget inspection."
+    }
+  ],
+  "outcome": {
+    "summary": "A caller-selected phase can produce final Attempt evidence before explicit task cancellation, but the cancellation reason and all workflow lifecycle decisions remain caller-owned.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-kernel --test workflow_phase_runtime --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30519834583", "status": "passed"},
+      {"command": "Pull request 762 squash merge 4d8402aa40d48737c787b2d0cb436754c522d445", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Cancellation reason is caller-owned terminal intent, not a model-generated conclusion.",
+    "Symmetric terminal APIs should reuse mechanics without blurring distinct semantic types.",
+    "Provider output remains Attempt evidence even when immediately followed by a terminal decision.",
+    "Review cooldowns must leave merge automation disarmed."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/762"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

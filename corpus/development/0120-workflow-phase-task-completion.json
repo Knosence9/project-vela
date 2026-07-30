@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Complete tasks through an explicit workflow-phase turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/754 with a caller-owned phase-assisted completion that preserves the final response as Attempt evidence and exact task output.",
+    "acceptance_criteria": [
+      "Reject invalid task, Attempt, session, and phase state before provider effects.",
+      "Atomically persist valid assistant content with matching Attempt evidence before completion.",
+      "Use the exact response as task output without classifying it as Verification.",
+      "Preserve the response prefix and report authoritative state when a terminal race wins."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED completion behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused test failed to compile because complete_workflow_phase_task_turn did not exist.",
+      "patch": "Added success, deterministic preflight, provider-failure, and terminal-race tests."
+    },
+    {
+      "summary": "Implemented ordered phase-assisted completion.",
+      "outcome": "success",
+      "diagnostic": "Existing response validation, atomic assistant/Attempt persistence, and task completion already defined the required authority boundaries.",
+      "patch": "Reused those boundaries after explicit phase resolution and retained assistant turn, Attempt, then completion ordering."
+    },
+    {
+      "summary": "Strengthened persisted-response assertions during review.",
+      "outcome": "success",
+      "diagnostic": "Substantive review found that success and terminal-race tests counted transcript turns without proving the exact preserved assistant content.",
+      "patch": "Asserted the exact phase response in both durable transcript paths, reran verification, and held merge until the exact fix head received review capacity."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can explicitly complete an active associated task after a selected phase response, preserving exact Attempt and output evidence without granting the model workflow or verification authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-kernel --test workflow_phase_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30509710366", "status": "passed"},
+      {"command": "Pull request 755 squash merge 0ce531cea3e13c1c696dd6c921e0a063828261d7", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Provider output may be exact task output and Attempt evidence without becoming independent Verification.",
+    "Terminal intent remains caller-owned even when the runtime owns ordered persistence.",
+    "Race tests should assert exact preserved content, not only event or turn counts.",
+    "A review fix is not merge-ready while its incremental review is rate limited."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/755"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
