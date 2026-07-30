@@ -1,0 +1,56 @@
+# ADR-0032: Advance task-attributed workflow gates through durable Verification
+
+- **Status:** accepted
+- **Date:** 2026-07-30
+- **Decision and execution issue:** [#779](https://github.com/Knosence9/project-vela/issues/779)
+
+## Context
+
+Durable workflow transitions preserve an optional authored gate ID, but ADR-0010 intentionally treats `WorkflowRunStore::advance` as a low-level caller-owned acknowledgement boundary because no evidence contract existed. ADRs 0027-0030 now provide independent identified task Verification and deterministic latest-result gate evaluation for one exact Attempt. ADR-0031 also establishes the stale-safe pattern for composing that evidence with a lifecycle append.
+
+Task-attributed workflow runs need an additive evidence-backed advancement boundary. Treating a caller's matching string as proof would retain the original gap; automatically choosing a transition or running a checker would add authority not present in either aggregate.
+
+## Decision
+
+`WorkflowRunStore::advance_if_task_verification_passes` accepts one run ID, exact expected run revision, caller-selected authored transition index, and exact task Attempt ID. The run must be task-attributed and the transition must declare one gate ID. That exact authored gate ID is interpreted as the required `TaskVerificationCheck` and evaluated against identified structured Verification linked to the supplied Attempt under ADR-0030's latest-result semantics.
+
+A passed report appends the existing workflow advancement event with the exact authored gate acknowledgement. Pending and failed reports return distinct `WorkflowVerifiedAdvanceError` variants carrying the complete report. Missing or non-Attempt identities preserve the typed gate-evaluation source. Unattributed runs and ungated transitions are deterministic domain rejections. Every rejection writes nothing.
+
+Evaluation observes the task at one exact stream version. The workflow event append is conditioned atomically on both the caller's exact workflow revision and that task stream version. If only the task changes, the operation reloads and re-evaluates; newer failed Verification therefore blocks advancement rather than permitting stale green evidence. If the workflow changes, the exact caller revision fails authoritatively and the selected transition is never reinterpreted against a newer phase.
+
+`WorkflowRunStore::advance` remains unchanged as the explicit low-level acknowledgement primitive. The new operation is an additive evidence-backed policy boundary, not a global permission change. It executes no verifier, provider, command, or tool and does not mutate the task lifecycle.
+
+## Alternatives considered
+
+### Treat gate acknowledgement as sufficient evidence
+
+That preserves the historical caller assertion but does not satisfy the deterministic evidence contract. The explicit low-level operation already supports that use case.
+
+### Accept a caller-owned multi-check gate set
+
+One authored transition currently has one gate identity. Accepting unrelated ephemeral checks would sever the durable topology from the evidence authorizing its edge. Multi-check persisted policy requires a separate definition contract.
+
+### Advance after evaluating and then calling `advance`
+
+That creates a time-of-check/time-of-use gap in which newer failed task evidence can arrive before the workflow append.
+
+### Retry after a workflow revision race
+
+The transition index is phase-relative. Retrying it against a newer run could reinterpret caller intent, so workflow concurrency remains fail-closed.
+
+## Consequences
+
+- An authored workflow gate can be backed by independently persisted task evidence for one exact Attempt.
+- The successful event and replay format remain unchanged.
+- Task evidence changes are re-evaluated; workflow revision changes are never reinterpreted.
+- Existing raw acknowledgement authority and compatibility remain explicit.
+- One transition gate maps to one exact Verification check identity.
+- Persisted multi-check policy, automatic transition choice, verifier execution, task/workflow terminal synchronization, scheduling, retries beyond task re-evaluation, actors, timestamps, artifacts, credentials, and remote execution remain deferred.
+
+## Verification
+
+RED→GREEN tests cover successful advancement and replayed exact gate acknowledgement, pending and failed reports without writes, Attempt scoping, unattributed and ungated runs, missing and non-Attempt identities, a newer failed Verification race, and an authoritative workflow revision race. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider this decision before adding multi-check or conditional authored gate policy, automatic transition selection, verifier execution from workflow definitions, task/workflow lifecycle synchronization, persisted phase execution identities, scheduling, retries, actors, timestamps, artifacts, credentials, or remote execution.

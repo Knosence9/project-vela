@@ -1,16 +1,214 @@
 use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
-    task::{TaskGoal, TaskId, TaskOutput, TaskStatus, TaskStore},
+    task::{
+        TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText, TaskOutput,
+        TaskStatus, TaskStore, TaskVerificationCheck, TaskVerificationGateEvaluationError,
+        TaskVerificationGateStatus, TaskVerificationOutcome,
+    },
     workflow::{
         RegisteredWorkflow, RegisteredWorkflowPhase, RegisteredWorkflowTransition, WorkflowId,
         WorkflowRunCancellation, WorkflowRunCancellationError, WorkflowRunFailure,
         WorkflowRunFailureError, WorkflowRunFilter, WorkflowRunHistoryEvent, WorkflowRunId,
         WorkflowRunIdError, WorkflowRunPauseReason, WorkflowRunPauseReasonError,
         WorkflowRunResumeReason, WorkflowRunResumeReasonError, WorkflowRunStatus, WorkflowRunStore,
-        WorkflowRunStoreError,
+        WorkflowRunStoreError, WorkflowVerifiedAdvanceError,
     },
 };
+
+#[test]
+fn advances_an_attributed_gated_run_through_passed_task_verification() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("verified-release").unwrap();
+    let attempt_id = TaskObservationId::new("release-attempt").unwrap();
+    let run_id = WorkflowRunId::new("verified-run").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(
+            task_id.clone(),
+            TaskGoal::new("ship verified release").unwrap(),
+        )
+        .unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("candidate release").unwrap(),
+        )
+        .unwrap();
+    tasks
+        .append_verification_for_attempt(
+            &task_id,
+            TaskObservationId::new("release-check").unwrap(),
+            TaskVerificationOutcome::Passed,
+            TaskVerificationCheck::new("plan.approved").unwrap(),
+            TaskObservationText::new("release checks passed").unwrap(),
+            attempt_id.clone(),
+        )
+        .unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    let started = runs
+        .start_for_task(run_id.clone(), &task_id, &workflow("plan"))
+        .unwrap();
+
+    let advanced = runs
+        .advance_if_task_verification_passes(&run_id, started.revision(), 0, &attempt_id)
+        .unwrap();
+
+    assert_eq!(advanced.current_phase().id(), "done");
+    let history = WorkflowRunStore::open(&path)
+        .unwrap()
+        .history(&run_id)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        history[1].event(),
+        WorkflowRunHistoryEvent::Advanced {
+            gate_acknowledgement: Some(gate),
+            ..
+        } if gate == "plan.approved"
+    ));
+}
+
+#[test]
+fn reports_pending_and_failed_task_verification_without_advancing() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("blocked-release").unwrap();
+    let attempt_id = TaskObservationId::new("blocked-attempt").unwrap();
+    let other_attempt_id = TaskObservationId::new("other-attempt").unwrap();
+    let run_id = WorkflowRunId::new("blocked-run").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("check release").unwrap())
+        .unwrap();
+    for id in [&attempt_id, &other_attempt_id] {
+        tasks
+            .append_observation(
+                &task_id,
+                id.clone(),
+                TaskObservationKind::Attempt,
+                TaskObservationText::new(format!("candidate {id}")).unwrap(),
+            )
+            .unwrap();
+    }
+    tasks
+        .append_verification_for_attempt(
+            &task_id,
+            TaskObservationId::new("other-pass").unwrap(),
+            TaskVerificationOutcome::Passed,
+            TaskVerificationCheck::new("plan.approved").unwrap(),
+            TaskObservationText::new("other attempt passed").unwrap(),
+            other_attempt_id,
+        )
+        .unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    let started = runs
+        .start_for_task(run_id.clone(), &task_id, &workflow("plan"))
+        .unwrap();
+
+    assert!(matches!(
+        runs.advance_if_task_verification_passes(&run_id, started.revision(), 0, &attempt_id),
+        Err(WorkflowVerifiedAdvanceError::GatesPending { ref report })
+            if report.status() == TaskVerificationGateStatus::Pending
+    ));
+    tasks
+        .append_verification_for_attempt(
+            &task_id,
+            TaskObservationId::new("failed-check").unwrap(),
+            TaskVerificationOutcome::Failed,
+            TaskVerificationCheck::new("plan.approved").unwrap(),
+            TaskObservationText::new("release check failed").unwrap(),
+            attempt_id.clone(),
+        )
+        .unwrap();
+    assert!(matches!(
+        runs.advance_if_task_verification_passes(&run_id, started.revision(), 0, &attempt_id),
+        Err(WorkflowVerifiedAdvanceError::GatesFailed { ref report })
+            if report.status() == TaskVerificationGateStatus::Failed
+    ));
+    assert_eq!(
+        runs.load(&run_id).unwrap().unwrap().revision(),
+        started.revision()
+    );
+}
+
+#[test]
+fn rejects_unattributed_and_ungated_verified_advancement() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let attempt_id = TaskObservationId::new("attempt").unwrap();
+    let plain_id = WorkflowRunId::new("plain-run").unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    let plain = runs.start(plain_id.clone(), &workflow("plan")).unwrap();
+    assert!(matches!(
+        runs.advance_if_task_verification_passes(&plain_id, plain.revision(), 0, &attempt_id),
+        Err(WorkflowVerifiedAdvanceError::RunNotTaskAttributed { .. })
+    ));
+
+    let task_id = TaskId::new("ungated-task").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(task_id.clone(), TaskGoal::new("ungated work").unwrap())
+        .unwrap();
+    let ungated_id = WorkflowRunId::new("ungated-run").unwrap();
+    let ungated = runs
+        .start_for_task(ungated_id.clone(), &task_id, &advancing_workflow())
+        .unwrap();
+    assert!(matches!(
+        runs.advance_if_task_verification_passes(&ungated_id, ungated.revision(), 0, &attempt_id,),
+        Err(WorkflowVerifiedAdvanceError::TransitionUngated { .. })
+    ));
+}
+
+#[test]
+fn rejects_missing_and_non_attempt_verification_parents() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("lineage-task").unwrap();
+    let diagnostic_id = TaskObservationId::new("diagnostic").unwrap();
+    let run_id = WorkflowRunId::new("lineage-run").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(task_id.clone(), TaskGoal::new("validate lineage").unwrap())
+        .unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            diagnostic_id.clone(),
+            TaskObservationKind::Diagnostic,
+            TaskObservationText::new("not an attempt").unwrap(),
+        )
+        .unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    let started = runs
+        .start_for_task(run_id.clone(), &task_id, &workflow("plan"))
+        .unwrap();
+
+    assert!(matches!(
+        runs.advance_if_task_verification_passes(
+            &run_id,
+            started.revision(),
+            0,
+            &TaskObservationId::new("missing").unwrap(),
+        ),
+        Err(WorkflowVerifiedAdvanceError::GateEvaluation(
+            TaskVerificationGateEvaluationError::AttemptNotFound { .. }
+        ))
+    ));
+    assert!(matches!(
+        runs.advance_if_task_verification_passes(&run_id, started.revision(), 0, &diagnostic_id,),
+        Err(WorkflowVerifiedAdvanceError::GateEvaluation(
+            TaskVerificationGateEvaluationError::ObservationNotAttempt { .. }
+        ))
+    ));
+    assert_eq!(
+        runs.load(&run_id).unwrap().unwrap().revision(),
+        started.revision()
+    );
+}
 
 #[test]
 fn attributes_a_workflow_run_immutably_to_an_active_task() {
