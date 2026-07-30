@@ -172,6 +172,7 @@ impl TaskVerificationGateSet {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum TaskVerificationGateSetError {
     Empty,
     Duplicate { check: TaskVerificationCheck },
@@ -235,6 +236,7 @@ impl TaskVerificationGateReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum TaskVerificationGateEvaluationError {
     AttemptNotFound {
         observation_id: TaskObservationId,
