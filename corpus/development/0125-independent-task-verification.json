@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Record independently observed task Verification",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/767 with a caller-owned verifier boundary that records evidence for one exact task Attempt without assistant or lifecycle authority.",
+    "acceptance_criteria": [
+      "Supply the exact active task and parent Attempt to one caller-owned verifier invocation.",
+      "Persist successful non-blank output as linked Verification evidence while leaving the task active.",
+      "Reject invalid lineage, duplicate identity, checker failure, blank output, and racing writes without retrying the verifier.",
+      "Do not invoke the assistant provider, mutate transcripts, or transition task or workflow lifecycle."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED verifier-boundary coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused task verification runtime test failed because the verifier trait, request, result, and runtime operation did not exist.",
+      "patch": "Added exact-input, lineage, no-session, checker-error, blank-output, and deterministic race tests."
+    },
+    {
+      "summary": "Implemented one-call independent Verification recording.",
+      "outcome": "success",
+      "diagnostic": "Existing task observation lineage and optimistic append checks could establish provenance without routing checker output through the assistant provider.",
+      "patch": "Added the caller-owned TaskVerifier boundary, immutable exact-Attempt request, preflight validation, linked append, typed execution errors, ADR, and runtime/task documentation."
+    },
+    {
+      "summary": "Strengthened independent pre-commit coverage.",
+      "outcome": "success",
+      "diagnostic": "Read-only review identified that unassociated-task behavior and verifier error-source chaining deserved explicit assertions.",
+      "patch": "Added both focused assertions before the single reviewed commit and reran the full quality gate."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can run one independent checker against an exact active-task Attempt and durably preserve its non-blank evidence without granting the checker provider, transcript, or terminal authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test task_verification_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30539641505", "status": "passed"},
+      {"command": "Pull request 768 squash merge 28a6735cfd517464751ce4e6730fa40cccf9b269", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Independent Verification must use a boundary distinct from assistant generation so model claims cannot become their own proof.",
+    "Validate exact lineage and fresh identity before checker effects, then preserve authoritative append races without retries.",
+    "Execution failure and observed evidence need separate typed outcomes even before pass/fail evidence semantics exist.",
+    "Assert that unassociated tasks remain verifiable without creating sessions and preserve verifier failures as chained error sources so boundary and diagnostic guarantees remain regression-tested."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/768"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

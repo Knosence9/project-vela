@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Identify independent task Verification checks",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/771 with a validated caller-owned check identity persisted alongside every new structured Verification result.",
+    "acceptance_criteria": [
+      "Expose the exact validated check identity to the verifier before any checker effects.",
+      "Persist check, outcome, evidence, fresh Verification identity, and exact parent Attempt atomically.",
+      "Fail closed on malformed identified payloads while preserving payload versions 1 through 3 without fabricated identities.",
+      "Keep check identity descriptive and unable to grant permissions or lifecycle authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED check-identity and replay coverage.",
+      "outcome": "failure",
+      "diagnostic": "Runtime and replay tests failed because TaskVerificationCheck, request check access, payload version 4, and the identified append argument did not exist.",
+      "patch": "Added exact verifier-input, passed/failed round-trip, blank-check, malformed-version-4, unknown-field, and historical compatibility tests."
+    },
+    {
+      "summary": "Implemented durable identified Verification.",
+      "outcome": "success",
+      "diagnostic": "A validated opaque identity was sufficient for later gate matching without encoding commands, permissions, or artifacts.",
+      "patch": "Added TaskVerificationCheck, propagated it through the runtime request and typed append metadata, introduced strict payload version 4 replay, and documented the provenance-only boundary."
+    },
+    {
+      "summary": "Completed independent review without follow-up findings.",
+      "outcome": "success",
+      "diagnostic": "Read-only review found no blocking correctness, compatibility, or permission-boundary defect in the exact patch.",
+      "patch": "Preserved the single reviewed commit and verified the complete repository in the pinned environment."
+    }
+  ],
+  "outcome": {
+    "summary": "New independent Verification evidence carries an exact validated caller-owned check identity, while historical evidence remains honest about missing identity and check names confer no execution authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test task_verification_runtime", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test task_observations", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30556360385", "status": "passed"},
+      {"command": "Pull request 772 squash merge 0dd1313e326539ae60b5210cecf7c088bef67906", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Stable check identity should be opaque validated provenance, not an executable checker definition.",
+    "Schema evolution must preserve the absence of fields in historical evidence instead of inventing defaults.",
+    "Strict versioned replay can reject malformed new records without breaking valid older payloads."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/task.rs", "url": "https://github.com/Knosence9/project-vela/pull/772"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

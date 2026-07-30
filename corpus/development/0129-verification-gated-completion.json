@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Complete tasks through passed Verification gates",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/775 with an explicit caller-selected completion boundary that cannot authorize from stale green evidence.",
+    "acceptance_criteria": [
+      "Complete with exact output only when every caller-required gate passes for one exact Attempt.",
+      "Return typed ordered Pending or Failed reports and typed invalid-Attempt causes without writes.",
+      "Re-evaluate after concurrent task stream changes so a newer failed Verification blocks stale completion.",
+      "Preserve authoritative terminal races, historical replay, and the existing unconditional completion primitive."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED guarded-completion coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused verified-completion test failed because the guarded API and typed completion error did not exist.",
+      "patch": "Added all-passed persistence, ordered rejection, invalid-Attempt, terminal-state, historical compatibility, and deterministic stale-evidence race tests."
+    },
+    {
+      "summary": "Implemented exact-version gate-authorized completion.",
+      "outcome": "success",
+      "diagnostic": "Separately evaluating gates before unconditional completion left a time-of-check/time-of-use gap on the task stream.",
+      "patch": "Added a store-owned loop that evaluates the exact projected version, appends the existing completion event at that version, and reloads plus re-evaluates after concurrent writes; documented the caller-owned policy boundary in ADR-0031."
+    },
+    {
+      "summary": "Closed terminal-race coverage and a redundant clone after substantive review.",
+      "outcome": "success",
+      "diagnostic": "Review found that terminal authority was covered only sequentially inside the new evaluation-to-append window and that the success path cloned output after its final use.",
+      "patch": "Added a deterministic concurrent cancellation test, moved output on successful append, reran the full gate, and withheld auto-merge until the exact follow-up head received a genuine review after rate limiting."
+    }
+  ],
+  "outcome": {
+    "summary": "Caller-selected gates can authorize durable task completion without stale green races, while typed rejections, terminal authority, exact output replay, and unconditional caller-owned completion remain intact.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test task_verified_completion", "status": "passed"},
+      {"command": "nix develop --command cargo doc --workspace --no-deps --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30573701289", "status": "passed"},
+      {"command": "Pull request 776 squash merge fd3b021be4a17988d175cc9a6fc3328787e48e90", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Authorization and the state mutation it guards must share an exact-version boundary to prevent stale green decisions.",
+    "Concurrent terminal transitions remain authoritative even when gate evidence was valid immediately beforehand.",
+    "Move owned completion output only after a successful append so retries retain it without paying for a redundant success-path clone.",
+    "A green review status carrying a rate-limit warning is not substantive exact-head review evidence.",
+    "Keep unconditional lifecycle primitives when policy remains an explicit caller-owned choice rather than global persisted authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/task.rs", "url": "https://github.com/Knosence9/project-vela/pull/776"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
