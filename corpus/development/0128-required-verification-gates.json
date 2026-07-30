@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Evaluate required task Verification gates",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/773 with a deterministic read-only evaluation of caller-owned required checks for one exact task Attempt.",
+    "acceptance_criteria": [
+      "Validate a non-empty unique gate set while preserving caller order.",
+      "Use the latest identified result for each required check linked to the exact Attempt and ignore unrelated or legacy evidence.",
+      "Report Failed before Pending before Passed while retaining every ordered per-check status.",
+      "Execute nothing, write no event, grant no permission, and leave task and workflow lifecycle unchanged."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED gate-set and evaluation coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused gate tests failed because gate-set validation, per-check reports, aggregate status, typed evaluation errors, and the evaluator did not exist.",
+      "patch": "Added empty/duplicate, authored-order, all-passed, failed-precedence, pending, latest-result, evidence-isolation, and invalid-Attempt tests."
+    },
+    {
+      "summary": "Implemented pure projected-state gate evaluation.",
+      "outcome": "success",
+      "diagnostic": "Caller-owned check identities and append-ordered projected observations were sufficient to compute a deterministic report without persisting policy.",
+      "patch": "Added validated gate sets, ordered per-check and aggregate reports, typed errors, exact-Attempt filtering, ADR, and lifecycle documentation."
+    },
+    {
+      "summary": "Preserved public error evolution after substantive review.",
+      "outcome": "success",
+      "diagnostic": "Review found that the two new public gate error enums omitted the crate convention that permits future variants without a breaking API change.",
+      "patch": "Marked both enums non-exhaustive, reran focused and full verification, and required successful exact-head review before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can deterministically inspect whether every required identified check passed for one exact Attempt, including mixed and missing evidence, without granting the report any side effects or lifecycle authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test task_verification_gates", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30563003837", "status": "passed"},
+      {"command": "Pull request 774 squash merge 7280bd9d2170e82c84ff240a234004c6a060dcfb", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Gate policy can remain caller-owned and ephemeral while deterministic code evaluates durable evidence.",
+    "Latest matching evidence must be scoped to both exact Attempt and exact check; legacy text cannot satisfy identified gates.",
+    "Public Rust errors should remain non-exhaustive when future variants are a compatible expectation."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/task.rs", "url": "https://github.com/Knosence9/project-vela/pull/774"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

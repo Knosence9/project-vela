@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist typed independent Verification outcomes",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/769 by storing explicit Passed or Failed evidence with one exact Attempt while preserving historical replay and lifecycle boundaries.",
+    "acceptance_criteria": [
+      "Distinguish a successfully observed Failed result from checker execution failure.",
+      "Persist and replay typed outcomes with exact parent lineage while preserving payload versions 1 and 2 without fabricated outcomes.",
+      "Reject malformed structured Verification payloads and keep blank or execution-error results write-free.",
+      "Keep both outcomes evidence-only with no task or workflow transition authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED typed-outcome and compatibility coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused verification tests failed because TaskVerificationResult, TaskVerificationOutcome, and projected verification outcomes did not exist.",
+      "patch": "Added passed, failed, execution-error, malformed-payload, and historical payload replay tests."
+    },
+    {
+      "summary": "Implemented structured Verification payload version 3.",
+      "outcome": "success",
+      "diagnostic": "A new payload version could carry outcome and evidence atomically while old payloads remained valid with no inferred typed result.",
+      "patch": "Added the closed Passed/Failed taxonomy, structured verifier result, typed append path, strict replay validation, compatibility handling, ADR, and lifecycle documentation."
+    },
+    {
+      "summary": "Encoded valid append metadata combinations after substantive review.",
+      "outcome": "success",
+      "diagnostic": "Review found that the private append helper accepted kind, parent, and outcome independently, allowing a future internal caller to write a stream that only failed during replay.",
+      "patch": "Replaced the loose parameter combination with an internal typed metadata representation that makes valid generic, parented, and structured-Verification append states explicit, then reran exact-head verification."
+    }
+  ],
+  "outcome": {
+    "summary": "Independent Verification now durably distinguishes Passed and Failed evidence from checker execution errors, fails closed on malformed structured payloads, and replays historical opaque observations without invented outcomes.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test task_verification_runtime", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test task_observations", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30547367657", "status": "passed"},
+      {"command": "Pull request 770 squash merge 23691939bbc423f0abb5138e237396ac0981d01c", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A checker can execute successfully and report Failed; execution transport errors must not erase that semantic distinction.",
+    "Historical payloads should remain readable without fabricating evidence fields that were never recorded.",
+    "Authority-sensitive persistence helpers should encode valid field combinations structurally rather than depend on caller discipline."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/task.rs", "url": "https://github.com/Knosence9/project-vela/pull/770"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
