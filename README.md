@@ -235,6 +235,10 @@ The first milestone is the **evidence loop**:
 77. Preserve inert authored-order skill bindings through workflow preparation, registration, and durable run replay. ✅
 78. Resolve one caller-chosen current phase's inert skill bindings explicitly through the existing skill registry selection boundary. ✅
 79. Execute one caller-chosen workflow phase through the existing explicit tool-free composed provider boundary. ✅
+80. Preserve one caller-chosen workflow phase response as durable task Attempt evidence. ✅
+81. Preserve one caller-chosen workflow phase response as linked task Correction evidence. ✅
+82. Complete a task explicitly through one caller-chosen workflow phase response. ✅
+83. Fail a task explicitly through one caller-chosen workflow phase response and caller-owned diagnostic. ✅
 
 ## Project documents
 
