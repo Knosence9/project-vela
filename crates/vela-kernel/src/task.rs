@@ -147,6 +147,124 @@ impl fmt::Display for TaskVerificationCheckError {
 
 impl std::error::Error for TaskVerificationCheckError {}
 
+/// An ordered, non-empty set of unique checks required for one task attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskVerificationGateSet(Vec<TaskVerificationCheck>);
+
+impl TaskVerificationGateSet {
+    pub fn new(checks: Vec<TaskVerificationCheck>) -> Result<Self, TaskVerificationGateSetError> {
+        if checks.is_empty() {
+            return Err(TaskVerificationGateSetError::Empty);
+        }
+        for (index, check) in checks.iter().enumerate() {
+            if checks[..index].contains(check) {
+                return Err(TaskVerificationGateSetError::Duplicate {
+                    check: check.clone(),
+                });
+            }
+        }
+        Ok(Self(checks))
+    }
+
+    pub fn checks(&self) -> &[TaskVerificationCheck] {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TaskVerificationGateSetError {
+    Empty,
+    Duplicate { check: TaskVerificationCheck },
+}
+
+impl fmt::Display for TaskVerificationGateSetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("task verification gate set must not be empty"),
+            Self::Duplicate { check } => {
+                write!(
+                    formatter,
+                    "task verification gate set repeats check {}",
+                    check.as_str()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for TaskVerificationGateSetError {}
+
+/// The current state of one gate or the aggregate required gate set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskVerificationGateStatus {
+    Pending,
+    Passed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskVerificationGate {
+    check: TaskVerificationCheck,
+    status: TaskVerificationGateStatus,
+}
+
+impl TaskVerificationGate {
+    pub fn check(&self) -> &TaskVerificationCheck {
+        &self.check
+    }
+
+    pub fn status(&self) -> TaskVerificationGateStatus {
+        self.status
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskVerificationGateReport {
+    status: TaskVerificationGateStatus,
+    gates: Vec<TaskVerificationGate>,
+}
+
+impl TaskVerificationGateReport {
+    pub fn status(&self) -> TaskVerificationGateStatus {
+        self.status
+    }
+
+    pub fn gates(&self) -> &[TaskVerificationGate] {
+        &self.gates
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TaskVerificationGateEvaluationError {
+    AttemptNotFound {
+        observation_id: TaskObservationId,
+    },
+    ObservationNotAttempt {
+        observation_id: TaskObservationId,
+        kind: TaskObservationKind,
+    },
+}
+
+impl fmt::Display for TaskVerificationGateEvaluationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AttemptNotFound { observation_id } => write!(
+                formatter,
+                "task attempt observation {observation_id} was not found"
+            ),
+            Self::ObservationNotAttempt {
+                observation_id,
+                kind,
+            } => write!(
+                formatter,
+                "task observation {observation_id} has kind {kind:?}, not attempt"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TaskVerificationGateEvaluationError {}
+
 /// Non-blank opaque UTF-8 evidence recorded for one task observation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -392,6 +510,71 @@ impl Task {
 
     pub fn observations(&self) -> &[TaskObservation] {
         &self.observations
+    }
+
+    /// Evaluates caller-required checks from durable evidence for one exact attempt.
+    pub fn evaluate_verification_gates(
+        &self,
+        attempt_id: &TaskObservationId,
+        gate_set: &TaskVerificationGateSet,
+    ) -> Result<TaskVerificationGateReport, TaskVerificationGateEvaluationError> {
+        let Some(attempt) = self
+            .observations
+            .iter()
+            .find(|observation| observation.id == *attempt_id)
+        else {
+            return Err(TaskVerificationGateEvaluationError::AttemptNotFound {
+                observation_id: attempt_id.clone(),
+            });
+        };
+        if attempt.kind != TaskObservationKind::Attempt {
+            return Err(TaskVerificationGateEvaluationError::ObservationNotAttempt {
+                observation_id: attempt_id.clone(),
+                kind: attempt.kind,
+            });
+        }
+
+        let gates: Vec<_> = gate_set
+            .checks()
+            .iter()
+            .map(|check| {
+                let status = self
+                    .observations
+                    .iter()
+                    .rev()
+                    .find(|observation| {
+                        observation.parent_attempt_id.as_ref() == Some(attempt_id)
+                            && observation.verification_check.as_ref() == Some(check)
+                    })
+                    .and_then(|observation| observation.verification_outcome)
+                    .map_or(
+                        TaskVerificationGateStatus::Pending,
+                        |outcome| match outcome {
+                            TaskVerificationOutcome::Passed => TaskVerificationGateStatus::Passed,
+                            TaskVerificationOutcome::Failed => TaskVerificationGateStatus::Failed,
+                        },
+                    );
+                TaskVerificationGate {
+                    check: check.clone(),
+                    status,
+                }
+            })
+            .collect();
+        let status = if gates
+            .iter()
+            .any(|gate| gate.status == TaskVerificationGateStatus::Failed)
+        {
+            TaskVerificationGateStatus::Failed
+        } else if gates
+            .iter()
+            .any(|gate| gate.status == TaskVerificationGateStatus::Pending)
+        {
+            TaskVerificationGateStatus::Pending
+        } else {
+            TaskVerificationGateStatus::Passed
+        };
+
+        Ok(TaskVerificationGateReport { status, gates })
     }
 
     pub(crate) fn validate_observation_append(
