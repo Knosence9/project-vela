@@ -3332,6 +3332,66 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         Ok(TaskTurnOutcome { session, task })
     }
 
+    /// Executes one caller-selected workflow phase as a task-associated correction turn.
+    ///
+    /// The active associated task, Correction lineage, writable session, and phase bindings are
+    /// validated before transcript or provider side effects. A successful provider response is
+    /// committed atomically as an assistant turn and Correction evidence linked to the exact
+    /// caller-selected parent Attempt. This operation neither proves phase/run provenance nor
+    /// mutates workflow lifecycle state.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "phase correction turns retain explicit lineage, policies, registry, and phase"
+    )]
+    pub fn execute_workflow_phase_task_correction_turn(
+        &mut self,
+        task_id: &TaskId,
+        parent_attempt_id: &TaskObservationId,
+        human_content: SessionTurnContent,
+        correction_observation_id: TaskObservationId,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        skill_registry: &SkillRegistry,
+        phase: &RegisteredWorkflowPhase,
+    ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (task, session_id) = self.load_active_associated_task(task_id)?;
+        task.validate_observation_append(
+            &correction_observation_id,
+            TaskObservationKind::Correction,
+            Some(parent_attempt_id),
+        )
+        .map_err(RuntimeError::Task)?;
+        self.ensure_session_writable(&session_id)?;
+        let selected_skills = phase
+            .resolve_skills(skill_registry)
+            .map_err(RuntimeError::WorkflowPhaseSkills)?;
+
+        let (assistant_content, correction_text) = self.complete_selected_composed_turn_validated(
+            &session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+            |assistant_content| {
+                TaskObservationText::new(assistant_content.as_str())
+                    .map_err(RuntimeError::InvalidCorrectionText)
+            },
+        )?;
+        let (session, task) = self
+            .tasks
+            .append_correction_with_assistant_turn(
+                task_id,
+                &session_id,
+                correction_observation_id,
+                correction_text,
+                parent_attempt_id.clone(),
+                assistant_content,
+            )
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
+    }
+
     /// Executes one caller-selected workflow phase as an explicit tool-free composed turn.
     ///
     /// Phase bindings are resolved before transcript or provider side effects. This operation

@@ -215,6 +215,158 @@ fn records_a_selected_workflow_phase_response_as_task_attempt_evidence() {
 }
 
 #[test]
+fn records_a_selected_workflow_phase_response_as_task_correction_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("phase-correction-session").unwrap();
+    let task_id = TaskId::new("phase-correction-task").unwrap();
+    create_associated_task(&path, &task_id, &session_id);
+    let parent_attempt_id = TaskObservationId::new("parent-attempt").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .append_observation(
+            &task_id,
+            parent_attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("original answer").unwrap(),
+        )
+        .unwrap();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = AssistantRuntime::open(
+        &path,
+        RecordingProvider {
+            calls: Rc::clone(&calls),
+        },
+    )
+    .unwrap();
+    let phase = RegisteredWorkflowPhase::new("review", false, vec![])
+        .with_skills(["zeta.skill", "alpha.skill"]);
+
+    let outcome = runtime
+        .execute_workflow_phase_task_correction_turn(
+            &task_id,
+            &parent_attempt_id,
+            SessionTurnContent::new("correct this").unwrap(),
+            TaskObservationId::new("phase-correction-1").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &registry(&["zeta.skill", "unused.skill", "alpha.skill"]),
+            &phase,
+        )
+        .unwrap();
+
+    assert_eq!(
+        calls.borrow().as_slice(),
+        &[vec!["alpha.skill", "zeta.skill"]]
+    );
+    assert_eq!(outcome.session().turns().len(), 2);
+    assert_eq!(outcome.task().observations().len(), 2);
+    let correction = &outcome.task().observations()[1];
+    assert_eq!(correction.id().as_str(), "phase-correction-1");
+    assert_eq!(correction.kind(), TaskObservationKind::Correction);
+    assert_eq!(correction.text().as_str(), "phase answer");
+    assert_eq!(correction.parent_attempt_id(), Some(&parent_attempt_id));
+}
+
+#[test]
+fn correction_lineage_and_phase_preflight_precede_transcript_and_provider_effects() {
+    for case in [
+        "missing-parent",
+        "non-attempt-parent",
+        "duplicate-correction",
+        "missing-skill",
+    ] {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("vela.sqlite3");
+        let session_id = SessionId::new(format!("{case}-correction-session")).unwrap();
+        let task_id = TaskId::new(format!("{case}-correction-task")).unwrap();
+        create_associated_task(&path, &task_id, &session_id);
+        let parent_attempt_id = TaskObservationId::new("parent-attempt").unwrap();
+        let requested_parent_id = if case == "non-attempt-parent" {
+            TaskObservationId::new("earlier-correction").unwrap()
+        } else {
+            parent_attempt_id.clone()
+        };
+        if case != "missing-parent" {
+            let mut tasks = TaskStore::open(&path).unwrap();
+            tasks
+                .append_observation(
+                    &task_id,
+                    parent_attempt_id.clone(),
+                    TaskObservationKind::Attempt,
+                    TaskObservationText::new("original answer").unwrap(),
+                )
+                .unwrap();
+            if case == "non-attempt-parent" {
+                tasks
+                    .append_observation_for_attempt(
+                        &task_id,
+                        requested_parent_id.clone(),
+                        TaskObservationKind::Correction,
+                        TaskObservationText::new("earlier correction").unwrap(),
+                        parent_attempt_id.clone(),
+                    )
+                    .unwrap();
+            }
+            if case == "duplicate-correction" {
+                tasks
+                    .append_observation_for_attempt(
+                        &task_id,
+                        TaskObservationId::new("correction-1").unwrap(),
+                        TaskObservationKind::Correction,
+                        TaskObservationText::new("existing correction").unwrap(),
+                        parent_attempt_id.clone(),
+                    )
+                    .unwrap();
+            }
+        }
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut runtime = AssistantRuntime::open(
+            &path,
+            RecordingProvider {
+                calls: Rc::clone(&calls),
+            },
+        )
+        .unwrap();
+        let phase = RegisteredWorkflowPhase::new("review", false, vec![]).with_skills([
+            if case == "missing-skill" {
+                "missing.skill"
+            } else {
+                "present.skill"
+            },
+        ]);
+
+        let error = runtime
+            .execute_workflow_phase_task_correction_turn(
+                &task_id,
+                &requested_parent_id,
+                SessionTurnContent::new("must not persist").unwrap(),
+                TaskObservationId::new("correction-1").unwrap(),
+                SystemPolicy::new("system"),
+                DeveloperPolicy::new("developer"),
+                &registry(&["present.skill"]),
+                &phase,
+            )
+            .unwrap_err();
+
+        match case {
+            "missing-skill" => assert!(matches!(error, RuntimeError::WorkflowPhaseSkills(_))),
+            _ => assert!(matches!(error, RuntimeError::Task(_))),
+        }
+        assert!(calls.borrow().is_empty());
+        assert!(
+            SessionStore::open(&path)
+                .unwrap()
+                .load(&session_id)
+                .unwrap()
+                .unwrap()
+                .turns()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn task_attempt_and_phase_preflight_fail_before_transcript_or_provider_side_effects() {
     for case in [
         "unassociated-task",
@@ -443,6 +595,102 @@ fn blank_workflow_phase_task_response_preserves_only_the_human_turn() {
             .observations()
             .is_empty()
     );
+}
+
+#[test]
+fn blank_workflow_phase_task_correction_response_preserves_only_the_human_turn() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("blank-phase-correction-session").unwrap();
+    let task_id = TaskId::new("blank-phase-correction-task").unwrap();
+    create_associated_task(&path, &task_id, &session_id);
+    let parent_attempt_id = TaskObservationId::new("parent-attempt").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .append_observation(
+            &task_id,
+            parent_attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("original answer").unwrap(),
+        )
+        .unwrap();
+    let mut runtime = AssistantRuntime::open(&path, BlankProvider).unwrap();
+
+    let error = runtime
+        .execute_workflow_phase_task_correction_turn(
+            &task_id,
+            &parent_attempt_id,
+            SessionTurnContent::new("persist this correction request").unwrap(),
+            TaskObservationId::new("correction-1").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &registry(&["review.skill"]),
+            &RegisteredWorkflowPhase::new("review", false, vec![]).with_skills(["review.skill"]),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, RuntimeError::InvalidCorrectionText(_)));
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 1);
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].id(), &parent_attempt_id);
+}
+
+#[test]
+fn workflow_phase_task_correction_provider_failure_preserves_only_the_human_turn() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("failed-phase-correction-session").unwrap();
+    let task_id = TaskId::new("failed-phase-correction-task").unwrap();
+    create_associated_task(&path, &task_id, &session_id);
+    let parent_attempt_id = TaskObservationId::new("parent-attempt").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .append_observation(
+            &task_id,
+            parent_attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("original answer").unwrap(),
+        )
+        .unwrap();
+    let mut runtime = AssistantRuntime::open(&path, FailingProvider).unwrap();
+
+    let error = runtime
+        .execute_workflow_phase_task_correction_turn(
+            &task_id,
+            &parent_attempt_id,
+            SessionTurnContent::new("persist this correction request").unwrap(),
+            TaskObservationId::new("correction-1").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &registry(&["review.skill"]),
+            &RegisteredWorkflowPhase::new("review", false, vec![]).with_skills(["review.skill"]),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, RuntimeError::Provider(_)));
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 1);
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].id(), &parent_attempt_id);
 }
 
 #[test]
