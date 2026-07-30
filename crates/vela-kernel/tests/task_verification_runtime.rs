@@ -4,12 +4,12 @@ use tempfile::tempdir;
 use vela_kernel::{
     runtime::{
         AssistantProvider, AssistantRuntime, ProviderError, RuntimeError, TaskVerificationRequest,
-        TaskVerifier, TaskVerifierError,
+        TaskVerificationResult, TaskVerifier, TaskVerifierError,
     },
     session::{SessionId, SessionStore, SessionTitle, SessionTurn, SessionTurnContent},
     task::{
         TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText,
-        TaskStatus, TaskStore, TaskStoreError,
+        TaskStatus, TaskStore, TaskStoreError, TaskVerificationOutcome,
     },
 };
 
@@ -51,14 +51,14 @@ fn create_active_task(path: &Path, task_id: &TaskId, session_id: &SessionId) -> 
 
 struct RecordingVerifier {
     calls: Rc<RefCell<Vec<(String, String, String)>>>,
-    result: Result<String, TaskVerifierError>,
+    result: Result<TaskVerificationResult, TaskVerifierError>,
 }
 
 impl TaskVerifier for RecordingVerifier {
     fn verify(
         &mut self,
         request: TaskVerificationRequest<'_>,
-    ) -> Result<String, TaskVerifierError> {
+    ) -> Result<TaskVerificationResult, TaskVerifierError> {
         self.calls.borrow_mut().push((
             request.task().id().as_str().to_owned(),
             request.attempt().id().as_str().to_owned(),
@@ -81,7 +81,10 @@ fn records_independently_observed_verification_for_the_exact_attempt() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut verifier = RecordingVerifier {
         calls: Rc::clone(&calls),
-        result: Ok("just verify passed".to_owned()),
+        result: Ok(TaskVerificationResult::new(
+            TaskVerificationOutcome::Passed,
+            "just verify passed",
+        )),
     };
     let mut runtime = AssistantRuntime::open(&path, PanicProvider).unwrap();
 
@@ -108,6 +111,35 @@ fn records_independently_observed_verification_for_the_exact_attempt() {
     assert_eq!(verification.kind(), TaskObservationKind::Verification);
     assert_eq!(verification.text().as_str(), "just verify passed");
     assert_eq!(verification.parent_attempt_id(), Some(&attempt_id));
+    assert_eq!(
+        verification.verification_outcome(),
+        Some(TaskVerificationOutcome::Passed)
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .observations()
+            .last()
+            .unwrap()
+            .verification_outcome(),
+        Some(TaskVerificationOutcome::Passed)
+    );
+    let persisted: (u32, Vec<u8>) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_version, payload FROM events WHERE stream_id = 'task:verified-task' AND stream_version = 4",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted.0, 3);
+    assert_eq!(
+        persisted.1,
+        br#"{"id":"verification-1","kind":"verification","text":"just verify passed","parent_attempt_id":"attempt-1","verification_outcome":"passed"}"#
+    );
     assert!(
         SessionStore::open(&path)
             .unwrap()
@@ -140,7 +172,10 @@ fn verifies_an_unassociated_task_without_creating_a_session() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut verifier = RecordingVerifier {
         calls: Rc::clone(&calls),
-        result: Ok("checked".to_owned()),
+        result: Ok(TaskVerificationResult::new(
+            TaskVerificationOutcome::Failed,
+            "check failed",
+        )),
     };
     let mut runtime = AssistantRuntime::open(&path, PanicProvider).unwrap();
 
@@ -159,6 +194,25 @@ fn verifies_an_unassociated_task_without_creating_a_session() {
         task.observations().last().unwrap().kind(),
         TaskObservationKind::Verification
     );
+    assert_eq!(
+        task.observations().last().unwrap().verification_outcome(),
+        Some(TaskVerificationOutcome::Failed)
+    );
+    assert_eq!(task.status(), TaskStatus::Active);
+    let reopened = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reopened
+            .observations()
+            .last()
+            .unwrap()
+            .verification_outcome(),
+        Some(TaskVerificationOutcome::Failed)
+    );
+    assert_eq!(reopened.status(), TaskStatus::Active);
 }
 
 #[test]
@@ -212,7 +266,10 @@ fn rejects_invalid_verification_lineage_before_verifier_effects() {
         let calls = Rc::new(RefCell::new(Vec::new()));
         let mut verifier = RecordingVerifier {
             calls: Rc::clone(&calls),
-            result: Ok("must not run".to_owned()),
+            result: Ok(TaskVerificationResult::new(
+                TaskVerificationOutcome::Passed,
+                "must not run",
+            )),
         };
         let mut runtime = AssistantRuntime::open(&path, PanicProvider).unwrap();
 
@@ -235,7 +292,13 @@ fn verifier_failure_or_blank_output_writes_no_verification() {
             "failure",
             Err(TaskVerifierError::new(io::Error::other("checker offline"))),
         ),
-        ("blank", Ok(" \n ".to_owned())),
+        (
+            "blank",
+            Ok(TaskVerificationResult::new(
+                TaskVerificationOutcome::Passed,
+                " \n ",
+            )),
+        ),
     ] {
         let directory = tempdir().unwrap();
         let path = directory.path().join("vela.sqlite3");
@@ -292,7 +355,7 @@ impl TaskVerifier for RacingVerifier {
     fn verify(
         &mut self,
         _request: TaskVerificationRequest<'_>,
-    ) -> Result<String, TaskVerifierError> {
+    ) -> Result<TaskVerificationResult, TaskVerifierError> {
         self.calls += 1;
         TaskStore::open(&self.path)
             .unwrap()
@@ -304,7 +367,10 @@ impl TaskVerifier for RacingVerifier {
                 self.parent_attempt_id.clone(),
             )
             .unwrap();
-        Ok("stale verification".to_owned())
+        Ok(TaskVerificationResult::new(
+            TaskVerificationOutcome::Passed,
+            "stale verification",
+        ))
     }
 }
 

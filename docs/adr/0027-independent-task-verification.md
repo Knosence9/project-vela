@@ -30,7 +30,7 @@ The store remains available for already-observed evidence, but it cannot define 
 
 ### Persist a typed pass/fail result now
 
-The current task observation schema intentionally stores opaque evidence text. A status taxonomy, command identity, artifacts, and durable verifier provenance require separate contracts and migration analysis; they are not needed to establish the independent execution boundary.
+The task observation schema at this decision point intentionally stored opaque evidence text. A status taxonomy required a separate compatibility contract and was not needed to establish the independent execution boundary. [ADR-0028](0028-typed-task-verification-outcomes.md) later adds the bounded `Passed | Failed` taxonomy while preserving older opaque observations and continuing to defer command identity, artifacts, provenance, and lifecycle policy.
 
 ## Consequences
 
@@ -46,4 +46,4 @@ RED→GREEN tests prove exact task and Attempt input, linked Verification persis
 
 ## Revisit when
 
-Reconsider this decision before adding typed verification outcomes, executable command/tool adapters, durable verifier identity or artifacts, task completion policy derived from checks, workflow gates driven by verification, retries, scheduling, timestamps, actors, credentials, remote execution, or post-terminal evidence.
+Reconsider this decision before adding executable command/tool adapters, durable verifier identity or artifacts, task completion policy derived from checks, workflow gates driven by verification, retries, scheduling, timestamps, actors, credentials, remote execution, or post-terminal evidence. Typed outcomes are specified separately by [ADR-0028](0028-typed-task-verification-outcomes.md).

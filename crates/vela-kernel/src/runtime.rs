@@ -10,7 +10,7 @@ use crate::skill::{RegisteredSkill, SkillId, SkillRegistry, SkillSelection, Skil
 use crate::task::{
     Task, TaskCancellation, TaskFailure, TaskId, TaskObservation, TaskObservationId,
     TaskObservationKind, TaskObservationText, TaskObservationTextError, TaskOutput,
-    TaskOutputError, TaskStatus, TaskStore, TaskStoreError,
+    TaskOutputError, TaskStatus, TaskStore, TaskStoreError, TaskVerificationOutcome,
 };
 use crate::tool::{
     DurableToolInvocationError, DurableToolRegistryInvocationError, ToolAuthorizer, ToolId,
@@ -27,8 +27,38 @@ pub trait AssistantProvider {
 
 /// A synchronous caller-owned source of independently observed evidence about one exact attempt.
 pub trait TaskVerifier {
-    fn verify(&mut self, request: TaskVerificationRequest<'_>)
-    -> Result<String, TaskVerifierError>;
+    fn verify(
+        &mut self,
+        request: TaskVerificationRequest<'_>,
+    ) -> Result<TaskVerificationResult, TaskVerifierError>;
+}
+
+/// A successful independent check, distinct from failure to execute the checker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskVerificationResult {
+    outcome: TaskVerificationOutcome,
+    evidence: String,
+}
+
+impl TaskVerificationResult {
+    pub fn new(outcome: TaskVerificationOutcome, evidence: impl Into<String>) -> Self {
+        Self {
+            outcome,
+            evidence: evidence.into(),
+        }
+    }
+
+    pub fn outcome(&self) -> TaskVerificationOutcome {
+        self.outcome
+    }
+
+    pub fn evidence(&self) -> &str {
+        &self.evidence
+    }
+
+    fn into_parts(self) -> (TaskVerificationOutcome, String) {
+        (self.outcome, self.evidence)
+    }
 }
 
 /// The immutable task and exact parent Attempt supplied to one verifier invocation.
@@ -3080,8 +3110,9 @@ impl<P> AssistantRuntime<P> {
     ///
     /// Task status, the fresh Verification identity, and parent lineage are validated before the
     /// verifier runs. The verifier is invoked exactly once and is independent of the assistant
-    /// provider and transcript. Its non-blank result is appended as linked Verification evidence;
-    /// verifier failure, invalid output, or an authoritative racing task change is not retried.
+    /// provider and transcript. Its typed outcome and non-blank evidence are appended together as
+    /// linked Verification evidence; verifier execution failure, invalid evidence, or an
+    /// authoritative racing task change is not retried.
     pub fn verify_task_attempt<V: TaskVerifier>(
         &mut self,
         task_id: &TaskId,
@@ -3108,14 +3139,15 @@ impl<P> AssistantRuntime<P> {
                 attempt,
             })
             .map_err(RuntimeError::Verifier)?;
-        let verification = TaskObservationText::new(verification)
-            .map_err(RuntimeError::InvalidVerificationText)?;
+        let (outcome, evidence) = verification.into_parts();
+        let verification =
+            TaskObservationText::new(evidence).map_err(RuntimeError::InvalidVerificationText)?;
 
         self.tasks
-            .append_observation_for_attempt(
+            .append_verification_for_attempt(
                 task_id,
                 verification_observation_id,
-                TaskObservationKind::Verification,
+                outcome,
                 verification,
                 parent_attempt_id.clone(),
             )
