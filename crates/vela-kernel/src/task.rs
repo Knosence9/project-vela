@@ -539,6 +539,42 @@ impl std::error::Error for TaskStoreError {
     }
 }
 
+enum ObservationAppendMetadata {
+    Legacy {
+        kind: TaskObservationKind,
+        parent_attempt_id: Option<TaskObservationId>,
+    },
+    StructuredVerification {
+        outcome: TaskVerificationOutcome,
+        parent_attempt_id: TaskObservationId,
+    },
+}
+
+impl ObservationAppendMetadata {
+    fn into_parts(
+        self,
+    ) -> (
+        TaskObservationKind,
+        Option<TaskObservationId>,
+        Option<TaskVerificationOutcome>,
+    ) {
+        match self {
+            Self::Legacy {
+                kind,
+                parent_attempt_id,
+            } => (kind, parent_attempt_id, None),
+            Self::StructuredVerification {
+                outcome,
+                parent_attempt_id,
+            } => (
+                TaskObservationKind::Verification,
+                Some(parent_attempt_id),
+                Some(outcome),
+            ),
+        }
+    }
+}
+
 /// A synchronous task lifecycle store backed by the typed event log.
 pub struct TaskStore {
     event_log: EventLog,
@@ -800,10 +836,11 @@ impl TaskStore {
         self.append_observation_with_parent_and_outcome(
             id,
             observation_id,
-            TaskObservationKind::Verification,
             text,
-            Some(parent_attempt_id),
-            Some(outcome),
+            ObservationAppendMetadata::StructuredVerification {
+                outcome,
+                parent_attempt_id,
+            },
         )
     }
 
@@ -818,10 +855,11 @@ impl TaskStore {
         self.append_observation_with_parent_and_outcome(
             id,
             observation_id,
-            kind,
             text,
-            parent_attempt_id,
-            None,
+            ObservationAppendMetadata::Legacy {
+                kind,
+                parent_attempt_id,
+            },
         )
     }
 
@@ -829,11 +867,10 @@ impl TaskStore {
         &mut self,
         id: &TaskId,
         observation_id: TaskObservationId,
-        kind: TaskObservationKind,
         text: TaskObservationText,
-        parent_attempt_id: Option<TaskObservationId>,
-        verification_outcome: Option<TaskVerificationOutcome>,
+        metadata: ObservationAppendMetadata,
     ) -> Result<Task, TaskStoreError> {
+        let (kind, parent_attempt_id, verification_outcome) = metadata.into_parts();
         loop {
             let Some(mut loaded) = self.load_versioned(id)? else {
                 return Err(TaskStoreError::NotFound {
