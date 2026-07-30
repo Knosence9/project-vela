@@ -43,7 +43,7 @@
   "lessons": [
     "Model-produced explanation is execution evidence, not caller-owned terminal truth.",
     "Ordered durable prefixes make terminal races observable without pretending cross-stream rollback exists.",
-    "A valid maintainability finding can become a separate bounded refactor instead of expanding a feature slice."
+    "Substantive review found duplicated authority-sensitive workflow-phase task preflight; the failure slice stayed bounded and issue 759 tracked the shared-preflight refactor."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/758"},
   "sanitation": {"passed": true, "blockers": []},

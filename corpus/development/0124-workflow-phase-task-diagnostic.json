@@ -43,7 +43,7 @@
   "lessons": [
     "A diagnosis can be useful linked evidence without proving that its explanation is correct.",
     "Provider-produced Diagnostic and independently observed Verification need different authority contracts.",
-    "Documentation non-goals must exempt capabilities that the same change explicitly introduces.",
+    "Substantive review found that the broad runtime-diagnostic non-goal contradicted the new parented Diagnostic operation; the fix narrowed both non-goals to exclude only unrelated diagnostics.",
     "Incremental fixes require substantive exact-head review after any rate-limit cooldown."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/764"},
