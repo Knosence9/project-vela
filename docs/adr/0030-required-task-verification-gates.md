@@ -52,4 +52,4 @@ RED→GREEN tests cover gate-set validation and order, all-passed and mixed stat
 
 ## Revisit when
 
-Reconsider this decision before persisting or replacing gate policy, attaching commands or artifacts, deriving task/workflow lifecycle transitions, requiring freshness beyond append order, adding conditional/optional gates, or introducing actors, timestamps, scheduling, retries, permissions, credentials, or remote execution.
+[ADR-0031](0031-verification-gated-task-completion.md) subsequently composes this pure report with an explicit caller-selected completion boundary that re-evaluates on concurrent task changes; gate evaluation itself remains read-only and caller-owned. Reconsider this decision before persisting or replacing gate policy, attaching commands or artifacts, deriving workflow lifecycle transitions, requiring freshness beyond append order, adding conditional/optional gates, or introducing actors, timestamps, scheduling, retries, permissions, credentials, or remote execution.

@@ -267,6 +267,58 @@ impl fmt::Display for TaskVerificationGateEvaluationError {
 
 impl std::error::Error for TaskVerificationGateEvaluationError {}
 
+/// A rejected attempt to complete a task through caller-required verification gates.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum TaskVerifiedCompletionError {
+    Store(TaskStoreError),
+    GateEvaluation(TaskVerificationGateEvaluationError),
+    GatesPending { report: TaskVerificationGateReport },
+    GatesFailed { report: TaskVerificationGateReport },
+}
+
+impl fmt::Display for TaskVerifiedCompletionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Store(error) => write!(formatter, "verified task completion failed: {error}"),
+            Self::GateEvaluation(error) => {
+                write!(
+                    formatter,
+                    "verified task completion gate evaluation failed: {error}"
+                )
+            }
+            Self::GatesPending { .. } => {
+                formatter.write_str("verified task completion gates are pending")
+            }
+            Self::GatesFailed { .. } => {
+                formatter.write_str("verified task completion gates failed")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TaskVerifiedCompletionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Store(error) => Some(error),
+            Self::GateEvaluation(error) => Some(error),
+            Self::GatesPending { .. } | Self::GatesFailed { .. } => None,
+        }
+    }
+}
+
+impl From<TaskStoreError> for TaskVerifiedCompletionError {
+    fn from(error: TaskStoreError) -> Self {
+        Self::Store(error)
+    }
+}
+
+impl From<TaskVerificationGateEvaluationError> for TaskVerifiedCompletionError {
+    fn from(error: TaskVerificationGateEvaluationError) -> Self {
+        Self::GateEvaluation(error)
+    }
+}
+
 /// Non-blank opaque UTF-8 evidence recorded for one task observation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -855,6 +907,82 @@ impl TaskStore {
             None,
             None,
         )
+    }
+
+    /// Completes an active task only when every caller-required gate passes for one exact attempt.
+    ///
+    /// A concurrent task-stream change causes the current state and gates to be evaluated again,
+    /// so completion is never authorized from a stale green report.
+    pub fn complete_if_verification_gates_pass(
+        &mut self,
+        id: &TaskId,
+        output: TaskOutput,
+        attempt_id: &TaskObservationId,
+        gate_set: &TaskVerificationGateSet,
+    ) -> Result<Task, TaskVerifiedCompletionError> {
+        self.complete_if_verification_gates_pass_before_append(
+            id,
+            output,
+            attempt_id,
+            gate_set,
+            &mut || {},
+        )
+    }
+
+    fn complete_if_verification_gates_pass_before_append(
+        &mut self,
+        id: &TaskId,
+        output: TaskOutput,
+        attempt_id: &TaskObservationId,
+        gate_set: &TaskVerificationGateSet,
+        before_append: &mut impl FnMut(),
+    ) -> Result<Task, TaskVerifiedCompletionError> {
+        loop {
+            let loaded = match self.load_versioned(id)? {
+                Some(loaded) if loaded.task.status == TaskStatus::Active => loaded,
+                Some(loaded) => {
+                    return Err(terminal_state_error(id, loaded.task.status).into());
+                }
+                None => {
+                    return Err(TaskStoreError::NotFound {
+                        task_id: id.clone(),
+                    }
+                    .into());
+                }
+            };
+            let report = loaded
+                .task
+                .evaluate_verification_gates(attempt_id, gate_set)?;
+            match report.status() {
+                TaskVerificationGateStatus::Pending => {
+                    return Err(TaskVerifiedCompletionError::GatesPending { report });
+                }
+                TaskVerificationGateStatus::Failed => {
+                    return Err(TaskVerifiedCompletionError::GatesFailed { report });
+                }
+                TaskVerificationGateStatus::Passed => {}
+            }
+
+            before_append();
+            let event = TaskEvent::Completed {
+                output: Some(output.clone()),
+            };
+            match self.event_log.append(
+                &task_stream(id),
+                ExpectedVersion::Exact(loaded.stream_version),
+                &event,
+            ) {
+                Ok(_) => {
+                    return Ok(Task {
+                        status: TaskStatus::Completed,
+                        output: Some(output.clone()),
+                        ..loaded.task
+                    });
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(TaskStoreError::EventLog(error).into()),
+            }
+        }
     }
 
     pub fn cancel(
@@ -1861,5 +1989,76 @@ impl Event for TaskEvent {
             message: error.to_string(),
         })?;
         Ok(Self::Started { goal })
+    }
+}
+
+#[cfg(test)]
+mod verified_completion_concurrency_tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn re_evaluates_after_a_verification_write_wins_the_completion_race() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new("guarded-completion-race").unwrap();
+        let attempt_id = TaskObservationId::new("attempt").unwrap();
+        let check = TaskVerificationCheck::new("quality").unwrap();
+        let gates = TaskVerificationGateSet::new(vec![check.clone()]).unwrap();
+        let mut store = TaskStore::open(&path).unwrap();
+        store
+            .start(task_id.clone(), TaskGoal::new("Keep gates fresh").unwrap())
+            .unwrap();
+        store
+            .append_observation(
+                &task_id,
+                attempt_id.clone(),
+                TaskObservationKind::Attempt,
+                TaskObservationText::new("candidate").unwrap(),
+            )
+            .unwrap();
+        store
+            .append_verification_for_attempt(
+                &task_id,
+                TaskObservationId::new("passed").unwrap(),
+                TaskVerificationOutcome::Passed,
+                check.clone(),
+                TaskObservationText::new("passed").unwrap(),
+                attempt_id.clone(),
+            )
+            .unwrap();
+
+        let mut racing_store = Some(TaskStore::open(&path).unwrap());
+        let result = store.complete_if_verification_gates_pass_before_append(
+            &task_id,
+            TaskOutput::new("stale completion").unwrap(),
+            &attempt_id,
+            &gates,
+            &mut || {
+                if let Some(mut racing_store) = racing_store.take() {
+                    racing_store
+                        .append_verification_for_attempt(
+                            &task_id,
+                            TaskObservationId::new("failed").unwrap(),
+                            TaskVerificationOutcome::Failed,
+                            check.clone(),
+                            TaskObservationText::new("failed after evaluation").unwrap(),
+                            attempt_id.clone(),
+                        )
+                        .unwrap();
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(TaskVerifiedCompletionError::GatesFailed { ref report })
+                if report.status() == TaskVerificationGateStatus::Failed
+        ));
+        assert_eq!(
+            store.load(&task_id).unwrap().unwrap().status(),
+            TaskStatus::Active
+        );
     }
 }

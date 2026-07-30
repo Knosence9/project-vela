@@ -245,6 +245,8 @@ The first milestone is the **evidence loop**:
 86. Record independently observed Verification evidence for one exact task Attempt through a separate caller-owned verifier boundary. ✅
 87. Persist explicit passed or failed outcomes for independent task Verification without granting lifecycle authority. ✅
 88. Identify each new structured independent task Verification check without fabricating historical provenance. ✅
+89. Evaluate a caller-owned required Verification gate set deterministically for one exact task Attempt. ✅
+90. Complete a task through an explicit caller-selected gate boundary without stale green authorization. ✅
 
 ## Project documents
 
