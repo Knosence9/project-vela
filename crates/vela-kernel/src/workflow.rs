@@ -11,7 +11,11 @@ use crate::event_log::{
     DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
 };
 use crate::skill::{SkillId, SkillIdError, SkillRegistry, SkillSelection, SkillSelectionError};
-use crate::task::{TaskId, TaskStatus, TaskStore, TaskStoreError, task_stream};
+use crate::task::{
+    TaskId, TaskObservationId, TaskStatus, TaskStore, TaskStoreError, TaskVerificationCheck,
+    TaskVerificationCheckError, TaskVerificationGateEvaluationError, TaskVerificationGateReport,
+    TaskVerificationGateSet, TaskVerificationGateStatus, task_stream,
+};
 
 /// An opaque, non-blank stable identifier for one registered workflow.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -841,6 +845,90 @@ impl Error for WorkflowRunStoreError {
     }
 }
 
+/// A rejected evidence-backed workflow advancement.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkflowVerifiedAdvanceError {
+    Store(WorkflowRunStoreError),
+    GateEvaluation(TaskVerificationGateEvaluationError),
+    RunNotTaskAttributed {
+        run_id: WorkflowRunId,
+    },
+    TransitionUngated {
+        phase_id: String,
+        transition_index: usize,
+    },
+    InvalidGate {
+        source: TaskVerificationCheckError,
+    },
+    GatesPending {
+        report: TaskVerificationGateReport,
+    },
+    GatesFailed {
+        report: TaskVerificationGateReport,
+    },
+}
+
+impl fmt::Display for WorkflowVerifiedAdvanceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Store(error) => {
+                write!(formatter, "verified workflow advancement failed: {error}")
+            }
+            Self::GateEvaluation(error) => write!(
+                formatter,
+                "verified workflow advancement gate evaluation failed: {error}"
+            ),
+            Self::RunNotTaskAttributed { run_id } => {
+                write!(
+                    formatter,
+                    "workflow run {run_id} is not attributed to a task"
+                )
+            }
+            Self::TransitionUngated {
+                phase_id,
+                transition_index,
+            } => write!(
+                formatter,
+                "workflow phase {phase_id} transition {transition_index} has no verification gate"
+            ),
+            Self::InvalidGate { source } => {
+                write!(formatter, "workflow verification gate is invalid: {source}")
+            }
+            Self::GatesPending { .. } => {
+                formatter.write_str("workflow verification gate is pending")
+            }
+            Self::GatesFailed { .. } => formatter.write_str("workflow verification gate failed"),
+        }
+    }
+}
+
+impl Error for WorkflowVerifiedAdvanceError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Store(error) => Some(error),
+            Self::GateEvaluation(error) => Some(error),
+            Self::InvalidGate { source } => Some(source),
+            Self::RunNotTaskAttributed { .. }
+            | Self::TransitionUngated { .. }
+            | Self::GatesPending { .. }
+            | Self::GatesFailed { .. } => None,
+        }
+    }
+}
+
+impl From<WorkflowRunStoreError> for WorkflowVerifiedAdvanceError {
+    fn from(error: WorkflowRunStoreError) -> Self {
+        Self::Store(error)
+    }
+}
+
+impl From<TaskVerificationGateEvaluationError> for WorkflowVerifiedAdvanceError {
+    fn from(error: TaskVerificationGateEvaluationError) -> Self {
+        Self::GateEvaluation(error)
+    }
+}
+
 /// A synchronous durable workflow-run store backed by the typed event log.
 pub struct WorkflowRunStore {
     event_log: EventLog,
@@ -1018,6 +1106,124 @@ impl WorkflowRunStore {
                 current_revision,
             }),
             Err(error) => Err(WorkflowRunStoreError::EventLog(error)),
+        }
+    }
+
+    /// Advances a task-attributed run only when its authored gate has passed for one exact attempt.
+    ///
+    /// A concurrent task-stream change causes gate re-evaluation. The exact caller-selected run
+    /// revision and transition are never reinterpreted after a concurrent workflow change.
+    pub fn advance_if_task_verification_passes(
+        &mut self,
+        id: &WorkflowRunId,
+        expected_revision: u64,
+        transition_index: usize,
+        attempt_id: &TaskObservationId,
+    ) -> Result<WorkflowRun, WorkflowVerifiedAdvanceError> {
+        self.advance_if_task_verification_passes_before_append(
+            id,
+            expected_revision,
+            transition_index,
+            attempt_id,
+            &mut || {},
+        )
+    }
+
+    fn advance_if_task_verification_passes_before_append(
+        &mut self,
+        id: &WorkflowRunId,
+        expected_revision: u64,
+        transition_index: usize,
+        attempt_id: &TaskObservationId,
+        before_append: &mut impl FnMut(),
+    ) -> Result<WorkflowRun, WorkflowVerifiedAdvanceError> {
+        loop {
+            let Some(mut run) = self.load(id)? else {
+                return Err(WorkflowRunStoreError::NotFound { run_id: id.clone() }.into());
+            };
+            validate_revision(&run, expected_revision)?;
+            if run.is_cancelled() {
+                return Err(WorkflowRunStoreError::AlreadyCancelled { run_id: id.clone() }.into());
+            }
+            if run.is_failed() {
+                return Err(WorkflowRunStoreError::AlreadyFailed { run_id: id.clone() }.into());
+            }
+            if run.is_paused() {
+                return Err(WorkflowRunStoreError::Paused { run_id: id.clone() }.into());
+            }
+            let task_id = run.task_id().cloned().ok_or_else(|| {
+                WorkflowVerifiedAdvanceError::RunNotTaskAttributed { run_id: id.clone() }
+            })?;
+            let transition = run
+                .current_phase()
+                .transitions()
+                .get(transition_index)
+                .ok_or_else(|| WorkflowRunStoreError::InvalidTransition {
+                    source: resolve_transition(&run, transition_index, None).unwrap_err(),
+                })?;
+            let gate_id = transition.gate().ok_or_else(|| {
+                WorkflowVerifiedAdvanceError::TransitionUngated {
+                    phase_id: run.current_phase().id().to_owned(),
+                    transition_index,
+                }
+            })?;
+            let gate_check = TaskVerificationCheck::new(gate_id.to_owned())
+                .map_err(|source| WorkflowVerifiedAdvanceError::InvalidGate { source })?;
+            let gate_set = TaskVerificationGateSet::new(vec![gate_check])
+                .expect("one validated workflow gate is a non-empty unique gate set");
+            let target_phase_index = resolve_transition(&run, transition_index, Some(gate_id))
+                .map_err(|source| WorkflowRunStoreError::InvalidTransition { source })?;
+            let Some((task, task_version)) = self
+                .tasks
+                .load_with_version(&task_id)
+                .map_err(WorkflowRunStoreError::Task)?
+            else {
+                return Err(WorkflowRunStoreError::TaskNotFound { task_id }.into());
+            };
+            let report = task.evaluate_verification_gates(attempt_id, &gate_set)?;
+            match report.status() {
+                TaskVerificationGateStatus::Pending => {
+                    return Err(WorkflowVerifiedAdvanceError::GatesPending { report });
+                }
+                TaskVerificationGateStatus::Failed => {
+                    return Err(WorkflowVerifiedAdvanceError::GatesFailed { report });
+                }
+                TaskVerificationGateStatus::Passed => {}
+            }
+
+            before_append();
+            let event = WorkflowRunEvent::Advanced {
+                source_phase_index: run.current_phase_index,
+                transition_index,
+                target_phase_index,
+                gate_acknowledgement: Some(gate_id.to_owned()),
+            };
+            match self.event_log.append_if_stream_unchanged(
+                &workflow_run_stream(id),
+                ExpectedVersion::Exact(expected_revision),
+                &task_stream(&task_id),
+                ExpectedVersion::Exact(task_version),
+                &event,
+            ) {
+                Ok(revision) => {
+                    run.current_phase_index = target_phase_index;
+                    run.revision = revision;
+                    return Ok(run);
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => {
+                    let current = self
+                        .load(id)?
+                        .ok_or_else(|| WorkflowRunStoreError::NotFound { run_id: id.clone() })?;
+                    if current.revision() != expected_revision {
+                        return Err(WorkflowRunStoreError::ConcurrentModification {
+                            expected_revision,
+                            current_revision: current.revision(),
+                        }
+                        .into());
+                    }
+                }
+                Err(error) => return Err(WorkflowRunStoreError::EventLog(error).into()),
+            }
         }
     }
 
@@ -2073,7 +2279,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::task::{TaskGoal, TaskOutput};
+    use crate::task::{
+        TaskGoal, TaskObservationId, TaskObservationKind, TaskObservationText, TaskOutput,
+        TaskVerificationCheck, TaskVerificationOutcome,
+    };
 
     #[test]
     fn task_revision_race_rejects_attributed_start_without_creating_a_run() {
@@ -2101,5 +2310,137 @@ mod tests {
             Err(WorkflowRunStoreError::TaskChanged { .. })
         ));
         assert!(runs.load(&run_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn task_verification_race_rechecks_before_verified_workflow_advance() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new("verified-task-race").unwrap();
+        let attempt_id = TaskObservationId::new("attempt").unwrap();
+        let run_id = WorkflowRunId::new("verified-task-race").unwrap();
+        let workflow = verified_workflow();
+        let mut tasks = TaskStore::open(&path).unwrap();
+        seed_passed_verification(&mut tasks, &task_id, &attempt_id);
+        let mut runs = WorkflowRunStore::open(&path).unwrap();
+        let started = runs
+            .start_for_task(run_id.clone(), &task_id, &workflow)
+            .unwrap();
+        let mut racing_tasks = Some(TaskStore::open(&path).unwrap());
+
+        let result = runs.advance_if_task_verification_passes_before_append(
+            &run_id,
+            started.revision(),
+            0,
+            &attempt_id,
+            &mut || {
+                if let Some(mut racing_tasks) = racing_tasks.take() {
+                    racing_tasks
+                        .append_verification_for_attempt(
+                            &task_id,
+                            TaskObservationId::new("late-failure").unwrap(),
+                            TaskVerificationOutcome::Failed,
+                            TaskVerificationCheck::new("release.approved").unwrap(),
+                            TaskObservationText::new("late check failed").unwrap(),
+                            attempt_id.clone(),
+                        )
+                        .unwrap();
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(WorkflowVerifiedAdvanceError::GatesFailed { ref report })
+                if report.status() == TaskVerificationGateStatus::Failed
+        ));
+        assert_eq!(runs.load(&run_id).unwrap().unwrap().revision(), 1);
+    }
+
+    #[test]
+    fn workflow_revision_race_remains_authoritative_during_verified_advance() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new("workflow-race-task").unwrap();
+        let attempt_id = TaskObservationId::new("attempt").unwrap();
+        let run_id = WorkflowRunId::new("workflow-race-run").unwrap();
+        let workflow = verified_workflow();
+        let mut tasks = TaskStore::open(&path).unwrap();
+        seed_passed_verification(&mut tasks, &task_id, &attempt_id);
+        let mut runs = WorkflowRunStore::open(&path).unwrap();
+        let started = runs
+            .start_for_task(run_id.clone(), &task_id, &workflow)
+            .unwrap();
+        let mut racing_runs = Some(WorkflowRunStore::open(&path).unwrap());
+
+        let result = runs.advance_if_task_verification_passes_before_append(
+            &run_id,
+            started.revision(),
+            0,
+            &attempt_id,
+            &mut || {
+                if let Some(mut racing_runs) = racing_runs.take() {
+                    racing_runs
+                        .advance(&run_id, started.revision(), 0, Some("release.approved"))
+                        .unwrap();
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(WorkflowVerifiedAdvanceError::Store(
+                WorkflowRunStoreError::ConcurrentModification {
+                    expected_revision: 1,
+                    current_revision: 2,
+                }
+            ))
+        ));
+    }
+
+    fn verified_workflow() -> RegisteredWorkflow {
+        RegisteredWorkflow::new(
+            WorkflowId::new("verified.workflow").unwrap(),
+            "review",
+            vec![
+                RegisteredWorkflowPhase::new(
+                    "review",
+                    false,
+                    vec![RegisteredWorkflowTransition::new(
+                        "done",
+                        Some("release.approved".to_owned()),
+                    )],
+                ),
+                RegisteredWorkflowPhase::new("done", true, vec![]),
+            ],
+        )
+    }
+
+    fn seed_passed_verification(
+        tasks: &mut TaskStore,
+        task_id: &TaskId,
+        attempt_id: &TaskObservationId,
+    ) {
+        tasks
+            .start(task_id.clone(), TaskGoal::new("verify release").unwrap())
+            .unwrap();
+        tasks
+            .append_observation(
+                task_id,
+                attempt_id.clone(),
+                TaskObservationKind::Attempt,
+                TaskObservationText::new("candidate").unwrap(),
+            )
+            .unwrap();
+        tasks
+            .append_verification_for_attempt(
+                task_id,
+                TaskObservationId::new("initial-pass").unwrap(),
+                TaskVerificationOutcome::Passed,
+                TaskVerificationCheck::new("release.approved").unwrap(),
+                TaskObservationText::new("check passed").unwrap(),
+                attempt_id.clone(),
+            )
+            .unwrap();
     }
 }

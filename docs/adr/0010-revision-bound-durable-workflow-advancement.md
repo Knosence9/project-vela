@@ -39,7 +39,7 @@ Replay could derive source and target, but recording all three indexes makes cor
 
 ### Evaluate gates while advancing
 
-No gate evaluator, evidence schema, or permission contract exists. Treating a gate ID as executable would cross the inert topology boundary and invent authority not granted by the workflow definition.
+At this decision point no gate evaluator, evidence schema, or permission contract existed. Treating a gate ID as executable would have crossed the inert topology boundary and invented authority not granted by the workflow definition. [ADR-0032](0032-task-verification-workflow-advancement.md) subsequently adds a separate evidence-backed operation for task-attributed runs while preserving this raw caller-acknowledgement boundary unchanged.
 
 ## Consequences
 
@@ -65,4 +65,4 @@ The bounded execution slice follows RED→GREEN tests proving ungated and exactl
 
 ## Revisit when
 
-Reconsider this decision before gate evaluation or evidence binding, phase actions, scheduling, automatic transition choice, pause/resume, cancellation, retries, compensation, run discovery, snapshots or compaction, migration, deletion, definition replacement, or remote execution.
+[ADR-0032](0032-task-verification-workflow-advancement.md) subsequently adds exact task-Verification evidence binding through a separate stale-safe advancement operation; the low-level revision-bound acknowledgement contract remains unchanged. Reconsider this decision before phase actions, scheduling, automatic transition choice, multi-check gate policy, retries after workflow changes, compensation, snapshots or compaction, migration, deletion, definition replacement, or remote execution.
