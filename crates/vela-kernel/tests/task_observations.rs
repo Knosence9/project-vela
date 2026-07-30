@@ -72,6 +72,7 @@ fn persists_every_observation_kind_in_append_order_across_reopen() {
         assert_eq!(observation.text().as_str(), text);
         assert_eq!(observation.parent_attempt_id(), None);
         assert_eq!(observation.verification_outcome(), None);
+        assert_eq!(observation.verification_check(), None);
     }
     let persisted: (String, u32, Vec<u8>) = rusqlite::Connection::open(&path)
         .unwrap()
@@ -142,6 +143,7 @@ fn relates_non_attempt_observations_to_an_earlier_attempt_across_reopen() {
             Some("attempt-1")
         );
         assert_eq!(observation.verification_outcome(), None);
+        assert_eq!(observation.verification_check(), None);
     }
     let persisted: (u32, Vec<u8>) = rusqlite::Connection::open(&path)
         .unwrap()
@@ -619,7 +621,7 @@ fn malformed_observations_and_unsupported_kinds_are_replay_errors() {
 
     connection
         .execute(
-            "UPDATE events SET payload_version = 4 WHERE stream_id = 'task:corrupt-observation' AND stream_version = 2",
+            "UPDATE events SET payload_version = 5 WHERE stream_id = 'task:corrupt-observation' AND stream_version = 2",
             [],
         )
         .unwrap();
@@ -627,7 +629,7 @@ fn malformed_observations_and_unsupported_kinds_are_replay_errors() {
         TaskStore::open(&path).unwrap().load(&task_id).unwrap_err(),
         TaskStoreError::Replay(ReplayError::UnsupportedEvent {
             ref event_type,
-            payload_version: 4,
+            payload_version: 5,
         }) if event_type == "task.observation_appended"
     ));
 }
@@ -675,6 +677,103 @@ fn malformed_structured_verification_payloads_fail_closed() {
             })
         ));
     }
+}
+
+#[test]
+fn malformed_identified_verification_payloads_fail_closed() {
+    for (case, payload) in [
+        (
+            "wrong-kind",
+            br#"{"id":"verification","kind":"diagnostic","text":"checked","parent_attempt_id":"attempt","verification_outcome":"passed","verification_check":"quality-gate"}"#.as_slice(),
+        ),
+        (
+            "missing-check",
+            br#"{"id":"verification","kind":"verification","text":"checked","parent_attempt_id":"attempt","verification_outcome":"passed"}"#.as_slice(),
+        ),
+        (
+            "blank-check",
+            br#"{"id":"verification","kind":"verification","text":"checked","parent_attempt_id":"attempt","verification_outcome":"passed","verification_check":"  "}"#.as_slice(),
+        ),
+        (
+            "unknown-field",
+            br#"{"id":"verification","kind":"verification","text":"checked","parent_attempt_id":"attempt","verification_outcome":"passed","verification_check":"quality-gate","command":"just verify"}"#.as_slice(),
+        ),
+    ] {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new(format!("identified-{case}")).unwrap();
+        let mut store = TaskStore::open(&path).unwrap();
+        store
+            .start(task_id.clone(), TaskGoal::new("Replay identified evidence").unwrap())
+            .unwrap();
+        store
+            .append_observation(
+                &task_id,
+                observation_id("attempt"),
+                TaskObservationKind::Attempt,
+                observation_text("candidate"),
+            )
+            .unwrap();
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "INSERT INTO events VALUES (?1, 3, 'task.observation_appended', 4, ?2)",
+                rusqlite::params![format!("task:{task_id}"), payload],
+            )
+            .unwrap();
+
+        assert!(matches!(
+            TaskStore::open(&path).unwrap().load(&task_id).unwrap_err(),
+            TaskStoreError::Replay(ReplayError::MalformedPayload {
+                stream_version: 3,
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn version_three_structured_verification_replays_without_fabricated_check() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("version-three-verification").unwrap();
+    let mut store = TaskStore::open(&path).unwrap();
+    store
+        .start(
+            task_id.clone(),
+            TaskGoal::new("Replay typed evidence").unwrap(),
+        )
+        .unwrap();
+    store
+        .append_observation(
+            &task_id,
+            observation_id("attempt"),
+            TaskObservationKind::Attempt,
+            observation_text("candidate"),
+        )
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events VALUES (?1, 3, 'task.observation_appended', 3, ?2)",
+            rusqlite::params![
+                format!("task:{task_id}"),
+                br#"{"id":"verification","kind":"verification","text":"checked","parent_attempt_id":"attempt","verification_outcome":"passed"}"#.as_slice()
+            ],
+        )
+        .unwrap();
+
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    let verification = task.observations().last().unwrap();
+    assert_eq!(
+        verification.verification_outcome(),
+        Some(vela_kernel::task::TaskVerificationOutcome::Passed)
+    );
+    assert_eq!(verification.verification_check(), None);
 }
 
 #[test]
@@ -733,6 +832,7 @@ fn version_one_observations_replay_as_ungrouped() {
     assert_eq!(task.observations()[0].id().as_str(), "old-diagnostic");
     assert_eq!(task.observations()[0].parent_attempt_id(), None);
     assert_eq!(task.observations()[0].verification_outcome(), None);
+    assert_eq!(task.observations()[0].verification_check(), None);
 }
 
 #[test]

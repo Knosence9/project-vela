@@ -10,7 +10,8 @@ use crate::skill::{RegisteredSkill, SkillId, SkillRegistry, SkillSelection, Skil
 use crate::task::{
     Task, TaskCancellation, TaskFailure, TaskId, TaskObservation, TaskObservationId,
     TaskObservationKind, TaskObservationText, TaskObservationTextError, TaskOutput,
-    TaskOutputError, TaskStatus, TaskStore, TaskStoreError, TaskVerificationOutcome,
+    TaskOutputError, TaskStatus, TaskStore, TaskStoreError, TaskVerificationCheck,
+    TaskVerificationOutcome,
 };
 use crate::tool::{
     DurableToolInvocationError, DurableToolRegistryInvocationError, ToolAuthorizer, ToolId,
@@ -66,6 +67,7 @@ impl TaskVerificationResult {
 pub struct TaskVerificationRequest<'a> {
     task: &'a Task,
     attempt: &'a TaskObservation,
+    check: &'a TaskVerificationCheck,
 }
 
 impl<'a> TaskVerificationRequest<'a> {
@@ -75,6 +77,10 @@ impl<'a> TaskVerificationRequest<'a> {
 
     pub fn attempt(self) -> &'a TaskObservation {
         self.attempt
+    }
+
+    pub fn check(self) -> &'a TaskVerificationCheck {
+        self.check
     }
 }
 
@@ -3118,6 +3124,7 @@ impl<P> AssistantRuntime<P> {
         task_id: &TaskId,
         parent_attempt_id: &TaskObservationId,
         verification_observation_id: TaskObservationId,
+        check: TaskVerificationCheck,
         verifier: &mut V,
     ) -> Result<Task, RuntimeError> {
         let task = self.load_active_task(task_id)?;
@@ -3137,6 +3144,7 @@ impl<P> AssistantRuntime<P> {
             .verify(TaskVerificationRequest {
                 task: &task,
                 attempt,
+                check: &check,
             })
             .map_err(RuntimeError::Verifier)?;
         let (outcome, evidence) = verification.into_parts();
@@ -3148,6 +3156,7 @@ impl<P> AssistantRuntime<P> {
                 task_id,
                 verification_observation_id,
                 outcome,
+                check,
                 verification,
                 parent_attempt_id.clone(),
             )

@@ -43,4 +43,4 @@ RED→GREEN tests cover persisted and reopened passed and failed outcomes, exact
 
 ## Revisit when
 
-Reconsider this decision before adding executable command/tool verifier adapters, durable verifier identity or artifacts, check freshness or supersession, task completion policy derived from checks, workflow gates, retries, scheduling, timestamps, actors, credentials, remote execution, or post-terminal evidence.
+ADR-0029 subsequently adds a caller-owned check identity while preserving this outcome taxonomy and payload-version-3 compatibility. Reconsider this decision before adding executable command/tool verifier adapters, durable command or artifact provenance, check freshness or supersession, task completion policy derived from checks, workflow gates, retries, scheduling, timestamps, actors, credentials, remote execution, or post-terminal evidence.
