@@ -1,0 +1,49 @@
+# ADR-0029: Identify independent task Verification checks
+
+- **Status:** accepted
+- **Date:** 2026-07-30
+- **Decision and execution issue:** [#771](https://github.com/Knosence9/project-vela/issues/771)
+
+## Context
+
+ADR-0027 separates independent checking from assistant-provider authority, and ADR-0028 distinguishes observed `Passed | Failed` results from checker execution errors. The persisted evidence still does not identify which check produced a result. Callers therefore cannot distinguish verification gates without parsing opaque evidence text, even though the architecture requires code-owned deterministic checks and explicit verification.
+
+This boundary needs descriptive check provenance before any caller can responsibly evaluate a set of verification gates. It does not yet need executable command definitions, artifacts, scheduling, or lifecycle policy.
+
+## Decision
+
+`TaskVerificationCheck` is a validated, non-blank, caller-owned identity for one independent check. `AssistantRuntime::verify_task_attempt` accepts it before verifier execution and includes an immutable reference in `TaskVerificationRequest`. A successful verifier result appends the exact check identity together with the `Passed | Failed` outcome, opaque non-blank evidence, fresh Verification identity, and exact parent Attempt.
+
+`task.observation_appended` payload version 4 is reserved for identified structured Verification. It requires `kind: verification`, a non-blank parent Attempt ID, a known verification outcome, non-blank evidence, and a non-blank `verification_check`. Unknown fields fail closed. Payload versions 1 and 2 remain replayable without a fabricated outcome or check; payload version 3 remains replayable with its structured outcome but no fabricated check.
+
+The generic store-level observation methods remain available for historical or already-observed evidence but cannot claim an identified check. Check identity is descriptive provenance only. It does not contain or execute a command, identify artifacts, grant permission, select tools or skills, transition task or workflow lifecycle, or decide whether a collection of checks is sufficient.
+
+## Alternatives considered
+
+### Encode the check in evidence text
+
+That would make correctness depend on prose conventions and prevent deterministic grouping by check identity.
+
+### Persist an executable command now
+
+A command introduces environment, working-directory, argument, secret, timeout, and permission contracts. Those are a larger execution boundary and are not required to identify the checker result.
+
+### Rewrite payload-version-3 observations with a default check
+
+No truthful identity can be inferred for existing evidence. Fabricating one would corrupt provenance, so older observations expose no check.
+
+## Consequences
+
+- New runtime-produced Verification evidence identifies the exact caller-selected check independently of its opaque evidence.
+- Both passed and failed outcomes preserve check identity across replay without gaining lifecycle authority.
+- Invalid check identities are unrepresentable at the runtime boundary and malformed version-4 payloads fail closed.
+- Historical payloads remain compatible without invented provenance.
+- Command identity, executable checker adapters, artifacts, environment provenance, gate-set policy, retries, and automatic transitions remain deferred.
+
+## Verification
+
+The bounded slice follows RED→GREEN tests proving non-blank check validation, exact check exposure to the verifier, passed and failed durable round trips, version-3 compatibility without fabricated identity, strict version-4 decoding, preflight-before-effects, and no-retry race behavior. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider this decision before adding executable checker definitions, command/environment provenance, artifacts, a required gate set, verification-derived completion or workflow transitions, retries, scheduling, actors, timestamps, or remote execution.

@@ -9,7 +9,7 @@ use vela_kernel::{
     session::{SessionId, SessionStore, SessionTitle, SessionTurn, SessionTurnContent},
     task::{
         TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText,
-        TaskStatus, TaskStore, TaskStoreError, TaskVerificationOutcome,
+        TaskStatus, TaskStore, TaskStoreError, TaskVerificationCheck, TaskVerificationOutcome,
     },
 };
 
@@ -49,8 +49,10 @@ fn create_active_task(path: &Path, task_id: &TaskId, session_id: &SessionId) -> 
     attempt_id
 }
 
+type VerificationCall = (String, String, String, String);
+
 struct RecordingVerifier {
-    calls: Rc<RefCell<Vec<(String, String, String)>>>,
+    calls: Rc<RefCell<Vec<VerificationCall>>>,
     result: Result<TaskVerificationResult, TaskVerifierError>,
 }
 
@@ -63,12 +65,18 @@ impl TaskVerifier for RecordingVerifier {
             request.task().id().as_str().to_owned(),
             request.attempt().id().as_str().to_owned(),
             request.attempt().text().as_str().to_owned(),
+            request.check().as_str().to_owned(),
         ));
         self.result
             .as_ref()
             .map(Clone::clone)
             .map_err(|error| TaskVerifierError::new(io::Error::other(error.to_string())))
     }
+}
+
+#[test]
+fn verification_check_rejects_blank_identity() {
+    assert!(TaskVerificationCheck::new(" \n ").is_err());
 }
 
 #[test]
@@ -93,6 +101,7 @@ fn records_independently_observed_verification_for_the_exact_attempt() {
             &task_id,
             &attempt_id,
             TaskObservationId::new("verification-1").unwrap(),
+            TaskVerificationCheck::new("rust-quality-gate").unwrap(),
             &mut verifier,
         )
         .unwrap();
@@ -103,6 +112,7 @@ fn records_independently_observed_verification_for_the_exact_attempt() {
             "verified-task".to_owned(),
             "attempt-1".to_owned(),
             "candidate result".to_owned(),
+            "rust-quality-gate".to_owned(),
         )]
     );
     assert_eq!(task.status(), TaskStatus::Active);
@@ -114,6 +124,12 @@ fn records_independently_observed_verification_for_the_exact_attempt() {
     assert_eq!(
         verification.verification_outcome(),
         Some(TaskVerificationOutcome::Passed)
+    );
+    assert_eq!(
+        verification
+            .verification_check()
+            .map(TaskVerificationCheck::as_str),
+        Some("rust-quality-gate")
     );
     assert_eq!(
         TaskStore::open(&path)
@@ -135,10 +151,10 @@ fn records_independently_observed_verification_for_the_exact_attempt() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(persisted.0, 3);
+    assert_eq!(persisted.0, 4);
     assert_eq!(
         persisted.1,
-        br#"{"id":"verification-1","kind":"verification","text":"just verify passed","parent_attempt_id":"attempt-1","verification_outcome":"passed"}"#
+        br#"{"id":"verification-1","kind":"verification","text":"just verify passed","parent_attempt_id":"attempt-1","verification_outcome":"passed","verification_check":"rust-quality-gate"}"#
     );
     assert!(
         SessionStore::open(&path)
@@ -184,6 +200,7 @@ fn verifies_an_unassociated_task_without_creating_a_session() {
             &task_id,
             &attempt_id,
             TaskObservationId::new("verification-1").unwrap(),
+            TaskVerificationCheck::new("unit-tests").unwrap(),
             &mut verifier,
         )
         .unwrap();
@@ -211,6 +228,15 @@ fn verifies_an_unassociated_task_without_creating_a_session() {
             .unwrap()
             .verification_outcome(),
         Some(TaskVerificationOutcome::Failed)
+    );
+    assert_eq!(
+        reopened
+            .observations()
+            .last()
+            .unwrap()
+            .verification_check()
+            .map(TaskVerificationCheck::as_str),
+        Some("unit-tests")
     );
     assert_eq!(reopened.status(), TaskStatus::Active);
 }
@@ -274,7 +300,13 @@ fn rejects_invalid_verification_lineage_before_verifier_effects() {
         let mut runtime = AssistantRuntime::open(&path, PanicProvider).unwrap();
 
         let error = runtime
-            .verify_task_attempt(&task_id, &parent_id, verification_id, &mut verifier)
+            .verify_task_attempt(
+                &task_id,
+                &parent_id,
+                verification_id,
+                TaskVerificationCheck::new("preflight-check").unwrap(),
+                &mut verifier,
+            )
             .unwrap_err();
 
         assert!(
@@ -317,6 +349,7 @@ fn verifier_failure_or_blank_output_writes_no_verification() {
                 &task_id,
                 &attempt_id,
                 TaskObservationId::new("verification-1").unwrap(),
+                TaskVerificationCheck::new("fallible-check").unwrap(),
                 &mut verifier,
             )
             .unwrap_err();
@@ -396,6 +429,7 @@ fn racing_evidence_is_authoritative_without_retrying_the_verifier() {
             &task_id,
             &attempt_id,
             verification_id.clone(),
+            TaskVerificationCheck::new("racing-check").unwrap(),
             &mut verifier,
         )
         .unwrap_err();
