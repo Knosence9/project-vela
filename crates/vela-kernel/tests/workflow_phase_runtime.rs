@@ -6,7 +6,7 @@ use vela_kernel::{
         AssistantRuntime, ComposedAssistantProvider, ComposedAssistantRequest, DeveloperPolicy,
         ProviderError, RuntimeError, SystemPolicy,
     },
-    session::{SessionId, SessionStore, SessionTitle, SessionTurnContent},
+    session::{SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole},
     skill::{RegisteredSkill, SkillId, SkillRegistry},
     task::{
         TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText, TaskStore,
@@ -303,6 +303,14 @@ fn completes_a_task_with_a_selected_workflow_phase_response() {
         &[vec!["alpha.skill", "zeta.skill"]]
     );
     assert_eq!(outcome.session().turns().len(), 2);
+    assert_eq!(
+        outcome.session().turns()[1].role(),
+        SessionTurnRole::Assistant
+    );
+    assert_eq!(
+        outcome.session().turns()[1].content().as_str(),
+        "phase answer"
+    );
     assert_eq!(
         outcome.task().status(),
         vela_kernel::task::TaskStatus::Completed
@@ -900,6 +908,8 @@ fn workflow_phase_completion_race_preserves_attempt_and_winning_state() {
         .unwrap()
         .unwrap();
     assert_eq!(session.turns().len(), 2);
+    assert_eq!(session.turns()[1].role(), SessionTurnRole::Assistant);
+    assert_eq!(session.turns()[1].content().as_str(), "phase answer");
     let task = TaskStore::open(&path)
         .unwrap()
         .load(&task_id)
