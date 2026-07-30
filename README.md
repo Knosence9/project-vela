@@ -240,6 +240,7 @@ The first milestone is the **evidence loop**:
 82. Complete a task explicitly through one caller-chosen workflow phase response. ✅
 83. Fail a task explicitly through one caller-chosen workflow phase response and caller-owned diagnostic. ✅
 84. Cancel a task explicitly through one caller-chosen workflow phase response and caller-owned reason. ✅
+85. Preserve one caller-chosen workflow phase response as linked task Diagnostic evidence. ✅
 
 ## Project documents
 

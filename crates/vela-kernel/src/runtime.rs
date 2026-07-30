@@ -2616,6 +2616,7 @@ pub enum RuntimeError {
     InvalidAttemptText(TaskObservationTextError),
     InvalidTaskOutput(TaskOutputError),
     InvalidCorrectionText(TaskObservationTextError),
+    InvalidDiagnosticText(TaskObservationTextError),
 }
 
 impl fmt::Display for RuntimeError {
@@ -2642,6 +2643,9 @@ impl fmt::Display for RuntimeError {
             Self::InvalidCorrectionText(error) => {
                 write!(formatter, "assistant correction observation error: {error}")
             }
+            Self::InvalidDiagnosticText(error) => {
+                write!(formatter, "assistant diagnostic observation error: {error}")
+            }
         }
     }
 }
@@ -2657,6 +2661,7 @@ impl Error for RuntimeError {
             Self::InvalidAttemptText(error) => Some(error),
             Self::InvalidTaskOutput(error) => Some(error),
             Self::InvalidCorrectionText(error) => Some(error),
+            Self::InvalidDiagnosticText(error) => Some(error),
             Self::TaskNotAssociated { .. } => None,
         }
     }
@@ -3398,6 +3403,63 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
                 &session_id,
                 correction_observation_id,
                 correction_text,
+                parent_attempt_id.clone(),
+                assistant_content,
+            )
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
+    }
+
+    /// Executes one caller-selected workflow phase as a task-associated diagnostic turn.
+    ///
+    /// The active associated task, Diagnostic lineage, writable session, and phase bindings are
+    /// validated before transcript or provider side effects. A successful provider response is
+    /// committed atomically as an assistant turn and Diagnostic linked to the exact caller-selected
+    /// parent Attempt. This operation does not classify content as Verification evidence, prove
+    /// phase/run provenance, or mutate task or workflow lifecycle state.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "phase diagnostic turns retain explicit lineage, policies, registry, and phase"
+    )]
+    pub fn execute_workflow_phase_task_diagnostic_turn(
+        &mut self,
+        task_id: &TaskId,
+        parent_attempt_id: &TaskObservationId,
+        human_content: SessionTurnContent,
+        diagnostic_observation_id: TaskObservationId,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        skill_registry: &SkillRegistry,
+        phase: &RegisteredWorkflowPhase,
+    ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (session_id, selected_skills) = self.preflight_workflow_phase_task_turn(
+            task_id,
+            &diagnostic_observation_id,
+            TaskObservationKind::Diagnostic,
+            Some(parent_attempt_id),
+            skill_registry,
+            phase,
+        )?;
+
+        let (assistant_content, diagnostic_text) = self.complete_selected_composed_turn_validated(
+            &session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+            |assistant_content| {
+                TaskObservationText::new(assistant_content.as_str())
+                    .map_err(RuntimeError::InvalidDiagnosticText)
+            },
+        )?;
+        let (session, task) = self
+            .tasks
+            .append_diagnostic_with_assistant_turn(
+                task_id,
+                &session_id,
+                diagnostic_observation_id,
+                diagnostic_text,
                 parent_attempt_id.clone(),
                 assistant_content,
             )
