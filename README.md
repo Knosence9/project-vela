@@ -242,6 +242,8 @@ The first milestone is the **evidence loop**:
 84. Cancel a task explicitly through one caller-chosen workflow phase response and caller-owned reason. ✅
 85. Preserve one caller-chosen workflow phase response as linked task Diagnostic evidence. ✅
 
+86. Record independently observed Verification evidence for one exact task Attempt through a separate caller-owned verifier boundary. ✅
+
 ## Project documents
 
 - [`plans/00-north-star.md`](plans/00-north-star.md) — identity and operating principles

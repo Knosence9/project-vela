@@ -8,9 +8,9 @@ use crate::session::{
 };
 use crate::skill::{RegisteredSkill, SkillId, SkillRegistry, SkillSelection, SkillSelectionError};
 use crate::task::{
-    Task, TaskCancellation, TaskFailure, TaskId, TaskObservationId, TaskObservationKind,
-    TaskObservationText, TaskObservationTextError, TaskOutput, TaskOutputError, TaskStatus,
-    TaskStore, TaskStoreError,
+    Task, TaskCancellation, TaskFailure, TaskId, TaskObservation, TaskObservationId,
+    TaskObservationKind, TaskObservationText, TaskObservationTextError, TaskOutput,
+    TaskOutputError, TaskStatus, TaskStore, TaskStoreError,
 };
 use crate::tool::{
     DurableToolInvocationError, DurableToolRegistryInvocationError, ToolAuthorizer, ToolId,
@@ -23,6 +23,29 @@ pub trait AssistantProvider {
     /// Produces one assistant turn from the complete durable conversation.
     fn complete(&mut self, transcript: &[SessionTurn])
     -> Result<SessionTurnContent, ProviderError>;
+}
+
+/// A synchronous caller-owned source of independently observed evidence about one exact attempt.
+pub trait TaskVerifier {
+    fn verify(&mut self, request: TaskVerificationRequest<'_>)
+    -> Result<String, TaskVerifierError>;
+}
+
+/// The immutable task and exact parent Attempt supplied to one verifier invocation.
+#[derive(Clone, Copy, Debug)]
+pub struct TaskVerificationRequest<'a> {
+    task: &'a Task,
+    attempt: &'a TaskObservation,
+}
+
+impl<'a> TaskVerificationRequest<'a> {
+    pub fn task(self) -> &'a Task {
+        self.task
+    }
+
+    pub fn attempt(self) -> &'a TaskObservation {
+        self.attempt
+    }
 }
 
 /// Caller-owned highest-authority policy for one explicitly composed request.
@@ -2603,12 +2626,39 @@ impl Error for ProviderError {
     }
 }
 
-/// A failure before, during, or after one provider invocation.
+/// A verifier failure that preserves the caller-specific checker error as its source.
+#[derive(Debug)]
+pub struct TaskVerifierError {
+    source: Box<dyn Error>,
+}
+
+impl TaskVerifierError {
+    pub fn new(error: impl Error + 'static) -> Self {
+        Self {
+            source: Box::new(error),
+        }
+    }
+}
+
+impl fmt::Display for TaskVerifierError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.source.fmt(formatter)
+    }
+}
+
+impl Error for TaskVerifierError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+/// A failure before, during, or after one provider or verifier invocation.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RuntimeError {
     Session(SessionStoreError),
     Provider(ProviderError),
+    Verifier(TaskVerifierError),
     SkillSelection(SkillSelectionError),
     WorkflowPhaseSkills(WorkflowPhaseSkillResolutionError),
     Task(TaskStoreError),
@@ -2617,6 +2667,7 @@ pub enum RuntimeError {
     InvalidTaskOutput(TaskOutputError),
     InvalidCorrectionText(TaskObservationTextError),
     InvalidDiagnosticText(TaskObservationTextError),
+    InvalidVerificationText(TaskObservationTextError),
 }
 
 impl fmt::Display for RuntimeError {
@@ -2624,6 +2675,7 @@ impl fmt::Display for RuntimeError {
         match self {
             Self::Session(error) => write!(formatter, "assistant runtime session error: {error}"),
             Self::Provider(error) => write!(formatter, "assistant provider error: {error}"),
+            Self::Verifier(error) => write!(formatter, "task verifier error: {error}"),
             Self::SkillSelection(error) => {
                 write!(formatter, "assistant skill selection error: {error}")
             }
@@ -2646,6 +2698,9 @@ impl fmt::Display for RuntimeError {
             Self::InvalidDiagnosticText(error) => {
                 write!(formatter, "assistant diagnostic observation error: {error}")
             }
+            Self::InvalidVerificationText(error) => {
+                write!(formatter, "task verification observation error: {error}")
+            }
         }
     }
 }
@@ -2655,6 +2710,7 @@ impl Error for RuntimeError {
         match self {
             Self::Session(error) => Some(error),
             Self::Provider(error) => Some(error),
+            Self::Verifier(error) => Some(error),
             Self::SkillSelection(error) => Some(error),
             Self::WorkflowPhaseSkills(error) => Some(error),
             Self::Task(error) => Some(error),
@@ -2662,6 +2718,7 @@ impl Error for RuntimeError {
             Self::InvalidTaskOutput(error) => Some(error),
             Self::InvalidCorrectionText(error) => Some(error),
             Self::InvalidDiagnosticText(error) => Some(error),
+            Self::InvalidVerificationText(error) => Some(error),
             Self::TaskNotAssociated { .. } => None,
         }
     }
@@ -2974,10 +3031,7 @@ impl<P> AssistantRuntime<P> {
         Ok(())
     }
 
-    fn load_active_associated_task(
-        &self,
-        task_id: &TaskId,
-    ) -> Result<(Task, SessionId), RuntimeError> {
+    fn load_active_task(&self, task_id: &TaskId) -> Result<Task, RuntimeError> {
         let task = self
             .tasks
             .load(task_id)
@@ -3005,6 +3059,14 @@ impl<P> AssistantRuntime<P> {
                 }));
             }
         }
+        Ok(task)
+    }
+
+    fn load_active_associated_task(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<(Task, SessionId), RuntimeError> {
+        let task = self.load_active_task(task_id)?;
         let session_id =
             task.session_id()
                 .cloned()
@@ -3012,6 +3074,52 @@ impl<P> AssistantRuntime<P> {
                     task_id: task_id.clone(),
                 })?;
         Ok((task, session_id))
+    }
+
+    /// Runs one caller-owned verifier against an exact active-task Attempt and records its result.
+    ///
+    /// Task status, the fresh Verification identity, and parent lineage are validated before the
+    /// verifier runs. The verifier is invoked exactly once and is independent of the assistant
+    /// provider and transcript. Its non-blank result is appended as linked Verification evidence;
+    /// verifier failure, invalid output, or an authoritative racing task change is not retried.
+    pub fn verify_task_attempt<V: TaskVerifier>(
+        &mut self,
+        task_id: &TaskId,
+        parent_attempt_id: &TaskObservationId,
+        verification_observation_id: TaskObservationId,
+        verifier: &mut V,
+    ) -> Result<Task, RuntimeError> {
+        let task = self.load_active_task(task_id)?;
+        task.validate_observation_append(
+            &verification_observation_id,
+            TaskObservationKind::Verification,
+            Some(parent_attempt_id),
+        )
+        .map_err(RuntimeError::Task)?;
+        let attempt = task
+            .observations()
+            .iter()
+            .find(|observation| observation.id() == parent_attempt_id)
+            .expect("validated Verification lineage has an exact parent Attempt");
+
+        let verification = verifier
+            .verify(TaskVerificationRequest {
+                task: &task,
+                attempt,
+            })
+            .map_err(RuntimeError::Verifier)?;
+        let verification = TaskObservationText::new(verification)
+            .map_err(RuntimeError::InvalidVerificationText)?;
+
+        self.tasks
+            .append_observation_for_attempt(
+                task_id,
+                verification_observation_id,
+                TaskObservationKind::Verification,
+                verification,
+                parent_attempt_id.clone(),
+            )
+            .map_err(RuntimeError::Task)
     }
 }
 
