@@ -9,8 +9,8 @@ use vela_kernel::{
     session::{SessionId, SessionStore, SessionTitle, SessionTurnContent, SessionTurnRole},
     skill::{RegisteredSkill, SkillId, SkillRegistry},
     task::{
-        TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText, TaskStore,
-        TaskStoreError,
+        TaskFailure, TaskGoal, TaskId, TaskObservationId, TaskObservationKind, TaskObservationText,
+        TaskStore, TaskStoreError,
     },
     workflow::{RegisteredWorkflowPhase, WorkflowPhaseSkillResolutionError},
 };
@@ -321,6 +321,133 @@ fn completes_a_task_with_a_selected_workflow_phase_response() {
     assert_eq!(attempt.id().as_str(), "phase-final-attempt");
     assert_eq!(attempt.kind(), TaskObservationKind::Attempt);
     assert_eq!(attempt.text().as_str(), "phase answer");
+}
+
+#[test]
+fn fails_a_task_with_a_selected_workflow_phase_response_and_caller_diagnostic() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("phase-failure-session").unwrap();
+    let task_id = TaskId::new("phase-failure-task").unwrap();
+    create_associated_task(&path, &task_id, &session_id);
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut runtime = AssistantRuntime::open(
+        &path,
+        RecordingProvider {
+            calls: Rc::clone(&calls),
+        },
+    )
+    .unwrap();
+    let phase = RegisteredWorkflowPhase::new("diagnose", false, vec![])
+        .with_skills(["zeta.skill", "alpha.skill"]);
+
+    let outcome = runtime
+        .fail_workflow_phase_task_turn(
+            &task_id,
+            SessionTurnContent::new("diagnose this failure").unwrap(),
+            TaskObservationId::new("phase-failure-attempt").unwrap(),
+            TaskFailure::new("caller-owned diagnostic").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &registry(&["zeta.skill", "unused.skill", "alpha.skill"]),
+            &phase,
+        )
+        .unwrap();
+
+    assert_eq!(
+        calls.borrow().as_slice(),
+        &[vec!["alpha.skill", "zeta.skill"]]
+    );
+    assert_eq!(outcome.session().turns().len(), 2);
+    assert_eq!(
+        outcome.session().turns()[1].role(),
+        SessionTurnRole::Assistant
+    );
+    assert_eq!(
+        outcome.session().turns()[1].content().as_str(),
+        "phase answer"
+    );
+    assert_eq!(
+        outcome.task().status(),
+        vela_kernel::task::TaskStatus::Failed
+    );
+    assert_eq!(
+        outcome.task().failure().unwrap().as_str(),
+        "caller-owned diagnostic"
+    );
+    assert_eq!(outcome.task().observations().len(), 1);
+    let attempt = &outcome.task().observations()[0];
+    assert_eq!(attempt.id().as_str(), "phase-failure-attempt");
+    assert_eq!(attempt.kind(), TaskObservationKind::Attempt);
+    assert_eq!(attempt.text().as_str(), "phase answer");
+}
+
+#[test]
+fn phase_failure_preflight_precedes_transcript_and_provider_effects() {
+    for case in ["duplicate-attempt", "missing-skill"] {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("vela.sqlite3");
+        let session_id = SessionId::new(format!("{case}-failure-session")).unwrap();
+        let task_id = TaskId::new(format!("{case}-failure-task")).unwrap();
+        create_associated_task(&path, &task_id, &session_id);
+        let attempt_id = TaskObservationId::new("attempt-1").unwrap();
+        if case == "duplicate-attempt" {
+            TaskStore::open(&path)
+                .unwrap()
+                .append_observation(
+                    &task_id,
+                    attempt_id.clone(),
+                    TaskObservationKind::Attempt,
+                    TaskObservationText::new("existing attempt").unwrap(),
+                )
+                .unwrap();
+        }
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut runtime = AssistantRuntime::open(
+            &path,
+            RecordingProvider {
+                calls: Rc::clone(&calls),
+            },
+        )
+        .unwrap();
+        let skill_id = if case == "missing-skill" {
+            "missing.skill"
+        } else {
+            "present.skill"
+        };
+
+        let error = runtime
+            .fail_workflow_phase_task_turn(
+                &task_id,
+                SessionTurnContent::new("must not persist").unwrap(),
+                attempt_id,
+                TaskFailure::new("caller diagnostic").unwrap(),
+                SystemPolicy::new("system"),
+                DeveloperPolicy::new("developer"),
+                &registry(&["present.skill"]),
+                &RegisteredWorkflowPhase::new("diagnose", false, vec![]).with_skills([skill_id]),
+            )
+            .unwrap_err();
+
+        if case == "duplicate-attempt" {
+            assert!(matches!(
+                error,
+                RuntimeError::Task(TaskStoreError::DuplicateObservation { .. })
+            ));
+        } else {
+            assert!(matches!(error, RuntimeError::WorkflowPhaseSkills(_)));
+        }
+        assert!(calls.borrow().is_empty());
+        assert!(
+            SessionStore::open(&path)
+                .unwrap()
+                .load(&session_id)
+                .unwrap()
+                .unwrap()
+                .turns()
+                .is_empty()
+        );
+    }
 }
 
 #[test]
@@ -816,6 +943,46 @@ fn workflow_phase_task_correction_provider_failure_preserves_only_the_human_turn
 }
 
 #[test]
+fn workflow_phase_task_failure_provider_failure_preserves_only_the_human_turn() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("failed-phase-failure-session").unwrap();
+    let task_id = TaskId::new("failed-phase-failure-task").unwrap();
+    create_associated_task(&path, &task_id, &session_id);
+    let mut runtime = AssistantRuntime::open(&path, FailingProvider).unwrap();
+
+    let error = runtime
+        .fail_workflow_phase_task_turn(
+            &task_id,
+            SessionTurnContent::new("persist this failure request").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+            TaskFailure::new("caller diagnostic").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &registry(&["diagnose.skill"]),
+            &RegisteredWorkflowPhase::new("diagnose", false, vec![])
+                .with_skills(["diagnose.skill"]),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, RuntimeError::Provider(_)));
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 1);
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert!(task.observations().is_empty());
+    assert_eq!(task.status(), vela_kernel::task::TaskStatus::Active);
+    assert!(task.failure().is_none());
+}
+
+#[test]
 fn workflow_phase_task_completion_provider_failure_preserves_only_the_human_turn() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("vela.sqlite3");
@@ -852,6 +1019,74 @@ fn workflow_phase_task_completion_provider_failure_preserves_only_the_human_turn
     assert!(task.observations().is_empty());
     assert_eq!(task.status(), vela_kernel::task::TaskStatus::Active);
     assert!(task.output().is_none());
+}
+
+#[test]
+fn workflow_phase_failure_race_preserves_attempt_and_winning_state() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("vela.sqlite3");
+    let session_id = SessionId::new("phase-failure-race-session").unwrap();
+    let task_id = TaskId::new("phase-failure-race").unwrap();
+    create_associated_task(&path, &task_id, &session_id);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER complete_after_phase_failure_attempt
+             AFTER INSERT ON events
+             WHEN NEW.stream_id = 'task:phase-failure-race'
+              AND NEW.event_type = 'task.observation_appended'
+             BEGIN
+               INSERT INTO events
+                 (stream_id, stream_version, event_type, payload_version, payload)
+               VALUES
+                 (NEW.stream_id, NEW.stream_version + 1, 'task.completed', 2,
+                  CAST('{\"output\":\"winning output\"}' AS BLOB));
+             END;",
+        )
+        .unwrap();
+    let mut runtime = AssistantRuntime::open(
+        &path,
+        RecordingProvider {
+            calls: Rc::new(RefCell::new(Vec::new())),
+        },
+    )
+    .unwrap();
+
+    let error = runtime
+        .fail_workflow_phase_task_turn(
+            &task_id,
+            SessionTurnContent::new("diagnose this").unwrap(),
+            TaskObservationId::new("attempt-1").unwrap(),
+            TaskFailure::new("losing diagnostic").unwrap(),
+            SystemPolicy::new("system"),
+            DeveloperPolicy::new("developer"),
+            &registry(&["diagnose.skill"]),
+            &RegisteredWorkflowPhase::new("diagnose", false, vec![])
+                .with_skills(["diagnose.skill"]),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::Task(TaskStoreError::AlreadyCompleted { .. })
+    ));
+    let session = SessionStore::open(&path)
+        .unwrap()
+        .load(&session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns().len(), 2);
+    assert_eq!(session.turns()[1].role(), SessionTurnRole::Assistant);
+    assert_eq!(session.turns()[1].content().as_str(), "phase answer");
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.observations().len(), 1);
+    assert_eq!(task.observations()[0].text().as_str(), "phase answer");
+    assert_eq!(task.output().unwrap().as_str(), "winning output");
+    assert!(task.failure().is_none());
 }
 
 #[test]
