@@ -3249,6 +3249,26 @@ impl<P: AssistantProvider> AssistantRuntime<P> {
 }
 
 impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
+    fn preflight_workflow_phase_task_turn<'a>(
+        &self,
+        task_id: &TaskId,
+        observation_id: &TaskObservationId,
+        observation_kind: TaskObservationKind,
+        parent_attempt_id: Option<&TaskObservationId>,
+        skill_registry: &'a SkillRegistry,
+        phase: &RegisteredWorkflowPhase,
+    ) -> Result<(SessionId, SkillSelection<'a>), RuntimeError> {
+        let (task, session_id) = self.load_active_associated_task(task_id)?;
+        task.validate_observation_append(observation_id, observation_kind, parent_attempt_id)
+            .map_err(RuntimeError::Task)?;
+        self.ensure_session_writable(&session_id)?;
+        let selected_skills = phase
+            .resolve_skills(skill_registry)
+            .map_err(RuntimeError::WorkflowPhaseSkills)?;
+
+        Ok((session_id, selected_skills))
+    }
+
     /// Executes one tool-free turn with explicit caller policies and selected skill blocks.
     ///
     /// Selection is validated before transcript persistence. After validation, this preserves the
@@ -3295,17 +3315,14 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         skill_registry: &SkillRegistry,
         phase: &RegisteredWorkflowPhase,
     ) -> Result<TaskTurnOutcome, RuntimeError> {
-        let (task, session_id) = self.load_active_associated_task(task_id)?;
-        task.validate_observation_append(
+        let (session_id, selected_skills) = self.preflight_workflow_phase_task_turn(
+            task_id,
             &attempt_observation_id,
             TaskObservationKind::Attempt,
             None,
-        )
-        .map_err(RuntimeError::Task)?;
-        self.ensure_session_writable(&session_id)?;
-        let selected_skills = phase
-            .resolve_skills(skill_registry)
-            .map_err(RuntimeError::WorkflowPhaseSkills)?;
+            skill_registry,
+            phase,
+        )?;
 
         let (assistant_content, attempt_text) = self.complete_selected_composed_turn_validated(
             &session_id,
@@ -3354,17 +3371,14 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         skill_registry: &SkillRegistry,
         phase: &RegisteredWorkflowPhase,
     ) -> Result<TaskTurnOutcome, RuntimeError> {
-        let (task, session_id) = self.load_active_associated_task(task_id)?;
-        task.validate_observation_append(
+        let (session_id, selected_skills) = self.preflight_workflow_phase_task_turn(
+            task_id,
             &correction_observation_id,
             TaskObservationKind::Correction,
             Some(parent_attempt_id),
-        )
-        .map_err(RuntimeError::Task)?;
-        self.ensure_session_writable(&session_id)?;
-        let selected_skills = phase
-            .resolve_skills(skill_registry)
-            .map_err(RuntimeError::WorkflowPhaseSkills)?;
+            skill_registry,
+            phase,
+        )?;
 
         let (assistant_content, correction_text) = self.complete_selected_composed_turn_validated(
             &session_id,
@@ -3413,17 +3427,14 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         skill_registry: &SkillRegistry,
         phase: &RegisteredWorkflowPhase,
     ) -> Result<TaskTurnOutcome, RuntimeError> {
-        let (task, session_id) = self.load_active_associated_task(task_id)?;
-        task.validate_observation_append(
+        let (session_id, selected_skills) = self.preflight_workflow_phase_task_turn(
+            task_id,
             &attempt_observation_id,
             TaskObservationKind::Attempt,
             None,
-        )
-        .map_err(RuntimeError::Task)?;
-        self.ensure_session_writable(&session_id)?;
-        let selected_skills = phase
-            .resolve_skills(skill_registry)
-            .map_err(RuntimeError::WorkflowPhaseSkills)?;
+            skill_registry,
+            phase,
+        )?;
 
         let (assistant_content, (attempt_text, output)) = self
             .complete_selected_composed_turn_validated(
@@ -3480,17 +3491,14 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         skill_registry: &SkillRegistry,
         phase: &RegisteredWorkflowPhase,
     ) -> Result<TaskTurnOutcome, RuntimeError> {
-        let (task, session_id) = self.load_active_associated_task(task_id)?;
-        task.validate_observation_append(
+        let (session_id, selected_skills) = self.preflight_workflow_phase_task_turn(
+            task_id,
             &attempt_observation_id,
             TaskObservationKind::Attempt,
             None,
-        )
-        .map_err(RuntimeError::Task)?;
-        self.ensure_session_writable(&session_id)?;
-        let selected_skills = phase
-            .resolve_skills(skill_registry)
-            .map_err(RuntimeError::WorkflowPhaseSkills)?;
+            skill_registry,
+            phase,
+        )?;
 
         let (assistant_content, attempt_text) = self.complete_selected_composed_turn_validated(
             &session_id,
