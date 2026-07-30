@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Share workflow-phase task preflight without changing authority",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/759 by replacing repeated authority-sensitive preflight logic with one private helper while preserving every public behavior and error boundary.",
+    "acceptance_criteria": [
+      "Centralize active task association, evidence identity and lineage, writable session, and phase-skill validation.",
+      "Keep observation kind and optional parent Attempt explicit at each caller.",
+      "Preserve validation order, errors, side effects, persistence, and public APIs.",
+      "Pass existing workflow-phase behavior tests unchanged."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Confirmed the duplication and behavior constraints.",
+      "outcome": "success",
+      "diagnostic": "Review of the failure slice identified four synchronized copies of the same task, evidence, session, and skill preflight.",
+      "patch": "Opened a bounded refactor issue rather than widening the reviewed feature change."
+    },
+    {
+      "summary": "Extracted one private generic preflight.",
+      "outcome": "success",
+      "diagnostic": "The common sequence varied only by explicit observation kind and optional parent Attempt lineage.",
+      "patch": "Added a private helper returning the validated session and selected skills, then routed Attempt and Correction callers through it."
+    },
+    {
+      "summary": "Held a false-green review status until substantive capacity returned.",
+      "outcome": "blocked",
+      "diagnostic": "The Rust quality gate passed, but CodeRabbit reported review limiting and initially produced no substantive review.",
+      "patch": "Kept auto-merge disarmed, waited through the cooldown, and resumed review only after a fresh budget check."
+    }
+  ],
+  "outcome": {
+    "summary": "Workflow-phase task operations now share one fail-closed preflight implementation while retaining explicit evidence lineage, deterministic errors, and unchanged authority boundaries.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-kernel --test workflow_phase_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30517315975", "status": "passed"},
+      {"command": "Pull request 760 squash merge 0b00b5171d267a31dfeb8f5d997edb0e9fe40073", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Authority-sensitive validation order should have one implementation once repetition becomes real.",
+    "Generic mechanics can be shared while semantic kind and lineage remain explicit at call sites.",
+    "An unchanged behavior suite is strong refactor evidence when the tests cover side-effect ordering.",
+    "A green rate-limited status cannot establish substantive review."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/760"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

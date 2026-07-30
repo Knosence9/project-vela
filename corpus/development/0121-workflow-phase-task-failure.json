@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Fail tasks through an explicit workflow-phase turn",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/757 with a phase-assisted failure that separates provider Attempt evidence from the exact caller-owned terminal diagnostic.",
+    "acceptance_criteria": [
+      "Validate active association, fresh Attempt identity, writable session, and phase bindings before provider work.",
+      "Persist a valid response as assistant content and Attempt evidence before failure.",
+      "Fail with the exact prevalidated caller diagnostic rather than model content.",
+      "Preserve ordered prefixes under provider failure and terminal races without mutating workflow lifecycle."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED failure behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-phase failure tests failed because fail_workflow_phase_task_turn did not exist.",
+      "patch": "Added exact-skill, caller-diagnostic, invalid-preflight, provider-failure, and terminal-race coverage."
+    },
+    {
+      "summary": "Implemented caller-owned phase-assisted failure.",
+      "outcome": "success",
+      "diagnostic": "The established task runtime already separated provider Attempt text from validated terminal failure detail.",
+      "patch": "Resolved the selected phase before effects, atomically persisted the response as Attempt evidence, then applied the retained TaskFailure."
+    },
+    {
+      "summary": "Converted a review maintainability finding into bounded follow-up.",
+      "outcome": "success",
+      "diagnostic": "Substantive review observed a fourth copy of the authority-sensitive workflow-phase task preflight, but changing all sibling paths inside the feature would widen scope.",
+      "patch": "Preserved the verified failure slice and opened issue 759 for one behavior-preserving shared-preflight refactor."
+    }
+  ],
+  "outcome": {
+    "summary": "A selected phase can produce final Attempt evidence before caller-requested task failure, while the exact terminal diagnostic and all workflow lifecycle authority remain outside model control.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-kernel --test workflow_phase_runtime", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30514652378", "status": "passed"},
+      {"command": "Pull request 758 squash merge 58ae8f80f97afaae0dfd19edabc4788b06d501b9", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Model-produced explanation is execution evidence, not caller-owned terminal truth.",
+    "Ordered durable prefixes make terminal races observable without pretending cross-stream rollback exists.",
+    "Substantive review found duplicated authority-sensitive workflow-phase task preflight; the failure slice stayed bounded and issue 759 tracked the shared-preflight refactor."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/758"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

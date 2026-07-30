@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve workflow-phase diagnoses as linked task evidence",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/763 with a phase-assisted diagnostic turn that records model analysis against one exact caller-selected Attempt.",
+    "acceptance_criteria": [
+      "Validate active association, fresh Diagnostic ID, exact parent Attempt, writable session, and phase bindings before provider effects.",
+      "Atomically persist valid assistant content with a matching parented Diagnostic.",
+      "Preserve only the human turn on provider failure or blank content and reject racing evidence without an orphan assistant turn.",
+      "Do not classify the response as Verification, terminal intent, or workflow lifecycle authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED diagnostic behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused workflow-phase diagnostic tests failed because execute_workflow_phase_task_diagnostic_turn did not exist.",
+      "patch": "Added selected-skill, exact-lineage, invalid-preflight, provider-failure, durability, and race tests."
+    },
+    {
+      "summary": "Implemented atomic linked-Diagnostic persistence.",
+      "outcome": "success",
+      "diagnostic": "The shared phase preflight and generic atomic assistant/evidence transaction could preserve analysis without creating a new Attempt.",
+      "patch": "Added the diagnostic runtime method, parented Diagnostic append helper, focused errors, ADR, and behavior documentation."
+    },
+    {
+      "summary": "Corrected the documented non-goal boundary after review.",
+      "outcome": "success",
+      "diagnostic": "Substantive review found that broad statements excluding runtime diagnostics contradicted the new explicit parented workflow-phase Diagnostic operation.",
+      "patch": "Narrowed both non-goals to exclude only unrelated runtime diagnostics, reran verification, and held merge until the documentation fix received exact-head review capacity."
+    }
+  ],
+  "outcome": {
+    "summary": "A selected phase can preserve model-produced Diagnostic evidence linked to one Attempt without turning that analysis into independent Verification, terminal truth, or workflow authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_phase_runtime diagnostic", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30526401322", "status": "passed"},
+      {"command": "Pull request 764 squash merge 9cf49662890112ac8508467a2d1d1d7d1414aa9e", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A diagnosis can be useful linked evidence without proving that its explanation is correct.",
+    "Provider-produced Diagnostic and independently observed Verification need different authority contracts.",
+    "Substantive review found that the broad runtime-diagnostic non-goal contradicted the new parented Diagnostic operation; the fix narrowed both non-goals to exclude only unrelated diagnostics.",
+    "Incremental fixes require substantive exact-head review after any rate-limit cooldown."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/764"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
