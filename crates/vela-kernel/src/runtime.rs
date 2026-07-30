@@ -3529,6 +3529,66 @@ impl<P: ComposedAssistantProvider> AssistantRuntime<P> {
         Ok(TaskTurnOutcome { session, task })
     }
 
+    /// Executes one caller-selected workflow phase as a caller-requested task cancellation turn.
+    ///
+    /// The active associated task, fresh Attempt identity, writable session, and phase bindings are
+    /// validated before transcript or provider side effects. A successful provider response is
+    /// committed atomically as an assistant turn and Attempt before the task is cancelled with the
+    /// caller-owned reason. Provider content is not cancellation or Verification evidence, and
+    /// this operation does not cancel or otherwise mutate workflow lifecycle state.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "phase cancellation turns retain explicit task intent, reason, policies, registry, and phase"
+    )]
+    pub fn cancel_workflow_phase_task_turn(
+        &mut self,
+        task_id: &TaskId,
+        human_content: SessionTurnContent,
+        attempt_observation_id: TaskObservationId,
+        cancellation: TaskCancellation,
+        system_policy: SystemPolicy<'_>,
+        developer_policy: DeveloperPolicy<'_>,
+        skill_registry: &SkillRegistry,
+        phase: &RegisteredWorkflowPhase,
+    ) -> Result<TaskTurnOutcome, RuntimeError> {
+        let (session_id, selected_skills) = self.preflight_workflow_phase_task_turn(
+            task_id,
+            &attempt_observation_id,
+            TaskObservationKind::Attempt,
+            None,
+            skill_registry,
+            phase,
+        )?;
+
+        let (assistant_content, attempt_text) = self.complete_selected_composed_turn_validated(
+            &session_id,
+            human_content,
+            system_policy,
+            developer_policy,
+            selected_skills,
+            |assistant_content| {
+                TaskObservationText::new(assistant_content.as_str())
+                    .map_err(RuntimeError::InvalidAttemptText)
+            },
+        )?;
+        let (session, _) = self
+            .tasks
+            .append_attempt_with_assistant_turn(
+                task_id,
+                &session_id,
+                attempt_observation_id,
+                attempt_text,
+                assistant_content,
+            )
+            .map_err(RuntimeError::Task)?;
+        let task = self
+            .tasks
+            .cancel(task_id, cancellation)
+            .map_err(RuntimeError::Task)?;
+
+        Ok(TaskTurnOutcome { session, task })
+    }
+
     /// Executes one caller-selected workflow phase as an explicit tool-free composed turn.
     ///
     /// Phase bindings are resolved before transcript or provider side effects. This operation
