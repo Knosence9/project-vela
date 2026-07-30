@@ -628,6 +628,52 @@ impl TaskStore {
         text: TaskObservationText,
         assistant_content: SessionTurnContent,
     ) -> Result<(Session, Task), TaskStoreError> {
+        self.append_observation_with_assistant_turn(
+            id,
+            session_id,
+            observation_id,
+            TaskObservationKind::Attempt,
+            text,
+            None,
+            assistant_content,
+        )
+    }
+
+    /// Atomically appends one assistant turn and its matching task Correction evidence.
+    pub(crate) fn append_correction_with_assistant_turn(
+        &mut self,
+        id: &TaskId,
+        session_id: &SessionId,
+        observation_id: TaskObservationId,
+        text: TaskObservationText,
+        parent_attempt_id: TaskObservationId,
+        assistant_content: SessionTurnContent,
+    ) -> Result<(Session, Task), TaskStoreError> {
+        self.append_observation_with_assistant_turn(
+            id,
+            session_id,
+            observation_id,
+            TaskObservationKind::Correction,
+            text,
+            Some(parent_attempt_id),
+            assistant_content,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the atomic boundary retains both stream identities and complete evidence"
+    )]
+    fn append_observation_with_assistant_turn(
+        &mut self,
+        id: &TaskId,
+        session_id: &SessionId,
+        observation_id: TaskObservationId,
+        kind: TaskObservationKind,
+        text: TaskObservationText,
+        parent_attempt_id: Option<TaskObservationId>,
+        assistant_content: SessionTurnContent,
+    ) -> Result<(Session, Task), TaskStoreError> {
         loop {
             let Some(mut loaded_task) = self.load_versioned(id)? else {
                 return Err(TaskStoreError::NotFound {
@@ -636,8 +682,8 @@ impl TaskStore {
             };
             loaded_task.task.validate_observation_append(
                 &observation_id,
-                TaskObservationKind::Attempt,
-                None,
+                kind,
+                parent_attempt_id.as_ref(),
             )?;
             if loaded_task.task.session_id() != Some(session_id) {
                 return Err(TaskStoreError::SessionNotFound {
@@ -664,9 +710,9 @@ impl TaskStore {
             };
             let task_event = TaskEvent::ObservationAppended {
                 id: observation_id.clone(),
-                kind: TaskObservationKind::Attempt,
+                kind,
                 text: text.clone(),
-                parent_attempt_id: None,
+                parent_attempt_id: parent_attempt_id.clone(),
             };
             match self.event_log.append_pair(
                 &session_stream(session_id),
@@ -680,9 +726,9 @@ impl TaskStore {
                     session.apply_appended_turn(SessionTurnRole::Assistant, assistant_content);
                     loaded_task.task.observations.push(TaskObservation {
                         id: observation_id,
-                        kind: TaskObservationKind::Attempt,
+                        kind,
                         text,
-                        parent_attempt_id: None,
+                        parent_attempt_id,
                     });
                     return Ok((session, loaded_task.task));
                 }
