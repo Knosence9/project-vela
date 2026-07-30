@@ -43,7 +43,8 @@
   "lessons": [
     "Independent Verification must use a boundary distinct from assistant generation so model claims cannot become their own proof.",
     "Validate exact lineage and fresh identity before checker effects, then preserve authoritative append races without retries.",
-    "Execution failure and observed evidence need separate typed outcomes even before pass/fail evidence semantics exist."
+    "Execution failure and observed evidence need separate typed outcomes even before pass/fail evidence semantics exist.",
+    "Assert that unassociated tasks remain verifiable without creating sessions and preserve verifier failures as chained error sources so boundary and diagnostic guarantees remain regression-tested."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/runtime.rs", "url": "https://github.com/Knosence9/project-vela/pull/768"},
   "sanitation": {"passed": true, "blockers": []},

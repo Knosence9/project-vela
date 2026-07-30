@@ -44,6 +44,7 @@
   "lessons": [
     "Authorization and the state mutation it guards must share an exact-version boundary to prevent stale green decisions.",
     "Concurrent terminal transitions remain authoritative even when gate evidence was valid immediately beforehand.",
+    "Move owned completion output only after a successful append so retries retain it without paying for a redundant success-path clone.",
     "A green review status carrying a rate-limit warning is not substantive exact-head review evidence.",
     "Keep unconditional lifecycle primitives when policy remains an explicit caller-owned choice rather than global persisted authority."
   ],
