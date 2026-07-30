@@ -975,7 +975,7 @@ impl TaskStore {
                 Ok(_) => {
                     return Ok(Task {
                         status: TaskStatus::Completed,
-                        output: Some(output.clone()),
+                        output: Some(output),
                         ..loaded.task
                     });
                 }
@@ -2059,6 +2059,70 @@ mod verified_completion_concurrency_tests {
         assert_eq!(
             store.load(&task_id).unwrap().unwrap().status(),
             TaskStatus::Active
+        );
+    }
+
+    #[test]
+    fn preserves_a_concurrent_cancellation_that_wins_the_completion_race() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new("guarded-completion-terminal-race").unwrap();
+        let attempt_id = TaskObservationId::new("attempt").unwrap();
+        let check = TaskVerificationCheck::new("quality").unwrap();
+        let gates = TaskVerificationGateSet::new(vec![check.clone()]).unwrap();
+        let mut store = TaskStore::open(&path).unwrap();
+        store
+            .start(
+                task_id.clone(),
+                TaskGoal::new("Keep terminal state authoritative").unwrap(),
+            )
+            .unwrap();
+        store
+            .append_observation(
+                &task_id,
+                attempt_id.clone(),
+                TaskObservationKind::Attempt,
+                TaskObservationText::new("candidate").unwrap(),
+            )
+            .unwrap();
+        store
+            .append_verification_for_attempt(
+                &task_id,
+                TaskObservationId::new("passed").unwrap(),
+                TaskVerificationOutcome::Passed,
+                check,
+                TaskObservationText::new("passed").unwrap(),
+                attempt_id.clone(),
+            )
+            .unwrap();
+
+        let mut racing_store = Some(TaskStore::open(&path).unwrap());
+        let result = store.complete_if_verification_gates_pass_before_append(
+            &task_id,
+            TaskOutput::new("stale completion").unwrap(),
+            &attempt_id,
+            &gates,
+            &mut || {
+                if let Some(mut racing_store) = racing_store.take() {
+                    racing_store
+                        .cancel(
+                            &task_id,
+                            TaskCancellation::new("racing cancellation").unwrap(),
+                        )
+                        .unwrap();
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(TaskVerifiedCompletionError::Store(
+                TaskStoreError::AlreadyCancelled { .. }
+            ))
+        ));
+        assert_eq!(
+            store.load(&task_id).unwrap().unwrap().status(),
+            TaskStatus::Cancelled
         );
     }
 }
