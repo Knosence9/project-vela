@@ -243,6 +243,7 @@ The first milestone is the **evidence loop**:
 85. Preserve one caller-chosen workflow phase response as linked task Diagnostic evidence. ✅
 
 86. Record independently observed Verification evidence for one exact task Attempt through a separate caller-owned verifier boundary. ✅
+87. Persist explicit passed or failed outcomes for independent task Verification without granting lifecycle authority. ✅
 
 ## Project documents
 

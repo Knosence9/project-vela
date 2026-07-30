@@ -18,6 +18,7 @@ const TASK_SESSION_ASSOCIATED_EVENT_TYPE: &str = "task.session_associated";
 const TASK_OBSERVATION_APPENDED_EVENT_TYPE: &str = "task.observation_appended";
 const TASK_EVENT_PAYLOAD_VERSION: u32 = 1;
 const TASK_OBSERVATION_PAYLOAD_VERSION: u32 = 2;
+const TASK_STRUCTURED_VERIFICATION_PAYLOAD_VERSION: u32 = 3;
 const TASK_COMPLETED_PAYLOAD_VERSION: u32 = 2;
 const TASK_CANCELLED_PAYLOAD_VERSION: u32 = 2;
 const TASK_FAILED_PAYLOAD_VERSION: u32 = 2;
@@ -106,6 +107,14 @@ pub enum TaskObservationKind {
     Verification,
 }
 
+/// The independently observed result of checking one exact task attempt.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskVerificationOutcome {
+    Passed,
+    Failed,
+}
+
 /// Non-blank opaque UTF-8 evidence recorded for one task observation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -143,6 +152,7 @@ pub struct TaskObservation {
     kind: TaskObservationKind,
     text: TaskObservationText,
     parent_attempt_id: Option<TaskObservationId>,
+    verification_outcome: Option<TaskVerificationOutcome>,
 }
 
 impl TaskObservation {
@@ -161,6 +171,11 @@ impl TaskObservation {
     /// The earlier attempt that this evidence describes, when grouped into an episode.
     pub fn parent_attempt_id(&self) -> Option<&TaskObservationId> {
         self.parent_attempt_id.as_ref()
+    }
+
+    /// The structured checker outcome, when written by the typed verification boundary.
+    pub fn verification_outcome(&self) -> Option<TaskVerificationOutcome> {
+        self.verification_outcome
     }
 }
 
@@ -734,6 +749,7 @@ impl TaskStore {
                 kind,
                 text: text.clone(),
                 parent_attempt_id: parent_attempt_id.clone(),
+                verification_outcome: None,
             };
             match self.event_log.append_pair(
                 &session_stream(session_id),
@@ -750,6 +766,7 @@ impl TaskStore {
                         kind,
                         text,
                         parent_attempt_id,
+                        verification_outcome: None,
                     });
                     return Ok((session, loaded_task.task));
                 }
@@ -771,6 +788,25 @@ impl TaskStore {
         self.append_observation_with_parent(id, observation_id, kind, text, Some(parent_attempt_id))
     }
 
+    /// Appends a typed independent-check outcome related to one earlier task attempt.
+    pub fn append_verification_for_attempt(
+        &mut self,
+        id: &TaskId,
+        observation_id: TaskObservationId,
+        outcome: TaskVerificationOutcome,
+        text: TaskObservationText,
+        parent_attempt_id: TaskObservationId,
+    ) -> Result<Task, TaskStoreError> {
+        self.append_observation_with_parent_and_outcome(
+            id,
+            observation_id,
+            TaskObservationKind::Verification,
+            text,
+            Some(parent_attempt_id),
+            Some(outcome),
+        )
+    }
+
     fn append_observation_with_parent(
         &mut self,
         id: &TaskId,
@@ -778,6 +814,25 @@ impl TaskStore {
         kind: TaskObservationKind,
         text: TaskObservationText,
         parent_attempt_id: Option<TaskObservationId>,
+    ) -> Result<Task, TaskStoreError> {
+        self.append_observation_with_parent_and_outcome(
+            id,
+            observation_id,
+            kind,
+            text,
+            parent_attempt_id,
+            None,
+        )
+    }
+
+    fn append_observation_with_parent_and_outcome(
+        &mut self,
+        id: &TaskId,
+        observation_id: TaskObservationId,
+        kind: TaskObservationKind,
+        text: TaskObservationText,
+        parent_attempt_id: Option<TaskObservationId>,
+        verification_outcome: Option<TaskVerificationOutcome>,
     ) -> Result<Task, TaskStoreError> {
         loop {
             let Some(mut loaded) = self.load_versioned(id)? else {
@@ -799,6 +854,7 @@ impl TaskStore {
                     kind,
                     text: text.clone(),
                     parent_attempt_id: parent_attempt_id.clone(),
+                    verification_outcome,
                 },
             ) {
                 Ok(_) => {
@@ -807,6 +863,7 @@ impl TaskStore {
                         kind,
                         text,
                         parent_attempt_id,
+                        verification_outcome,
                     });
                     return Ok(loaded.task);
                 }
@@ -1030,6 +1087,7 @@ impl TaskStore {
                     kind,
                     text,
                     parent_attempt_id,
+                    verification_outcome,
                 } if task.status == TaskStatus::Active
                     && !task.observations.iter().any(|item| item.id == *id)
                     && observation_parent_is_valid(
@@ -1044,6 +1102,7 @@ impl TaskStore {
                         kind: *kind,
                         text: text.clone(),
                         parent_attempt_id: parent_attempt_id.clone(),
+                        verification_outcome: *verification_outcome,
                     });
                 }
                 TaskEvent::SessionAssociated {
@@ -1184,6 +1243,8 @@ enum TaskEvent {
         kind: TaskObservationKind,
         text: TaskObservationText,
         parent_attempt_id: Option<TaskObservationId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        verification_outcome: Option<TaskVerificationOutcome>,
     },
 }
 
@@ -1204,6 +1265,10 @@ impl Event for TaskEvent {
             Self::Completed { .. } => TASK_COMPLETED_PAYLOAD_VERSION,
             Self::Cancelled { .. } => TASK_CANCELLED_PAYLOAD_VERSION,
             Self::Failed { .. } => TASK_FAILED_PAYLOAD_VERSION,
+            Self::ObservationAppended {
+                verification_outcome: Some(_),
+                ..
+            } => TASK_STRUCTURED_VERIFICATION_PAYLOAD_VERSION,
             Self::ObservationAppended { .. } => TASK_OBSERVATION_PAYLOAD_VERSION,
             Self::Started { .. } | Self::SessionAssociated { .. } => TASK_EVENT_PAYLOAD_VERSION,
         }
@@ -1227,7 +1292,9 @@ impl Event for TaskEvent {
             TASK_SESSION_ASSOCIATED_EVENT_TYPE => payload_version == TASK_EVENT_PAYLOAD_VERSION,
             TASK_OBSERVATION_APPENDED_EVENT_TYPE => matches!(
                 payload_version,
-                TASK_EVENT_PAYLOAD_VERSION | TASK_OBSERVATION_PAYLOAD_VERSION
+                TASK_EVENT_PAYLOAD_VERSION
+                    | TASK_OBSERVATION_PAYLOAD_VERSION
+                    | TASK_STRUCTURED_VERIFICATION_PAYLOAD_VERSION
             ),
             _ => false,
         };
@@ -1350,27 +1417,60 @@ impl Event for TaskEvent {
                 parent_attempt_id: Option<String>,
             }
 
-            let (id, kind, text, parent_attempt_id) = if payload_version
-                == TASK_EVENT_PAYLOAD_VERSION
-            {
-                let payload: LegacyPayload = serde_json::from_slice(payload).map_err(|error| {
-                    DecodeError::MalformedPayload {
-                        message: error.to_string(),
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct StructuredVerificationPayload {
+                id: String,
+                kind: TaskObservationKind,
+                text: String,
+                parent_attempt_id: String,
+                verification_outcome: TaskVerificationOutcome,
+            }
+
+            let (id, kind, text, parent_attempt_id, verification_outcome) = match payload_version {
+                TASK_EVENT_PAYLOAD_VERSION => {
+                    let payload: LegacyPayload =
+                        serde_json::from_slice(payload).map_err(|error| {
+                            DecodeError::MalformedPayload {
+                                message: error.to_string(),
+                            }
+                        })?;
+                    (payload.id, payload.kind, payload.text, None, None)
+                }
+                TASK_OBSERVATION_PAYLOAD_VERSION => {
+                    let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                        DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        }
+                    })?;
+                    (
+                        payload.id,
+                        payload.kind,
+                        payload.text,
+                        payload.parent_attempt_id,
+                        None,
+                    )
+                }
+                TASK_STRUCTURED_VERIFICATION_PAYLOAD_VERSION => {
+                    let payload: StructuredVerificationPayload = serde_json::from_slice(payload)
+                        .map_err(|error| DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        })?;
+                    if payload.kind != TaskObservationKind::Verification {
+                        return Err(DecodeError::MalformedPayload {
+                            message: "structured verification outcome requires verification kind"
+                                .to_owned(),
+                        });
                     }
-                })?;
-                (payload.id, payload.kind, payload.text, None)
-            } else {
-                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
-                    DecodeError::MalformedPayload {
-                        message: error.to_string(),
-                    }
-                })?;
-                (
-                    payload.id,
-                    payload.kind,
-                    payload.text,
-                    payload.parent_attempt_id,
-                )
+                    (
+                        payload.id,
+                        payload.kind,
+                        payload.text,
+                        Some(payload.parent_attempt_id),
+                        Some(payload.verification_outcome),
+                    )
+                }
+                _ => unreachable!("observation payload version was validated above"),
             };
             let id = TaskObservationId::new(id).map_err(|error| DecodeError::MalformedPayload {
                 message: error.to_string(),
@@ -1390,6 +1490,7 @@ impl Event for TaskEvent {
                 kind,
                 text,
                 parent_attempt_id,
+                verification_outcome,
             });
         }
 
