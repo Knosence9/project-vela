@@ -254,6 +254,10 @@ pub enum ScheduleStoreError {
     TaskAlreadyExists {
         task_id: TaskId,
     },
+    AmbiguousTaskBinding {
+        task_id: TaskId,
+        schedule_count: usize,
+    },
     ConcurrentModification {
         schedule_id: ScheduleId,
         expected_revision: u64,
@@ -300,6 +304,13 @@ impl fmt::Display for ScheduleStoreError {
             Self::TaskAlreadyExists { task_id } => {
                 write!(formatter, "task {task_id} already exists")
             }
+            Self::AmbiguousTaskBinding {
+                task_id,
+                schedule_count,
+            } => write!(
+                formatter,
+                "task {task_id} is bound to {schedule_count} schedules"
+            ),
             Self::ConcurrentModification {
                 schedule_id,
                 expected_revision,
@@ -343,6 +354,7 @@ impl Error for ScheduleStoreError {
             | Self::NotClaimed { .. }
             | Self::AlreadyMaterialized { .. }
             | Self::TaskAlreadyExists { .. }
+            | Self::AmbiguousTaskBinding { .. }
             | Self::ConcurrentModification { .. }
             | Self::NotDue { .. }
             | Self::InvalidStreamId { .. }
@@ -426,6 +438,25 @@ impl ScheduleStore {
                 })
                 .collect(),
         ))
+    }
+
+    /// Resolves exact schedule provenance for one materialized task without changing lifecycle state.
+    pub fn find_by_task_id(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<Option<ScheduledTask>, ScheduleStoreError> {
+        let mut matches = self
+            .discover()?
+            .into_iter()
+            .filter(|scheduled| scheduled.task_id() == Some(task_id))
+            .collect::<Vec<_>>();
+        if matches.len() > 1 {
+            return Err(ScheduleStoreError::AmbiguousTaskBinding {
+                task_id: task_id.clone(),
+                schedule_count: matches.len(),
+            });
+        }
+        Ok(matches.pop())
     }
 
     pub fn cancel(

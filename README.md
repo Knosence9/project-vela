@@ -257,6 +257,7 @@ The first milestone is the **evidence loop**:
 98. Atomically materialize one claimed schedule as one caller-identified active task without executing it. ✅
 99. Filter durable one-shot schedule inventory by exact persisted lifecycle status without granting execution authority. ✅
 100. Query one exact durable schedule's complete typed lifecycle history without granting execution authority. ✅
+101. Resolve a materialized schedule from its exact task identity without granting lifecycle authority. ✅
 
 ## Project documents
 
