@@ -44,7 +44,8 @@
     "Two aggregate writes representing one binding decision need one atomic transaction rather than compensation.",
     "Reuse existing authoritative task start events instead of creating a second scheduled-task lifecycle.",
     "Task materialization is durable state creation, not permission to execute the task.",
-    "A correct feature may preserve structural duplication as a concrete bounded refactor instead of broadening the atomicity patch."
+    "Review found duplicated claimed-state preconditions; the atomicity patch deferred that structural change to bounded follow-up issue 801.",
+    "Review also found that the ADR omitted session creation from one inert-boundary sentence; issue 801 explicitly tracked and corrected that documentation gap."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/800"},
   "sanitation": {"passed": true, "blockers": []},

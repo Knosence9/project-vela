@@ -44,7 +44,9 @@
     "Cancellation should preserve why intent was withdrawn instead of deleting the aggregate.",
     "A terminal-state error is safer than silently treating repeated cancellation as success.",
     "Cancellation prevents future selection but does not imply interruption of work selected elsewhere.",
-    "Concurrency tests should assert one persisted winner and authoritative typed loser evidence."
+    "Concurrency tests should assert one persisted winner and authoritative typed loser evidence.",
+    "Review found a hard-coded pending revision; it was retained because the exact pending-history contract contained one creation event, with revision derivation required if that contract grows.",
+    "Review also proposed a shared MalformedPayload mapping helper; that optional low-value cleanup was deferred rather than broadening the cancellation slice."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/792"},
   "sanitation": {"passed": true, "blockers": []},
