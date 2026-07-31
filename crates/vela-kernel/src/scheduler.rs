@@ -151,6 +151,44 @@ pub enum ScheduleStatus {
     Materialized,
 }
 
+/// One validated persisted transition in an exact schedule's lifecycle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ScheduleHistoryEvent {
+    Created {
+        goal: TaskGoal,
+        due_at: ScheduleInstant,
+    },
+    Cancelled {
+        reason: ScheduleCancellation,
+    },
+    Claimed,
+    Released {
+        reason: ScheduleRelease,
+    },
+    Materialized {
+        task_id: TaskId,
+    },
+}
+
+/// One revision-bearing entry from a validated durable schedule history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduleHistoryEntry {
+    revision: u64,
+    event: ScheduleHistoryEvent,
+}
+
+impl ScheduleHistoryEntry {
+    /// The one-based event-stream revision occupied by this lifecycle event.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn event(&self) -> &ScheduleHistoryEvent {
+        &self.event
+    }
+}
+
 impl ScheduledTask {
     pub fn id(&self) -> &ScheduleId {
         &self.id
@@ -362,6 +400,32 @@ impl ScheduleStore {
             .replay::<ScheduleEvent>(&schedule_stream(id))
             .map_err(ScheduleStoreError::Replay)?;
         Self::project(id.clone(), events)
+    }
+
+    /// Returns complete validated lifecycle evidence in exact revision order.
+    pub fn history(
+        &self,
+        id: &ScheduleId,
+    ) -> Result<Option<Vec<ScheduleHistoryEntry>>, ScheduleStoreError> {
+        let events = self
+            .event_log
+            .replay::<ScheduleEvent>(&schedule_stream(id))
+            .map_err(ScheduleStoreError::Replay)?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+        Self::project(id.clone(), events.clone())?;
+
+        Ok(Some(
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| ScheduleHistoryEntry {
+                    revision: index as u64 + 1,
+                    event: ScheduleHistoryEvent::from(event),
+                })
+                .collect(),
+        ))
     }
 
     pub fn cancel(
@@ -719,7 +783,7 @@ fn schedule_stream(id: &ScheduleId) -> StreamId {
         .expect("a prefixed schedule stream is never empty")
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 enum ScheduleEvent {
     Created {
@@ -736,6 +800,24 @@ enum ScheduleEvent {
     Materialized {
         task_id: TaskId,
     },
+}
+
+impl From<ScheduleEvent> for ScheduleHistoryEvent {
+    fn from(event: ScheduleEvent) -> Self {
+        match event {
+            ScheduleEvent::Created {
+                goal,
+                due_at_unix_millis,
+            } => Self::Created {
+                goal,
+                due_at: ScheduleInstant::from_unix_millis(due_at_unix_millis),
+            },
+            ScheduleEvent::Cancelled { reason } => Self::Cancelled { reason },
+            ScheduleEvent::Claimed {} => Self::Claimed,
+            ScheduleEvent::Released { reason } => Self::Released { reason },
+            ScheduleEvent::Materialized { task_id } => Self::Materialized { task_id },
+        }
+    }
 }
 
 impl Event for ScheduleEvent {

@@ -256,6 +256,7 @@ The first milestone is the **evidence loop**:
 97. Explicitly release claimed one-shot schedule intent back to pending eligibility with durable recovery evidence. ✅
 98. Atomically materialize one claimed schedule as one caller-identified active task without executing it. ✅
 99. Filter durable one-shot schedule inventory by exact persisted lifecycle status without granting execution authority. ✅
+100. Query one exact durable schedule's complete typed lifecycle history without granting execution authority. ✅
 
 ## Project documents
 
