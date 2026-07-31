@@ -251,6 +251,7 @@ The first milestone is the **evidence loop**:
 92. Atomically complete an active task while its attributed workflow advances through verified authored gate evidence into terminal. ✅
 93. Persist inert one-shot task schedule intent and query due work against a caller-owned cutoff deterministically. ✅
 94. Durably cancel pending one-shot schedule intent before it can be selected as due work. ✅
+95. Durably claim due one-shot schedule intent without granting dispatch or execution authority. ✅
 
 ## Project documents
 
