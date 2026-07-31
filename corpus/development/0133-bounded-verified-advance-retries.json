@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Bound verified workflow advancement retries",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/785 by preventing continuous task stream conflicts from blocking either synchronous verified advancement path indefinitely.",
+    "acceptance_criteria": [
+      "Apply one exact finite append-attempt limit to workflow-only and terminal-synchronizing verified advancement.",
+      "Return a typed exhaustion error after continuous task conflicts without workflow advancement or partial task completion.",
+      "Check the exact workflow revision first so its concurrent modification remains authoritative even at the retry bound.",
+      "Preserve evidence re-evaluation, event schemas, gate policy, and success behavior without adding backoff or configuration."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED continuous-conflict regressions.",
+      "outcome": "failure",
+      "diagnostic": "Both new tests initially failed to compile because no attempt limit or typed exhaustion error existed.",
+      "patch": "Added deterministic conflict injection for both advancement paths and asserted exact exhaustion count plus unchanged workflow and task lifecycle state."
+    },
+    {
+      "summary": "Implemented finite shared conflict classification.",
+      "outcome": "success",
+      "diagnostic": "An unbounded retry loop could deny synchronous caller progress, while reusing a generic store error would obscure whether workflow intent or task churn caused rejection.",
+      "patch": "Added a four-attempt constant and TaskConflictRetriesExhausted error, counted only unchanged-workflow task conflicts, and retained immediate workflow revision rejection."
+    },
+    {
+      "summary": "Verified the exact bounded contract independently.",
+      "outcome": "success",
+      "diagnostic": "Independent pre-commit review and substantive hosted review found no blocking correctness, mutation-safety, documentation, or scope defect.",
+      "patch": "Documented the exact limit in both verification ADRs and public workflow guidance, then reran focused and full verification."
+    }
+  ],
+  "outcome": {
+    "summary": "Verified workflow advancement now makes at most four append attempts during task stream churn, reports typed exhaustion without partial mutation, and never reinterprets a stale workflow revision.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel workflow::tests --no-fail-fast", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_run_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30600225489", "status": "passed"},
+      {"command": "Pull request 786 squash merge 4912123441217f267bf050fcfe59eda1e3dd30dd", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Every synchronous optimistic-retry loop needs an explicit progress bound or a justified external cancellation mechanism.",
+    "Classify the authoritative workflow conflict before counting task churn so exhaustion cannot mask stale caller intent.",
+    "A typed exhaustion error makes retry policy observable without overloading unrelated persistence failures.",
+    "One shared conflict classifier keeps retry semantics aligned across workflow-only and atomic terminal operations."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/786"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

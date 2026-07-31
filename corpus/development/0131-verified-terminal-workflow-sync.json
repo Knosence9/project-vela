@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Synchronize verified terminal workflow and task completion",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/781 with an opt-in atomic boundary that advances a verified task attributed workflow to authored terminal and completes its active task.",
+    "acceptance_criteria": [
+      "Require one exact authored gated transition whose target phase is terminal and one active attributed task.",
+      "Evaluate exact identified Verification for the supplied Attempt and preserve complete pending or failed reports.",
+      "Append the existing workflow advancement and exact-output task completion events atomically with both revisions guarded.",
+      "Reject evidence, task terminal, and workflow races without exposing a partial lifecycle state."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED terminal-synchronization coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-run test failed because advance_and_complete_task_if_verification_passes did not exist.",
+      "patch": "Added success and replay, pending, failed, lineage, non-terminal-target, task evidence, task terminal, and workflow-race tests."
+    },
+    {
+      "summary": "Implemented atomic two-stream terminal synchronization.",
+      "outcome": "success",
+      "diagnostic": "Calling independent verified advancement and completion operations sequentially could expose either lifecycle transition without the other.",
+      "patch": "Reused existing events and the event log's exact-version pair append, added typed terminal-target and task state validation, and recorded ADR-0033."
+    },
+    {
+      "summary": "Completed independent and substantive review follow-ups.",
+      "outcome": "success",
+      "diagnostic": "Independent review found missing historical follow-on notes and exact replayed-output coverage; substantive review identified duplicated verified-advance preflight and an undocumented crate-private completion precondition.",
+      "patch": "Added the documentation notes, replay assertion, terminal-race coverage, and helper precondition documentation; preserved the larger duplication finding as bounded follow-up issue 783 rather than expanding the feature patch."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can atomically advance an exactly verified workflow to authored terminal and complete its active attributed task with exact output, while independent lifecycle APIs remain available.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30593721737", "status": "passed"},
+      {"command": "Pull request 782 squash merge e06728aebfca6fe4b572fd4367183ca2e9182e2d", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Two lifecycle writes that represent one opt-in terminal decision need one atomic transaction rather than compensating sequential calls.",
+    "Reuse authoritative aggregate events instead of introducing a duplicate combined aggregate solely for coordination.",
+    "Exact replay assertions should cover terminal detail, not only status and revision.",
+    "Substantive review exposed duplicated verified-advance preflight as issue 783 and an undocumented crate-private completion precondition; document the precondition immediately and keep structural cleanup bounded separately.",
+    "Keep behavior-preserving duplication cleanup in a separate bounded issue when the feature patch is already correct and fully guarded."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/782"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
