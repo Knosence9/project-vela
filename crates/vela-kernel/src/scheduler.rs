@@ -12,9 +12,9 @@ use crate::{
 const SCHEDULE_CREATED_EVENT_TYPE: &str = "schedule.created";
 const SCHEDULE_CANCELLED_EVENT_TYPE: &str = "schedule.cancelled";
 const SCHEDULE_CLAIMED_EVENT_TYPE: &str = "schedule.claimed";
+const SCHEDULE_RELEASED_EVENT_TYPE: &str = "schedule.released";
 const SCHEDULE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
-const PENDING_SCHEDULE_STREAM_VERSION: u64 = 1;
 
 /// An opaque, non-blank identity for one durable schedule intent.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -83,6 +83,37 @@ impl fmt::Display for ScheduleCancellationError {
 
 impl Error for ScheduleCancellationError {}
 
+/// A caller-supplied, non-blank reason for recovering a claimed schedule.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ScheduleRelease(String);
+
+impl ScheduleRelease {
+    pub fn new(value: impl Into<String>) -> Result<Self, ScheduleReleaseError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            Err(ScheduleReleaseError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScheduleReleaseError;
+
+impl fmt::Display for ScheduleReleaseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("schedule release reason must not be blank")
+    }
+}
+
+impl Error for ScheduleReleaseError {}
+
 /// A deterministic caller-owned instant in non-negative Unix milliseconds.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
@@ -106,6 +137,8 @@ pub struct ScheduledTask {
     due_at: ScheduleInstant,
     cancellation: Option<ScheduleCancellation>,
     claimed: bool,
+    latest_release: Option<ScheduleRelease>,
+    revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,6 +174,10 @@ impl ScheduledTask {
     pub fn cancellation(&self) -> Option<&ScheduleCancellation> {
         self.cancellation.as_ref()
     }
+
+    pub fn latest_release(&self) -> Option<&ScheduleRelease> {
+        self.latest_release.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -159,6 +196,14 @@ pub enum ScheduleStoreError {
     },
     AlreadyClaimed {
         schedule_id: ScheduleId,
+    },
+    NotClaimed {
+        schedule_id: ScheduleId,
+    },
+    ConcurrentModification {
+        schedule_id: ScheduleId,
+        expected_revision: u64,
+        current_revision: u64,
     },
     NotDue {
         schedule_id: ScheduleId,
@@ -188,6 +233,17 @@ impl fmt::Display for ScheduleStoreError {
             Self::AlreadyClaimed { schedule_id } => {
                 write!(formatter, "schedule {schedule_id} is already claimed")
             }
+            Self::NotClaimed { schedule_id } => {
+                write!(formatter, "schedule {schedule_id} is not claimed")
+            }
+            Self::ConcurrentModification {
+                schedule_id,
+                expected_revision,
+                current_revision,
+            } => write!(
+                formatter,
+                "schedule {schedule_id} changed from revision {expected_revision} to {current_revision}"
+            ),
             Self::NotDue {
                 schedule_id,
                 due_at,
@@ -220,6 +276,8 @@ impl Error for ScheduleStoreError {
             | Self::NotFound { .. }
             | Self::AlreadyCancelled { .. }
             | Self::AlreadyClaimed { .. }
+            | Self::NotClaimed { .. }
+            | Self::ConcurrentModification { .. }
             | Self::NotDue { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. } => None,
@@ -259,6 +317,8 @@ impl ScheduleStore {
                 due_at,
                 cancellation: None,
                 claimed: false,
+                latest_release: None,
+                revision: 1,
             }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
                 Err(ScheduleStoreError::AlreadyExists { schedule_id: id })
@@ -294,14 +354,15 @@ impl ScheduleStore {
         };
         match self.event_log.append(
             &schedule_stream(id),
-            ExpectedVersion::Exact(PENDING_SCHEDULE_STREAM_VERSION),
+            ExpectedVersion::Exact(scheduled.revision),
             &event,
         ) {
             Ok(_) => {
                 scheduled.cancellation = Some(cancellation);
+                scheduled.revision += 1;
                 Ok(scheduled)
             }
-            Err(error @ EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
+            Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
                 Some(current) if current.status() == ScheduleStatus::Cancelled => {
                     Err(ScheduleStoreError::AlreadyCancelled {
                         schedule_id: id.clone(),
@@ -312,7 +373,11 @@ impl ScheduleStore {
                         schedule_id: id.clone(),
                     })
                 }
-                Some(_) => Err(ScheduleStoreError::EventLog(error)),
+                Some(current) => Err(ScheduleStoreError::ConcurrentModification {
+                    schedule_id: id.clone(),
+                    expected_revision: scheduled.revision,
+                    current_revision: current.revision,
+                }),
                 None => Err(ScheduleStoreError::NotFound {
                     schedule_id: id.clone(),
                 }),
@@ -345,14 +410,15 @@ impl ScheduleStore {
 
         match self.event_log.append(
             &schedule_stream(id),
-            ExpectedVersion::Exact(PENDING_SCHEDULE_STREAM_VERSION),
+            ExpectedVersion::Exact(scheduled.revision),
             &ScheduleEvent::Claimed {},
         ) {
             Ok(_) => {
                 scheduled.claimed = true;
+                scheduled.revision += 1;
                 Ok(scheduled)
             }
-            Err(error @ EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
+            Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
                 Some(current) if current.status() == ScheduleStatus::Cancelled => {
                     Err(ScheduleStoreError::AlreadyCancelled {
                         schedule_id: id.clone(),
@@ -363,7 +429,64 @@ impl ScheduleStore {
                         schedule_id: id.clone(),
                     })
                 }
-                Some(_) => Err(ScheduleStoreError::EventLog(error)),
+                Some(current) => Err(ScheduleStoreError::ConcurrentModification {
+                    schedule_id: id.clone(),
+                    expected_revision: scheduled.revision,
+                    current_revision: current.revision,
+                }),
+                None => Err(ScheduleStoreError::NotFound {
+                    schedule_id: id.clone(),
+                }),
+            },
+            Err(error) => Err(ScheduleStoreError::EventLog(error)),
+        }
+    }
+
+    /// Returns a claimed intent to pending eligibility with exact recovery evidence.
+    pub fn release(
+        &mut self,
+        id: &ScheduleId,
+        release: ScheduleRelease,
+    ) -> Result<ScheduledTask, ScheduleStoreError> {
+        let Some(mut scheduled) = self.load(id)? else {
+            return Err(ScheduleStoreError::NotFound {
+                schedule_id: id.clone(),
+            });
+        };
+        match scheduled.status() {
+            ScheduleStatus::Claimed => {}
+            ScheduleStatus::Cancelled => {
+                return Err(ScheduleStoreError::AlreadyCancelled {
+                    schedule_id: id.clone(),
+                });
+            }
+            ScheduleStatus::Pending => {
+                return Err(ScheduleStoreError::NotClaimed {
+                    schedule_id: id.clone(),
+                });
+            }
+        }
+
+        let event = ScheduleEvent::Released {
+            reason: release.clone(),
+        };
+        match self.event_log.append(
+            &schedule_stream(id),
+            ExpectedVersion::Exact(scheduled.revision),
+            &event,
+        ) {
+            Ok(_) => {
+                scheduled.claimed = false;
+                scheduled.latest_release = Some(release);
+                scheduled.revision += 1;
+                Ok(scheduled)
+            }
+            Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
+                Some(current) => Err(ScheduleStoreError::ConcurrentModification {
+                    schedule_id: id.clone(),
+                    expected_revision: scheduled.revision,
+                    current_revision: current.revision,
+                }),
                 None => Err(ScheduleStoreError::NotFound {
                     schedule_id: id.clone(),
                 }),
@@ -424,50 +547,46 @@ impl ScheduleStore {
         id: ScheduleId,
         events: Vec<ScheduleEvent>,
     ) -> Result<Option<ScheduledTask>, ScheduleStoreError> {
-        match events.as_slice() {
-            [] => Ok(None),
-            [
-                ScheduleEvent::Created {
-                    goal,
-                    due_at_unix_millis,
-                },
-            ] => Ok(Some(ScheduledTask {
-                id,
-                goal: goal.clone(),
-                due_at: ScheduleInstant::from_unix_millis(*due_at_unix_millis),
-                cancellation: None,
-                claimed: false,
-            })),
-            [
-                ScheduleEvent::Created {
-                    goal,
-                    due_at_unix_millis,
-                },
-                ScheduleEvent::Cancelled { reason },
-            ] => Ok(Some(ScheduledTask {
-                id,
-                goal: goal.clone(),
-                due_at: ScheduleInstant::from_unix_millis(*due_at_unix_millis),
-                cancellation: Some(reason.clone()),
-                claimed: false,
-            })),
-            [
-                ScheduleEvent::Created {
-                    goal,
-                    due_at_unix_millis,
-                },
-                ScheduleEvent::Claimed {},
-            ] => Ok(Some(ScheduledTask {
-                id,
-                goal: goal.clone(),
-                due_at: ScheduleInstant::from_unix_millis(*due_at_unix_millis),
-                cancellation: None,
-                claimed: true,
-            })),
-            _ => Err(ScheduleStoreError::InvalidHistory {
-                event_count: events.len(),
-            }),
+        let event_count = events.len();
+        let mut events = events.into_iter();
+        let Some(ScheduleEvent::Created {
+            goal,
+            due_at_unix_millis,
+        }) = events.next()
+        else {
+            return if event_count == 0 {
+                Ok(None)
+            } else {
+                Err(ScheduleStoreError::InvalidHistory { event_count })
+            };
+        };
+        let mut scheduled = ScheduledTask {
+            id,
+            goal,
+            due_at: ScheduleInstant::from_unix_millis(due_at_unix_millis),
+            cancellation: None,
+            claimed: false,
+            latest_release: None,
+            revision: event_count as u64,
+        };
+
+        for event in events {
+            match (scheduled.status(), event) {
+                (ScheduleStatus::Pending, ScheduleEvent::Cancelled { reason }) => {
+                    scheduled.cancellation = Some(reason);
+                }
+                (ScheduleStatus::Pending, ScheduleEvent::Claimed {}) => {
+                    scheduled.claimed = true;
+                }
+                (ScheduleStatus::Claimed, ScheduleEvent::Released { reason }) => {
+                    scheduled.claimed = false;
+                    scheduled.latest_release = Some(reason);
+                }
+                _ => return Err(ScheduleStoreError::InvalidHistory { event_count }),
+            }
         }
+
+        Ok(Some(scheduled))
     }
 }
 
@@ -499,6 +618,9 @@ enum ScheduleEvent {
         reason: ScheduleCancellation,
     },
     Claimed {},
+    Released {
+        reason: ScheduleRelease,
+    },
 }
 
 impl Event for ScheduleEvent {
@@ -507,6 +629,7 @@ impl Event for ScheduleEvent {
             Self::Created { .. } => SCHEDULE_CREATED_EVENT_TYPE,
             Self::Cancelled { .. } => SCHEDULE_CANCELLED_EVENT_TYPE,
             Self::Claimed {} => SCHEDULE_CLAIMED_EVENT_TYPE,
+            Self::Released { .. } => SCHEDULE_RELEASED_EVENT_TYPE,
         }
     }
 
@@ -576,6 +699,25 @@ impl Event for ScheduleEvent {
                     }
                 })?;
                 Ok(Self::Claimed {})
+            }
+            SCHEDULE_RELEASED_EVENT_TYPE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    reason: String,
+                }
+
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let reason = ScheduleRelease::new(payload.reason).map_err(
+                    |error: ScheduleReleaseError| DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    },
+                )?;
+                Ok(Self::Released { reason })
             }
             _ => Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),

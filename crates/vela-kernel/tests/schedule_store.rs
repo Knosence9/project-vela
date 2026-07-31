@@ -4,8 +4,8 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
-        ScheduleCancellation, ScheduleId, ScheduleInstant, ScheduleStatus, ScheduleStore,
-        ScheduleStoreError,
+        ScheduleCancellation, ScheduleId, ScheduleInstant, ScheduleRelease, ScheduleStatus,
+        ScheduleStore, ScheduleStoreError,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -688,6 +688,238 @@ fn replay_rejects_cancellation_before_creation_and_blank_reasons() {
             .unwrap_err(),
         ScheduleStoreError::Replay(ReplayError::MalformedPayload {
             stream_version: 2,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn releases_claimed_schedule_back_to_due_work_with_exact_recovery_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("recover-me").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Recover abandoned reservation").unwrap(),
+            instant(10),
+        )
+        .unwrap();
+    store.claim(&id, instant(10)).unwrap();
+
+    let released = store
+        .release(
+            &id,
+            ScheduleRelease::new(" worker stopped before dispatch ").unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(released.status(), ScheduleStatus::Pending);
+    assert_eq!(
+        released.latest_release().unwrap().as_str(),
+        " worker stopped before dispatch "
+    );
+    let reopened = ScheduleStore::open(&path).unwrap();
+    assert_eq!(reopened.load(&id).unwrap(), Some(released.clone()));
+    assert_eq!(reopened.list().unwrap(), vec![released.clone()]);
+    assert_eq!(reopened.list_due(instant(10)).unwrap(), vec![released]);
+}
+
+#[test]
+fn released_schedule_can_be_claimed_again_without_changing_intent() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("retry-claim").unwrap();
+    let goal = TaskGoal::new("Keep immutable intent").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(id.clone(), goal.clone(), instant(7))
+        .unwrap();
+    store.claim(&id, instant(7)).unwrap();
+    store
+        .release(&id, ScheduleRelease::new("retry reservation").unwrap())
+        .unwrap();
+
+    let reclaimed = store.claim(&id, instant(7)).unwrap();
+
+    assert_eq!(reclaimed.status(), ScheduleStatus::Claimed);
+    assert_eq!(reclaimed.goal(), &goal);
+    assert_eq!(reclaimed.due_at(), instant(7));
+    assert_eq!(
+        reclaimed.latest_release().unwrap().as_str(),
+        "retry reservation"
+    );
+    assert_eq!(
+        ScheduleStore::open(&path).unwrap().load(&id).unwrap(),
+        Some(reclaimed)
+    );
+
+    let released_again = store
+        .release(&id, ScheduleRelease::new("second recovery").unwrap())
+        .unwrap();
+    let cancelled = store
+        .cancel(
+            &id,
+            ScheduleCancellation::new("stop after recovery").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(cancelled.status(), ScheduleStatus::Cancelled);
+    assert_eq!(
+        cancelled.latest_release().unwrap().as_str(),
+        "second recovery"
+    );
+    assert_eq!(cancelled.goal(), released_again.goal());
+    assert_eq!(cancelled.due_at(), released_again.due_at());
+}
+
+#[test]
+fn release_rejects_blank_reasons_and_non_claimed_schedules_without_appending() {
+    assert!(ScheduleRelease::new(" \n").is_err());
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let pending_id = ScheduleId::new("pending-release").unwrap();
+    let cancelled_id = ScheduleId::new("cancelled-release").unwrap();
+    let missing_id = ScheduleId::new("missing-release").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    let pending = store
+        .schedule(
+            pending_id.clone(),
+            TaskGoal::new("Remain pending").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    store
+        .schedule(
+            cancelled_id.clone(),
+            TaskGoal::new("Remain cancelled").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    let cancelled = store
+        .cancel(
+            &cancelled_id,
+            ScheduleCancellation::new("withdrawn").unwrap(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store
+            .release(&missing_id, ScheduleRelease::new("recover").unwrap())
+            .unwrap_err(),
+        ScheduleStoreError::NotFound { schedule_id } if schedule_id == missing_id
+    ));
+    assert!(matches!(
+        store
+            .release(&pending_id, ScheduleRelease::new("recover").unwrap())
+            .unwrap_err(),
+        ScheduleStoreError::NotClaimed { schedule_id } if schedule_id == pending_id
+    ));
+    assert!(matches!(
+        store
+            .release(&cancelled_id, ScheduleRelease::new("recover").unwrap())
+            .unwrap_err(),
+        ScheduleStoreError::AlreadyCancelled { schedule_id } if schedule_id == cancelled_id
+    ));
+    assert_eq!(store.load(&pending_id).unwrap(), Some(pending));
+    assert_eq!(store.load(&cancelled_id).unwrap(), Some(cancelled));
+}
+
+#[test]
+fn racing_releases_append_once_and_impossible_release_history_fails_closed() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("release-race").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Release once").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    store.claim(&id, instant(1)).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = ["first recovery", "second recovery"].map(|reason| {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let mut store = ScheduleStore::open(path).unwrap();
+            barrier.wait();
+            store.release(&id, ScheduleRelease::new(reason).unwrap())
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(ScheduleStoreError::ConcurrentModification {
+                    expected_revision: 2,
+                    current_revision: 3,
+                    ..
+                })
+            ))
+            .count(),
+        1
+    );
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:release-race', 4, 'schedule.released', 1, ?1)",
+            [br#"{"reason":"impossible second release"}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        ScheduleStore::open(&path).unwrap().list().unwrap_err(),
+        ScheduleStoreError::InvalidHistory { event_count: 4 }
+    ));
+}
+
+#[test]
+fn replay_rejects_malformed_release_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("malformed-release").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Reject corrupt recovery evidence").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    store.claim(&id, instant(1)).unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:malformed-release', 3, 'schedule.released', 1, ?1)",
+            [br#"{"reason":"  "}"#.as_slice()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        ScheduleStore::open(&path).unwrap().list().unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 3,
+            ..
+        })
+    ));
+    assert!(matches!(
+        ScheduleStore::open(&path)
+            .unwrap()
+            .list_due(instant(1))
+            .unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 3,
             ..
         })
     ));
