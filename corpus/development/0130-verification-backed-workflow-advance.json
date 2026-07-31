@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Advance workflows through task Verification",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/779 with a stale-safe boundary that advances one task attributed workflow through an authored gate backed by exact identified Verification evidence.",
+    "acceptance_criteria": [
+      "Map the caller-selected authored transition gate to one exact task Verification check for one supplied Attempt.",
+      "Advance only after passed evidence and return typed pending, failed, lineage, attribution, and ungated rejections without writes.",
+      "Re-evaluate task evidence after task stream races while keeping the caller's workflow revision authoritative.",
+      "Preserve the existing advancement event, replay compatibility, and raw caller-acknowledgement API."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED verified-advancement coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused workflow-run test failed because advance_if_task_verification_passes did not exist.",
+      "patch": "Added success, pending, failed, invalid-lineage, unattributed, ungated, task race, and workflow-race tests."
+    },
+    {
+      "summary": "Implemented exact-evidence workflow advancement.",
+      "outcome": "success",
+      "diagnostic": "Separating gate evaluation from append would authorize from stale task evidence, so both observed stream revisions had to participate in the persistence boundary.",
+      "patch": "Added typed preparation and rejection, exact Attempt and check evaluation, guarded append with task reload, ADR-0032, and lifecycle documentation."
+    },
+    {
+      "summary": "Reconciled documentation findings before merge.",
+      "outcome": "success",
+      "diagnostic": "Independent review found ADR-0010 still claimed no evidence binding existed; substantive review also found awkward gate-identity wording.",
+      "patch": "Added an explicit historical follow-on note, clarified that the authored gate becomes the single identified Verification check, reran verification, and resolved the review thread."
+    }
+  ],
+  "outcome": {
+    "summary": "A task attributed workflow can advance through one caller-selected authored gate only when exact identified Verification passes, without stale task evidence reinterpreting exact workflow intent.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30590195118", "status": "passed"},
+      {"command": "Pull request 780 squash merge 129afda4fbc9ee7e914acea03f2004200c6a52c9", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Evidence authorization and its guarded workflow append must share exact task and workflow revision checks.",
+    "Task evidence races may be re-evaluated, but phase-relative workflow intent must remain bound to the caller's exact revision.",
+    "Historical ADRs need explicit follow-on notes when later additive boundaries supersede deferred capability statements.",
+    "A gate identity names required evidence; it does not execute a verifier or grant permission."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/780"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

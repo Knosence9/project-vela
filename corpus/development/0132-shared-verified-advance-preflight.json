@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Share verified workflow advancement preflight",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/783 by removing duplicated verified-advance preparation while preserving every public validation, conflict, and event contract.",
+    "acceptance_criteria": [
+      "Share exact run, transition, authored gate, attributed task, and gate-set preparation across both verified advancement paths.",
+      "Preserve each path's original validation order, terminal-target rule, task active rule, append shape, and public errors.",
+      "Centralize workflow revision conflict classification without weakening task evidence re-evaluation.",
+      "Introduce no public API, event schema, or behavior change."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established characterization coverage before refactoring.",
+      "outcome": "success",
+      "diagnostic": "Existing workflow unit and integration tests covered success, rejection, evidence-race, terminal-race, and workflow-race behavior for both paths.",
+      "patch": "Ran the focused workflow suites as the behavior-preservation baseline before changing private structure."
+    },
+    {
+      "summary": "Extracted shared verified-advance preparation.",
+      "outcome": "success",
+      "diagnostic": "The two operations duplicated phase-relative preparation but intentionally differed in task state timing and append semantics.",
+      "patch": "Added a private prepared value and small helpers for run and gate resolution, task loading, passed-evidence checks, and workflow conflict classification while retaining path-specific checks."
+    },
+    {
+      "summary": "Preserved a newly discovered liveness defect as explicit follow-up.",
+      "outcome": "failure",
+      "diagnostic": "Substantive review found both shared retry loops could remain synchronous forever under continuous task stream writes.",
+      "patch": "Did not hide the finding inside a nominal refactor; recorded bounded issue 785 for a typed retry limit, verified unchanged behavior, and merged only after the review thread was resolved."
+    }
+  ],
+  "outcome": {
+    "summary": "Both verified workflow advancement paths now share auditable private preparation and conflict handling while preserving their distinct atomicity and lifecycle contracts; the discovered retry-liveness defect became explicit follow-up work.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test workflow_run_store", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel workflow::tests", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30597395963", "status": "passed"},
+      {"command": "Pull request 784 squash merge 30ad940fb8474eae3e9ff24151ea67e9f0681052", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "For refactors, characterize externally visible behavior before extraction instead of manufacturing a failing behavior test.",
+    "Share phase-relative preparation while leaving materially different append and lifecycle policy visible at each call site.",
+    "Centralizing conflict classification makes cross-path concurrency fixes less likely to drift.",
+    "A valid review finding outside a behavior-preserving refactor should become a concrete bounded issue, not be ignored or silently broaden scope."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/784"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
