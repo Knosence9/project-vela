@@ -107,6 +107,86 @@ fn schedule_history_preserves_cancellation_and_returns_none_for_missing_id() {
 }
 
 #[test]
+fn finds_materialized_schedule_by_exact_task_id_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let schedule_id = ScheduleId::new("task-provenance").unwrap();
+    let task_id = TaskId::new("materialized-task").unwrap();
+    let unrelated_task_id = TaskId::new("unrelated-task").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            schedule_id.clone(),
+            TaskGoal::new("Preserve schedule provenance").unwrap(),
+            instant(42),
+        )
+        .unwrap();
+    store.claim(&schedule_id, instant(42)).unwrap();
+    let materialized = store.materialize(&schedule_id, task_id.clone()).unwrap();
+    drop(store);
+
+    let reopened = ScheduleStore::open(&path).unwrap();
+    assert_eq!(
+        reopened.find_by_task_id(&task_id).unwrap(),
+        Some(materialized)
+    );
+    assert_eq!(reopened.find_by_task_id(&unrelated_task_id).unwrap(), None);
+}
+
+#[test]
+fn task_lookup_fails_closed_for_malformed_history_and_duplicate_bindings() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("duplicate-task-binding").unwrap();
+    let first_id = ScheduleId::new("first-binding").unwrap();
+    let second_id = ScheduleId::new("second-binding").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    for id in [&first_id, &second_id] {
+        store
+            .schedule(
+                id.clone(),
+                TaskGoal::new(format!("goal-{id}")).unwrap(),
+                instant(1),
+            )
+            .unwrap();
+        store.claim(id, instant(1)).unwrap();
+    }
+    store.materialize(&first_id, task_id.clone()).unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:second-binding', 3, 'schedule.materialized', 1, ?1)",
+            [br#"{"task_id":"duplicate-task-binding"}"#.as_slice()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store.find_by_task_id(&task_id).unwrap_err(),
+        ScheduleStoreError::AmbiguousTaskBinding {
+            task_id: ref duplicate,
+            schedule_count: 2,
+        } if duplicate == &task_id
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D'
+             WHERE stream_id = 'schedule:second-binding' AND stream_version = 3",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.find_by_task_id(&task_id).unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 3,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn schedule_history_rejects_invalid_lifecycle_without_returning_a_prefix() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");

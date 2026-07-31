@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-07-31
-- **Decision and execution issues:** [#789](https://github.com/Knosence9/project-vela/issues/789), [#791](https://github.com/Knosence9/project-vela/issues/791), [#793](https://github.com/Knosence9/project-vela/issues/793), [#795](https://github.com/Knosence9/project-vela/issues/795), [#797](https://github.com/Knosence9/project-vela/issues/797), [#799](https://github.com/Knosence9/project-vela/issues/799), [#803](https://github.com/Knosence9/project-vela/issues/803), [#805](https://github.com/Knosence9/project-vela/issues/805)
+- **Decision and execution issues:** [#789](https://github.com/Knosence9/project-vela/issues/789), [#791](https://github.com/Knosence9/project-vela/issues/791), [#793](https://github.com/Knosence9/project-vela/issues/793), [#795](https://github.com/Knosence9/project-vela/issues/795), [#797](https://github.com/Knosence9/project-vela/issues/797), [#799](https://github.com/Knosence9/project-vela/issues/799), [#803](https://github.com/Knosence9/project-vela/issues/803), [#805](https://github.com/Knosence9/project-vela/issues/805), [#807](https://github.com/Knosence9/project-vela/issues/807)
 
 ## Context
 
@@ -25,6 +25,8 @@ The typed SQLite event log already provides exact stream identity, immutable app
 `ScheduleStore::materialize(id, task_id)` atomically appends one `schedule.materialized` event and one existing `task.started` event only while the schedule is claimed and the caller-owned task ID has no stream. The task receives the schedule's exact immutable goal; the terminal materialized schedule preserves the exact task ID across load and inventory discovery. A task-ID collision leaves the schedule claimed, and a stale schedule revision leaves no task orphan. Replay permits materialization only after a claim, including after any number of explicit claim-release recovery cycles.
 
 `ScheduleStore::history(id)` returns every validated creation, claim, release, cancellation, and materialization transition for one exact schedule as a revision-bearing typed `ScheduleHistoryEntry` in stream-revision order. Creation preserves the exact goal and due instant; reason-bearing and task-binding transitions preserve their exact caller-owned values. A missing schedule returns no history. The query decodes and projects the complete lifecycle before exposing any result, so malformed payloads, unsupported events, version gaps, or impossible ordering return an error and no partial prefix.
+
+`ScheduleStore::find_by_task_id(task_id)` provides the reverse read-only provenance lookup for materialized schedules. It validates discovered schedule histories in one SQLite read snapshot and returns the complete schedule bound to the exact caller-owned task identity, or no schedule when the task is unrelated. Persisted corruption that binds one task identity from multiple schedule streams returns typed `AmbiguousTaskBinding` evidence rather than choosing an arbitrary schedule. The query does not inspect task outcome or mutate either lifecycle.
 
 The store never reads wall-clock time. Materialization creates inert active task state but does not infer worker failure or lease expiry, create a session, start or advance a workflow, invoke a provider or tool, grant permission, sleep, execute or dispatch task work, retry execution, or interpret recurrence, cron syntax, or time zones. A caller decides when to query, claim, release, or materialize and retains every execution decision.
 
@@ -56,4 +58,5 @@ Rejected because schedules require the same immutable identity and fail-closed r
 - A durable claim prevents duplicate selection; explicit caller-owned release provides inspectable recovery without implying a lease, worker-health detector, or automatic expiry.
 - Explicit materialization binds one claimed schedule to one caller-identified active task atomically, without granting execution authority or risking a one-sided persistence result.
 - Exact typed lifecycle history makes every persisted scheduling and recovery transition inspectable without granting lifecycle authority.
+- Exact task-to-schedule reverse lookup makes materialization provenance inspectable and rejects ambiguous corrupted bindings.
 - Dispatch, worker identity, recurrence, automatic recovery, retries, and execution outcomes require later explicit decisions.
