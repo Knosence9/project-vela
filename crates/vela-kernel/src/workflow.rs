@@ -872,6 +872,9 @@ pub enum WorkflowVerifiedAdvanceError {
     GatesFailed {
         report: TaskVerificationGateReport,
     },
+    TaskConflictRetriesExhausted {
+        attempts: usize,
+    },
 }
 
 impl fmt::Display for WorkflowVerifiedAdvanceError {
@@ -912,6 +915,10 @@ impl fmt::Display for WorkflowVerifiedAdvanceError {
                 formatter.write_str("workflow verification gate is pending")
             }
             Self::GatesFailed { .. } => formatter.write_str("workflow verification gate failed"),
+            Self::TaskConflictRetriesExhausted { attempts } => write!(
+                formatter,
+                "verified workflow advancement exhausted {attempts} task-conflict attempts"
+            ),
         }
     }
 }
@@ -926,7 +933,8 @@ impl Error for WorkflowVerifiedAdvanceError {
             | Self::TransitionUngated { .. }
             | Self::TransitionTargetNotTerminal { .. }
             | Self::GatesPending { .. }
-            | Self::GatesFailed { .. } => None,
+            | Self::GatesFailed { .. }
+            | Self::TaskConflictRetriesExhausted { .. } => None,
         }
     }
 }
@@ -950,6 +958,8 @@ struct PreparedVerifiedAdvance {
     gate_id: String,
     gate_set: TaskVerificationGateSet,
 }
+
+const VERIFIED_ADVANCE_MAX_ATTEMPTS: usize = 4;
 
 /// A synchronous durable workflow-run store backed by the typed event log.
 pub struct WorkflowRunStore {
@@ -1133,8 +1143,9 @@ impl WorkflowRunStore {
 
     /// Advances a task-attributed run only when its authored gate has passed for one exact attempt.
     ///
-    /// A concurrent task-stream change causes gate re-evaluation. The exact caller-selected run
-    /// revision and transition are never reinterpreted after a concurrent workflow change.
+    /// A concurrent task-stream change causes gate re-evaluation for at most four append attempts.
+    /// The exact caller-selected run revision and transition are never reinterpreted after a
+    /// concurrent workflow change.
     pub fn advance_if_task_verification_passes(
         &mut self,
         id: &WorkflowRunId,
@@ -1159,6 +1170,7 @@ impl WorkflowRunStore {
         attempt_id: &TaskObservationId,
         before_append: &mut impl FnMut(),
     ) -> Result<WorkflowRun, WorkflowVerifiedAdvanceError> {
+        let mut attempts = 0;
         loop {
             let PreparedVerifiedAdvance {
                 mut run,
@@ -1190,7 +1202,7 @@ impl WorkflowRunStore {
                     return Ok(run);
                 }
                 Err(EventLogError::WrongExpectedVersion { .. }) => {
-                    self.reject_changed_workflow_revision(id, expected_revision)?;
+                    self.classify_verified_advance_conflict(id, expected_revision, &mut attempts)?;
                 }
                 Err(error) => return Err(WorkflowRunStoreError::EventLog(error).into()),
             }
@@ -1200,7 +1212,8 @@ impl WorkflowRunStore {
     /// Atomically advances into an authored terminal phase and completes its attributed task.
     ///
     /// Both existing lifecycle events are conditioned on exact workflow and task revisions. A task
-    /// evidence race is re-evaluated, while a workflow revision race remains authoritative.
+    /// evidence race is re-evaluated for at most four append attempts, while a workflow revision
+    /// race remains authoritative.
     pub fn advance_and_complete_task_if_verification_passes(
         &mut self,
         id: &WorkflowRunId,
@@ -1228,6 +1241,7 @@ impl WorkflowRunStore {
         output: TaskOutput,
         before_append: &mut impl FnMut(),
     ) -> Result<(WorkflowRun, Task), WorkflowVerifiedAdvanceError> {
+        let mut attempts = 0;
         loop {
             let PreparedVerifiedAdvance {
                 mut run,
@@ -1278,7 +1292,7 @@ impl WorkflowRunStore {
                     return Ok((run, task.into_completed(output)));
                 }
                 Err(EventLogError::WrongExpectedVersion { .. }) => {
-                    self.reject_changed_workflow_revision(id, expected_revision)?;
+                    self.classify_verified_advance_conflict(id, expected_revision, &mut attempts)?;
                 }
                 Err(error) => return Err(WorkflowRunStoreError::EventLog(error).into()),
             }
@@ -1369,10 +1383,11 @@ impl WorkflowRunStore {
         Ok(())
     }
 
-    fn reject_changed_workflow_revision(
+    fn classify_verified_advance_conflict(
         &mut self,
         id: &WorkflowRunId,
         expected_revision: u64,
+        attempts: &mut usize,
     ) -> Result<(), WorkflowVerifiedAdvanceError> {
         let current = self
             .load(id)?
@@ -1383,6 +1398,12 @@ impl WorkflowRunStore {
                 current_revision: current.revision(),
             }
             .into());
+        }
+        *attempts += 1;
+        if *attempts >= VERIFIED_ADVANCE_MAX_ATTEMPTS {
+            return Err(WorkflowVerifiedAdvanceError::TaskConflictRetriesExhausted {
+                attempts: *attempts,
+            });
         }
         Ok(())
     }
@@ -2518,6 +2539,56 @@ mod tests {
     }
 
     #[test]
+    fn continuous_task_conflicts_bound_verified_workflow_advance() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new("bounded-verified-task-race").unwrap();
+        let attempt_id = TaskObservationId::new("attempt").unwrap();
+        let run_id = WorkflowRunId::new("bounded-verified-task-race").unwrap();
+        let workflow = verified_workflow();
+        let mut tasks = TaskStore::open(&path).unwrap();
+        seed_passed_verification(&mut tasks, &task_id, &attempt_id);
+        let mut runs = WorkflowRunStore::open(&path).unwrap();
+        let started = runs
+            .start_for_task(run_id.clone(), &task_id, &workflow)
+            .unwrap();
+        let mut racing_tasks = TaskStore::open(&path).unwrap();
+        let mut conflicts = 0;
+
+        let result = runs.advance_if_task_verification_passes_before_append(
+            &run_id,
+            started.revision(),
+            0,
+            &attempt_id,
+            &mut || {
+                conflicts += 1;
+                racing_tasks
+                    .append_observation_for_attempt(
+                        &task_id,
+                        TaskObservationId::new(format!("conflict-{conflicts}")).unwrap(),
+                        TaskObservationKind::Diagnostic,
+                        TaskObservationText::new("task changed before append").unwrap(),
+                        attempt_id.clone(),
+                    )
+                    .unwrap();
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(WorkflowVerifiedAdvanceError::TaskConflictRetriesExhausted {
+                attempts: VERIFIED_ADVANCE_MAX_ATTEMPTS,
+            })
+        ));
+        assert_eq!(conflicts, VERIFIED_ADVANCE_MAX_ATTEMPTS);
+        assert_eq!(runs.load(&run_id).unwrap().unwrap().revision(), 1);
+        assert_eq!(
+            tasks.load(&task_id).unwrap().unwrap().status(),
+            TaskStatus::Active
+        );
+    }
+
+    #[test]
     fn workflow_revision_race_remains_authoritative_during_verified_advance() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("events.sqlite3");
@@ -2606,6 +2677,56 @@ mod tests {
             tasks.load(&task_id).unwrap().unwrap().status(),
             TaskStatus::Active
         );
+    }
+
+    #[test]
+    fn continuous_task_conflicts_bound_terminal_synchronization() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let task_id = TaskId::new("bounded-terminal-sync-task-race").unwrap();
+        let attempt_id = TaskObservationId::new("attempt").unwrap();
+        let run_id = WorkflowRunId::new("bounded-terminal-sync-task-race").unwrap();
+        let workflow = verified_workflow();
+        let mut tasks = TaskStore::open(&path).unwrap();
+        seed_passed_verification(&mut tasks, &task_id, &attempt_id);
+        let mut runs = WorkflowRunStore::open(&path).unwrap();
+        let started = runs
+            .start_for_task(run_id.clone(), &task_id, &workflow)
+            .unwrap();
+        let mut racing_tasks = TaskStore::open(&path).unwrap();
+        let mut conflicts = 0;
+
+        let result = runs.advance_and_complete_task_if_verification_passes_before_append(
+            &run_id,
+            started.revision(),
+            0,
+            &attempt_id,
+            TaskOutput::new("must not complete").unwrap(),
+            &mut || {
+                conflicts += 1;
+                racing_tasks
+                    .append_observation_for_attempt(
+                        &task_id,
+                        TaskObservationId::new(format!("terminal-conflict-{conflicts}")).unwrap(),
+                        TaskObservationKind::Diagnostic,
+                        TaskObservationText::new("task changed before terminal append").unwrap(),
+                        attempt_id.clone(),
+                    )
+                    .unwrap();
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(WorkflowVerifiedAdvanceError::TaskConflictRetriesExhausted {
+                attempts: VERIFIED_ADVANCE_MAX_ATTEMPTS,
+            })
+        ));
+        assert_eq!(conflicts, VERIFIED_ADVANCE_MAX_ATTEMPTS);
+        assert_eq!(runs.load(&run_id).unwrap().unwrap().revision(), 1);
+        let task = tasks.load(&task_id).unwrap().unwrap();
+        assert_eq!(task.status(), TaskStatus::Active);
+        assert!(task.output().is_none());
     }
 
     #[test]

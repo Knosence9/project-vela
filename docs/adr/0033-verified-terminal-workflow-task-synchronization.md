@@ -3,6 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-07-30
 - **Decision and execution issue:** [#781](https://github.com/Knosence9/project-vela/issues/781)
+- **Retry-bound follow-up:** [#785](https://github.com/Knosence9/project-vela/issues/785)
 
 ## Context
 
@@ -18,7 +19,7 @@ The run must be active, task-attributed, and positioned at a gated transition wh
 
 After a passing evaluation, the store appends the existing `workflow_run.advanced` event with the exact authored gate acknowledgement and the existing `task.completed` event with the caller's exact output in one SQLite transaction. Both appends are guarded by the workflow revision supplied by the caller and the task stream version used for evaluation. Success returns replay-equivalent workflow and task projections; no new event type or payload version is introduced.
 
-If the task stream changes first, the operation reloads the task and re-evaluates the same Attempt and gate. A newer failed Verification therefore blocks both lifecycle writes, and a winning task terminal event is authoritative. The caller's exact workflow revision is never updated or reinterpreted: if that stream changes, the operation returns the existing concurrent-modification error. The two requested events are never partially persisted.
+If the task stream changes first, the operation reloads the task and re-evaluates the same Attempt and gate for at most four append attempts. A newer failed Verification therefore blocks both lifecycle writes, and a winning task terminal event is authoritative. Continuous task conflicts through the fourth attempt return `WorkflowVerifiedAdvanceError::TaskConflictRetriesExhausted { attempts: 4 }` without either requested lifecycle event. The caller's exact workflow revision is never updated or reinterpreted: if that stream changes, the operation returns the existing concurrent-modification error before classifying retry exhaustion. The two requested events are never partially persisted.
 
 The existing raw `WorkflowRunStore::advance`, workflow-only `advance_if_task_verification_passes`, unconditional `TaskStore::complete`, and task-only `complete_if_verification_gates_pass` operations remain available and unchanged. This additive boundary executes no verifier, assistant provider, command, tool, or transition selection; grants no permission; and does not synchronize failure or cancellation.
 

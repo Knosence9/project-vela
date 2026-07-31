@@ -3,6 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-07-30
 - **Decision and execution issue:** [#779](https://github.com/Knosence9/project-vela/issues/779)
+- **Retry-bound follow-up:** [#785](https://github.com/Knosence9/project-vela/issues/785)
 
 ## Context
 
@@ -16,7 +17,7 @@ Task-attributed workflow runs need an additive evidence-backed advancement bound
 
 A passed report appends the existing workflow advancement event with the exact authored gate acknowledgement. Pending and failed reports return distinct `WorkflowVerifiedAdvanceError` variants carrying the complete report. Missing or non-Attempt identities preserve the typed gate-evaluation source. Unattributed runs and ungated transitions are deterministic domain rejections. Every rejection writes nothing.
 
-Evaluation observes the task at one exact stream version. The workflow event append is conditioned atomically on both the caller's exact workflow revision and that task stream version. If only the task changes, the operation reloads and re-evaluates; newer failed Verification therefore blocks advancement rather than permitting stale green evidence. If the workflow changes, the exact caller revision fails authoritatively and the selected transition is never reinterpreted against a newer phase.
+Evaluation observes the task at one exact stream version. The workflow event append is conditioned atomically on both the caller's exact workflow revision and that task stream version. If only the task changes, the operation reloads and re-evaluates; newer failed Verification therefore blocks advancement rather than permitting stale green evidence. This stale-task path makes at most four append attempts. If the task stream keeps changing through the fourth attempt while the workflow revision remains unchanged, the operation returns `WorkflowVerifiedAdvanceError::TaskConflictRetriesExhausted { attempts: 4 }` without appending the workflow event. If the workflow changes, the exact caller revision fails authoritatively before retry exhaustion is classified, and the selected transition is never reinterpreted against a newer phase.
 
 `WorkflowRunStore::advance` remains unchanged as the explicit low-level acknowledgement primitive. The new operation is an additive evidence-backed policy boundary, not a global permission change. It executes no verifier, provider, command, or tool and does not mutate the task lifecycle.
 
@@ -42,16 +43,17 @@ The transition index is phase-relative. Retrying it against a newer run could re
 
 - An authored workflow gate can be backed by independently persisted task evidence for one exact Attempt.
 - The successful event and replay format remain unchanged.
-- Task evidence changes are re-evaluated; workflow revision changes are never reinterpreted.
+- Task evidence changes are re-evaluated within a four-attempt bound; workflow revision changes are never reinterpreted.
+- Continuous task conflicts fail with explicit typed exhaustion rather than waiting indefinitely.
 - Existing raw acknowledgement authority and compatibility remain explicit.
 - One transition gate maps to one exact Verification check identity.
-- Persisted multi-check policy, automatic transition choice, verifier execution, task/workflow terminal synchronization, scheduling, retries beyond task re-evaluation, actors, timestamps, artifacts, credentials, and remote execution remain deferred.
+- Persisted multi-check policy, automatic transition choice, verifier execution, task/workflow terminal synchronization, scheduling, configurable retry or backoff policy, actors, timestamps, artifacts, credentials, and remote execution remain deferred.
 
 ADR-0033 subsequently adds a separate opt-in boundary that atomically combines this verified advancement contract with task completion only when the selected edge targets an authored terminal phase. This workflow-only operation and its non-synchronizing semantics remain unchanged.
 
 ## Verification
 
-RED→GREEN tests cover successful advancement and replayed exact gate acknowledgement, pending and failed reports without writes, Attempt scoping, unattributed and ungated runs, missing and non-Attempt identities, a newer failed Verification race, and an authoritative workflow revision race. The complete repository quality gate must remain green.
+RED→GREEN tests cover successful advancement and replayed exact gate acknowledgement, pending and failed reports without writes, Attempt scoping, unattributed and ungated runs, missing and non-Attempt identities, a newer failed Verification race, an authoritative workflow revision race, and typed exhaustion after four continuous task conflicts without workflow mutation. The complete repository quality gate must remain green.
 
 ## Revisit when
 
