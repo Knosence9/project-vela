@@ -377,11 +377,31 @@ impl ScheduleStore {
         &self,
         cutoff: ScheduleInstant,
     ) -> Result<Vec<ScheduledTask>, ScheduleStoreError> {
+        let mut due = self.discover()?;
+        due.retain(|scheduled| {
+            scheduled.status() == ScheduleStatus::Pending && scheduled.due_at <= cutoff
+        });
+        due.sort_by(|left, right| {
+            left.due_at
+                .cmp(&right.due_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(due)
+    }
+
+    /// Returns every durable schedule intent ordered by exact schedule ID.
+    pub fn list(&self) -> Result<Vec<ScheduledTask>, ScheduleStoreError> {
+        let mut schedules = self.discover()?;
+        schedules.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(schedules)
+    }
+
+    fn discover(&self) -> Result<Vec<ScheduledTask>, ScheduleStoreError> {
         let streams = self
             .event_log
             .replay_streams_with_event_type::<ScheduleEvent>(SCHEDULE_CREATED_EVENT_TYPE)
             .map_err(ScheduleStoreError::Replay)?;
-        let mut due = Vec::with_capacity(streams.len());
+        let mut schedules = Vec::with_capacity(streams.len());
 
         for (stream_id, events) in streams {
             let Some(external_id) = stream_id.strip_prefix(SCHEDULE_STREAM_PREFIX) else {
@@ -394,17 +414,10 @@ impl ScheduleStore {
             let Some(scheduled) = Self::project(id, events)? else {
                 return Err(ScheduleStoreError::InvalidHistory { event_count: 0 });
             };
-            if scheduled.status() == ScheduleStatus::Pending && scheduled.due_at <= cutoff {
-                due.push(scheduled);
-            }
+            schedules.push(scheduled);
         }
 
-        due.sort_by(|left, right| {
-            left.due_at
-                .cmp(&right.due_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(due)
+        Ok(schedules)
     }
 
     fn project(
