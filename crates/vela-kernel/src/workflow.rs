@@ -943,6 +943,14 @@ impl From<TaskVerificationGateEvaluationError> for WorkflowVerifiedAdvanceError 
     }
 }
 
+struct PreparedVerifiedAdvance {
+    run: WorkflowRun,
+    task_id: TaskId,
+    target_phase_index: usize,
+    gate_id: String,
+    gate_set: TaskVerificationGateSet,
+}
+
 /// A synchronous durable workflow-run store backed by the typed event log.
 pub struct WorkflowRunStore {
     event_log: EventLog,
@@ -1152,70 +1160,27 @@ impl WorkflowRunStore {
         before_append: &mut impl FnMut(),
     ) -> Result<WorkflowRun, WorkflowVerifiedAdvanceError> {
         loop {
-            let Some(mut run) = self.load(id)? else {
-                return Err(WorkflowRunStoreError::NotFound { run_id: id.clone() }.into());
-            };
-            validate_revision(&run, expected_revision)?;
-            if run.is_cancelled() {
-                return Err(WorkflowRunStoreError::AlreadyCancelled { run_id: id.clone() }.into());
-            }
-            if run.is_failed() {
-                return Err(WorkflowRunStoreError::AlreadyFailed { run_id: id.clone() }.into());
-            }
-            if run.is_paused() {
-                return Err(WorkflowRunStoreError::Paused { run_id: id.clone() }.into());
-            }
-            let task_id = run.task_id().cloned().ok_or_else(|| {
-                WorkflowVerifiedAdvanceError::RunNotTaskAttributed { run_id: id.clone() }
-            })?;
-            let transition = run
-                .current_phase()
-                .transitions()
-                .get(transition_index)
-                .ok_or_else(|| WorkflowRunStoreError::InvalidTransition {
-                    source: resolve_transition(&run, transition_index, None).unwrap_err(),
-                })?;
-            let gate_id = transition.gate().ok_or_else(|| {
-                WorkflowVerifiedAdvanceError::TransitionUngated {
-                    phase_id: run.current_phase().id().to_owned(),
-                    transition_index,
-                }
-            })?;
-            let gate_check = TaskVerificationCheck::new(gate_id.to_owned())
-                .map_err(|source| WorkflowVerifiedAdvanceError::InvalidGate { source })?;
-            let gate_set = TaskVerificationGateSet::new(vec![gate_check])
-                .expect("one validated workflow gate is a non-empty unique gate set");
-            let target_phase_index = resolve_transition(&run, transition_index, Some(gate_id))
-                .map_err(|source| WorkflowRunStoreError::InvalidTransition { source })?;
-            let Some((task, task_version)) = self
-                .tasks
-                .load_with_version(&task_id)
-                .map_err(WorkflowRunStoreError::Task)?
-            else {
-                return Err(WorkflowRunStoreError::TaskNotFound { task_id }.into());
-            };
-            let report = task.evaluate_verification_gates(attempt_id, &gate_set)?;
-            match report.status() {
-                TaskVerificationGateStatus::Pending => {
-                    return Err(WorkflowVerifiedAdvanceError::GatesPending { report });
-                }
-                TaskVerificationGateStatus::Failed => {
-                    return Err(WorkflowVerifiedAdvanceError::GatesFailed { report });
-                }
-                TaskVerificationGateStatus::Passed => {}
-            }
+            let PreparedVerifiedAdvance {
+                mut run,
+                task_id,
+                target_phase_index,
+                gate_id,
+                gate_set,
+            } = self.prepare_verified_advance(id, expected_revision, transition_index)?;
+            let (task, task_version) = self.load_verified_advance_task(&task_id)?;
+            Self::require_passed_verification(&task, attempt_id, &gate_set)?;
 
             before_append();
             let event = WorkflowRunEvent::Advanced {
                 source_phase_index: run.current_phase_index,
                 transition_index,
                 target_phase_index,
-                gate_acknowledgement: Some(gate_id.to_owned()),
+                gate_acknowledgement: Some(gate_id),
             };
             match self.event_log.append_if_stream_unchanged(
                 &workflow_run_stream(id),
                 ExpectedVersion::Exact(expected_revision),
-                &task_stream(&task_id),
+                &task_stream(task.id()),
                 ExpectedVersion::Exact(task_version),
                 &event,
             ) {
@@ -1225,16 +1190,7 @@ impl WorkflowRunStore {
                     return Ok(run);
                 }
                 Err(EventLogError::WrongExpectedVersion { .. }) => {
-                    let current = self
-                        .load(id)?
-                        .ok_or_else(|| WorkflowRunStoreError::NotFound { run_id: id.clone() })?;
-                    if current.revision() != expected_revision {
-                        return Err(WorkflowRunStoreError::ConcurrentModification {
-                            expected_revision,
-                            current_revision: current.revision(),
-                        }
-                        .into());
-                    }
+                    self.reject_changed_workflow_revision(id, expected_revision)?;
                 }
                 Err(error) => return Err(WorkflowRunStoreError::EventLog(error).into()),
             }
@@ -1273,41 +1229,13 @@ impl WorkflowRunStore {
         before_append: &mut impl FnMut(),
     ) -> Result<(WorkflowRun, Task), WorkflowVerifiedAdvanceError> {
         loop {
-            let Some(mut run) = self.load(id)? else {
-                return Err(WorkflowRunStoreError::NotFound { run_id: id.clone() }.into());
-            };
-            validate_revision(&run, expected_revision)?;
-            if run.is_cancelled() {
-                return Err(WorkflowRunStoreError::AlreadyCancelled { run_id: id.clone() }.into());
-            }
-            if run.is_failed() {
-                return Err(WorkflowRunStoreError::AlreadyFailed { run_id: id.clone() }.into());
-            }
-            if run.is_paused() {
-                return Err(WorkflowRunStoreError::Paused { run_id: id.clone() }.into());
-            }
-            let task_id = run.task_id().cloned().ok_or_else(|| {
-                WorkflowVerifiedAdvanceError::RunNotTaskAttributed { run_id: id.clone() }
-            })?;
-            let transition = run
-                .current_phase()
-                .transitions()
-                .get(transition_index)
-                .ok_or_else(|| WorkflowRunStoreError::InvalidTransition {
-                    source: resolve_transition(&run, transition_index, None).unwrap_err(),
-                })?;
-            let gate_id = transition.gate().ok_or_else(|| {
-                WorkflowVerifiedAdvanceError::TransitionUngated {
-                    phase_id: run.current_phase().id().to_owned(),
-                    transition_index,
-                }
-            })?;
-            let gate_check = TaskVerificationCheck::new(gate_id.to_owned())
-                .map_err(|source| WorkflowVerifiedAdvanceError::InvalidGate { source })?;
-            let gate_set = TaskVerificationGateSet::new(vec![gate_check])
-                .expect("one validated workflow gate is a non-empty unique gate set");
-            let target_phase_index = resolve_transition(&run, transition_index, Some(gate_id))
-                .map_err(|source| WorkflowRunStoreError::InvalidTransition { source })?;
+            let PreparedVerifiedAdvance {
+                mut run,
+                task_id,
+                target_phase_index,
+                gate_id,
+                gate_set,
+            } = self.prepare_verified_advance(id, expected_revision, transition_index)?;
             let target_phase = &run.workflow().phases()[target_phase_index];
             if !target_phase.is_terminal() {
                 return Err(WorkflowVerifiedAdvanceError::TransitionTargetNotTerminal {
@@ -1316,31 +1244,15 @@ impl WorkflowRunStore {
                     target_phase_id: target_phase.id().to_owned(),
                 });
             }
-            let gate_id = gate_id.to_owned();
-            let Some((task, task_version)) = self
-                .tasks
-                .load_with_version(&task_id)
-                .map_err(WorkflowRunStoreError::Task)?
-            else {
-                return Err(WorkflowRunStoreError::TaskNotFound { task_id }.into());
-            };
+            let (task, task_version) = self.load_verified_advance_task(&task_id)?;
             if task.status() != TaskStatus::Active {
                 return Err(WorkflowRunStoreError::TaskNotActive {
-                    task_id,
+                    task_id: task.id().clone(),
                     status: task.status(),
                 }
                 .into());
             }
-            let report = task.evaluate_verification_gates(attempt_id, &gate_set)?;
-            match report.status() {
-                TaskVerificationGateStatus::Pending => {
-                    return Err(WorkflowVerifiedAdvanceError::GatesPending { report });
-                }
-                TaskVerificationGateStatus::Failed => {
-                    return Err(WorkflowVerifiedAdvanceError::GatesFailed { report });
-                }
-                TaskVerificationGateStatus::Passed => {}
-            }
+            Self::require_passed_verification(&task, attempt_id, &gate_set)?;
 
             before_append();
             let workflow_event = WorkflowRunEvent::Advanced {
@@ -1356,7 +1268,7 @@ impl WorkflowRunStore {
                 &workflow_run_stream(id),
                 ExpectedVersion::Exact(expected_revision),
                 &workflow_event,
-                &task_stream(&task_id),
+                &task_stream(task.id()),
                 ExpectedVersion::Exact(task_version),
                 &task_event,
             ) {
@@ -1366,20 +1278,113 @@ impl WorkflowRunStore {
                     return Ok((run, task.into_completed(output)));
                 }
                 Err(EventLogError::WrongExpectedVersion { .. }) => {
-                    let current = self
-                        .load(id)?
-                        .ok_or_else(|| WorkflowRunStoreError::NotFound { run_id: id.clone() })?;
-                    if current.revision() != expected_revision {
-                        return Err(WorkflowRunStoreError::ConcurrentModification {
-                            expected_revision,
-                            current_revision: current.revision(),
-                        }
-                        .into());
-                    }
+                    self.reject_changed_workflow_revision(id, expected_revision)?;
                 }
                 Err(error) => return Err(WorkflowRunStoreError::EventLog(error).into()),
             }
         }
+    }
+
+    fn prepare_verified_advance(
+        &mut self,
+        id: &WorkflowRunId,
+        expected_revision: u64,
+        transition_index: usize,
+    ) -> Result<PreparedVerifiedAdvance, WorkflowVerifiedAdvanceError> {
+        let Some(run) = self.load(id)? else {
+            return Err(WorkflowRunStoreError::NotFound { run_id: id.clone() }.into());
+        };
+        validate_revision(&run, expected_revision)?;
+        if run.is_cancelled() {
+            return Err(WorkflowRunStoreError::AlreadyCancelled { run_id: id.clone() }.into());
+        }
+        if run.is_failed() {
+            return Err(WorkflowRunStoreError::AlreadyFailed { run_id: id.clone() }.into());
+        }
+        if run.is_paused() {
+            return Err(WorkflowRunStoreError::Paused { run_id: id.clone() }.into());
+        }
+        let task_id = run.task_id().cloned().ok_or_else(|| {
+            WorkflowVerifiedAdvanceError::RunNotTaskAttributed { run_id: id.clone() }
+        })?;
+        let transition = run
+            .current_phase()
+            .transitions()
+            .get(transition_index)
+            .ok_or_else(|| WorkflowRunStoreError::InvalidTransition {
+                source: resolve_transition(&run, transition_index, None).unwrap_err(),
+            })?;
+        let gate_id = transition
+            .gate()
+            .ok_or_else(|| WorkflowVerifiedAdvanceError::TransitionUngated {
+                phase_id: run.current_phase().id().to_owned(),
+                transition_index,
+            })?
+            .to_owned();
+        let gate_check = TaskVerificationCheck::new(gate_id.clone())
+            .map_err(|source| WorkflowVerifiedAdvanceError::InvalidGate { source })?;
+        let gate_set = TaskVerificationGateSet::new(vec![gate_check])
+            .expect("one validated workflow gate is a non-empty unique gate set");
+        let target_phase_index = resolve_transition(&run, transition_index, Some(&gate_id))
+            .map_err(|source| WorkflowRunStoreError::InvalidTransition { source })?;
+        Ok(PreparedVerifiedAdvance {
+            run,
+            task_id,
+            target_phase_index,
+            gate_id,
+            gate_set,
+        })
+    }
+
+    fn load_verified_advance_task(
+        &mut self,
+        task_id: &TaskId,
+    ) -> Result<(Task, u64), WorkflowVerifiedAdvanceError> {
+        self.tasks
+            .load_with_version(task_id)
+            .map_err(WorkflowRunStoreError::Task)?
+            .ok_or_else(|| {
+                WorkflowRunStoreError::TaskNotFound {
+                    task_id: task_id.clone(),
+                }
+                .into()
+            })
+    }
+
+    fn require_passed_verification(
+        task: &Task,
+        attempt_id: &TaskObservationId,
+        gate_set: &TaskVerificationGateSet,
+    ) -> Result<(), WorkflowVerifiedAdvanceError> {
+        let report = task.evaluate_verification_gates(attempt_id, gate_set)?;
+        match report.status() {
+            TaskVerificationGateStatus::Pending => {
+                return Err(WorkflowVerifiedAdvanceError::GatesPending { report });
+            }
+            TaskVerificationGateStatus::Failed => {
+                return Err(WorkflowVerifiedAdvanceError::GatesFailed { report });
+            }
+            TaskVerificationGateStatus::Passed => {}
+        }
+        Ok(())
+    }
+
+    fn reject_changed_workflow_revision(
+        &mut self,
+        id: &WorkflowRunId,
+        expected_revision: u64,
+    ) -> Result<(), WorkflowVerifiedAdvanceError> {
+        let current = self
+            .load(id)?
+            .ok_or_else(|| WorkflowRunStoreError::NotFound { run_id: id.clone() })?;
+        if current.revision() != expected_revision {
+            return Err(WorkflowRunStoreError::ConcurrentModification {
+                expected_revision,
+                current_revision: current.revision(),
+            }
+            .into());
+        }
+        Ok(())
     }
 
     /// Pauses one exact projected revision without changing its phase or topology.
