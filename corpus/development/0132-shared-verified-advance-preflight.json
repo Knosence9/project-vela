@@ -45,6 +45,7 @@
     "For refactors, characterize externally visible behavior before extraction instead of manufacturing a failing behavior test.",
     "Share phase-relative preparation while leaving materially different append and lifecycle policy visible at each call site.",
     "Centralizing conflict classification makes cross-path concurrency fixes less likely to drift.",
+    "Substantive review exposed retry liveness under continuous task stream writes and preserved issue 785 as the bounded follow-up for a typed retry limit.",
     "A valid review finding outside a behavior-preserving refactor should become a concrete bounded issue, not be ignored or silently broaden scope."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/784"},

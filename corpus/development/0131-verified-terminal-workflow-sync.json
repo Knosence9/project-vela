@@ -43,6 +43,7 @@
     "Two lifecycle writes that represent one opt-in terminal decision need one atomic transaction rather than compensating sequential calls.",
     "Reuse authoritative aggregate events instead of introducing a duplicate combined aggregate solely for coordination.",
     "Exact replay assertions should cover terminal detail, not only status and revision.",
+    "Substantive review exposed duplicated verified-advance preflight as issue 783 and an undocumented crate-private completion precondition; document the precondition immediately and keep structural cleanup bounded separately.",
     "Keep behavior-preserving duplication cleanup in a separate bounded issue when the feature patch is already correct and fully guarded."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/workflow.rs", "url": "https://github.com/Knosence9/project-vela/pull/782"},
