@@ -250,6 +250,7 @@ The first milestone is the **evidence loop**:
 91. Advance a task-attributed workflow through exact authored gate Verification without stale green authorization. ✅
 92. Atomically complete an active task while its attributed workflow advances through verified authored gate evidence into terminal. ✅
 93. Persist inert one-shot task schedule intent and query due work against a caller-owned cutoff deterministically. ✅
+94. Durably cancel pending one-shot schedule intent before it can be selected as due work. ✅
 
 ## Project documents
 
