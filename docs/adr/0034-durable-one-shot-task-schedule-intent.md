@@ -24,7 +24,7 @@ The typed SQLite event log already provides exact stream identity, immutable app
 
 `ScheduleStore::materialize(id, task_id)` atomically appends one `schedule.materialized` event and one existing `task.started` event only while the schedule is claimed and the caller-owned task ID has no stream. The task receives the schedule's exact immutable goal; the terminal materialized schedule preserves the exact task ID across load and inventory discovery. A task-ID collision leaves the schedule claimed, and a stale schedule revision leaves no task orphan. Replay permits materialization only after a claim, including after any number of explicit claim-release recovery cycles.
 
-The store never reads wall-clock time. Materialization creates inert active task state but does not infer worker failure or lease expiry, start or advance a workflow, invoke a provider or tool, grant permission, sleep, execute or dispatch task work, retry execution, or interpret recurrence, cron syntax, or time zones. A caller decides when to query, claim, release, or materialize and retains every execution decision.
+The store never reads wall-clock time. Materialization creates inert active task state but does not infer worker failure or lease expiry, create a session, start or advance a workflow, invoke a provider or tool, grant permission, sleep, execute or dispatch task work, retry execution, or interpret recurrence, cron syntax, or time zones. A caller decides when to query, claim, release, or materialize and retains every execution decision.
 
 ## Alternatives considered
 
