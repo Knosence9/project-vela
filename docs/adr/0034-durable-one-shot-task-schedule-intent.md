@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-07-31
-- **Decision and execution issue:** [#789](https://github.com/Knosence9/project-vela/issues/789)
+- **Decision and execution issues:** [#789](https://github.com/Knosence9/project-vela/issues/789), [#791](https://github.com/Knosence9/project-vela/issues/791)
 
 ## Context
 
@@ -14,9 +14,9 @@ The typed SQLite event log already provides exact stream identity, immutable app
 
 `ScheduleStore` persists one immutable `schedule.created` event at payload version `1` for each exact `ScheduleId`. The event contains a validated `TaskGoal` and a `ScheduleInstant`, represented as an exact non-negative count of Unix milliseconds. Schedule IDs must contain at least one non-whitespace character; otherwise their exact UTF-8 is preserved and compared without normalization.
 
-`ScheduleStore::schedule` uses `ExpectedVersion::NoStream`, so an exact ID can be created once and a duplicate cannot replace its original goal or due instant. `load` replays one exact stream. Histories other than exactly one valid creation event fail closed.
+`ScheduleStore::schedule` uses `ExpectedVersion::NoStream`, so an exact ID can be created once and a duplicate cannot replace its original goal or due instant. `ScheduleStore::cancel` appends one version-one `schedule.cancelled` event with an exact non-blank caller reason only while the schedule is pending. Missing and already-cancelled schedules return typed errors without rewriting history. `load` replays one exact stream and projects explicit `Pending` or `Cancelled` status while preserving the cancellation reason. Histories other than exactly `created` or `created -> cancelled` fail closed.
 
-`ScheduleStore::list_due(cutoff)` discovers streams from their authoritative creation events in one SQLite read snapshot. It returns every intent whose due instant is less than or equal to the caller-owned cutoff, ordered by due instant and then exact schedule ID. Non-schedule streams are excluded. Invalid owning stream IDs, malformed payloads, unsupported events, and invalid histories are errors rather than skipped records.
+`ScheduleStore::list_due(cutoff)` discovers streams from their authoritative creation events in one SQLite read snapshot. It returns every pending intent whose due instant is less than or equal to the caller-owned cutoff, ordered by due instant and then exact schedule ID. Cancelled and non-schedule streams are excluded. Invalid owning stream IDs, malformed payloads, unsupported events, and invalid histories are errors rather than skipped records.
 
 The store never reads wall-clock time. It does not create a task, start or advance a workflow, invoke a provider or tool, grant permission, sleep, claim work, retry execution, or interpret recurrence, cron syntax, or time zones. A caller decides when to query and what to do with the returned inert intent.
 
@@ -43,5 +43,5 @@ Rejected because schedules require the same immutable identity and fail-closed r
 - Vela can durably record exact one-shot task intent and query due work deterministically.
 - Callers retain all clock and execution authority.
 - Due results are stable across insertion order and database reopen.
-- Pending is currently implicit because creation is the only valid lifecycle event.
-- Cancellation, claiming, dispatch, recurrence, and terminal schedule outcomes require later explicit decisions.
+- A pending schedule can be withdrawn exactly once with durable caller-owned reason evidence; cancelled schedules remain inspectable but are excluded from due work.
+- Claiming, dispatch, recurrence, and execution outcomes require later explicit decisions.
