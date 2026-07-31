@@ -482,28 +482,7 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
-        match scheduled.status() {
-            ScheduleStatus::Claimed => {}
-            ScheduleStatus::Cancelled => {
-                return Err(ScheduleStoreError::AlreadyCancelled {
-                    schedule_id: id.clone(),
-                });
-            }
-            ScheduleStatus::Pending => {
-                return Err(ScheduleStoreError::NotClaimed {
-                    schedule_id: id.clone(),
-                });
-            }
-            ScheduleStatus::Materialized => {
-                return Err(ScheduleStoreError::AlreadyMaterialized {
-                    schedule_id: id.clone(),
-                    task_id: scheduled
-                        .task_id
-                        .clone()
-                        .expect("materialized status always carries a task ID"),
-                });
-            }
-        }
+        require_claimed(id, &scheduled)?;
 
         let event = ScheduleEvent::Released {
             reason: release.clone(),
@@ -544,27 +523,7 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
-        match scheduled.status() {
-            ScheduleStatus::Claimed => {}
-            ScheduleStatus::Pending => {
-                return Err(ScheduleStoreError::NotClaimed {
-                    schedule_id: id.clone(),
-                });
-            }
-            ScheduleStatus::Cancelled => {
-                return Err(ScheduleStoreError::AlreadyCancelled {
-                    schedule_id: id.clone(),
-                });
-            }
-            ScheduleStatus::Materialized => {
-                return Err(ScheduleStoreError::AlreadyMaterialized {
-                    schedule_id: id.clone(),
-                    task_id: scheduled
-                        .task_id
-                        .expect("materialized status always carries a task ID"),
-                });
-            }
-        }
+        require_claimed(id, &scheduled)?;
 
         let expected_revision = scheduled.revision;
         let schedule_event = ScheduleEvent::Materialized {
@@ -716,6 +675,25 @@ fn terminal_schedule_error(
             schedule_id: id.clone(),
         }),
         ScheduleStatus::Materialized => Some(ScheduleStoreError::AlreadyMaterialized {
+            schedule_id: id.clone(),
+            task_id: scheduled
+                .task_id
+                .clone()
+                .expect("materialized status always carries a task ID"),
+        }),
+    }
+}
+
+fn require_claimed(id: &ScheduleId, scheduled: &ScheduledTask) -> Result<(), ScheduleStoreError> {
+    match scheduled.status() {
+        ScheduleStatus::Claimed => Ok(()),
+        ScheduleStatus::Pending => Err(ScheduleStoreError::NotClaimed {
+            schedule_id: id.clone(),
+        }),
+        ScheduleStatus::Cancelled => Err(ScheduleStoreError::AlreadyCancelled {
+            schedule_id: id.clone(),
+        }),
+        ScheduleStatus::Materialized => Err(ScheduleStoreError::AlreadyMaterialized {
             schedule_id: id.clone(),
             task_id: scheduled
                 .task_id
