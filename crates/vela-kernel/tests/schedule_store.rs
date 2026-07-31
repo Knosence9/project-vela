@@ -340,7 +340,9 @@ fn racing_claim_and_cancellation_commit_one_terminal_transition() {
                 .iter()
                 .any(|result| matches!(result, Err(ScheduleStoreError::AlreadyCancelled { .. })))
         ),
-        ScheduleStatus::Pending => panic!("the schedule must be terminal"),
+        ScheduleStatus::Pending | ScheduleStatus::Materialized => {
+            panic!("the schedule must be claimed or cancelled")
+        }
     }
 }
 
@@ -920,6 +922,248 @@ fn replay_rejects_malformed_release_evidence() {
             .unwrap_err(),
         ScheduleStoreError::Replay(ReplayError::MalformedPayload {
             stream_version: 3,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn materializes_claimed_schedule_and_task_atomically_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let schedule_id = ScheduleId::new("materialize-me").unwrap();
+    let task_id = TaskId::new("scheduled-task").unwrap();
+    let goal = TaskGoal::new("Perform the scheduled work").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(schedule_id.clone(), goal.clone(), instant(10))
+        .unwrap();
+    store.claim(&schedule_id, instant(10)).unwrap();
+    store
+        .release(
+            &schedule_id,
+            ScheduleRelease::new("recover before materialization").unwrap(),
+        )
+        .unwrap();
+    store.claim(&schedule_id, instant(10)).unwrap();
+
+    let materialized = store.materialize(&schedule_id, task_id.clone()).unwrap();
+
+    assert_eq!(materialized.status(), ScheduleStatus::Materialized);
+    assert_eq!(materialized.task_id(), Some(&task_id));
+    assert_eq!(
+        materialized.latest_release().unwrap().as_str(),
+        "recover before materialization"
+    );
+    assert_eq!(materialized.goal(), &goal);
+    assert_eq!(
+        ScheduleStore::open(&path)
+            .unwrap()
+            .load(&schedule_id)
+            .unwrap(),
+        Some(materialized.clone())
+    );
+    assert_eq!(
+        ScheduleStore::open(&path).unwrap().list().unwrap(),
+        vec![materialized.clone()]
+    );
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.id(), &task_id);
+    assert_eq!(task.goal(), &goal);
+    assert!(
+        ScheduleStore::open(&path)
+            .unwrap()
+            .list_due(instant(u64::MAX))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn materialization_rejects_invalid_states_and_task_collisions_without_writes() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let pending_id = ScheduleId::new("pending-materialization").unwrap();
+    let cancelled_id = ScheduleId::new("cancelled-materialization").unwrap();
+    let claimed_id = ScheduleId::new("claimed-materialization").unwrap();
+    let missing_id = ScheduleId::new("missing-materialization").unwrap();
+    let existing_task_id = TaskId::new("existing-task").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    for id in [&pending_id, &cancelled_id, &claimed_id] {
+        store
+            .schedule(
+                id.clone(),
+                TaskGoal::new(format!("goal-{id}")).unwrap(),
+                instant(1),
+            )
+            .unwrap();
+    }
+    store
+        .cancel(
+            &cancelled_id,
+            ScheduleCancellation::new("withdrawn").unwrap(),
+        )
+        .unwrap();
+    let claimed = store.claim(&claimed_id, instant(1)).unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            existing_task_id.clone(),
+            TaskGoal::new("Existing goal").unwrap(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store
+            .materialize(&missing_id, TaskId::new("missing-task").unwrap())
+            .unwrap_err(),
+        ScheduleStoreError::NotFound { schedule_id } if schedule_id == missing_id
+    ));
+    assert!(matches!(
+        store
+            .materialize(&pending_id, TaskId::new("pending-task").unwrap())
+            .unwrap_err(),
+        ScheduleStoreError::NotClaimed { schedule_id } if schedule_id == pending_id
+    ));
+    assert!(matches!(
+        store
+            .materialize(&cancelled_id, TaskId::new("cancelled-task").unwrap())
+            .unwrap_err(),
+        ScheduleStoreError::AlreadyCancelled { schedule_id } if schedule_id == cancelled_id
+    ));
+    assert!(matches!(
+        store
+            .materialize(&claimed_id, existing_task_id.clone())
+            .unwrap_err(),
+        ScheduleStoreError::TaskAlreadyExists { task_id } if task_id == existing_task_id
+    ));
+    assert_eq!(store.load(&claimed_id).unwrap(), Some(claimed));
+
+    let new_task_id = TaskId::new("new-task").unwrap();
+    let materialized = store.materialize(&claimed_id, new_task_id.clone()).unwrap();
+    assert!(matches!(
+        store
+            .materialize(&claimed_id, TaskId::new("replacement-task").unwrap())
+            .unwrap_err(),
+        ScheduleStoreError::AlreadyMaterialized {
+            schedule_id,
+            task_id,
+        } if schedule_id == claimed_id && task_id == new_task_id
+    ));
+    assert_eq!(store.load(&claimed_id).unwrap(), Some(materialized));
+}
+
+#[test]
+fn racing_materializations_commit_exactly_one_schedule_task_pair() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let schedule_id = ScheduleId::new("materialization-race").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            schedule_id.clone(),
+            TaskGoal::new("Create one task").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    store.claim(&schedule_id, instant(1)).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = ["first-task", "second-task"].map(|task_id| {
+        let path = path.clone();
+        let schedule_id = schedule_id.clone();
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let mut store = ScheduleStore::open(path).unwrap();
+            barrier.wait();
+            store.materialize(&schedule_id, TaskId::new(task_id).unwrap())
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(ScheduleStoreError::ConcurrentModification {
+                    expected_revision: 2,
+                    current_revision: 3,
+                    ..
+                })
+            ))
+            .count(),
+        1
+    );
+    let loaded = ScheduleStore::open(&path)
+        .unwrap()
+        .load(&schedule_id)
+        .unwrap()
+        .unwrap();
+    let winner = loaded.task_id().unwrap();
+    assert!(matches!(winner.as_str(), "first-task" | "second-task"));
+    assert!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(winner)
+            .unwrap()
+            .is_some()
+    );
+    let loser = if winner.as_str() == "first-task" {
+        TaskId::new("second-task").unwrap()
+    } else {
+        TaskId::new("first-task").unwrap()
+    };
+    assert!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&loser)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn replay_rejects_malformed_and_impossible_materialization_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("bad-materialization").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Reject invalid materialization").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:bad-materialization', 2, 'schedule.materialized', 1, ?1)",
+            [br#"{"task_id":"task-before-claim"}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.load(&id).unwrap_err(),
+        ScheduleStoreError::InvalidHistory { event_count: 2 }
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE stream_id = 'schedule:bad-materialization' AND stream_version = 2",
+            [br#"{"task_id":""}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.load(&id).unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
             ..
         })
     ));

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-07-31
-- **Decision and execution issues:** [#789](https://github.com/Knosence9/project-vela/issues/789), [#791](https://github.com/Knosence9/project-vela/issues/791), [#793](https://github.com/Knosence9/project-vela/issues/793), [#795](https://github.com/Knosence9/project-vela/issues/795), [#797](https://github.com/Knosence9/project-vela/issues/797)
+- **Decision and execution issues:** [#789](https://github.com/Knosence9/project-vela/issues/789), [#791](https://github.com/Knosence9/project-vela/issues/791), [#793](https://github.com/Knosence9/project-vela/issues/793), [#795](https://github.com/Knosence9/project-vela/issues/795), [#797](https://github.com/Knosence9/project-vela/issues/797), [#799](https://github.com/Knosence9/project-vela/issues/799)
 
 ## Context
 
@@ -22,7 +22,9 @@ The typed SQLite event log already provides exact stream identity, immutable app
 
 `ScheduleStore::release(id, reason)` appends exact non-blank caller-owned recovery evidence only while a schedule is claimed and returns that immutable intent to pending eligibility. Released schedules survive reopen, preserve their latest exact release reason in load and inventory projections, reappear in due discovery against a sufficient caller-owned cutoff, and may be claimed again. Missing, pending, and cancelled schedules return typed errors without an append; racing releases commit exactly one event and the loser receives typed `ConcurrentModification` evidence identifying the expected and persisted revisions. A stale claim, cancellation, or release that encounters a complete intervening lifecycle cycle reports the same typed conflict rather than a raw event-log error. Replay accepts `created -> (claimed -> released)*` followed by an optional final claim or cancellation and rejects every other ordering fail-closed.
 
-The store never reads wall-clock time. It does not infer worker failure or lease expiry, create a task, start or advance a workflow, invoke a provider or tool, grant permission, sleep, dispatch claimed work, retry execution, or interpret recurrence, cron syntax, or time zones. A caller decides when to query, claim, or release and what to do with the returned inert intent.
+`ScheduleStore::materialize(id, task_id)` atomically appends one `schedule.materialized` event and one existing `task.started` event only while the schedule is claimed and the caller-owned task ID has no stream. The task receives the schedule's exact immutable goal; the terminal materialized schedule preserves the exact task ID across load and inventory discovery. A task-ID collision leaves the schedule claimed, and a stale schedule revision leaves no task orphan. Replay permits materialization only after a claim, including after any number of explicit claim-release recovery cycles.
+
+The store never reads wall-clock time. Materialization creates inert active task state but does not infer worker failure or lease expiry, start or advance a workflow, invoke a provider or tool, grant permission, sleep, execute or dispatch task work, retry execution, or interpret recurrence, cron syntax, or time zones. A caller decides when to query, claim, release, or materialize and retains every execution decision.
 
 ## Alternatives considered
 
@@ -32,7 +34,7 @@ Rejected because ambient time makes selection less deterministic, hides clock au
 
 ### Create tasks automatically when schedules become due
 
-Rejected because exactly-once identity, claiming, crash recovery, retry, cancellation, and task-creation atomicity are separate contracts. Persisting intent first avoids implying execution guarantees that the kernel does not yet provide.
+Rejected because due discovery does not grant execution authority and an automatic task ID or clock would hide caller policy. The later explicit materialization boundary instead requires a durable claim and caller-owned task ID, then atomically binds the inert task without executing it.
 
 ### Start with cron expressions and time zones
 
@@ -50,4 +52,5 @@ Rejected because schedules require the same immutable identity and fail-closed r
 - Full schedule inventory is stable across insertion order and database reopen without requiring callers to know exact IDs.
 - A pending schedule can be withdrawn exactly once with durable caller-owned reason evidence; cancelled schedules remain inspectable but are excluded from due work.
 - A durable claim prevents duplicate selection; explicit caller-owned release provides inspectable recovery without implying a lease, worker-health detector, or automatic expiry.
-- Dispatch, task creation, worker identity, recurrence, automatic recovery, retries, and execution outcomes require later explicit decisions.
+- Explicit materialization binds one claimed schedule to one caller-identified active task atomically, without granting execution authority or risking a one-sided persistence result.
+- Dispatch, worker identity, recurrence, automatic recovery, retries, and execution outcomes require later explicit decisions.
