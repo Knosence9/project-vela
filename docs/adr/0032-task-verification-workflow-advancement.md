@@ -47,6 +47,8 @@ The transition index is phase-relative. Retrying it against a newer run could re
 - One transition gate maps to one exact Verification check identity.
 - Persisted multi-check policy, automatic transition choice, verifier execution, task/workflow terminal synchronization, scheduling, retries beyond task re-evaluation, actors, timestamps, artifacts, credentials, and remote execution remain deferred.
 
+ADR-0033 subsequently adds a separate opt-in boundary that atomically combines this verified advancement contract with task completion only when the selected edge targets an authored terminal phase. This workflow-only operation and its non-synchronizing semantics remain unchanged.
+
 ## Verification
 
 RED→GREEN tests cover successful advancement and replayed exact gate acknowledgement, pending and failed reports without writes, Attempt scoping, unattributed and ungated runs, missing and non-Attempt identities, a newer failed Verification race, and an authoritative workflow revision race. The complete repository quality gate must remain green.

@@ -248,6 +248,7 @@ The first milestone is the **evidence loop**:
 89. Evaluate a caller-owned required Verification gate set deterministically for one exact task Attempt. ✅
 90. Complete a task through an explicit caller-selected gate boundary without stale green authorization. ✅
 91. Advance a task-attributed workflow through exact authored gate Verification without stale green authorization. ✅
+92. Atomically complete an active task while its attributed workflow advances through verified authored gate evidence into terminal. ✅
 
 ## Project documents
 

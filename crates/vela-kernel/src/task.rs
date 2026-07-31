@@ -534,6 +534,12 @@ pub struct Task {
 }
 
 impl Task {
+    pub(crate) fn into_completed(mut self, output: TaskOutput) -> Self {
+        self.status = TaskStatus::Completed;
+        self.output = Some(output);
+        self
+    }
+
     pub fn id(&self) -> &TaskId {
         &self.id
     }
@@ -1622,7 +1628,7 @@ pub(crate) fn task_stream(id: &TaskId) -> StreamId {
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
-enum TaskEvent {
+pub(crate) enum TaskEvent {
     Started {
         goal: TaskGoal,
     },
