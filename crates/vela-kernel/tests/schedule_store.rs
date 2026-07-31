@@ -546,6 +546,84 @@ fn lists_every_schedule_in_exact_id_order_after_reopening() {
 }
 
 #[test]
+fn filters_schedules_by_exact_status_in_id_order_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&path).unwrap();
+    for id in [
+        "pending-z",
+        "cancelled",
+        "claimed",
+        "pending-a",
+        "materialized",
+    ] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(format!("goal-{id}")).unwrap(),
+                instant(10),
+            )
+            .unwrap();
+    }
+    store
+        .cancel(
+            &ScheduleId::new("cancelled").unwrap(),
+            ScheduleCancellation::new("withdrawn").unwrap(),
+        )
+        .unwrap();
+    store
+        .claim(&ScheduleId::new("claimed").unwrap(), instant(10))
+        .unwrap();
+    store
+        .claim(&ScheduleId::new("materialized").unwrap(), instant(10))
+        .unwrap();
+    store
+        .materialize(
+            &ScheduleId::new("materialized").unwrap(),
+            TaskId::new("scheduled-task").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let store = ScheduleStore::open(&path).unwrap();
+    let ids_for = |status| {
+        store
+            .list_by_status(status)
+            .unwrap()
+            .iter()
+            .map(|schedule| schedule.id().as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(ids_for(ScheduleStatus::Pending), ["pending-a", "pending-z"]);
+    assert_eq!(ids_for(ScheduleStatus::Claimed), ["claimed"]);
+    assert_eq!(ids_for(ScheduleStatus::Cancelled), ["cancelled"]);
+    assert_eq!(ids_for(ScheduleStatus::Materialized), ["materialized"]);
+}
+
+#[test]
+fn status_filter_returns_empty_when_no_schedules_match() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    ScheduleStore::open(&path)
+        .unwrap()
+        .schedule(
+            ScheduleId::new("pending").unwrap(),
+            TaskGoal::new("still pending").unwrap(),
+            instant(10),
+        )
+        .unwrap();
+
+    assert!(
+        ScheduleStore::open(&path)
+            .unwrap()
+            .list_by_status(ScheduleStatus::Cancelled)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn empty_store_has_no_schedules() {
     let directory = tempdir().unwrap();
     let store = ScheduleStore::open(directory.path().join("events.sqlite3")).unwrap();
@@ -582,6 +660,16 @@ fn schedule_discovery_rejects_malformed_creation_payload_and_owning_stream_id() 
     assert!(matches!(
         ScheduleStore::open(&path)
             .unwrap()
+            .list_by_status(ScheduleStatus::Cancelled)
+            .unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            ..
+        })
+    ));
+    assert!(matches!(
+        ScheduleStore::open(&path)
+            .unwrap()
             .list_due(instant(7))
             .unwrap_err(),
         ScheduleStoreError::Replay(ReplayError::MalformedPayload {
@@ -598,6 +686,13 @@ fn schedule_discovery_rejects_malformed_creation_payload_and_owning_stream_id() 
         .unwrap();
     assert!(matches!(
         ScheduleStore::open(&path).unwrap().list().unwrap_err(),
+        ScheduleStoreError::InvalidStreamId { ref stream_id } if stream_id == "schedule:"
+    ));
+    assert!(matches!(
+        ScheduleStore::open(&path)
+            .unwrap()
+            .list_by_status(ScheduleStatus::Pending)
+            .unwrap_err(),
         ScheduleStoreError::InvalidStreamId { ref stream_id } if stream_id == "schedule:"
     ));
     assert!(matches!(

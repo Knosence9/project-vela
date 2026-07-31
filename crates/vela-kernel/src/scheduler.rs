@@ -580,6 +580,17 @@ impl ScheduleStore {
         Ok(due)
     }
 
+    /// Returns schedules with the exact persisted status, ordered by exact schedule ID.
+    pub fn list_by_status(
+        &self,
+        status: ScheduleStatus,
+    ) -> Result<Vec<ScheduledTask>, ScheduleStoreError> {
+        let mut schedules = self.discover()?;
+        schedules.retain(|scheduled| scheduled.status() == status);
+        schedules.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(schedules)
+    }
+
     /// Returns every durable schedule intent ordered by exact schedule ID.
     pub fn list(&self) -> Result<Vec<ScheduledTask>, ScheduleStoreError> {
         let mut schedules = self.discover()?;
