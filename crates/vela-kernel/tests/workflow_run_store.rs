@@ -73,6 +73,90 @@ fn advances_an_attributed_gated_run_through_passed_task_verification() {
 }
 
 #[test]
+fn atomically_advances_to_terminal_and_completes_the_verified_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("synchronized-release").unwrap();
+    let attempt_id = TaskObservationId::new("release-attempt").unwrap();
+    let run_id = WorkflowRunId::new("synchronized-run").unwrap();
+    let mut tasks = TaskStore::open(&path).unwrap();
+    tasks
+        .start(
+            task_id.clone(),
+            TaskGoal::new("ship the synchronized release").unwrap(),
+        )
+        .unwrap();
+    tasks
+        .append_observation(
+            &task_id,
+            attempt_id.clone(),
+            TaskObservationKind::Attempt,
+            TaskObservationText::new("release candidate").unwrap(),
+        )
+        .unwrap();
+    tasks
+        .append_verification_for_attempt(
+            &task_id,
+            TaskObservationId::new("release-check").unwrap(),
+            TaskVerificationOutcome::Passed,
+            TaskVerificationCheck::new("plan.approved").unwrap(),
+            TaskObservationText::new("release approved").unwrap(),
+            attempt_id.clone(),
+        )
+        .unwrap();
+    let mut runs = WorkflowRunStore::open(&path).unwrap();
+    let started = runs
+        .start_for_task(run_id.clone(), &task_id, &workflow("plan"))
+        .unwrap();
+
+    let (advanced, completed) = runs
+        .advance_and_complete_task_if_verification_passes(
+            &run_id,
+            started.revision(),
+            0,
+            &attempt_id,
+            TaskOutput::new("verified release shipped").unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(advanced.current_phase().id(), "done");
+    assert_eq!(completed.status(), TaskStatus::Completed);
+    assert_eq!(
+        completed.output().unwrap().as_str(),
+        "verified release shipped"
+    );
+    drop((runs, tasks));
+    let replayed_run = WorkflowRunStore::open(&path)
+        .unwrap()
+        .load(&run_id)
+        .unwrap()
+        .unwrap();
+    let replayed_task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(replayed_run.current_phase().id(), "done");
+    assert_eq!(replayed_task.status(), TaskStatus::Completed);
+    assert_eq!(
+        replayed_task.output().unwrap().as_str(),
+        "verified release shipped"
+    );
+    assert!(matches!(
+        WorkflowRunStore::open(&path)
+            .unwrap()
+            .history(&run_id)
+            .unwrap()
+            .unwrap()[1]
+            .event(),
+        WorkflowRunHistoryEvent::Advanced {
+            gate_acknowledgement: Some(gate),
+            ..
+        } if gate == "plan.approved"
+    ));
+}
+
+#[test]
 fn reports_pending_and_failed_task_verification_without_advancing() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -114,6 +198,17 @@ fn reports_pending_and_failed_task_verification_without_advancing() {
         Err(WorkflowVerifiedAdvanceError::GatesPending { ref report })
             if report.status() == TaskVerificationGateStatus::Pending
     ));
+    assert!(matches!(
+        runs.advance_and_complete_task_if_verification_passes(
+            &run_id,
+            started.revision(),
+            0,
+            &attempt_id,
+            TaskOutput::new("must not complete").unwrap(),
+        ),
+        Err(WorkflowVerifiedAdvanceError::GatesPending { ref report })
+            if report.status() == TaskVerificationGateStatus::Pending
+    ));
     tasks
         .append_verification_for_attempt(
             &task_id,
@@ -129,6 +224,21 @@ fn reports_pending_and_failed_task_verification_without_advancing() {
         Err(WorkflowVerifiedAdvanceError::GatesFailed { ref report })
             if report.status() == TaskVerificationGateStatus::Failed
     ));
+    assert!(matches!(
+        runs.advance_and_complete_task_if_verification_passes(
+            &run_id,
+            started.revision(),
+            0,
+            &attempt_id,
+            TaskOutput::new("must not complete").unwrap(),
+        ),
+        Err(WorkflowVerifiedAdvanceError::GatesFailed { ref report })
+            if report.status() == TaskVerificationGateStatus::Failed
+    ));
+    assert_eq!(
+        tasks.load(&task_id).unwrap().unwrap().status(),
+        TaskStatus::Active
+    );
     assert_eq!(
         runs.load(&run_id).unwrap().unwrap().revision(),
         started.revision()
@@ -161,6 +271,37 @@ fn rejects_unattributed_and_ungated_verified_advancement() {
         runs.advance_if_task_verification_passes(&ungated_id, ungated.revision(), 0, &attempt_id,),
         Err(WorkflowVerifiedAdvanceError::TransitionUngated { .. })
     ));
+
+    let non_terminal_id = WorkflowRunId::new("non-terminal-run").unwrap();
+    let non_terminal = runs
+        .start_for_task(
+            non_terminal_id.clone(),
+            &task_id,
+            &gated_non_terminal_workflow(),
+        )
+        .unwrap();
+    assert!(matches!(
+        runs.advance_and_complete_task_if_verification_passes(
+            &non_terminal_id,
+            non_terminal.revision(),
+            0,
+            &attempt_id,
+            TaskOutput::new("must not complete").unwrap(),
+        ),
+        Err(WorkflowVerifiedAdvanceError::TransitionTargetNotTerminal {
+            ref target_phase_id,
+            ..
+        }) if target_phase_id == "review"
+    ));
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .status(),
+        TaskStatus::Active
+    );
 }
 
 #[test]
@@ -200,6 +341,30 @@ fn rejects_missing_and_non_attempt_verification_parents() {
     ));
     assert!(matches!(
         runs.advance_if_task_verification_passes(&run_id, started.revision(), 0, &diagnostic_id,),
+        Err(WorkflowVerifiedAdvanceError::GateEvaluation(
+            TaskVerificationGateEvaluationError::ObservationNotAttempt { .. }
+        ))
+    ));
+    assert!(matches!(
+        runs.advance_and_complete_task_if_verification_passes(
+            &run_id,
+            started.revision(),
+            0,
+            &TaskObservationId::new("missing").unwrap(),
+            TaskOutput::new("must not complete").unwrap(),
+        ),
+        Err(WorkflowVerifiedAdvanceError::GateEvaluation(
+            TaskVerificationGateEvaluationError::AttemptNotFound { .. }
+        ))
+    ));
+    assert!(matches!(
+        runs.advance_and_complete_task_if_verification_passes(
+            &run_id,
+            started.revision(),
+            0,
+            &diagnostic_id,
+            TaskOutput::new("must not complete").unwrap(),
+        ),
         Err(WorkflowVerifiedAdvanceError::GateEvaluation(
             TaskVerificationGateEvaluationError::ObservationNotAttempt { .. }
         ))
@@ -1021,6 +1186,29 @@ fn workflow(start: &str) -> RegisteredWorkflow {
                     "done",
                     Some("plan.approved".to_owned()),
                 )],
+            ),
+            RegisteredWorkflowPhase::new("done", true, vec![]),
+        ],
+    )
+}
+
+fn gated_non_terminal_workflow() -> RegisteredWorkflow {
+    RegisteredWorkflow::new(
+        WorkflowId::new("gated.multi-phase.workflow").unwrap(),
+        "plan",
+        vec![
+            RegisteredWorkflowPhase::new(
+                "plan",
+                false,
+                vec![RegisteredWorkflowTransition::new(
+                    "review",
+                    Some("plan.approved".to_owned()),
+                )],
+            ),
+            RegisteredWorkflowPhase::new(
+                "review",
+                false,
+                vec![RegisteredWorkflowTransition::new("done", None)],
             ),
             RegisteredWorkflowPhase::new("done", true, vec![]),
         ],

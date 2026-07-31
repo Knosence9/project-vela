@@ -37,6 +37,8 @@ That would persist unverifiable provenance and allow new work to be attributed t
 
 The aggregates have different semantics: authored workflow termination is not task success, and caller-owned workflow failure or cancellation need not be a task outcome. Synchronization requires a separate execution contract.
 
+ADR-0033 later defines one such explicit opt-in contract for verified advancement into an authored terminal phase together with successful task completion. Attribution and every independent lifecycle operation remain non-synchronizing by default.
+
 ## Consequences
 
 - Orchestration can discover exact task provenance after restart without a secondary index.
