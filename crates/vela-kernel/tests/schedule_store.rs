@@ -150,6 +150,252 @@ fn racing_cancellations_persist_exactly_one_terminal_reason() {
 }
 
 #[test]
+fn claims_due_schedule_and_excludes_it_from_due_work_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("claim-me").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Reserve this intent").unwrap(),
+            instant(10),
+        )
+        .unwrap();
+
+    let claimed = store.claim(&id, instant(10)).unwrap();
+
+    assert_eq!(claimed.status(), ScheduleStatus::Claimed);
+    assert_eq!(
+        ScheduleStore::open(&path).unwrap().load(&id).unwrap(),
+        Some(claimed)
+    );
+    assert!(
+        ScheduleStore::open(&path)
+            .unwrap()
+            .list_due(instant(u64::MAX))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn rejects_claiming_future_missing_or_terminal_schedules_without_rewriting_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let pending_id = ScheduleId::new("future").unwrap();
+    let cancelled_id = ScheduleId::new("cancelled").unwrap();
+    let missing_id = ScheduleId::new("missing").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    let pending = store
+        .schedule(
+            pending_id.clone(),
+            TaskGoal::new("Wait until due").unwrap(),
+            instant(11),
+        )
+        .unwrap();
+    store
+        .schedule(
+            cancelled_id.clone(),
+            TaskGoal::new("Never claim").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    let cancelled = store
+        .cancel(
+            &cancelled_id,
+            ScheduleCancellation::new("Withdrawn").unwrap(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store.claim(&pending_id, instant(10)).unwrap_err(),
+        ScheduleStoreError::NotDue {
+            schedule_id,
+            due_at,
+            cutoff,
+        } if schedule_id == pending_id && due_at == instant(11) && cutoff == instant(10)
+    ));
+    assert_eq!(store.load(&pending_id).unwrap(), Some(pending));
+    assert!(matches!(
+        store.claim(&missing_id, instant(u64::MAX)).unwrap_err(),
+        ScheduleStoreError::NotFound { schedule_id } if schedule_id == missing_id
+    ));
+    assert!(matches!(
+        store
+            .claim(&cancelled_id, instant(u64::MAX))
+            .unwrap_err(),
+        ScheduleStoreError::AlreadyCancelled { schedule_id } if schedule_id == cancelled_id
+    ));
+    assert_eq!(store.load(&cancelled_id).unwrap(), Some(cancelled));
+
+    let claimed = store.claim(&pending_id, instant(11)).unwrap();
+    assert!(matches!(
+        store.claim(&pending_id, instant(11)).unwrap_err(),
+        ScheduleStoreError::AlreadyClaimed { schedule_id } if schedule_id == pending_id
+    ));
+    assert!(matches!(
+        store
+            .cancel(
+                &pending_id,
+                ScheduleCancellation::new("too late").unwrap(),
+            )
+            .unwrap_err(),
+        ScheduleStoreError::AlreadyClaimed { schedule_id } if schedule_id == pending_id
+    ));
+    assert_eq!(store.load(&pending_id).unwrap(), Some(claimed));
+}
+
+#[test]
+fn racing_claims_persist_exactly_one_claim() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("claim-race").unwrap();
+    ScheduleStore::open(&path)
+        .unwrap()
+        .schedule(id.clone(), TaskGoal::new("Claim once").unwrap(), instant(1))
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = [(), ()].map(|()| {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let mut store = ScheduleStore::open(path).unwrap();
+            barrier.wait();
+            store.claim(&id, instant(1))
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(ScheduleStoreError::AlreadyClaimed { .. })))
+            .count(),
+        1
+    );
+    assert_eq!(
+        ScheduleStore::open(&path)
+            .unwrap()
+            .load(&id)
+            .unwrap()
+            .unwrap()
+            .status(),
+        ScheduleStatus::Claimed
+    );
+}
+
+#[test]
+fn racing_claim_and_cancellation_commit_one_terminal_transition() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("terminal-race").unwrap();
+    ScheduleStore::open(&path)
+        .unwrap()
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Choose one terminal state").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let claim = {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let mut store = ScheduleStore::open(path).unwrap();
+            barrier.wait();
+            store.claim(&id, instant(1))
+        })
+    };
+    let cancel = {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let mut store = ScheduleStore::open(path).unwrap();
+            barrier.wait();
+            store.cancel(&id, ScheduleCancellation::new("operator withdrew").unwrap())
+        })
+    };
+    let results = [claim.join().unwrap(), cancel.join().unwrap()];
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let loaded = ScheduleStore::open(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap()
+        .unwrap();
+    match loaded.status() {
+        ScheduleStatus::Claimed => assert!(
+            results
+                .iter()
+                .any(|result| matches!(result, Err(ScheduleStoreError::AlreadyClaimed { .. })))
+        ),
+        ScheduleStatus::Cancelled => assert!(
+            results
+                .iter()
+                .any(|result| matches!(result, Err(ScheduleStoreError::AlreadyCancelled { .. })))
+        ),
+        ScheduleStatus::Pending => panic!("the schedule must be terminal"),
+    }
+}
+
+#[test]
+fn replay_rejects_malformed_claim_payload_and_transition_after_claim() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("malformed-claim").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Reject corrupt claim").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:malformed-claim', 2, 'schedule.claimed', 1, ?1)",
+            [br#"{"unexpected":true}"#.as_slice()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store.load(&id).unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'schedule:malformed-claim' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:malformed-claim', 3, 'schedule.cancelled', 1, ?1)",
+            [br#"{"reason":"too late"}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.load(&id).unwrap_err(),
+        ScheduleStoreError::InvalidHistory { event_count: 3 }
+    ));
+}
+
+#[test]
 fn cancellation_requires_content_and_reports_missing_or_terminal_schedules() {
     assert!(ScheduleCancellation::new(" \n").is_err());
     let directory = tempdir().unwrap();

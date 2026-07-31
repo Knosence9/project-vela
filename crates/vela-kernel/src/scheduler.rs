@@ -11,8 +11,10 @@ use crate::{
 
 const SCHEDULE_CREATED_EVENT_TYPE: &str = "schedule.created";
 const SCHEDULE_CANCELLED_EVENT_TYPE: &str = "schedule.cancelled";
+const SCHEDULE_CLAIMED_EVENT_TYPE: &str = "schedule.claimed";
 const SCHEDULE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
+const PENDING_SCHEDULE_STREAM_VERSION: u64 = 1;
 
 /// An opaque, non-blank identity for one durable schedule intent.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -103,12 +105,14 @@ pub struct ScheduledTask {
     goal: TaskGoal,
     due_at: ScheduleInstant,
     cancellation: Option<ScheduleCancellation>,
+    claimed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScheduleStatus {
     Pending,
     Cancelled,
+    Claimed,
 }
 
 impl ScheduledTask {
@@ -127,6 +131,8 @@ impl ScheduledTask {
     pub fn status(&self) -> ScheduleStatus {
         if self.cancellation.is_some() {
             ScheduleStatus::Cancelled
+        } else if self.claimed {
+            ScheduleStatus::Claimed
         } else {
             ScheduleStatus::Pending
         }
@@ -142,11 +148,29 @@ impl ScheduledTask {
 pub enum ScheduleStoreError {
     EventLog(EventLogError),
     Replay(ReplayError),
-    AlreadyExists { schedule_id: ScheduleId },
-    NotFound { schedule_id: ScheduleId },
-    AlreadyCancelled { schedule_id: ScheduleId },
-    InvalidStreamId { stream_id: String },
-    InvalidHistory { event_count: usize },
+    AlreadyExists {
+        schedule_id: ScheduleId,
+    },
+    NotFound {
+        schedule_id: ScheduleId,
+    },
+    AlreadyCancelled {
+        schedule_id: ScheduleId,
+    },
+    AlreadyClaimed {
+        schedule_id: ScheduleId,
+    },
+    NotDue {
+        schedule_id: ScheduleId,
+        due_at: ScheduleInstant,
+        cutoff: ScheduleInstant,
+    },
+    InvalidStreamId {
+        stream_id: String,
+    },
+    InvalidHistory {
+        event_count: usize,
+    },
 }
 
 impl fmt::Display for ScheduleStoreError {
@@ -161,6 +185,19 @@ impl fmt::Display for ScheduleStoreError {
             Self::AlreadyCancelled { schedule_id } => {
                 write!(formatter, "schedule {schedule_id} is already cancelled")
             }
+            Self::AlreadyClaimed { schedule_id } => {
+                write!(formatter, "schedule {schedule_id} is already claimed")
+            }
+            Self::NotDue {
+                schedule_id,
+                due_at,
+                cutoff,
+            } => write!(
+                formatter,
+                "schedule {schedule_id} is due at {} after cutoff {}",
+                due_at.unix_millis(),
+                cutoff.unix_millis()
+            ),
             Self::InvalidStreamId { stream_id } => {
                 write!(formatter, "invalid schedule stream id {stream_id:?}")
             }
@@ -182,6 +219,8 @@ impl Error for ScheduleStoreError {
             Self::AlreadyExists { .. }
             | Self::NotFound { .. }
             | Self::AlreadyCancelled { .. }
+            | Self::AlreadyClaimed { .. }
+            | Self::NotDue { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. } => None,
         }
@@ -219,6 +258,7 @@ impl ScheduleStore {
                 goal,
                 due_at,
                 cancellation: None,
+                claimed: false,
             }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
                 Err(ScheduleStoreError::AlreadyExists { schedule_id: id })
@@ -245,19 +285,18 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
-        if scheduled.status() == ScheduleStatus::Cancelled {
-            return Err(ScheduleStoreError::AlreadyCancelled {
-                schedule_id: id.clone(),
-            });
+        if let Some(error) = terminal_schedule_error(id, scheduled.status()) {
+            return Err(error);
         }
 
         let event = ScheduleEvent::Cancelled {
             reason: cancellation.clone(),
         };
-        match self
-            .event_log
-            .append(&schedule_stream(id), ExpectedVersion::Exact(1), &event)
-        {
+        match self.event_log.append(
+            &schedule_stream(id),
+            ExpectedVersion::Exact(PENDING_SCHEDULE_STREAM_VERSION),
+            &event,
+        ) {
             Ok(_) => {
                 scheduled.cancellation = Some(cancellation);
                 Ok(scheduled)
@@ -265,6 +304,62 @@ impl ScheduleStore {
             Err(error @ EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
                 Some(current) if current.status() == ScheduleStatus::Cancelled => {
                     Err(ScheduleStoreError::AlreadyCancelled {
+                        schedule_id: id.clone(),
+                    })
+                }
+                Some(current) if current.status() == ScheduleStatus::Claimed => {
+                    Err(ScheduleStoreError::AlreadyClaimed {
+                        schedule_id: id.clone(),
+                    })
+                }
+                Some(_) => Err(ScheduleStoreError::EventLog(error)),
+                None => Err(ScheduleStoreError::NotFound {
+                    schedule_id: id.clone(),
+                }),
+            },
+            Err(error) => Err(ScheduleStoreError::EventLog(error)),
+        }
+    }
+
+    /// Durably reserves one due intent without dispatching or executing it.
+    pub fn claim(
+        &mut self,
+        id: &ScheduleId,
+        cutoff: ScheduleInstant,
+    ) -> Result<ScheduledTask, ScheduleStoreError> {
+        let Some(mut scheduled) = self.load(id)? else {
+            return Err(ScheduleStoreError::NotFound {
+                schedule_id: id.clone(),
+            });
+        };
+        if let Some(error) = terminal_schedule_error(id, scheduled.status()) {
+            return Err(error);
+        }
+        if scheduled.due_at > cutoff {
+            return Err(ScheduleStoreError::NotDue {
+                schedule_id: id.clone(),
+                due_at: scheduled.due_at,
+                cutoff,
+            });
+        }
+
+        match self.event_log.append(
+            &schedule_stream(id),
+            ExpectedVersion::Exact(PENDING_SCHEDULE_STREAM_VERSION),
+            &ScheduleEvent::Claimed {},
+        ) {
+            Ok(_) => {
+                scheduled.claimed = true;
+                Ok(scheduled)
+            }
+            Err(error @ EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
+                Some(current) if current.status() == ScheduleStatus::Cancelled => {
+                    Err(ScheduleStoreError::AlreadyCancelled {
+                        schedule_id: id.clone(),
+                    })
+                }
+                Some(current) if current.status() == ScheduleStatus::Claimed => {
+                    Err(ScheduleStoreError::AlreadyClaimed {
                         schedule_id: id.clone(),
                     })
                 }
@@ -328,6 +423,7 @@ impl ScheduleStore {
                 goal: goal.clone(),
                 due_at: ScheduleInstant::from_unix_millis(*due_at_unix_millis),
                 cancellation: None,
+                claimed: false,
             })),
             [
                 ScheduleEvent::Created {
@@ -340,11 +436,37 @@ impl ScheduleStore {
                 goal: goal.clone(),
                 due_at: ScheduleInstant::from_unix_millis(*due_at_unix_millis),
                 cancellation: Some(reason.clone()),
+                claimed: false,
+            })),
+            [
+                ScheduleEvent::Created {
+                    goal,
+                    due_at_unix_millis,
+                },
+                ScheduleEvent::Claimed {},
+            ] => Ok(Some(ScheduledTask {
+                id,
+                goal: goal.clone(),
+                due_at: ScheduleInstant::from_unix_millis(*due_at_unix_millis),
+                cancellation: None,
+                claimed: true,
             })),
             _ => Err(ScheduleStoreError::InvalidHistory {
                 event_count: events.len(),
             }),
         }
+    }
+}
+
+fn terminal_schedule_error(id: &ScheduleId, status: ScheduleStatus) -> Option<ScheduleStoreError> {
+    match status {
+        ScheduleStatus::Pending => None,
+        ScheduleStatus::Cancelled => Some(ScheduleStoreError::AlreadyCancelled {
+            schedule_id: id.clone(),
+        }),
+        ScheduleStatus::Claimed => Some(ScheduleStoreError::AlreadyClaimed {
+            schedule_id: id.clone(),
+        }),
     }
 }
 
@@ -363,6 +485,7 @@ enum ScheduleEvent {
     Cancelled {
         reason: ScheduleCancellation,
     },
+    Claimed {},
 }
 
 impl Event for ScheduleEvent {
@@ -370,6 +493,7 @@ impl Event for ScheduleEvent {
         match self {
             Self::Created { .. } => SCHEDULE_CREATED_EVENT_TYPE,
             Self::Cancelled { .. } => SCHEDULE_CANCELLED_EVENT_TYPE,
+            Self::Claimed {} => SCHEDULE_CLAIMED_EVENT_TYPE,
         }
     }
 
@@ -427,6 +551,18 @@ impl Event for ScheduleEvent {
                     },
                 )?;
                 Ok(Self::Cancelled { reason })
+            }
+            SCHEDULE_CLAIMED_EVENT_TYPE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {}
+
+                serde_json::from_slice::<Payload>(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(Self::Claimed {})
             }
             _ => Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
