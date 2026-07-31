@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter schedules by lifecycle status",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/803 with an exact read-only status projection over authoritative inventory.",
+    "acceptance_criteria": [
+      "Return only schedules whose persisted status exactly matches the caller-owned filter.",
+      "Preserve exact schedule-ID ordering and return an empty list when no schedule matches.",
+      "Reuse snapshot-consistent discovery, fail-closed replay, and unrelated-stream exclusion.",
+      "Perform no append, clock read, claim, release, materialization, dispatch, execution, permission, or recovery decision."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED exact-status projection coverage.",
+      "outcome": "failure",
+      "diagnostic": "The targeted integration test failed because ScheduleStore::list_by_status did not exist.",
+      "patch": "Added all-status matching, exact-ID ordering, empty-match, and fail-closed behavior assertions."
+    },
+    {
+      "summary": "Implemented the smallest direct status filter.",
+      "outcome": "success",
+      "diagnostic": "Callers otherwise had to duplicate lifecycle filtering, but a new persisted index or query abstraction was not justified.",
+      "patch": "Filtered the existing authoritative schedule vector by exact projected status and retained its established ordering."
+    },
+    {
+      "summary": "Fixed pre-commit findings and verified the read-only boundary.",
+      "outcome": "success",
+      "diagnostic": "Independent review findings were addressed before the final verified head; substantive hosted review found no blocking defect.",
+      "patch": "Kept the projection direct, updated ADR and scheduler docs, and reran repository-wide verification."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can now inspect exact pending, cancelled, claimed, or materialized inventory without duplicating filtering or gaining lifecycle authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30658487232", "status": "passed"},
+      {"command": "Pull request 804 squash merge a2ab357bb589b6791f2dcf3c6759a7c24165a776", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Common operational filters belong beside authoritative discovery when their semantics are exact and stable.",
+    "A read-only projection must not be confused with authorization to mutate the returned aggregates.",
+    "Preserve established deterministic ordering after filtering instead of re-sorting under a new policy.",
+    "Do not add a generalized query abstraction for one proven exact-status operation."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/804"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

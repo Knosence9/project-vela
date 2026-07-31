@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Discover all durable schedule intents",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/795 with deterministic full inventory before defining dispatch or automatic recovery.",
+    "acceptance_criteria": [
+      "Return pending, cancelled, and claimed schedules in exact schedule-ID order after reopen.",
+      "Discover candidates from authoritative creation events in one SQLite read snapshot.",
+      "Exclude unrelated streams and return an empty list for an empty store.",
+      "Fail the whole query on invalid owning identities, malformed payloads, unsupported events, or impossible histories."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED full-inventory behavior.",
+      "outcome": "failure",
+      "diagnostic": "The focused integration test failed because ScheduleStore::list did not exist.",
+      "patch": "Added insertion-order independence, reopen, all-status, unrelated-stream, malformed-candidate, and invalid-history tests."
+    },
+    {
+      "summary": "Implemented snapshot-consistent authoritative discovery.",
+      "outcome": "success",
+      "diagnostic": "Requiring callers to retain every exact ID prevented operational inspection, while a separate mutable index would duplicate event-log truth.",
+      "patch": "Shared one fail-closed discovery projection between full inventory and due filtering, then applied query-specific ordering and filtering."
+    },
+    {
+      "summary": "Verified the observability-only contract.",
+      "outcome": "success",
+      "diagnostic": "Independent and substantive hosted review found no discrete blocking bug at the merged head.",
+      "patch": "Documented that inventory grants no mutation or execution authority and completed focused plus repository-wide verification."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can now inspect every durable one-shot schedule in stable exact-ID order from one authoritative read snapshot.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30643220315", "status": "passed"},
+      {"command": "Pull request 796 squash merge 05dcc558b67c1b6cf306cd09fbfbaa9a89a57dcc", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Add complete read-only inventory before operational execution so persisted state remains inspectable.",
+    "One authoritative snapshot prevents a result assembled from mutually inconsistent aggregate revisions.",
+    "Reuse discovery and projection while keeping full-inventory and due-order policy explicit at their call sites.",
+    "Malformed authoritative candidates must fail the entire inventory rather than disappear silently."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/796"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

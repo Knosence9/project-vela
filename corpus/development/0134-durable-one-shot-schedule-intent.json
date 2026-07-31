@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist durable one-shot schedule intent",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/789 with an inert event-sourced schedule boundary and deterministic caller-cutoff due discovery.",
+    "acceptance_criteria": [
+      "Round-trip exact schedule identity, task goal, and Unix-millisecond due instant through reopen while rejecting duplicate identities.",
+      "Return pending schedules due at or before a caller-owned cutoff in due-instant then exact-ID order.",
+      "Exclude future and unrelated streams and fail closed on malformed owning streams or invalid history.",
+      "Keep clock reads, task creation, dispatch, recurrence, retries, and permission outside this boundary."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED public schedule-store coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused integration target failed because the scheduler module and public contract did not exist.",
+      "patch": "Added reopen, duplicate, inclusive-cutoff, deterministic-ordering, unrelated-stream, malformed-payload, and invalid-history tests first."
+    },
+    {
+      "summary": "Implemented immutable one-shot intent over the typed event log.",
+      "outcome": "success",
+      "diagnostic": "Ambient clock access or automatic task creation would have combined time and execution authority before either policy existed.",
+      "patch": "Added validated opaque identities, exact caller-owned instants, one version-one creation event, fail-closed replay, and snapshot-consistent due discovery."
+    },
+    {
+      "summary": "Refactored around the existing persistence substrate and verified the boundary.",
+      "outcome": "success",
+      "diagnostic": "Independent and substantive hosted review found no blocking correctness issue at the merged head.",
+      "patch": "Kept one immutable event and reused event-log replay and authoritative event discovery; documented ADR-0034 and focused scheduler behavior."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel now persists inert one-shot task intent and deterministically discovers due schedules without owning a clock or execution decision.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30607692361", "status": "passed"},
+      {"command": "Pull request 790 squash merge 10fec0525fed2c26c2648ec1281d1d0af0cf0b16", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Persist intent before combining it with clock, dispatch, retry, or permission policy.",
+    "Caller-owned cutoff input keeps due selection deterministic and directly testable.",
+    "Authoritative creation-event discovery avoids a second mutable schedule index.",
+    "Fail closed on malformed candidate streams instead of returning a trustworthy-looking partial due set."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/790"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

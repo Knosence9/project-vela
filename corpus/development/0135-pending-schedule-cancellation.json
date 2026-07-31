@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Cancel pending one-shot schedules",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/791 by durably withdrawing pending intent before any claim or dispatch boundary.",
+    "acceptance_criteria": [
+      "Persist and reopen exact non-blank caller-owned cancellation reason and explicit cancelled status.",
+      "Exclude cancelled schedules from due discovery without changing pending ordering.",
+      "Return typed missing, duplicate, and racing terminal errors without rewriting valid history.",
+      "Reject malformed and impossible cancellation histories fail closed."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED cancellation lifecycle tests.",
+      "outcome": "failure",
+      "diagnostic": "The integration target failed on missing cancellation value, status, store operation, and typed errors.",
+      "patch": "Added reopen, due-exclusion, missing, duplicate, malformed-history, and concurrent-cancellation coverage."
+    },
+    {
+      "summary": "Implemented one explicit pending-to-cancelled transition.",
+      "outcome": "success",
+      "diagnostic": "Silently idempotent cancellation would hide repeated caller intent, while deleting the schedule would erase audit evidence.",
+      "patch": "Appended an exact reason-bearing event against the projected revision, retained terminal schedules for inspection, and filtered them from due results."
+    },
+    {
+      "summary": "Verified concurrency and reviewed maintainability findings.",
+      "outcome": "success",
+      "diagnostic": "Hosted review noted a hard-coded pending revision and repeated decode mapping; the revision was correct under the then-exact two-state contract and the optional helper did not justify scope growth.",
+      "patch": "Repeated the racing cancellation test, preserved strict replay, updated ADR and scheduler docs, and completed full verification."
+    }
+  ],
+  "outcome": {
+    "summary": "Pending schedule intent can now be withdrawn once with exact durable evidence, while cancelled intent remains inspectable and cannot re-enter due selection.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30612056998", "status": "passed"},
+      {"command": "Pull request 792 squash merge 4fad675297669a0e821aa280ca2020ff8929f982", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Cancellation should preserve why intent was withdrawn instead of deleting the aggregate.",
+    "A terminal-state error is safer than silently treating repeated cancellation as success.",
+    "Cancellation prevents future selection but does not imply interruption of work selected elsewhere.",
+    "Concurrency tests should assert one persisted winner and authoritative typed loser evidence."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/792"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize claimed schedules atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/799 by binding one claimed schedule to one caller-identified active task without a persistence crash gap.",
+    "acceptance_criteria": [
+      "Atomically append schedule materialization and existing task start evidence with exact schedule and no-stream task guards.",
+      "Preserve exact immutable goal and caller-owned task identity in both projections through reopen.",
+      "Reject invalid schedule states, colliding task IDs, racing materializations, malformed payloads, and impossible histories without partial writes.",
+      "Create only inert task state without session, workflow, provider, tool, dispatch, retry, or permission authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED atomic materialization coverage.",
+      "outcome": "failure",
+      "diagnostic": "Public integration tests failed because materialize, materialized status, task binding, and typed state errors did not exist.",
+      "patch": "Added success/reopen, invalid-state, task collision, race, no-orphan, malformed-history, and due-exclusion tests."
+    },
+    {
+      "summary": "Implemented one transactional schedule-task binding.",
+      "outcome": "success",
+      "diagnostic": "Sequential schedule and task writes could leave one-sided durable state after a process or persistence failure.",
+      "patch": "Reused the event log pair append to commit schedule.materialized and task.started atomically under exact aggregate expectations."
+    },
+    {
+      "summary": "Preserved review findings as bounded follow-up work.",
+      "outcome": "success",
+      "diagnostic": "Hosted review identified duplicated claimed-state preconditions between release and materialize and a missing explicit session-creation documentation exclusion.",
+      "patch": "Kept materialization behavior bounded, recorded the shared-precondition refactor as issue 801, and preserved the complete inert authority contract in subsequent scheduler documentation."
+    }
+  ],
+  "outcome": {
+    "summary": "A claimed schedule can now become exactly one active task atomically, with no orphan schedule or task and no implied execution grant.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30650649844", "status": "passed"},
+      {"command": "Pull request 800 squash merge 2da61bd3ba9ea8652168991e8c1c8cbc35a8a181", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Two aggregate writes representing one binding decision need one atomic transaction rather than compensation.",
+    "Reuse existing authoritative task start events instead of creating a second scheduled-task lifecycle.",
+    "Task materialization is durable state creation, not permission to execute the task.",
+    "A correct feature may preserve structural duplication as a concrete bounded refactor instead of broadening the atomicity patch."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/800"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

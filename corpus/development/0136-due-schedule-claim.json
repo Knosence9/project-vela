@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Claim due one-shot schedules",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/793 with a durable due-only reservation that grants no dispatch authority.",
+    "acceptance_criteria": [
+      "Claim only an existing pending schedule due at or before the caller cutoff and preserve the claim through reopen.",
+      "Exclude claimed schedules from due discovery and reject future schedules with typed due evidence.",
+      "Resolve claim-claim and claim-cancel races to one persisted terminal winner.",
+      "Reject malformed payloads and impossible claim histories without partial projection."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED claim eligibility and race coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused tests failed because claim, claimed status, NotDue, and AlreadyClaimed did not exist.",
+      "patch": "Added cutoff, reopen, due-list exclusion, terminal precedence, malformed-history, claim-claim, and claim-cancel tests."
+    },
+    {
+      "summary": "Implemented revision-bound durable reservation.",
+      "outcome": "success",
+      "diagnostic": "Treating due discovery as authority would permit duplicate selection, but adding a lease would require missing worker and expiry policy.",
+      "patch": "Added one empty claimed event, explicit caller cutoff validation, status-first terminal rejection, and authoritative conflict reload."
+    },
+    {
+      "summary": "Fixed the substantive documentation mismatch and verified exact-head behavior.",
+      "outcome": "success",
+      "diagnostic": "Hosted review found ADR text that still described only created and cancelled histories after claimed history became valid.",
+      "patch": "Aligned ADR replay rules, documented terminal-error precedence over NotDue, retained refactor nits outside feature scope, and reran focused and full verification."
+    }
+  ],
+  "outcome": {
+    "summary": "Due one-shot intent can now be durably reserved exactly once while clock input, recovery, dispatch, and execution remain caller-owned.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30639834432", "status": "passed"},
+      {"command": "Pull request 794 squash merge a55c2ef94d98a836b61214f6efc3bb32a8f2760b", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Due discovery is observability; a separate durable transition must reserve work.",
+    "Terminal lifecycle errors should take precedence over due-time evaluation so caller intent is not misclassified.",
+    "Claiming without automatic expiry makes crash recovery limitations explicit rather than inventing lease policy.",
+    "When lifecycle behavior expands, update earlier authoritative replay prose instead of only appending later documentation."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/794"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
