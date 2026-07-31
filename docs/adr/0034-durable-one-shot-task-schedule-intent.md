@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-07-31
-- **Decision and execution issues:** [#789](https://github.com/Knosence9/project-vela/issues/789), [#791](https://github.com/Knosence9/project-vela/issues/791), [#793](https://github.com/Knosence9/project-vela/issues/793), [#795](https://github.com/Knosence9/project-vela/issues/795), [#797](https://github.com/Knosence9/project-vela/issues/797), [#799](https://github.com/Knosence9/project-vela/issues/799), [#803](https://github.com/Knosence9/project-vela/issues/803)
+- **Decision and execution issues:** [#789](https://github.com/Knosence9/project-vela/issues/789), [#791](https://github.com/Knosence9/project-vela/issues/791), [#793](https://github.com/Knosence9/project-vela/issues/793), [#795](https://github.com/Knosence9/project-vela/issues/795), [#797](https://github.com/Knosence9/project-vela/issues/797), [#799](https://github.com/Knosence9/project-vela/issues/799), [#803](https://github.com/Knosence9/project-vela/issues/803), [#805](https://github.com/Knosence9/project-vela/issues/805)
 
 ## Context
 
@@ -23,6 +23,8 @@ The typed SQLite event log already provides exact stream identity, immutable app
 `ScheduleStore::release(id, reason)` appends exact non-blank caller-owned recovery evidence only while a schedule is claimed and returns that immutable intent to pending eligibility. Released schedules survive reopen, preserve their latest exact release reason in load and inventory projections, reappear in due discovery against a sufficient caller-owned cutoff, and may be claimed again. Missing, pending, and cancelled schedules return typed errors without an append; racing releases commit exactly one event and the loser receives typed `ConcurrentModification` evidence identifying the expected and persisted revisions. A stale claim, cancellation, or release that encounters a complete intervening lifecycle cycle reports the same typed conflict rather than a raw event-log error. Replay accepts `created -> (claimed -> released)*` followed by an optional final claim or cancellation and rejects every other ordering fail-closed.
 
 `ScheduleStore::materialize(id, task_id)` atomically appends one `schedule.materialized` event and one existing `task.started` event only while the schedule is claimed and the caller-owned task ID has no stream. The task receives the schedule's exact immutable goal; the terminal materialized schedule preserves the exact task ID across load and inventory discovery. A task-ID collision leaves the schedule claimed, and a stale schedule revision leaves no task orphan. Replay permits materialization only after a claim, including after any number of explicit claim-release recovery cycles.
+
+`ScheduleStore::history(id)` returns every validated creation, claim, release, cancellation, and materialization transition for one exact schedule as a revision-bearing typed `ScheduleHistoryEntry` in stream-revision order. Creation preserves the exact goal and due instant; reason-bearing and task-binding transitions preserve their exact caller-owned values. A missing schedule returns no history. The query decodes and projects the complete lifecycle before exposing any result, so malformed payloads, unsupported events, version gaps, or impossible ordering return an error and no partial prefix.
 
 The store never reads wall-clock time. Materialization creates inert active task state but does not infer worker failure or lease expiry, create a session, start or advance a workflow, invoke a provider or tool, grant permission, sleep, execute or dispatch task work, retry execution, or interpret recurrence, cron syntax, or time zones. A caller decides when to query, claim, release, or materialize and retains every execution decision.
 
@@ -53,4 +55,5 @@ Rejected because schedules require the same immutable identity and fail-closed r
 - A pending schedule can be withdrawn exactly once with durable caller-owned reason evidence; cancelled schedules remain inspectable but are excluded from due work.
 - A durable claim prevents duplicate selection; explicit caller-owned release provides inspectable recovery without implying a lease, worker-health detector, or automatic expiry.
 - Explicit materialization binds one claimed schedule to one caller-identified active task atomically, without granting execution authority or risking a one-sided persistence result.
+- Exact typed lifecycle history makes every persisted scheduling and recovery transition inspectable without granting lifecycle authority.
 - Dispatch, worker identity, recurrence, automatic recovery, retries, and execution outcomes require later explicit decisions.

@@ -4,8 +4,8 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
-        ScheduleCancellation, ScheduleId, ScheduleInstant, ScheduleRelease, ScheduleStatus,
-        ScheduleStore, ScheduleStoreError,
+        ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleRelease,
+        ScheduleStatus, ScheduleStore, ScheduleStoreError,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -19,6 +19,136 @@ fn schedule_ids_require_content_without_normalizing_exact_values() {
     assert!(ScheduleId::new(" \t").is_err());
     let exact = ScheduleId::new(" Morning ").unwrap();
     assert_eq!(exact.as_str(), " Morning ");
+}
+
+#[test]
+fn queries_complete_typed_schedule_history_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("history").unwrap();
+    let goal = TaskGoal::new("Preserve every transition").unwrap();
+    let release = ScheduleRelease::new(" first worker stopped ").unwrap();
+    let task_id = TaskId::new("history-task").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(id.clone(), goal.clone(), instant(42))
+        .unwrap();
+    store.claim(&id, instant(42)).unwrap();
+    store.release(&id, release.clone()).unwrap();
+    store.claim(&id, instant(42)).unwrap();
+    store.materialize(&id, task_id.clone()).unwrap();
+    drop(store);
+
+    let history = ScheduleStore::open(&path)
+        .unwrap()
+        .history(&id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| entry.revision())
+            .collect::<Vec<_>>(),
+        [1, 2, 3, 4, 5]
+    );
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| entry.event().clone())
+            .collect::<Vec<_>>(),
+        [
+            ScheduleHistoryEvent::Created {
+                goal,
+                due_at: instant(42),
+            },
+            ScheduleHistoryEvent::Claimed,
+            ScheduleHistoryEvent::Released { reason: release },
+            ScheduleHistoryEvent::Claimed,
+            ScheduleHistoryEvent::Materialized { task_id },
+        ]
+    );
+}
+
+#[test]
+fn schedule_history_preserves_cancellation_and_returns_none_for_missing_id() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("cancelled-history").unwrap();
+    let missing = ScheduleId::new("missing-history").unwrap();
+    let goal = TaskGoal::new("Withdraw this schedule").unwrap();
+    let reason = ScheduleCancellation::new(" exact withdrawal ").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(id.clone(), goal.clone(), instant(7))
+        .unwrap();
+    store.cancel(&id, reason.clone()).unwrap();
+
+    assert_eq!(
+        store
+            .history(&id)
+            .unwrap()
+            .unwrap()
+            .iter()
+            .map(|entry| (entry.revision(), entry.event().clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                1,
+                ScheduleHistoryEvent::Created {
+                    goal,
+                    due_at: instant(7),
+                },
+            ),
+            (2, ScheduleHistoryEvent::Cancelled { reason }),
+        ]
+    );
+    assert_eq!(store.history(&missing).unwrap(), None);
+}
+
+#[test]
+fn schedule_history_rejects_invalid_lifecycle_without_returning_a_prefix() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("invalid-history").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Reject partial evidence").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:invalid-history', 2, 'schedule.released', 1, ?1)",
+            [br#"{"reason":"release before claim"}"#.as_slice()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store.history(&id).unwrap_err(),
+        ScheduleStoreError::InvalidHistory { event_count: 2 }
+    ));
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D'
+             WHERE stream_id = 'schedule:invalid-history' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.history(&id).unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 2,
+            ..
+        })
+    ));
 }
 
 #[test]
