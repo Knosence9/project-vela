@@ -494,7 +494,65 @@ fn empty_store_has_no_due_intents() {
 }
 
 #[test]
-fn due_listing_rejects_malformed_creation_payload_and_owning_stream_id() {
+fn lists_every_schedule_in_exact_id_order_after_reopening() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&path).unwrap();
+    for id in ["zeta", "alpha", "middle"] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(format!("goal-{id}")).unwrap(),
+                instant(10),
+            )
+            .unwrap();
+    }
+    store
+        .cancel(
+            &ScheduleId::new("zeta").unwrap(),
+            ScheduleCancellation::new(" exact cancellation ").unwrap(),
+        )
+        .unwrap();
+    store
+        .claim(&ScheduleId::new("middle").unwrap(), instant(10))
+        .unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            TaskId::new("not-a-schedule").unwrap(),
+            TaskGoal::new("Ignore this stream").unwrap(),
+        )
+        .unwrap();
+
+    let schedules = ScheduleStore::open(&path).unwrap().list().unwrap();
+
+    assert_eq!(
+        schedules
+            .iter()
+            .map(|schedule| (schedule.id().as_str(), schedule.status()))
+            .collect::<Vec<_>>(),
+        [
+            ("alpha", ScheduleStatus::Pending),
+            ("middle", ScheduleStatus::Claimed),
+            ("zeta", ScheduleStatus::Cancelled),
+        ]
+    );
+    assert_eq!(
+        schedules[2].cancellation().unwrap().as_str(),
+        " exact cancellation "
+    );
+}
+
+#[test]
+fn empty_store_has_no_schedules() {
+    let directory = tempdir().unwrap();
+    let store = ScheduleStore::open(directory.path().join("events.sqlite3")).unwrap();
+
+    assert!(store.list().unwrap().is_empty());
+}
+
+#[test]
+fn schedule_discovery_rejects_malformed_creation_payload_and_owning_stream_id() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
     ScheduleStore::open(&path)
@@ -513,6 +571,13 @@ fn due_listing_rejects_malformed_creation_payload_and_owning_stream_id() {
         )
         .unwrap();
     assert!(matches!(
+        ScheduleStore::open(&path).unwrap().list().unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            ..
+        })
+    ));
+    assert!(matches!(
         ScheduleStore::open(&path)
             .unwrap()
             .list_due(instant(7))
@@ -530,6 +595,10 @@ fn due_listing_rejects_malformed_creation_payload_and_owning_stream_id() {
         )
         .unwrap();
     assert!(matches!(
+        ScheduleStore::open(&path).unwrap().list().unwrap_err(),
+        ScheduleStoreError::InvalidStreamId { ref stream_id } if stream_id == "schedule:"
+    ));
+    assert!(matches!(
         ScheduleStore::open(&path)
             .unwrap()
             .list_due(instant(7))
@@ -539,7 +608,7 @@ fn due_listing_rejects_malformed_creation_payload_and_owning_stream_id() {
 }
 
 #[test]
-fn due_listing_rejects_duplicate_creation_history() {
+fn schedule_discovery_rejects_duplicate_creation_history() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
     ScheduleStore::open(&path)
@@ -560,6 +629,10 @@ fn due_listing_rejects_duplicate_creation_history() {
         )
         .unwrap();
 
+    assert!(matches!(
+        ScheduleStore::open(&path).unwrap().list().unwrap_err(),
+        ScheduleStoreError::InvalidHistory { event_count: 2 }
+    ));
     assert!(matches!(
         ScheduleStore::open(&path)
             .unwrap()

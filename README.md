@@ -252,6 +252,7 @@ The first milestone is the **evidence loop**:
 93. Persist inert one-shot task schedule intent and query due work against a caller-owned cutoff deterministically. ✅
 94. Durably cancel pending one-shot schedule intent before it can be selected as due work. ✅
 95. Durably claim due one-shot schedule intent without granting dispatch or execution authority. ✅
+96. Discover every durable one-shot schedule intent in deterministic exact-ID order. ✅
 
 ## Project documents
 
