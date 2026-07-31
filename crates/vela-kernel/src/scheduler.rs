@@ -6,13 +6,14 @@ use crate::{
     event_log::{
         DecodeError, Event, EventLog, EventLogError, ExpectedVersion, ReplayError, StreamId,
     },
-    task::{TaskGoal, TaskGoalError},
+    task::{TaskEvent, TaskGoal, TaskGoalError, TaskId, TaskIdError, task_stream},
 };
 
 const SCHEDULE_CREATED_EVENT_TYPE: &str = "schedule.created";
 const SCHEDULE_CANCELLED_EVENT_TYPE: &str = "schedule.cancelled";
 const SCHEDULE_CLAIMED_EVENT_TYPE: &str = "schedule.claimed";
 const SCHEDULE_RELEASED_EVENT_TYPE: &str = "schedule.released";
+const SCHEDULE_MATERIALIZED_EVENT_TYPE: &str = "schedule.materialized";
 const SCHEDULE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
 
@@ -138,6 +139,7 @@ pub struct ScheduledTask {
     cancellation: Option<ScheduleCancellation>,
     claimed: bool,
     latest_release: Option<ScheduleRelease>,
+    task_id: Option<TaskId>,
     revision: u64,
 }
 
@@ -146,6 +148,7 @@ pub enum ScheduleStatus {
     Pending,
     Cancelled,
     Claimed,
+    Materialized,
 }
 
 impl ScheduledTask {
@@ -162,7 +165,9 @@ impl ScheduledTask {
     }
 
     pub fn status(&self) -> ScheduleStatus {
-        if self.cancellation.is_some() {
+        if self.task_id.is_some() {
+            ScheduleStatus::Materialized
+        } else if self.cancellation.is_some() {
             ScheduleStatus::Cancelled
         } else if self.claimed {
             ScheduleStatus::Claimed
@@ -177,6 +182,10 @@ impl ScheduledTask {
 
     pub fn latest_release(&self) -> Option<&ScheduleRelease> {
         self.latest_release.as_ref()
+    }
+
+    pub fn task_id(&self) -> Option<&TaskId> {
+        self.task_id.as_ref()
     }
 }
 
@@ -199,6 +208,13 @@ pub enum ScheduleStoreError {
     },
     NotClaimed {
         schedule_id: ScheduleId,
+    },
+    AlreadyMaterialized {
+        schedule_id: ScheduleId,
+        task_id: TaskId,
+    },
+    TaskAlreadyExists {
+        task_id: TaskId,
     },
     ConcurrentModification {
         schedule_id: ScheduleId,
@@ -235,6 +251,16 @@ impl fmt::Display for ScheduleStoreError {
             }
             Self::NotClaimed { schedule_id } => {
                 write!(formatter, "schedule {schedule_id} is not claimed")
+            }
+            Self::AlreadyMaterialized {
+                schedule_id,
+                task_id,
+            } => write!(
+                formatter,
+                "schedule {schedule_id} is already materialized as task {task_id}"
+            ),
+            Self::TaskAlreadyExists { task_id } => {
+                write!(formatter, "task {task_id} already exists")
             }
             Self::ConcurrentModification {
                 schedule_id,
@@ -277,6 +303,8 @@ impl Error for ScheduleStoreError {
             | Self::AlreadyCancelled { .. }
             | Self::AlreadyClaimed { .. }
             | Self::NotClaimed { .. }
+            | Self::AlreadyMaterialized { .. }
+            | Self::TaskAlreadyExists { .. }
             | Self::ConcurrentModification { .. }
             | Self::NotDue { .. }
             | Self::InvalidStreamId { .. }
@@ -318,6 +346,7 @@ impl ScheduleStore {
                 cancellation: None,
                 claimed: false,
                 latest_release: None,
+                task_id: None,
                 revision: 1,
             }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
@@ -345,7 +374,7 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
-        if let Some(error) = terminal_schedule_error(id, scheduled.status()) {
+        if let Some(error) = terminal_schedule_error(id, &scheduled) {
             return Err(error);
         }
 
@@ -397,7 +426,7 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
-        if let Some(error) = terminal_schedule_error(id, scheduled.status()) {
+        if let Some(error) = terminal_schedule_error(id, &scheduled) {
             return Err(error);
         }
         if scheduled.due_at > cutoff {
@@ -465,6 +494,15 @@ impl ScheduleStore {
                     schedule_id: id.clone(),
                 });
             }
+            ScheduleStatus::Materialized => {
+                return Err(ScheduleStoreError::AlreadyMaterialized {
+                    schedule_id: id.clone(),
+                    task_id: scheduled
+                        .task_id
+                        .clone()
+                        .expect("materialized status always carries a task ID"),
+                });
+            }
         }
 
         let event = ScheduleEvent::Released {
@@ -485,6 +523,77 @@ impl ScheduleStore {
                 Some(current) => Err(ScheduleStoreError::ConcurrentModification {
                     schedule_id: id.clone(),
                     expected_revision: scheduled.revision,
+                    current_revision: current.revision,
+                }),
+                None => Err(ScheduleStoreError::NotFound {
+                    schedule_id: id.clone(),
+                }),
+            },
+            Err(error) => Err(ScheduleStoreError::EventLog(error)),
+        }
+    }
+
+    /// Atomically turns one claimed intent into one inert active task.
+    pub fn materialize(
+        &mut self,
+        id: &ScheduleId,
+        task_id: TaskId,
+    ) -> Result<ScheduledTask, ScheduleStoreError> {
+        let Some(mut scheduled) = self.load(id)? else {
+            return Err(ScheduleStoreError::NotFound {
+                schedule_id: id.clone(),
+            });
+        };
+        match scheduled.status() {
+            ScheduleStatus::Claimed => {}
+            ScheduleStatus::Pending => {
+                return Err(ScheduleStoreError::NotClaimed {
+                    schedule_id: id.clone(),
+                });
+            }
+            ScheduleStatus::Cancelled => {
+                return Err(ScheduleStoreError::AlreadyCancelled {
+                    schedule_id: id.clone(),
+                });
+            }
+            ScheduleStatus::Materialized => {
+                return Err(ScheduleStoreError::AlreadyMaterialized {
+                    schedule_id: id.clone(),
+                    task_id: scheduled
+                        .task_id
+                        .expect("materialized status always carries a task ID"),
+                });
+            }
+        }
+
+        let expected_revision = scheduled.revision;
+        let schedule_event = ScheduleEvent::Materialized {
+            task_id: task_id.clone(),
+        };
+        let task_event = TaskEvent::Started {
+            goal: scheduled.goal.clone(),
+        };
+        match self.event_log.append_pair(
+            &schedule_stream(id),
+            ExpectedVersion::Exact(expected_revision),
+            &schedule_event,
+            &task_stream(&task_id),
+            ExpectedVersion::NoStream,
+            &task_event,
+        ) {
+            Ok(_) => {
+                scheduled.task_id = Some(task_id);
+                scheduled.revision += 1;
+                Ok(scheduled)
+            }
+            Err(EventLogError::WrongExpectedVersion {
+                expected: ExpectedVersion::NoStream,
+                ..
+            }) => Err(ScheduleStoreError::TaskAlreadyExists { task_id }),
+            Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
+                Some(current) => Err(ScheduleStoreError::ConcurrentModification {
+                    schedule_id: id.clone(),
+                    expected_revision,
                     current_revision: current.revision,
                 }),
                 None => Err(ScheduleStoreError::NotFound {
@@ -567,6 +676,7 @@ impl ScheduleStore {
             cancellation: None,
             claimed: false,
             latest_release: None,
+            task_id: None,
             revision: event_count as u64,
         };
 
@@ -582,6 +692,9 @@ impl ScheduleStore {
                     scheduled.claimed = false;
                     scheduled.latest_release = Some(reason);
                 }
+                (ScheduleStatus::Claimed, ScheduleEvent::Materialized { task_id }) => {
+                    scheduled.task_id = Some(task_id);
+                }
                 _ => return Err(ScheduleStoreError::InvalidHistory { event_count }),
             }
         }
@@ -590,14 +703,24 @@ impl ScheduleStore {
     }
 }
 
-fn terminal_schedule_error(id: &ScheduleId, status: ScheduleStatus) -> Option<ScheduleStoreError> {
-    match status {
+fn terminal_schedule_error(
+    id: &ScheduleId,
+    scheduled: &ScheduledTask,
+) -> Option<ScheduleStoreError> {
+    match scheduled.status() {
         ScheduleStatus::Pending => None,
         ScheduleStatus::Cancelled => Some(ScheduleStoreError::AlreadyCancelled {
             schedule_id: id.clone(),
         }),
         ScheduleStatus::Claimed => Some(ScheduleStoreError::AlreadyClaimed {
             schedule_id: id.clone(),
+        }),
+        ScheduleStatus::Materialized => Some(ScheduleStoreError::AlreadyMaterialized {
+            schedule_id: id.clone(),
+            task_id: scheduled
+                .task_id
+                .clone()
+                .expect("materialized status always carries a task ID"),
         }),
     }
 }
@@ -621,6 +744,9 @@ enum ScheduleEvent {
     Released {
         reason: ScheduleRelease,
     },
+    Materialized {
+        task_id: TaskId,
+    },
 }
 
 impl Event for ScheduleEvent {
@@ -630,6 +756,7 @@ impl Event for ScheduleEvent {
             Self::Cancelled { .. } => SCHEDULE_CANCELLED_EVENT_TYPE,
             Self::Claimed {} => SCHEDULE_CLAIMED_EVENT_TYPE,
             Self::Released { .. } => SCHEDULE_RELEASED_EVENT_TYPE,
+            Self::Materialized { .. } => SCHEDULE_MATERIALIZED_EVENT_TYPE,
         }
     }
 
@@ -718,6 +845,25 @@ impl Event for ScheduleEvent {
                     },
                 )?;
                 Ok(Self::Released { reason })
+            }
+            SCHEDULE_MATERIALIZED_EVENT_TYPE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    task_id: String,
+                }
+
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let task_id = TaskId::new(payload.task_id).map_err(|error: TaskIdError| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(Self::Materialized { task_id })
             }
             _ => Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
