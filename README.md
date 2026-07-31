@@ -249,6 +249,7 @@ The first milestone is the **evidence loop**:
 90. Complete a task through an explicit caller-selected gate boundary without stale green authorization. ✅
 91. Advance a task-attributed workflow through exact authored gate Verification without stale green authorization. ✅
 92. Atomically complete an active task while its attributed workflow advances through verified authored gate evidence into terminal. ✅
+93. Persist inert one-shot task schedule intent and query due work against a caller-owned cutoff deterministically. ✅
 
 ## Project documents
 
@@ -263,6 +264,7 @@ The first milestone is the **evidence loop**:
 - [`docs/session-lifecycle.md`](docs/session-lifecycle.md) — persisted session lifecycle behavior
 - [`docs/tool-permissions.md`](docs/tool-permissions.md) — in-process tool permission and durable invocation-evidence behavior
 - [`docs/extension-manifests.md`](docs/extension-manifests.md) — versioned capability metadata and its non-executing trust boundary
+- [`docs/scheduler.md`](docs/scheduler.md) — durable one-shot schedule intent and caller-owned time authority
 - [`docs/adr/`](docs/adr/) — architecture decision records
 
 ## Contributing
