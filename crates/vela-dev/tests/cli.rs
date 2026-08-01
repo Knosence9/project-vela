@@ -296,6 +296,23 @@ fn schedule_cancellation_rejects_stale_missing_and_claimed_intent_without_append
 fn schedule_cancellation_validates_before_storage_and_reports_storage_failures() {
     let directory = tempdir().expect("schedule database directory");
 
+    let invalid_revision = directory.path().join("invalid-revision.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "cancel",
+            invalid_revision.to_str().expect("UTF-8 database path"),
+            "id",
+            "not-a-revision",
+            "reason",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid value 'not-a-revision'"));
+    assert!(!invalid_revision.exists());
+
     for (name, id, reason, expected_error) in [
         ("invalid-id.sqlite3", " ", "reason", "invalid_schedule_id"),
         (
