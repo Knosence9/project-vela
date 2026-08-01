@@ -204,6 +204,21 @@ schedules fail with one escaped diagnostic and no lifecycle append. Release
 does not infer worker death, read ambient time, dispatch, materialize, retry,
 grant permission, or execute anything.
 
+Materialize one exact observed claim as one caller-identified inert active task:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule materialize path/to/events.sqlite3 schedule-id 2 task-id
+```
+
+The command validates both exact identities and the numeric revision before
+opening writable storage, then atomically appends the materialization and task
+start only if the supplied revision remains claimed and the task ID is unused.
+Success emits the complete compact materialized schedule JSON object. Missing,
+stale, pending, cancelled, already-materialized, or task-colliding inputs fail
+with one escaped diagnostic, no orphan task, and no schedule append.
+Materialization does not read ambient time, infer worker identity, dispatch,
+advance a workflow, call a provider or tool, retry, or execute work.
+
 Inspect every durable one-shot schedule in an existing event-log database without
 granting the CLI write or creation authority:
 
@@ -400,6 +415,7 @@ The first milestone is the **evidence loop**:
 111. Cancel one exact pending durable schedule revision through deterministic JSON without granting interruption or execution authority. ✅
 112. Claim one exact due durable schedule revision through deterministic JSON without granting dispatch or execution authority. ✅
 113. Release one exact claimed durable schedule revision through deterministic JSON without inferring worker state or granting dispatch authority. ✅
+114. Materialize one exact claimed durable schedule revision through deterministic JSON without granting dispatch or execution authority. ✅
 
 ## Project documents
 
