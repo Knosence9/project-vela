@@ -569,7 +569,7 @@ fn schedule_task_lookup_reports_ambiguous_corrupted_bindings() {
             "INSERT INTO events
              (stream_id, stream_version, event_type, payload_version, payload)
              VALUES ('schedule:second', 3, 'schedule.materialized', 1, ?1)",
-            [br#"{\"task_id\":\"duplicate-task\"}"#.as_slice()],
+            [br#"{"task_id":"duplicate-task"}"#.as_slice()],
         )
         .unwrap();
 
@@ -584,9 +584,9 @@ fn schedule_task_lookup_reports_ambiguous_corrupted_bindings() {
         .assert()
         .code(1)
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::starts_with(
-            "$: schedule_task_lookup_failed:",
-        ));
+        .stderr(
+            "$: schedule_task_lookup_failed: \"task duplicate-task is bound to 2 schedules\"\n",
+        );
 }
 
 #[test]
