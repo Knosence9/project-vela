@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect exact schedule lifecycle history",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/821 by exposing one validated typed schedule history through deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Add vela-dev schedule history for one validated exact schedule identity.",
+      "Emit typed entries in exact revision order and preserve null for a valid missing schedule.",
+      "Validate identity before storage access and escape exact untrusted lifecycle strings.",
+      "Fail closed without partial output, storage creation, mutation, clock, dispatch, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED schedule-history CLI behavior.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because history was not a recognized schedule subcommand.",
+      "patch": "Added full created-claim-release-claim-materialize ordering, cancellation, missing, escaping, invalid-ID, and missing-storage tests."
+    },
+    {
+      "summary": "Mapped validated typed history into deterministic JSON.",
+      "outcome": "success",
+      "diagnostic": "The kernel exposed complete typed history, but operators could not query one schedule without writing Rust.",
+      "patch": "Validated ScheduleId before opening the read-only store, preserved the kernel's missing-stream distinction, and mapped each typed event locally without speculative abstraction."
+    },
+    {
+      "summary": "Completed exact-head review after a false-green pause.",
+      "outcome": "success",
+      "diagnostic": "The initial automatic CodeRabbit result was rate limited, so its success status did not constitute substantive review.",
+      "patch": "Waited for the resumed four-file walkthrough, which found no actionable comments and confirmed validation, typed mapping, deterministic output, and bounded scope."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can inspect one schedule's complete typed lifecycle in exact revision order while preserving absence and failure distinctions.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-dev --test cli", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30692678975", "status": "passed"},
+      {"command": "Pull request 822 squash merge 1bb9e821ea0031a93540445beb6919da64251a00", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Expose already-validated typed history rather than raw event rows at the CLI boundary.",
+    "Preserve null for a missing aggregate so absence is not confused with an existing empty lifecycle.",
+    "Validate exact identities before filesystem access and preserve accepted strings without hidden normalization.",
+    "Keep a one-use event mapping local until real duplication justifies shared abstraction.",
+    "Require substantive review of the exact PR head before treating a successful review status as merge evidence."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/822"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect durable schedules through deterministic JSON",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/817 by exposing typed schedule inventory through a read-only developer CLI.",
+    "acceptance_criteria": [
+      "Add vela-dev schedule inspect for one exact caller-selected database.",
+      "Emit one compact deterministic JSON document containing complete typed lifecycle projections.",
+      "Return no partial stdout and do not create storage on open, schema, replay, projection, or serialization failure.",
+      "Grant no cutoff choice, lifecycle mutation, claim, materialization, dispatch, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED CLI inventory behavior.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI test failed because schedule was an unrecognized subcommand.",
+      "patch": "Added deterministic mixed-status, escaping, empty-inventory, missing-database, and non-creation integration coverage."
+    },
+    {
+      "summary": "Implemented typed read-only schedule inspection.",
+      "outcome": "success",
+      "diagnostic": "Operators needed Rust code to access the kernel projection and could not inspect durable schedules without a practical interface.",
+      "patch": "Added schedule inspect, opened only through ScheduleStore::open_read_only, mapped all lifecycle evidence, serialized before output, and emitted one escaped failure diagnostic."
+    },
+    {
+      "summary": "Verified the complete CLI authority boundary.",
+      "outcome": "success",
+      "diagnostic": "The initial CodeRabbit status was rate limited and therefore insufficient for merge readiness.",
+      "patch": "Kept auto-merge disabled until a substantive four-file walkthrough completed with no actionable comments and confirmed deterministic read-only behavior."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can inspect every durable schedule as deterministic complete JSON without direct SQL or schedule mutation authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-dev --test cli", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30688043185", "status": "passed"},
+      {"command": "Pull request 818 squash merge 15e22c4e99a20606ceea38345dbf6035d352f642", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Build inspection CLIs over typed domain projections instead of duplicating storage interpretation with direct SQL.",
+    "Serialize the complete response before writing stdout so failures cannot leave a plausible partial document.",
+    "Deterministic ordering and JSON escaping make persisted operational evidence scriptable and safe to compare.",
+    "An observation command should omit mutation options rather than relying only on user restraint.",
+    "A rate-limited review status is not substantive merge evidence; keep auto-merge disabled until exact-head review completes."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/818"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

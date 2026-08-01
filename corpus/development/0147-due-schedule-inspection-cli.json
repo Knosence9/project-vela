@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect due schedules against an explicit cutoff",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/819 by exposing pending due work without ambient clock or mutation authority.",
+    "acceptance_criteria": [
+      "Add vela-dev schedule due with one exact non-negative Unix-millisecond cutoff.",
+      "Use the typed read-only list_due projection and preserve due-instant then exact-ID ordering.",
+      "Include only pending schedules due at or before the inclusive caller-supplied cutoff.",
+      "Emit no partial output and never create storage, claim, dispatch, materialize, or execute work."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED due-schedule CLI coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused integration test failed because due was an unrecognized schedule subcommand.",
+      "patch": "Added inclusive cutoff, deterministic ordering, lifecycle filtering, empty result, invalid cutoff, and missing-database non-creation tests."
+    },
+    {
+      "summary": "Implemented caller-clocked read-only due inspection.",
+      "outcome": "success",
+      "diagnostic": "The kernel due projection was unavailable to operators and reading ambient time would make inspection nondeterministic and broaden authority.",
+      "patch": "Parsed an exact u64 cutoff before storage access, called ScheduleStore::list_due, and reused the existing compact schedule projection and complete serialization path."
+    },
+    {
+      "summary": "Waited for genuine hosted review coverage.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit first returned a rate-limited false green and later remained pending after the Rust quality gate succeeded.",
+      "patch": "Kept auto-merge unarmed until the substantive four-file review completed with no actionable comments and confirmed explicit-time, no-mutation behavior."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can deterministically inspect pending schedules due by an explicit instant without granting the CLI clock or lifecycle authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-dev --test cli schedule", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30690212699", "status": "passed"},
+      {"command": "Pull request 820 squash merge 484a17c9085bd1d2856da063ed3507d997887599", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Accept time as explicit caller evidence when a read-only query does not need ambient clock authority.",
+    "Parse bounded input before opening storage so invalid requests cannot trigger filesystem side effects.",
+    "Reuse kernel ordering and filtering instead of recreating scheduler semantics in the CLI.",
+    "Due inspection identifies candidates; it does not reserve, claim, dispatch, or execute them.",
+    "A rate-limited review status is not substantive merge evidence; keep auto-merge disabled until exact-head review completes."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/820"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

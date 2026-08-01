@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Bind claimed-schedule consumption to exact revisions",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/811 by preventing an earlier claimant from releasing or materializing a later claim after an ABA lifecycle cycle.",
+    "acceptance_criteria": [
+      "Expose the current persisted schedule revision as read-only caller evidence.",
+      "Require the exact observed claimed revision for release and materialization.",
+      "Reject stale claimants with typed concurrent-modification evidence and no release, schedule, or orphan task write.",
+      "Keep revisions separate from worker identity, permission, leases, clocks, recovery policy, dispatch, and execution."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED stale-claim regression coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused test build failed because ScheduledTask::revision and revision-bound release and materialization APIs did not exist.",
+      "patch": "Added ABA release and materialization tests, including an assertion that rejected stale materialization creates no orphan task."
+    },
+    {
+      "summary": "Implemented exact-revision claim consumption.",
+      "outcome": "success",
+      "diagnostic": "A schedule ID identified the aggregate but not the exact claim observation authorized for consumption.",
+      "patch": "Exposed persisted revisions, centralized revision validation, and guarded release and materialization with the caller's exact observed revision."
+    },
+    {
+      "summary": "Completed independent and hosted review.",
+      "outcome": "success",
+      "diagnostic": "The substantive CodeRabbit walkthrough reviewed all five changed files and generated no actionable comments.",
+      "patch": "Retained the bounded revision-authority contract after independent review found no blocking correctness, concurrency, authority, test, or documentation issue."
+    }
+  ],
+  "outcome": {
+    "summary": "Claim-consuming schedule transitions now fail closed when a caller presents stale claim evidence, including after release and reclaim cycles.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test -p vela-kernel --test schedule_store stale_claim_revision", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30676370123", "status": "passed"},
+      {"command": "Pull request 812 squash merge bece4caa659f95e9ad540ccf5ba54de1a5805707", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "An aggregate identity is not sufficient concurrency authority when one lifecycle can return to the same claimed state.",
+    "Validate the observed revision before lifecycle-state interpretation so stale evidence reports a concurrency conflict rather than consuming newer state.",
+    "Atomic materialization must reject stale schedule evidence before creating the paired task stream.",
+    "A persisted revision proves which observation is being changed; it does not identify a worker or grant execution permission."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/812"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

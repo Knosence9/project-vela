@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Resolve schedule provenance through the developer CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/823 by exposing exact provenance from a task to its schedule as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Add vela-dev schedule task for one validated exact task identity.",
+      "Return the complete existing schedule projection or null for a valid unbound task.",
+      "Fail closed on malformed or ambiguous persisted bindings without partial output or storage creation.",
+      "Keep lookup separate from schedule mutation, task lifecycle, dispatch, provider, tool, and execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED task provenance CLI behavior.",
+      "outcome": "failure",
+      "diagnostic": "The first CLI integration test failed because task was not a recognized schedule subcommand.",
+      "patch": "Added bound, unbound, escaped, empty-ID, missing-storage, and ambiguous-corruption integration coverage."
+    },
+    {
+      "summary": "Implemented exact read-only task lookup.",
+      "outcome": "success",
+      "diagnostic": "The typed reverse lookup existed only in the kernel and the inventory JSON mapping had begun to duplicate schedule projection logic.",
+      "patch": "Validated TaskId before storage access, routed it through ScheduleStore::find_by_task_id, and extracted the already-duplicated schedule JSON mapping."
+    },
+    {
+      "summary": "Fixed the substantive review finding with focused RED-to-GREEN evidence.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that the ambiguity test inserted escaped quotation marks inside a SQL parameter, producing invalid JSON and exercising decode failure instead of AmbiguousTaskBinding.",
+      "patch": "Replaced the fixture with valid duplicate-binding JSON, confirmed the test failed when ambiguity handling was disabled and passed when restored, resolved the thread, and completed exact-head review."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can resolve exact task schedule provenance while absent, malformed, and ambiguous evidence remain distinct and fail closed where required.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-dev --test cli task_schedule", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30695784653", "status": "passed"},
+      {"command": "Pull request 824 squash merge 2b30e8148219a883afed9a98a06da9cc11d28448", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Test fixtures must reach the intended typed failure path; malformed setup data can make a negative test pass for the wrong reason.",
+    "A review finding about test reachability deserves explicit RED-to-GREEN proof, not only a corrected literal.",
+    "Return null for a valid unbound task but fail closed when corrupted state binds one task to multiple schedules.",
+    "Extract a shared projection only after two real CLI paths need the same complete schedule shape.",
+    "After fixing a reviewed commit, require substantive review of the exact new head rather than accepting a rate-limit success status."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/824"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
