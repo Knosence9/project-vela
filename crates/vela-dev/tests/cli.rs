@@ -193,6 +193,117 @@ fn schedule_inspection_reports_empty_and_missing_storage_without_creation() {
 }
 
 #[test]
+fn inspects_due_schedules_at_an_inclusive_caller_owned_cutoff() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).expect("writable schedule store");
+
+    for (id, goal, due_at) in [
+        ("same-z", "second at cutoff", 20),
+        ("earlier", "first by due instant", 10),
+        ("same-a", "first at cutoff", 20),
+        ("future", "not due", 21),
+    ] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(goal).unwrap(),
+                ScheduleInstant::from_unix_millis(due_at),
+            )
+            .unwrap();
+    }
+
+    let claimed_id = ScheduleId::new("claimed").unwrap();
+    let claimed = store
+        .schedule(
+            claimed_id.clone(),
+            TaskGoal::new("not pending").unwrap(),
+            ScheduleInstant::from_unix_millis(5),
+        )
+        .unwrap();
+    store
+        .claim(
+            &claimed_id,
+            claimed.revision(),
+            ScheduleInstant::from_unix_millis(5),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "due",
+            database.to_str().expect("UTF-8 database path"),
+            "20",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"schedules\":[",
+            "{\"id\":\"earlier\",\"goal\":\"first by due instant\",\"due_at_unix_millis\":10,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null},",
+            "{\"id\":\"same-a\",\"goal\":\"first at cutoff\",\"due_at_unix_millis\":20,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null},",
+            "{\"id\":\"same-z\",\"goal\":\"second at cutoff\",\"due_at_unix_millis\":20,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null}",
+            "]}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn due_schedule_inspection_fails_closed_without_creating_storage() {
+    let directory = tempdir().expect("schedule database directory");
+    let empty = directory.path().join("empty.sqlite3");
+    drop(ScheduleStore::open(&empty).expect("empty schedule store"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "due",
+            empty.to_str().expect("UTF-8 database path"),
+            "0",
+        ])
+        .assert()
+        .success()
+        .stdout("{\"schedules\":[]}\n")
+        .stderr(predicate::str::is_empty());
+
+    let missing = directory.path().join("missing.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "due",
+            missing.to_str().expect("UTF-8 database path"),
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: schedule_inspection_failed:",
+        ));
+    assert!(!missing.exists());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "due",
+            missing.to_str().expect("UTF-8 database path"),
+            "not-a-millisecond",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "invalid value 'not-a-millisecond'",
+        ));
+    assert!(!missing.exists());
+}
+
+#[test]
 fn record_help_describes_development_records() {
     let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
 

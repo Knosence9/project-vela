@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
-use vela_kernel::scheduler::{ScheduleStatus, ScheduleStore};
+use vela_kernel::scheduler::{ScheduleInstant, ScheduleStatus, ScheduleStore};
 use vela_kernel::tool::{
     PermissionDecision, ToolAuthorizer, ToolEffect, ToolId, ToolRegistry, ToolRequest,
 };
@@ -53,6 +53,11 @@ pub enum Command {
 pub enum ScheduleCommand {
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
+    /// Print pending schedules due by one explicit Unix-millisecond cutoff.
+    Due {
+        database: PathBuf,
+        cutoff_unix_millis: u64,
+    },
 }
 
 /// Extension-package workflows.
@@ -105,7 +110,14 @@ impl Cli {
             }) => invoke_extension(&root, &id, &input_json),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Inspect { database }),
-            }) => inspect_schedules(&database),
+            }) => inspect_schedules(&database, None),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::Due {
+                        database,
+                        cutoff_unix_millis,
+                    }),
+            }) => inspect_schedules(&database, Some(cutoff_unix_millis)),
             _ => ExitCode::SUCCESS,
         }
     }
@@ -128,12 +140,15 @@ struct ScheduleInspection<'a> {
     task_id: Option<&'a str>,
 }
 
-fn inspect_schedules(database: &Path) -> ExitCode {
+fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCode {
     let store = match ScheduleStore::open_read_only(database) {
         Ok(store) => store,
         Err(error) => return extension_error("schedule_inspection_failed", error),
     };
-    let schedules = match store.list() {
+    let schedules = match cutoff_unix_millis.map_or_else(
+        || store.list(),
+        |cutoff| store.list_due(ScheduleInstant::from_unix_millis(cutoff)),
+    ) {
         Ok(schedules) => schedules,
         Err(error) => return extension_error("schedule_inspection_failed", error),
     };
