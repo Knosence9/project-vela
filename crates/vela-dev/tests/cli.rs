@@ -456,6 +456,140 @@ fn schedule_history_rejects_invalid_input_before_storage_and_never_creates_stora
 }
 
 #[test]
+fn resolves_materialized_schedule_by_exact_task_identity() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).expect("writable schedule store");
+    let id = ScheduleId::new("bound\nschedule").unwrap();
+    let task_id = TaskId::new("task\tidentity").unwrap();
+    let scheduled = store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("run \"exactly\"").unwrap(),
+            ScheduleInstant::from_unix_millis(44),
+        )
+        .unwrap();
+    let claimed = store
+        .claim(
+            &id,
+            scheduled.revision(),
+            ScheduleInstant::from_unix_millis(44),
+        )
+        .unwrap();
+    store
+        .materialize(&id, claimed.revision(), task_id.clone())
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "task",
+            database.to_str().expect("UTF-8 database path"),
+            task_id.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"task_id\":\"task\\tidentity\",\"schedule\":{",
+            "\"id\":\"bound\\nschedule\",\"goal\":\"run \\\"exactly\\\"\",",
+            "\"due_at_unix_millis\":44,\"status\":\"materialized\",\"revision\":3,",
+            "\"cancellation\":null,\"latest_release\":null,\"task_id\":\"task\\tidentity\"}}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn schedule_task_lookup_preserves_absence_and_fails_closed() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    drop(ScheduleStore::open(&database).expect("empty schedule store"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["schedule", "task", database.to_str().unwrap(), "unbound"])
+        .assert()
+        .success()
+        .stdout("{\"task_id\":\"unbound\",\"schedule\":null}\n")
+        .stderr(predicate::str::is_empty());
+
+    let missing = directory.path().join("missing.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["schedule", "task", missing.to_str().unwrap(), ""])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: invalid_task_id:"));
+    assert!(!missing.exists());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["schedule", "task", missing.to_str().unwrap(), "valid"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: schedule_task_lookup_failed:",
+        ));
+    assert!(!missing.exists());
+}
+
+#[test]
+fn schedule_task_lookup_reports_ambiguous_corrupted_bindings() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let task_id = TaskId::new("duplicate-task").unwrap();
+    let mut store = ScheduleStore::open(&database).unwrap();
+    for raw_id in ["first", "second"] {
+        let id = ScheduleId::new(raw_id).unwrap();
+        let scheduled = store
+            .schedule(
+                id.clone(),
+                TaskGoal::new(format!("goal-{raw_id}")).unwrap(),
+                ScheduleInstant::from_unix_millis(1),
+            )
+            .unwrap();
+        store
+            .claim(
+                &id,
+                scheduled.revision(),
+                ScheduleInstant::from_unix_millis(1),
+            )
+            .unwrap();
+    }
+    store
+        .materialize(&ScheduleId::new("first").unwrap(), 2, task_id.clone())
+        .unwrap();
+    drop(store);
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:second', 3, 'schedule.materialized', 1, ?1)",
+            [br#"{"task_id":"duplicate-task"}"#.as_slice()],
+        )
+        .unwrap();
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "task",
+            database.to_str().unwrap(),
+            task_id.as_str(),
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(
+            "$: schedule_task_lookup_failed: \"task duplicate-task is bound to 2 schedules\"\n",
+        );
+}
+
+#[test]
 fn record_help_describes_development_records() {
     let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
 

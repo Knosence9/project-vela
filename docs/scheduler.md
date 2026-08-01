@@ -67,6 +67,20 @@ schema, replay, projection, and serialization failures emit one escaped
 never created. History inspection cannot mutate lifecycle state, read ambient
 time, dispatch, retry, or execute a schedule or task.
 
+`vela-dev schedule task DATABASE TASK_ID` validates the exact task identity
+before opening the caller-selected database read-only, then emits one compact
+JSON document containing `task_id` and `schedule`. A materialized binding uses
+the same complete deterministic schedule-object shape as inventory inspection;
+an unbound valid identity is represented by `"schedule":null`. Accepted task
+identities and every schedule field retain exact caller-authored content, with
+JSON escaping applied during serialization.
+
+Empty task IDs fail before storage access with `invalid_task_id`. Open, WAL,
+schema, replay, ambiguity, projection, and serialization failures emit one
+escaped `schedule_task_lookup_failed` diagnostic and no partial stdout. Missing
+storage is never created. Task provenance lookup cannot mutate lifecycle state,
+read ambient time, dispatch, retry, or execute a schedule or task.
+
 ## Authority boundary
 
 The caller owns every status filter, every cutoff supplied to `list_due` or `claim`, every cancellation, claim, exact revision supplied to a mutation, task-ID binding decision, and action taken from a listed, due, claimed, materialized, historical, or task-provenance result. Full, status-filtered, historical, and task-provenance discovery are read-only and grant no authority; `open_read_only` additionally removes SQLite write and creation authority but is not a snapshot, secrecy boundary, or filesystem permission grant. Cancellation prevents future due selection but does not interrupt work already selected elsewhere. A revision identifies one exact persisted observation and prevents an earlier observer or claimant from consuming later lifecycle state; it is not worker identity, a permission grant, a lease, or proof of liveness. A claim is only a durable reservation, release is only caller-authored recovery evidence, and materialization only creates inert active task state: none infers worker health, starts or advances a workflow, calls a provider, invokes a tool, grants or revokes permission, sleeps, retries, or executes task work.

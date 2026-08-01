@@ -11,8 +11,9 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleStatus, ScheduleStore,
+    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleStatus, ScheduleStore, ScheduledTask,
 };
+use vela_kernel::task::TaskId;
 use vela_kernel::tool::{
     PermissionDecision, ToolAuthorizer, ToolEffect, ToolId, ToolRegistry, ToolRequest,
 };
@@ -62,6 +63,8 @@ pub enum ScheduleCommand {
     },
     /// Print one exact schedule's validated lifecycle history.
     History { database: PathBuf, id: String },
+    /// Resolve one materialized schedule from an exact task identity.
+    Task { database: PathBuf, task_id: String },
 }
 
 /// Extension-package workflows.
@@ -125,6 +128,9 @@ impl Cli {
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::History { database, id }),
             }) => inspect_schedule_history(&database, &id),
+            Some(Command::Schedule {
+                command: Some(ScheduleCommand::Task { database, task_id }),
+            }) => inspect_schedule_task(&database, &task_id),
             _ => ExitCode::SUCCESS,
         }
     }
@@ -145,6 +151,12 @@ struct ScheduleInspection<'a> {
     cancellation: Option<&'a str>,
     latest_release: Option<&'a str>,
     task_id: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct ScheduleTaskInspection<'a> {
+    task_id: &'a str,
+    schedule: Option<ScheduleInspection<'a>>,
 }
 
 #[derive(Serialize)]
@@ -259,24 +271,7 @@ fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCo
         Err(error) => return extension_error("schedule_inspection_failed", error),
     };
     let inventory = ScheduleInventory {
-        schedules: schedules
-            .iter()
-            .map(|scheduled| ScheduleInspection {
-                id: scheduled.id().as_str(),
-                goal: scheduled.goal().as_str(),
-                due_at_unix_millis: scheduled.due_at().unix_millis(),
-                status: match scheduled.status() {
-                    ScheduleStatus::Pending => "pending",
-                    ScheduleStatus::Cancelled => "cancelled",
-                    ScheduleStatus::Claimed => "claimed",
-                    ScheduleStatus::Materialized => "materialized",
-                },
-                revision: scheduled.revision(),
-                cancellation: scheduled.cancellation().map(|reason| reason.as_str()),
-                latest_release: scheduled.latest_release().map(|reason| reason.as_str()),
-                task_id: scheduled.task_id().map(|id| id.as_str()),
-            })
-            .collect(),
+        schedules: schedules.iter().map(schedule_inspection).collect(),
     };
     let output = match serde_json::to_string(&inventory) {
         Ok(output) => output,
@@ -284,6 +279,48 @@ fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCo
     };
     println!("{output}");
     ExitCode::SUCCESS
+}
+
+fn inspect_schedule_task(database: &Path, raw_task_id: &str) -> ExitCode {
+    let task_id = match TaskId::new(raw_task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return extension_error("invalid_task_id", error),
+    };
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_task_lookup_failed", error),
+    };
+    let scheduled = match store.find_by_task_id(&task_id) {
+        Ok(scheduled) => scheduled,
+        Err(error) => return extension_error("schedule_task_lookup_failed", error),
+    };
+    let output = match serde_json::to_string(&ScheduleTaskInspection {
+        task_id: task_id.as_str(),
+        schedule: scheduled.as_ref().map(schedule_inspection),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_task_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn schedule_inspection(scheduled: &ScheduledTask) -> ScheduleInspection<'_> {
+    ScheduleInspection {
+        id: scheduled.id().as_str(),
+        goal: scheduled.goal().as_str(),
+        due_at_unix_millis: scheduled.due_at().unix_millis(),
+        status: match scheduled.status() {
+            ScheduleStatus::Pending => "pending",
+            ScheduleStatus::Cancelled => "cancelled",
+            ScheduleStatus::Claimed => "claimed",
+            ScheduleStatus::Materialized => "materialized",
+        },
+        revision: scheduled.revision(),
+        cancellation: scheduled.cancellation().map(|reason| reason.as_str()),
+        latest_release: scheduled.latest_release().map(|reason| reason.as_str()),
+        task_id: scheduled.task_id().map(|id| id.as_str()),
+    }
 }
 
 fn invoke_extension(root: &Path, id: &str, input_json: &str) -> ExitCode {
