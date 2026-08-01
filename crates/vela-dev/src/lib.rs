@@ -56,6 +56,8 @@ pub enum Command {
 pub enum ScheduleCommand {
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
+    /// Print durable schedules with one exact lifecycle status.
+    Status { database: PathBuf, status: String },
     /// Print pending schedules due by one explicit Unix-millisecond cutoff.
     Due {
         database: PathBuf,
@@ -118,6 +120,9 @@ impl Cli {
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Inspect { database }),
             }) => inspect_schedules(&database, None),
+            Some(Command::Schedule {
+                command: Some(ScheduleCommand::Status { database, status }),
+            }) => inspect_schedules_by_status(&database, &status),
             Some(Command::Schedule {
                 command:
                     Some(ScheduleCommand::Due {
@@ -270,12 +275,40 @@ fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCo
         Ok(schedules) => schedules,
         Err(error) => return extension_error("schedule_inspection_failed", error),
     };
+    write_schedule_inventory(&schedules, "schedule_inspection_failed")
+}
+
+fn inspect_schedules_by_status(database: &Path, raw_status: &str) -> ExitCode {
+    let status = match raw_status {
+        "pending" => ScheduleStatus::Pending,
+        "cancelled" => ScheduleStatus::Cancelled,
+        "claimed" => ScheduleStatus::Claimed,
+        "materialized" => ScheduleStatus::Materialized,
+        _ => {
+            return extension_error(
+                "invalid_schedule_status",
+                "expected pending, cancelled, claimed, or materialized",
+            );
+        }
+    };
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_status_inspection_failed", error),
+    };
+    let schedules = match store.list_by_status(status) {
+        Ok(schedules) => schedules,
+        Err(error) => return extension_error("schedule_status_inspection_failed", error),
+    };
+    write_schedule_inventory(&schedules, "schedule_status_inspection_failed")
+}
+
+fn write_schedule_inventory(schedules: &[ScheduledTask], error_code: &str) -> ExitCode {
     let inventory = ScheduleInventory {
         schedules: schedules.iter().map(schedule_inspection).collect(),
     };
     let output = match serde_json::to_string(&inventory) {
         Ok(output) => output,
-        Err(error) => return extension_error("schedule_inspection_failed", error),
+        Err(error) => return extension_error(error_code, error),
     };
     println!("{output}");
     ExitCode::SUCCESS

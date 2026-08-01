@@ -304,6 +304,170 @@ fn due_schedule_inspection_fails_closed_without_creating_storage() {
 }
 
 #[test]
+fn inspects_schedules_by_each_exact_lifecycle_status() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).expect("writable schedule store");
+
+    for id in ["pending-z", "pending-a"] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(format!("goal-{id}")).unwrap(),
+                ScheduleInstant::from_unix_millis(10),
+            )
+            .unwrap();
+    }
+    let cancelled_id = ScheduleId::new("cancelled").unwrap();
+    let cancelled = store
+        .schedule(
+            cancelled_id.clone(),
+            TaskGoal::new("cancelled goal").unwrap(),
+            ScheduleInstant::from_unix_millis(20),
+        )
+        .unwrap();
+    store
+        .cancel(
+            &cancelled_id,
+            cancelled.revision(),
+            ScheduleCancellation::new("not needed").unwrap(),
+        )
+        .unwrap();
+    let claimed_id = ScheduleId::new("claimed").unwrap();
+    let claimed = store
+        .schedule(
+            claimed_id.clone(),
+            TaskGoal::new("claimed goal").unwrap(),
+            ScheduleInstant::from_unix_millis(30),
+        )
+        .unwrap();
+    store
+        .claim(
+            &claimed_id,
+            claimed.revision(),
+            ScheduleInstant::from_unix_millis(30),
+        )
+        .unwrap();
+    let materialized_id = ScheduleId::new("materialized").unwrap();
+    let materialized = store
+        .schedule(
+            materialized_id.clone(),
+            TaskGoal::new("materialized goal").unwrap(),
+            ScheduleInstant::from_unix_millis(40),
+        )
+        .unwrap();
+    let materialized = store
+        .claim(
+            &materialized_id,
+            materialized.revision(),
+            ScheduleInstant::from_unix_millis(40),
+        )
+        .unwrap();
+    store
+        .materialize(
+            &materialized_id,
+            materialized.revision(),
+            TaskId::new("task-1").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let cases = [
+        (
+            "pending",
+            concat!(
+                "{\"schedules\":[",
+                "{\"id\":\"pending-a\",\"goal\":\"goal-pending-a\",\"due_at_unix_millis\":10,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null},",
+                "{\"id\":\"pending-z\",\"goal\":\"goal-pending-z\",\"due_at_unix_millis\":10,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null}]}\n"
+            ),
+        ),
+        (
+            "cancelled",
+            "{\"schedules\":[{\"id\":\"cancelled\",\"goal\":\"cancelled goal\",\"due_at_unix_millis\":20,\"status\":\"cancelled\",\"revision\":2,\"cancellation\":\"not needed\",\"latest_release\":null,\"task_id\":null}]}\n",
+        ),
+        (
+            "claimed",
+            "{\"schedules\":[{\"id\":\"claimed\",\"goal\":\"claimed goal\",\"due_at_unix_millis\":30,\"status\":\"claimed\",\"revision\":2,\"cancellation\":null,\"latest_release\":null,\"task_id\":null}]}\n",
+        ),
+        (
+            "materialized",
+            "{\"schedules\":[{\"id\":\"materialized\",\"goal\":\"materialized goal\",\"due_at_unix_millis\":40,\"status\":\"materialized\",\"revision\":3,\"cancellation\":null,\"latest_release\":null,\"task_id\":\"task-1\"}]}\n",
+        ),
+    ];
+    for (status, expected) in cases {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args(["schedule", "status", database.to_str().unwrap(), status])
+            .assert()
+            .success()
+            .stdout(expected)
+            .stderr(predicate::str::is_empty());
+    }
+}
+
+#[test]
+fn schedule_status_inspection_rejects_invalid_input_before_storage() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    drop(ScheduleStore::open(&database).expect("empty schedule store"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["schedule", "status", database.to_str().unwrap(), "pending"])
+        .assert()
+        .success()
+        .stdout("{\"schedules\":[]}\n")
+        .stderr(predicate::str::is_empty());
+
+    let missing = directory.path().join("missing.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["schedule", "status", missing.to_str().unwrap(), "PENDING"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: invalid_schedule_status:"));
+    assert!(!missing.exists());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["schedule", "status", missing.to_str().unwrap(), "pending"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: schedule_status_inspection_failed:",
+        ));
+    assert!(!missing.exists());
+}
+
+#[test]
+fn schedule_status_inspection_fails_closed_on_invalid_history() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    drop(ScheduleStore::open(&database).expect("writable schedule store"));
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:broken', 1, 'schedule.created', 1, '{}')",
+            [],
+        )
+        .unwrap();
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["schedule", "status", database.to_str().unwrap(), "pending"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: schedule_status_inspection_failed:",
+        ));
+}
+
+#[test]
 fn inspects_exact_schedule_history_as_revision_ordered_json() {
     let directory = tempdir().expect("schedule database directory");
     let database = directory.path().join("events.sqlite3");

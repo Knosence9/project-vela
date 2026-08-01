@@ -52,6 +52,19 @@ The due command does not read ambient time or infer that returned work should
 run. It cannot mutate, claim, release, cancel, materialize, dispatch, retry, or
 execute a schedule or task.
 
+`vela-dev schedule status DATABASE STATUS` validates one exact lowercase
+`pending`, `cancelled`, `claimed`, or `materialized` status before opening the
+caller-selected database read-only, then supplies that typed status to
+`ScheduleStore::list_by_status`. It emits the same compact complete schedule
+objects as inventory inspection in exact-ID order. An unmatched status returns
+`{"schedules":[]}`.
+
+Invalid status input emits `invalid_schedule_status` without accessing storage.
+Open, WAL, schema, replay, projection, and serialization failures emit one
+escaped `schedule_status_inspection_failed` diagnostic and no partial stdout;
+missing storage is never created. Status inspection cannot read time, mutate a
+lifecycle, claim, dispatch, retry, materialize, or execute a schedule or task.
+
 `vela-dev schedule history DATABASE SCHEDULE_ID` validates the exact schedule
 ID before opening the caller-selected database read-only, then emits one compact
 JSON document containing `id` and `history`. Existing histories are arrays in
