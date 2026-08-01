@@ -163,6 +163,19 @@ projection. It may create the selected database. Duplicate IDs and storage
 failures produce one escaped diagnostic without replacing existing intent.
 Creation does not read ambient time, claim, dispatch, retry, or execute work.
 
+Cancel one exact observed pending schedule revision with caller-owned evidence:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule cancel path/to/events.sqlite3 schedule-id 1 'operator request'
+```
+
+The command validates the exact ID and non-blank reason before opening writable
+storage, then appends cancellation only if the supplied revision is still
+pending. Success emits the complete compact cancelled schedule projection.
+Missing, stale, claimed, materialized, or already-cancelled schedules fail with
+one escaped diagnostic and no lifecycle append. Cancellation does not read
+ambient time, interrupt dispatched work, claim, retry, or execute anything.
+
 Inspect every durable one-shot schedule in an existing event-log database without
 granting the CLI write or creation authority:
 
@@ -355,6 +368,8 @@ The first milestone is the **evidence loop**:
 107. Inspect one exact durable schedule's typed lifecycle history through deterministic JSON without granting CLI lifecycle authority. ✅
 108. Resolve durable schedule provenance from one exact task identity through deterministic JSON without granting CLI lifecycle authority. ✅
 109. Inspect durable schedules by one exact lifecycle status through deterministic JSON without granting CLI lifecycle authority. ✅
+110. Create inert durable one-shot schedule intent through deterministic JSON without granting dispatch or execution authority. ✅
+111. Cancel one exact pending durable schedule revision through deterministic JSON without granting interruption or execution authority. ✅
 
 ## Project documents
 
