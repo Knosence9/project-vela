@@ -188,6 +188,18 @@ claim, release, cancellation, and materialization evidence. A valid missing ID
 is represented by `"history":null`; invalid IDs fail before storage is opened.
 History inspection opens storage read-only and cannot mutate or execute work.
 
+Resolve the exact materialized schedule bound to one caller-owned task identity:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule task path/to/events.sqlite3 task-id
+```
+
+The command validates the exact task ID before opening storage read-only and
+emits `task_id` plus either the complete deterministic schedule object or
+`"schedule":null` for an unbound identity. Ambiguous corrupted bindings fail
+closed without partial output. Task lookup cannot mutate lifecycle state,
+dispatch, or execute work.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
@@ -302,6 +314,7 @@ The first milestone is the **evidence loop**:
 105. Inspect durable one-shot schedule inventory through deterministic JSON without granting CLI mutation authority. ✅
 106. Inspect pending schedules due by one explicit cutoff through deterministic JSON without reading time or granting CLI mutation authority. ✅
 107. Inspect one exact durable schedule's typed lifecycle history through deterministic JSON without granting CLI lifecycle authority. ✅
+108. Resolve durable schedule provenance from one exact task identity through deterministic JSON without granting CLI lifecycle authority. ✅
 
 ## Project documents
 
