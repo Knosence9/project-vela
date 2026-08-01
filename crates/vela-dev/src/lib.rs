@@ -11,8 +11,8 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleStatus,
-    ScheduleStore, ScheduledTask,
+    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleRelease,
+    ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -75,6 +75,13 @@ pub enum ScheduleCommand {
         id: String,
         expected_revision: u64,
         cutoff_unix_millis: u64,
+    },
+    /// Release one exact claimed schedule revision with recovery evidence.
+    Release {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        reason: String,
     },
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
@@ -168,6 +175,15 @@ impl Cli {
                         cutoff_unix_millis,
                     }),
             }) => claim_schedule(&database, &id, expected_revision, cutoff_unix_millis),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::Release {
+                        database,
+                        id,
+                        expected_revision,
+                        reason,
+                    }),
+            }) => release_schedule(&database, &id, expected_revision, &reason),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Inspect { database }),
             }) => inspect_schedules(&database, None),
@@ -336,6 +352,36 @@ fn claim_schedule(
     let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
         Ok(output) => output,
         Err(error) => return extension_error("schedule_claim_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn release_schedule(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    raw_reason: &str,
+) -> ExitCode {
+    let id = match ScheduleId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let release = match ScheduleRelease::new(raw_reason) {
+        Ok(release) => release,
+        Err(error) => return extension_error("invalid_schedule_release_reason", error),
+    };
+    let mut store = match ScheduleStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_release_failed", error),
+    };
+    let scheduled = match store.release(&id, expected_revision, release) {
+        Ok(scheduled) => scheduled,
+        Err(error) => return extension_error("schedule_release_failed", error),
+    };
+    let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_release_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS
