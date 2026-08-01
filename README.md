@@ -165,6 +165,18 @@ without creating storage or printing partial JSON. Inventory inspection cannot
 read time, choose a due cutoff, mutate lifecycle state, dispatch, or execute
 work.
 
+Inspect one exact schedule's current validated projection:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule get path/to/events.sqlite3 schedule-id
+```
+
+The command validates the exact schedule ID before opening storage read-only and
+emits `id` plus either the complete schedule object used by inventory inspection
+or `"schedule":null` for a valid missing ID. Invalid IDs and malformed durable
+state fail without partial output or storage creation. Exact lookup cannot read
+time, mutate lifecycle state, dispatch, or execute work.
+
 Inspect schedules with one exact persisted lifecycle status:
 
 ```bash

@@ -39,6 +39,19 @@ Open, WAL, schema, replay, and projection failures emit one escaped
 a missing path does not create a database. The command accepts no lifecycle
 mutation, cutoff, dispatch, or execution options.
 
+`vela-dev schedule get DATABASE SCHEDULE_ID` validates the exact schedule ID
+before opening the caller-selected database read-only, then emits one compact
+JSON document containing `id` and `schedule`. An existing schedule uses the same
+complete deterministic object shape as inventory inspection; a valid missing ID
+is represented by `"schedule":null`. Every exact caller-authored string is JSON
+escaped during serialization.
+
+Blank IDs fail before storage access with `invalid_schedule_id`. Open, WAL,
+schema, replay, projection, and serialization failures emit one escaped
+`schedule_lookup_failed` diagnostic and no partial stdout. Missing storage is
+never created. Exact lookup cannot read time, mutate lifecycle state, dispatch,
+retry, or execute a schedule or task.
+
 `vela-dev schedule due DATABASE CUTOFF_UNIX_MILLIS` opens the same exact
 caller-selected database read-only and supplies the parsed non-negative `u64`
 cutoff to `ScheduleStore::list_due`. It emits the same compact JSON document and
@@ -96,6 +109,6 @@ read ambient time, dispatch, retry, or execute a schedule or task.
 
 ## Authority boundary
 
-The caller owns every status filter, every cutoff supplied to `list_due` or `claim`, every cancellation, claim, exact revision supplied to a mutation, task-ID binding decision, and action taken from a listed, due, claimed, materialized, historical, or task-provenance result. Full, status-filtered, historical, and task-provenance discovery are read-only and grant no authority; `open_read_only` additionally removes SQLite write and creation authority but is not a snapshot, secrecy boundary, or filesystem permission grant. Cancellation prevents future due selection but does not interrupt work already selected elsewhere. A revision identifies one exact persisted observation and prevents an earlier observer or claimant from consuming later lifecycle state; it is not worker identity, a permission grant, a lease, or proof of liveness. A claim is only a durable reservation, release is only caller-authored recovery evidence, and materialization only creates inert active task state: none infers worker health, starts or advances a workflow, calls a provider, invokes a tool, grants or revokes permission, sleeps, retries, or executes task work.
+The caller owns every status filter, every cutoff supplied to `list_due` or `claim`, every cancellation, claim, exact revision supplied to a mutation, task-ID binding decision, and action taken from a listed, exact, due, claimed, materialized, historical, or task-provenance result. Full, exact, status-filtered, historical, and task-provenance discovery are read-only and grant no authority; `open_read_only` additionally removes SQLite write and creation authority but is not a snapshot, secrecy boundary, or filesystem permission grant. Cancellation prevents future due selection but does not interrupt work already selected elsewhere. A revision identifies one exact persisted observation and prevents an earlier observer or claimant from consuming later lifecycle state; it is not worker identity, a permission grant, a lease, or proof of liveness. A claim is only a durable reservation, release is only caller-authored recovery evidence, and materialization only creates inert active task state: none infers worker health, starts or advances a workflow, calls a provider, invokes a tool, grants or revokes permission, sleeps, retries, or executes task work.
 
 Dispatch, recurrence and cron syntax, time zones, worker identity, distributed leases, automatic claim expiry, retries, and execution outcomes are intentionally deferred. A process failure after a successful claim leaves the schedule claimed until an explicit caller releases or materializes it. See [ADR-0034](adr/0034-durable-one-shot-task-schedule-intent.md) for the decision and rationale.
