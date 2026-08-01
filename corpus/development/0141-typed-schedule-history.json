@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Query typed schedule lifecycle history",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/805 by exposing every validated transition for one exact schedule without granting mutation authority.",
+    "acceptance_criteria": [
+      "Return revision-bearing typed creation, cancellation, claim, release, and materialization evidence in stream order.",
+      "Preserve exact goal, due instant, reasons, and task identity while returning no history for a missing schedule.",
+      "Validate complete decode and lifecycle projection before exposing any prefix.",
+      "Keep the query read-only, clock-free, and separate from dispatch, retry, execution, or permission."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED complete-history behavior.",
+      "outcome": "failure",
+      "diagnostic": "The targeted integration test failed because the typed history event and ScheduleStore::history API did not exist.",
+      "patch": "Added full transition-order, exact evidence, missing-stream, malformed-payload, version-gap, and impossible-order tests."
+    },
+    {
+      "summary": "Implemented typed revision-bearing lifecycle evidence.",
+      "outcome": "success",
+      "diagnostic": "The latest schedule projection was insufficient for audit and recovery analysis, while exposing raw event payloads would bypass domain validation.",
+      "patch": "Reused complete decoding and lifecycle projection before mapping validated events to public typed history entries."
+    },
+    {
+      "summary": "Aligned history ergonomics with existing kernel precedent.",
+      "outcome": "success",
+      "diagnostic": "Independent and substantive hosted review found no blocking issue in the exact-head history contract.",
+      "patch": "Matched workflow-run revision accessors, documented all-or-nothing history semantics, and completed full verification."
+    }
+  ],
+  "outcome": {
+    "summary": "Recovery and audit callers can inspect a schedule's complete validated typed lifecycle without receiving a malformed partial prefix.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30663609641", "status": "passed"},
+      {"command": "Pull request 806 squash merge 0b44968c01bd47856376181d089c29d193969ce2", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Expose validated typed history rather than raw storage events when callers need audit evidence.",
+    "Project the entire lifecycle before returning entries so corruption cannot produce a plausible partial prefix.",
+    "Revision-bearing evidence lets callers reason about exact ordering without granting write authority.",
+    "Reuse established history API shapes across aggregates when their contracts genuinely align."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/806"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

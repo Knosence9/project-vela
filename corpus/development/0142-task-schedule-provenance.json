@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Resolve schedule provenance by task identity",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/807 with fail-closed reverse lookup from one exact task to its materialized schedule.",
+    "acceptance_criteria": [
+      "Return the complete materialized schedule bound to one exact task identity after reopen.",
+      "Return no schedule for an unrelated task without mutating either lifecycle.",
+      "Fail closed on malformed schedule history and duplicate corrupted task bindings.",
+      "Keep provenance inspection separate from task outcome, dispatch, retry, and lifecycle synchronization."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED reverse-provenance coverage.",
+      "outcome": "failure",
+      "diagnostic": "The integration test failed to compile because find_by_task_id and AmbiguousTaskBinding did not exist.",
+      "patch": "Added exact reopen lookup, unrelated-task, malformed-history, and duplicate-binding corruption tests."
+    },
+    {
+      "summary": "Implemented snapshot-consistent exact task lookup.",
+      "outcome": "success",
+      "diagnostic": "Forward schedule-to-task binding was inspectable only when callers retained the schedule ID, and choosing one duplicate corrupted binding would hide ambiguity.",
+      "patch": "Reused authoritative discovery, selected exact materialized task bindings, returned none for zero matches, and emitted typed ambiguity for multiple matches."
+    },
+    {
+      "summary": "Reviewed diagnostic enrichment without broadening the contract.",
+      "outcome": "success",
+      "diagnostic": "Hosted review suggested including every conflicting schedule ID rather than the exact task identity and conflict count already required by the accepted issue contract.",
+      "patch": "Retained the bounded typed ambiguity contract, documented its read-only authority limits, and passed focused tests, docs, full verification, and exact-head quality checks."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can now resolve exact schedule provenance from a task identity while malformed or ambiguous persisted bindings fail closed.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command cargo doc --workspace --no-deps --locked", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30666983152", "status": "passed"},
+      {"command": "Pull request 808 squash merge 9c814406f4efc33aca259ac36c335d4ac75b6c2f", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Add reverse provenance only after the forward binding is durable and validated.",
+    "Never choose an arbitrary aggregate when corrupted state produces multiple exact ownership matches.",
+    "Reuse one read snapshot so reverse lookup cannot mix schedule revisions.",
+    "Diagnostic enrichment beyond the accepted typed contract can remain deferred when it is not needed for correctness or safe recovery."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/808"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

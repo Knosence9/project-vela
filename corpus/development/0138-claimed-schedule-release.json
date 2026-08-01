@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Release claimed one-shot schedules",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/797 with explicit caller-owned recovery from durable claims.",
+    "acceptance_criteria": [
+      "Return claimed schedules to pending eligibility with an exact non-blank durable release reason.",
+      "Preserve immutable goal and due instant across reopen and repeated claim-release cycles.",
+      "Reject missing, pending, cancelled, duplicate, racing, and impossible transitions with typed evidence and no invalid append.",
+      "Keep worker health, lease expiry, retry, dispatch, and execution outside recovery."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED release and recovery-cycle coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused tests failed because the release value, store operation, latest-release projection, and NotClaimed error did not exist.",
+      "patch": "Added reopen, due re-entry, reclaim, cancellation-after-release, malformed replay, and racing-release tests."
+    },
+    {
+      "summary": "Implemented explicit repeatable lifecycle recovery.",
+      "outcome": "success",
+      "diagnostic": "A durable claim otherwise remained reserved forever after process failure, but automatic expiry would require absent clock and worker-health authority.",
+      "patch": "Added a reason-bearing released event, explicit lifecycle state machine, exact-revision append, and repeatable claim-release replay."
+    },
+    {
+      "summary": "Fixed stale full-cycle conflict classification and reviewed scale limits.",
+      "outcome": "success",
+      "diagnostic": "Independent review found that a complete intervening claim-release cycle could leak a raw event-log conflict; hosted review also noted eventual replay cost from unbounded recovery history.",
+      "patch": "Mapped same-status stale cycles to typed ConcurrentModification evidence, retained append-only history, and deferred snapshots until measured dispatch-scale requirements justify a separate design."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can explicitly recover claimed intent with durable reason evidence and reclaim it later without hidden lease or retry policy.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30647702077", "status": "passed"},
+      {"command": "Pull request 798 squash merge a39cd4ffd71eed597eedf3ec65b074b79169dc4e", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Explicit release evidence is a smaller and more honest recovery boundary than automatic lease expiry without worker-health semantics.",
+    "Optimistic conflicts must compare revisions, not only projected status, because a full lifecycle cycle can return to the same state.",
+    "Repeated lifecycle cycles need one explicit replay state machine instead of event-count shortcuts.",
+    "Preserve append-only audit history until real scale evidence justifies checkpoint complexity."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/798"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
