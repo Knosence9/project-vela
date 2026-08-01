@@ -150,6 +150,20 @@ nix develop --command cargo run --locked -p vela-dev -- extension invoke path/to
 
 The explicit command authorizes only that one selected version-one `Pure` tool invocation. It uses a fresh process-local registry, default resource limits, and a fresh guest store; successful output is one compact JSON value. Malformed `INPUT_JSON` and discovery, selection, activation, authorization, guest, trap, resource-limit, or malformed-output failures emit one escaped diagnostic without partial stdout. Invocation does not persist activation or permission, grant host capabilities, retry, or run skills and workflows.
 
+Inspect every durable one-shot schedule in an existing event-log database without
+granting the CLI write or creation authority:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule inspect path/to/events.sqlite3
+```
+
+The command emits one compact JSON document whose `schedules` array is ordered
+by exact schedule ID. Each entry preserves the exact ID, goal, Unix-millisecond
+due instant, lowercase lifecycle status, revision, and nullable cancellation,
+latest-release, and task-binding evidence. A missing or invalid database fails
+without creating storage or printing partial JSON. Inspection does not choose a
+cutoff, mutate lifecycle state, dispatch, or execute work.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
@@ -261,6 +275,7 @@ The first milestone is the **evidence loop**:
 102. Bind schedule release and materialization to one exact persisted claim revision so stale claimants cannot consume later claims. ✅
 103. Bind pending schedule cancellation and claiming to exact persisted revisions so stale observers cannot consume recovered intent. ✅
 104. Open existing event-log and schedule evidence through an explicit read-only SQLite boundary without creating a database or initializing event schema. ✅
+105. Inspect durable one-shot schedule inventory through deterministic JSON without granting CLI mutation authority. ✅
 
 ## Project documents
 
