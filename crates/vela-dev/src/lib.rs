@@ -8,7 +8,9 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use record::DevelopmentRecord;
+use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
+use vela_kernel::scheduler::{ScheduleStatus, ScheduleStore};
 use vela_kernel::tool::{
     PermissionDecision, ToolAuthorizer, ToolEffect, ToolId, ToolRegistry, ToolRequest,
 };
@@ -39,6 +41,18 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<ExtensionCommand>,
     },
+    /// Inspect durable Vela schedule evidence.
+    Schedule {
+        #[command(subcommand)]
+        command: Option<ScheduleCommand>,
+    },
+}
+
+/// Durable schedule workflows.
+#[derive(Debug, Subcommand)]
+pub enum ScheduleCommand {
+    /// Print every durable schedule through a read-only storage boundary.
+    Inspect { database: PathBuf },
 }
 
 /// Extension-package workflows.
@@ -89,9 +103,66 @@ impl Cli {
                         input_json,
                     }),
             }) => invoke_extension(&root, &id, &input_json),
+            Some(Command::Schedule {
+                command: Some(ScheduleCommand::Inspect { database }),
+            }) => inspect_schedules(&database),
             _ => ExitCode::SUCCESS,
         }
     }
+}
+
+#[derive(Serialize)]
+struct ScheduleInventory<'a> {
+    schedules: Vec<ScheduleInspection<'a>>,
+}
+
+#[derive(Serialize)]
+struct ScheduleInspection<'a> {
+    id: &'a str,
+    goal: &'a str,
+    due_at_unix_millis: u64,
+    status: &'static str,
+    revision: u64,
+    cancellation: Option<&'a str>,
+    latest_release: Option<&'a str>,
+    task_id: Option<&'a str>,
+}
+
+fn inspect_schedules(database: &Path) -> ExitCode {
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_inspection_failed", error),
+    };
+    let schedules = match store.list() {
+        Ok(schedules) => schedules,
+        Err(error) => return extension_error("schedule_inspection_failed", error),
+    };
+    let inventory = ScheduleInventory {
+        schedules: schedules
+            .iter()
+            .map(|scheduled| ScheduleInspection {
+                id: scheduled.id().as_str(),
+                goal: scheduled.goal().as_str(),
+                due_at_unix_millis: scheduled.due_at().unix_millis(),
+                status: match scheduled.status() {
+                    ScheduleStatus::Pending => "pending",
+                    ScheduleStatus::Cancelled => "cancelled",
+                    ScheduleStatus::Claimed => "claimed",
+                    ScheduleStatus::Materialized => "materialized",
+                },
+                revision: scheduled.revision(),
+                cancellation: scheduled.cancellation().map(|reason| reason.as_str()),
+                latest_release: scheduled.latest_release().map(|reason| reason.as_str()),
+                task_id: scheduled.task_id().map(|id| id.as_str()),
+            })
+            .collect(),
+    };
+    let output = match serde_json::to_string(&inventory) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_inspection_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn invoke_extension(root: &Path, id: &str, input_json: &str) -> ExitCode {

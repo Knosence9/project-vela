@@ -2,6 +2,12 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use tempfile::tempdir;
+use vela_kernel::{
+    scheduler::{
+        ScheduleCancellation, ScheduleId, ScheduleInstant, ScheduleRelease, ScheduleStore,
+    },
+    task::{TaskGoal, TaskId},
+};
 
 const ECHO_COMPONENT: &str = r#"
 (component
@@ -44,6 +50,146 @@ fn help_identifies_vela_developer_tooling() {
             "Developer tooling for Project Vela",
         ))
         .stdout(predicate::str::contains("Usage: vela-dev [COMMAND]"));
+}
+
+#[test]
+fn inspects_durable_schedules_as_deterministic_complete_json() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).expect("writable schedule store");
+
+    let cancelled_id = ScheduleId::new("cancelled\nintent").unwrap();
+    let cancelled = store
+        .schedule(
+            cancelled_id.clone(),
+            TaskGoal::new("cancel \"safely\"").unwrap(),
+            ScheduleInstant::from_unix_millis(30),
+        )
+        .unwrap();
+    store
+        .cancel(
+            &cancelled_id,
+            cancelled.revision(),
+            ScheduleCancellation::new("operator\trequest").unwrap(),
+        )
+        .unwrap();
+
+    let claimed_id = ScheduleId::new("claimed").unwrap();
+    let claimed = store
+        .schedule(
+            claimed_id.clone(),
+            TaskGoal::new("reserved work").unwrap(),
+            ScheduleInstant::from_unix_millis(15),
+        )
+        .unwrap();
+    store
+        .claim(
+            &claimed_id,
+            claimed.revision(),
+            ScheduleInstant::from_unix_millis(15),
+        )
+        .unwrap();
+
+    let materialized_id = ScheduleId::new("materialized").unwrap();
+    let materialized = store
+        .schedule(
+            materialized_id.clone(),
+            TaskGoal::new("create task").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+        )
+        .unwrap();
+    let claimed = store
+        .claim(
+            &materialized_id,
+            materialized.revision(),
+            ScheduleInstant::from_unix_millis(10),
+        )
+        .unwrap();
+    store
+        .materialize(
+            &materialized_id,
+            claimed.revision(),
+            TaskId::new("task\n42").unwrap(),
+        )
+        .unwrap();
+
+    let pending_id = ScheduleId::new("pending").unwrap();
+    let pending = store
+        .schedule(
+            pending_id.clone(),
+            TaskGoal::new("retry later").unwrap(),
+            ScheduleInstant::from_unix_millis(20),
+        )
+        .unwrap();
+    let claimed = store
+        .claim(
+            &pending_id,
+            pending.revision(),
+            ScheduleInstant::from_unix_millis(20),
+        )
+        .unwrap();
+    store
+        .release(
+            &pending_id,
+            claimed.revision(),
+            ScheduleRelease::new("worker\rrecovery").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "inspect",
+            database.to_str().expect("UTF-8 database path"),
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"schedules\":[",
+            "{\"id\":\"cancelled\\nintent\",\"goal\":\"cancel \\\"safely\\\"\",\"due_at_unix_millis\":30,\"status\":\"cancelled\",\"revision\":2,\"cancellation\":\"operator\\trequest\",\"latest_release\":null,\"task_id\":null},",
+            "{\"id\":\"claimed\",\"goal\":\"reserved work\",\"due_at_unix_millis\":15,\"status\":\"claimed\",\"revision\":2,\"cancellation\":null,\"latest_release\":null,\"task_id\":null},",
+            "{\"id\":\"materialized\",\"goal\":\"create task\",\"due_at_unix_millis\":10,\"status\":\"materialized\",\"revision\":3,\"cancellation\":null,\"latest_release\":null,\"task_id\":\"task\\n42\"},",
+            "{\"id\":\"pending\",\"goal\":\"retry later\",\"due_at_unix_millis\":20,\"status\":\"pending\",\"revision\":3,\"cancellation\":null,\"latest_release\":\"worker\\rrecovery\",\"task_id\":null}",
+            "]}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn schedule_inspection_reports_empty_and_missing_storage_without_creation() {
+    let directory = tempdir().expect("schedule database directory");
+    let empty = directory.path().join("empty.sqlite3");
+    drop(ScheduleStore::open(&empty).expect("empty schedule store"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "inspect",
+            empty.to_str().expect("UTF-8 database path"),
+        ])
+        .assert()
+        .success()
+        .stdout("{\"schedules\":[]}\n")
+        .stderr(predicate::str::is_empty());
+
+    let missing = directory.path().join("missing.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "inspect",
+            missing.to_str().expect("UTF-8 database path"),
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: schedule_inspection_failed:",
+        ));
+    assert!(!missing.exists());
 }
 
 #[test]

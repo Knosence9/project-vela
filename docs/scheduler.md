@@ -23,6 +23,22 @@ The `vela-kernel` crate provides an inert first scheduler boundary: callers can 
 - Cancellation and claiming are exact-revision competing transitions from pending. Racing operations append exactly one event; racing releases likewise append exactly one recovery event, and the loser receives typed `ConcurrentModification` evidence identifying the expected and persisted revisions. Racing materializations commit one complete schedule/task pair and no orphan stream. A complete intervening claim/release cycle that returns a schedule to the same status is reported through the same typed conflict rather than a raw event-log error.
 - Status changes only through persisted lifecycle events; due time alone never changes status.
 
+## Read-only CLI inspection
+
+`vela-dev schedule inspect DATABASE` opens the exact caller-selected database
+through `ScheduleStore::open_read_only` and emits one compact JSON document. Its
+`schedules` array retains the kernel's deterministic exact-ID order. Every
+object contains `id`, `goal`, `due_at_unix_millis`, lowercase `status`, and
+`revision`; `cancellation`, `latest_release`, and `task_id` are exact strings
+when present and JSON `null` otherwise. An empty inventory is
+`{"schedules":[]}`. JSON serialization escapes untrusted identifiers, goals,
+reasons, and task IDs.
+
+Open, WAL, schema, replay, and projection failures emit one escaped
+`schedule_inspection_failed` diagnostic and no stdout. In particular, inspecting
+a missing path does not create a database. The command accepts no lifecycle
+mutation, cutoff, dispatch, or execution options.
+
 ## Authority boundary
 
 The caller owns every status filter, every cutoff supplied to `list_due` or `claim`, every cancellation, claim, exact revision supplied to a mutation, task-ID binding decision, and action taken from a listed, due, claimed, materialized, historical, or task-provenance result. Full, status-filtered, historical, and task-provenance discovery are read-only and grant no authority; `open_read_only` additionally removes SQLite write and creation authority but is not a snapshot, secrecy boundary, or filesystem permission grant. Cancellation prevents future due selection but does not interrupt work already selected elsewhere. A revision identifies one exact persisted observation and prevents an earlier observer or claimant from consuming later lifecycle state; it is not worker identity, a permission grant, a lease, or proof of liveness. A claim is only a durable reservation, release is only caller-authored recovery evidence, and materialization only creates inert active task state: none infers worker health, starts or advances a workflow, calls a provider, invokes a tool, grants or revokes permission, sleeps, retries, or executes task work.
