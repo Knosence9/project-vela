@@ -560,6 +560,135 @@ fn schedule_claim_validates_before_storage_and_reports_storage_failures() {
 }
 
 #[test]
+fn claims_next_due_schedule_in_deterministic_order_as_complete_json() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).unwrap();
+    for (id, goal, due_at) in [
+        ("zeta", "second", 5),
+        ("alpha", "preserve \"exact\" goal", 5),
+        ("future", "later", 6),
+    ] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(goal).unwrap(),
+                ScheduleInstant::from_unix_millis(due_at),
+            )
+            .unwrap();
+    }
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "claim-next",
+            database.to_str().expect("UTF-8 database path"),
+            "5",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"schedule\":{\"id\":\"alpha\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"due_at_unix_millis\":5,\"status\":\"claimed\",\"revision\":2,",
+            "\"cancellation\":null,\"latest_release\":null,\"task_id\":null}}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = ScheduleStore::open_read_only(&database).unwrap();
+    assert_eq!(
+        store
+            .load(&ScheduleId::new("alpha").unwrap())
+            .unwrap()
+            .unwrap()
+            .revision(),
+        2
+    );
+    assert_eq!(
+        store
+            .load(&ScheduleId::new("zeta").unwrap())
+            .unwrap()
+            .unwrap()
+            .revision(),
+        1
+    );
+}
+
+#[test]
+fn schedule_claim_next_returns_null_without_eligible_work() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).unwrap();
+    store
+        .schedule(
+            ScheduleId::new("future").unwrap(),
+            TaskGoal::new("later").unwrap(),
+            ScheduleInstant::from_unix_millis(6),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "claim-next",
+            database.to_str().expect("UTF-8 database path"),
+            "5",
+        ])
+        .assert()
+        .success()
+        .stdout("{\"schedule\":null}\n")
+        .stderr(predicate::str::is_empty());
+
+    assert_eq!(
+        ScheduleStore::open_read_only(&database)
+            .unwrap()
+            .load(&ScheduleId::new("future").unwrap())
+            .unwrap()
+            .unwrap()
+            .revision(),
+        1
+    );
+}
+
+#[test]
+fn schedule_claim_next_fails_closed_on_corrupt_history() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).unwrap();
+    store
+        .schedule(
+            ScheduleId::new("corrupt").unwrap(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+        )
+        .unwrap();
+    drop(store);
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'schedule:corrupt'",
+            [],
+        )
+        .unwrap();
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "claim-next",
+            database.to_str().expect("UTF-8 database path"),
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: schedule_claim_failed:"));
+}
+
+#[test]
 fn releases_one_exact_claimed_schedule_revision_as_complete_json() {
     let directory = tempdir().expect("schedule database directory");
     let database = directory.path().join("events.sqlite3");
