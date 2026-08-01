@@ -69,6 +69,13 @@ pub enum ScheduleCommand {
         expected_revision: u64,
         reason: String,
     },
+    /// Claim one exact due schedule revision against a caller-owned cutoff.
+    Claim {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        cutoff_unix_millis: u64,
+    },
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
     /// Print one exact durable schedule through a read-only storage boundary.
@@ -152,6 +159,15 @@ impl Cli {
                         reason,
                     }),
             }) => cancel_schedule(&database, &id, expected_revision, &reason),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::Claim {
+                        database,
+                        id,
+                        expected_revision,
+                        cutoff_unix_millis,
+                    }),
+            }) => claim_schedule(&database, &id, expected_revision, cutoff_unix_millis),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Inspect { database }),
             }) => inspect_schedules(&database, None),
@@ -290,6 +306,36 @@ fn cancel_schedule(
     let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
         Ok(output) => output,
         Err(error) => return extension_error("schedule_cancellation_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn claim_schedule(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    cutoff_unix_millis: u64,
+) -> ExitCode {
+    let id = match ScheduleId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let mut store = match ScheduleStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_claim_failed", error),
+    };
+    let scheduled = match store.claim(
+        &id,
+        expected_revision,
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+    ) {
+        Ok(scheduled) => scheduled,
+        Err(error) => return extension_error("schedule_claim_failed", error),
+    };
+    let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_claim_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS

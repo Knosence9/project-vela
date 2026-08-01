@@ -176,6 +176,20 @@ Missing, stale, claimed, materialized, or already-cancelled schedules fail with
 one escaped diagnostic and no lifecycle append. Cancellation does not read
 ambient time, interrupt dispatched work, claim, retry, or execute anything.
 
+Claim one exact observed due schedule revision against a caller-owned cutoff:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule claim path/to/events.sqlite3 schedule-id 1 1750000000000
+```
+
+The command validates the exact ID and numeric revision/cutoff before opening
+writable storage, then appends a claim only if the supplied revision remains
+pending and due at or before the inclusive cutoff. Success emits the complete
+compact claimed schedule JSON object. Missing, future, stale, cancelled,
+materialized, or already-claimed schedules fail with one escaped diagnostic and
+no lifecycle append. Claiming does not read ambient time, identify a worker,
+dispatch, materialize, retry, grant permission, or execute anything.
+
 Inspect every durable one-shot schedule in an existing event-log database without
 granting the CLI write or creation authority:
 
@@ -370,6 +384,7 @@ The first milestone is the **evidence loop**:
 109. Inspect durable schedules by one exact lifecycle status through deterministic JSON without granting CLI lifecycle authority. ✅
 110. Create inert durable one-shot schedule intent through deterministic JSON without granting dispatch or execution authority. ✅
 111. Cancel one exact pending durable schedule revision through deterministic JSON without granting interruption or execution authority. ✅
+112. Claim one exact due durable schedule revision through deterministic JSON without granting dispatch or execution authority. ✅
 
 ## Project documents
 

@@ -61,6 +61,27 @@ interrupt selected work, claim, release, materialize, dispatch, retry, or
 execute a schedule or task. The expected revision identifies one persisted
 observation; it is not worker identity, a lease, or a permission grant.
 
+## Writable CLI claiming
+
+`vela-dev schedule claim DATABASE SCHEDULE_ID EXPECTED_REVISION CUTOFF_UNIX_MILLIS`
+validates the exact caller-owned ID before opening the exact caller-selected
+database through `ScheduleStore::open`. The revision and cutoff are parsed as
+non-negative `u64` values by the CLI before the command runs. Success delegates
+the exact optimistic-concurrency and inclusive due-time checks to
+`ScheduleStore::claim`, appends one `schedule.claimed` event, and emits the
+complete compact claimed schedule object used by creation and inspection.
+
+Invalid IDs emit `invalid_schedule_id` without accessing storage. Invalid
+revision or cutoff syntax is rejected by the CLI before command execution.
+Missing, future, stale, cancelled, materialized, or already-claimed schedules,
+plus open, WAL, schema, append, replay, and serialization failures, emit one
+escaped `schedule_claim_failed` diagnostic, non-zero status, and no partial
+stdout. Failed lifecycle operations append no claim evidence. The cutoff is
+caller-owned input: the command cannot read ambient time, identify a worker,
+dispatch, release, materialize, retry, grant permission, or execute a schedule
+or task. The expected revision is not worker identity, a lease, or proof of
+liveness.
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database
