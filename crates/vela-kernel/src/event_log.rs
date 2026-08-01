@@ -1,6 +1,6 @@
 use std::{fmt, path::Path};
 
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
 
 /// An opaque, non-empty identifier for one event stream.
@@ -84,6 +84,9 @@ pub enum EventLogError {
     Storage(rusqlite::Error),
     Encode(serde_json::Error),
     UnsupportedJournalMode(String),
+    IncompatibleEventSchema {
+        reason: String,
+    },
     InvalidEventType,
     InvalidPayloadVersion(u32),
     InvalidExpectedVersion(u64),
@@ -108,6 +111,12 @@ impl fmt::Display for EventLogError {
                 write!(
                     formatter,
                     "event log requires WAL journal mode, found {mode}"
+                )
+            }
+            Self::IncompatibleEventSchema { reason } => {
+                write!(
+                    formatter,
+                    "event log has an incompatible events table schema: {reason}"
                 )
             }
             Self::InvalidEventType => formatter.write_str("event type must not be empty"),
@@ -151,6 +160,7 @@ impl std::error::Error for EventLogError {
             Self::Storage(error) => Some(error),
             Self::Encode(error) => Some(error),
             Self::UnsupportedJournalMode(_)
+            | Self::IncompatibleEventSchema { .. }
             | Self::InvalidEventType
             | Self::InvalidPayloadVersion(_)
             | Self::InvalidExpectedVersion(_)
@@ -315,6 +325,19 @@ impl EventLog {
                 PRIMARY KEY (stream_id, stream_version)
             ) WITHOUT ROWID;",
         )?;
+        Ok(Self { connection })
+    }
+
+    /// Opens one existing event log without database creation or write authority.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, EventLogError> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.pragma_update(None, "query_only", "ON")?;
+        let journal_mode: String =
+            connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            return Err(EventLogError::UnsupportedJournalMode(journal_mode));
+        }
+        validate_event_schema(&connection)?;
         Ok(Self { connection })
     }
 
@@ -682,6 +705,47 @@ impl EventLog {
 
         Ok(streams)
     }
+}
+
+fn validate_event_schema(connection: &Connection) -> Result<(), EventLogError> {
+    let exists = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'events'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Err(EventLogError::IncompatibleEventSchema {
+            reason: "events table is missing".to_owned(),
+        });
+    }
+
+    let mut statement = connection.prepare("PRAGMA table_info(events)")?;
+    let columns = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, bool>(3)?,
+                row.get::<_, u32>(5)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected = [
+        ("stream_id".to_owned(), "TEXT".to_owned(), true, 1),
+        ("stream_version".to_owned(), "INTEGER".to_owned(), true, 2),
+        ("event_type".to_owned(), "TEXT".to_owned(), true, 0),
+        ("payload_version".to_owned(), "INTEGER".to_owned(), true, 0),
+        ("payload".to_owned(), "BLOB".to_owned(), true, 0),
+    ];
+    if columns != expected {
+        return Err(EventLogError::IncompatibleEventSchema {
+            reason: "events table columns do not match the required schema".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn current_stream_version(

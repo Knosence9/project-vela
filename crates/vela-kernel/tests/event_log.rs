@@ -132,6 +132,68 @@ impl Event for DivergentDiscriminatorEvent {
 }
 
 #[test]
+fn read_only_open_requires_existing_initialized_storage_without_creating_it() {
+    let directory = tempdir().unwrap();
+    let missing = directory.path().join("missing.sqlite3");
+
+    assert!(matches!(
+        EventLog::open_read_only(&missing),
+        Err(EventLogError::Storage(_))
+    ));
+    assert!(!missing.exists());
+
+    let incompatible = directory.path().join("incompatible.sqlite3");
+    let connection = rusqlite::Connection::open(&incompatible).unwrap();
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    connection
+        .execute("CREATE TABLE unrelated (value TEXT NOT NULL)", [])
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        EventLog::open_read_only(&incompatible),
+        Err(EventLogError::IncompatibleEventSchema { reason })
+            if reason == "events table is missing"
+    ));
+    let connection = rusqlite::Connection::open(&incompatible).unwrap();
+    let event_tables: u64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'events'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(event_tables, 0);
+
+    let malformed = directory.path().join("malformed.sqlite3");
+    let connection = rusqlite::Connection::open(&malformed).unwrap();
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    connection
+        .execute("CREATE TABLE events (stream_id TEXT)", [])
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        EventLog::open_read_only(&malformed),
+        Err(EventLogError::IncompatibleEventSchema { reason })
+            if reason == "events table columns do not match the required schema"
+    ));
+    let schema: String = rusqlite::Connection::open(&malformed)
+        .unwrap()
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'events'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(schema, "CREATE TABLE events (stream_id TEXT)");
+}
+
+#[test]
 fn decode_errors_are_standard_errors_with_stable_context() {
     fn assert_standard_error(_: &dyn std::error::Error) {}
 

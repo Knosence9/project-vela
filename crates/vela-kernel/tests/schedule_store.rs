@@ -22,6 +22,37 @@ fn schedule_ids_require_content_without_normalizing_exact_values() {
 }
 
 #[test]
+fn read_only_store_projects_existing_schedules_and_rejects_mutation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("read-only-schedule").unwrap();
+    let goal = TaskGoal::new("Inspect without lifecycle authority").unwrap();
+    let mut writer = ScheduleStore::open(&path).unwrap();
+    let scheduled = writer.schedule(id.clone(), goal, instant(42)).unwrap();
+    drop(writer);
+
+    let mut reader = ScheduleStore::open_read_only(&path).unwrap();
+    assert_eq!(reader.load(&id).unwrap(), Some(scheduled.clone()));
+    assert_eq!(reader.list().unwrap(), std::slice::from_ref(&scheduled));
+    assert_eq!(reader.history(&id).unwrap().unwrap().len(), 1);
+    assert!(matches!(
+        reader
+            .cancel(
+                &id,
+                scheduled.revision(),
+                ScheduleCancellation::new("must not persist").unwrap(),
+            )
+            .unwrap_err(),
+        ScheduleStoreError::EventLog(vela_kernel::event_log::EventLogError::Storage(_))
+    ));
+    drop(reader);
+
+    let reopened = ScheduleStore::open(&path).unwrap();
+    assert_eq!(reopened.load(&id).unwrap(), Some(scheduled));
+    assert_eq!(reopened.history(&id).unwrap().unwrap().len(), 1);
+}
+
+#[test]
 fn queries_complete_typed_schedule_history_after_reopening() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
