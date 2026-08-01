@@ -10,7 +10,9 @@ use clap::{Parser, Subcommand};
 use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
-use vela_kernel::scheduler::{ScheduleInstant, ScheduleStatus, ScheduleStore};
+use vela_kernel::scheduler::{
+    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleStatus, ScheduleStore,
+};
 use vela_kernel::tool::{
     PermissionDecision, ToolAuthorizer, ToolEffect, ToolId, ToolRegistry, ToolRequest,
 };
@@ -58,6 +60,8 @@ pub enum ScheduleCommand {
         database: PathBuf,
         cutoff_unix_millis: u64,
     },
+    /// Print one exact schedule's validated lifecycle history.
+    History { database: PathBuf, id: String },
 }
 
 /// Extension-package workflows.
@@ -118,6 +122,9 @@ impl Cli {
                         cutoff_unix_millis,
                     }),
             }) => inspect_schedules(&database, Some(cutoff_unix_millis)),
+            Some(Command::Schedule {
+                command: Some(ScheduleCommand::History { database, id }),
+            }) => inspect_schedule_history(&database, &id),
             _ => ExitCode::SUCCESS,
         }
     }
@@ -138,6 +145,105 @@ struct ScheduleInspection<'a> {
     cancellation: Option<&'a str>,
     latest_release: Option<&'a str>,
     task_id: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct ScheduleHistoryInspection<'a> {
+    id: &'a str,
+    history: Option<Vec<ScheduleHistoryEntryInspection<'a>>>,
+}
+
+#[derive(Serialize)]
+struct ScheduleHistoryEntryInspection<'a> {
+    revision: u64,
+    #[serde(flatten)]
+    event: ScheduleHistoryEventInspection<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ScheduleHistoryEventInspection<'a> {
+    Created {
+        goal: &'a str,
+        due_at_unix_millis: u64,
+    },
+    Cancelled {
+        reason: &'a str,
+    },
+    Claimed,
+    Released {
+        reason: &'a str,
+    },
+    Materialized {
+        task_id: &'a str,
+    },
+}
+
+fn inspect_schedule_history(database: &Path, raw_id: &str) -> ExitCode {
+    let id = match ScheduleId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_history_failed", error),
+    };
+    let history = match store.history(&id) {
+        Ok(history) => history,
+        Err(error) => return extension_error("schedule_history_failed", error),
+    };
+    let history = match history.as_ref() {
+        None => None,
+        Some(entries) => {
+            let mut output = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let event = match entry.event() {
+                    ScheduleHistoryEvent::Created { goal, due_at } => {
+                        ScheduleHistoryEventInspection::Created {
+                            goal: goal.as_str(),
+                            due_at_unix_millis: due_at.unix_millis(),
+                        }
+                    }
+                    ScheduleHistoryEvent::Cancelled { reason } => {
+                        ScheduleHistoryEventInspection::Cancelled {
+                            reason: reason.as_str(),
+                        }
+                    }
+                    ScheduleHistoryEvent::Claimed => ScheduleHistoryEventInspection::Claimed,
+                    ScheduleHistoryEvent::Released { reason } => {
+                        ScheduleHistoryEventInspection::Released {
+                            reason: reason.as_str(),
+                        }
+                    }
+                    ScheduleHistoryEvent::Materialized { task_id } => {
+                        ScheduleHistoryEventInspection::Materialized {
+                            task_id: task_id.as_str(),
+                        }
+                    }
+                    _ => {
+                        return extension_error(
+                            "schedule_history_failed",
+                            "unsupported schedule history event",
+                        );
+                    }
+                };
+                output.push(ScheduleHistoryEntryInspection {
+                    revision: entry.revision(),
+                    event,
+                });
+            }
+            Some(output)
+        }
+    };
+    let output = match serde_json::to_string(&ScheduleHistoryInspection {
+        id: id.as_str(),
+        history,
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_history_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCode {

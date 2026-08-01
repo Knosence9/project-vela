@@ -176,6 +176,18 @@ contract, while preserving the kernel's due-instant then exact-ID ordering. An
 invalid cutoff fails during argument parsing without opening or creating the
 database. Due inspection does not claim, dispatch, materialize, or execute work.
 
+Inspect one exact schedule's complete validated lifecycle history without
+granting lifecycle authority:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule history path/to/events.sqlite3 schedule-id
+```
+
+The command emits the exact schedule ID plus revision-ordered typed creation,
+claim, release, cancellation, and materialization evidence. A valid missing ID
+is represented by `"history":null`; invalid IDs fail before storage is opened.
+History inspection opens storage read-only and cannot mutate or execute work.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
@@ -289,6 +301,7 @@ The first milestone is the **evidence loop**:
 104. Open existing event-log and schedule evidence through an explicit read-only SQLite boundary without creating a database or initializing event schema. ✅
 105. Inspect durable one-shot schedule inventory through deterministic JSON without granting CLI mutation authority. ✅
 106. Inspect pending schedules due by one explicit cutoff through deterministic JSON without reading time or granting CLI mutation authority. ✅
+107. Inspect one exact durable schedule's typed lifecycle history through deterministic JSON without granting CLI lifecycle authority. ✅
 
 ## Project documents
 
