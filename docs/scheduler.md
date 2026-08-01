@@ -82,6 +82,27 @@ dispatch, release, materialize, retry, grant permission, or execute a schedule
 or task. The expected revision is not worker identity, a lease, or proof of
 liveness.
 
+## Writable CLI release
+
+`vela-dev schedule release DATABASE SCHEDULE_ID EXPECTED_REVISION REASON`
+validates the exact caller-owned ID and non-blank recovery reason before opening
+the exact caller-selected database through `ScheduleStore::open`. The revision
+is parsed as a non-negative `u64` by the CLI. Success delegates the exact
+optimistic-concurrency and claimed-state checks to `ScheduleStore::release`,
+appends one `schedule.released` event, and emits the complete compact pending
+schedule object with its resulting revision and exact latest release evidence.
+
+Invalid IDs and reasons emit `invalid_schedule_id` or
+`invalid_schedule_release_reason` without accessing storage. Invalid revision
+syntax is rejected before command execution. Missing, stale, pending,
+cancelled, or materialized schedules, plus open, WAL, schema, append, replay,
+and serialization failures, emit one escaped `schedule_release_failed`
+diagnostic, non-zero status, and no partial stdout. Failed lifecycle operations
+append no release evidence. The command cannot infer worker death, read ambient
+time, expire a lease, claim, dispatch, materialize, retry, grant permission, or
+execute a schedule or task. The reason is caller-owned recovery evidence only,
+and the expected revision is not worker identity, a lease, or proof of liveness.
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database
