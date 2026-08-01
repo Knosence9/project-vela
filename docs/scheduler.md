@@ -103,6 +103,27 @@ time, expire a lease, claim, dispatch, materialize, retry, grant permission, or
 execute a schedule or task. The reason is caller-owned recovery evidence only,
 and the expected revision is not worker identity, a lease, or proof of liveness.
 
+## Writable CLI materialization
+
+`vela-dev schedule materialize DATABASE SCHEDULE_ID EXPECTED_REVISION TASK_ID`
+validates both exact caller-owned identities before opening the exact selected
+database through `ScheduleStore::open`. The revision is parsed as a non-negative
+`u64` by the CLI. Success delegates exact optimistic concurrency, claimed-state,
+and task-stream uniqueness checks to `ScheduleStore::materialize`, atomically
+appends `schedule.materialized` and `task.started`, and emits the complete compact
+materialized schedule object with its resulting revision and exact task binding.
+
+Invalid identities emit `invalid_schedule_id` or `invalid_task_id` without
+accessing storage. Invalid revision syntax is rejected before command execution.
+Missing, stale, pending, cancelled, already-materialized, or task-colliding
+inputs, plus open, WAL, schema, replay, append, and serialization failures, emit
+one escaped `schedule_materialization_failed` diagnostic, non-zero status, and
+no partial stdout. Every failed operation leaves both streams unchanged, so it
+cannot create an orphan task. The command cannot read ambient time, infer worker
+identity, dispatch, advance a workflow, call a provider or tool, retry, grant
+permission, or execute work. The expected revision is not worker identity, a
+lease, a permission grant, or proof of liveness.
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database

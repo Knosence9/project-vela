@@ -83,6 +83,13 @@ pub enum ScheduleCommand {
         expected_revision: u64,
         reason: String,
     },
+    /// Materialize one exact claimed schedule revision as an inert active task.
+    Materialize {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        task_id: String,
+    },
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
     /// Print one exact durable schedule through a read-only storage boundary.
@@ -184,6 +191,15 @@ impl Cli {
                         reason,
                     }),
             }) => release_schedule(&database, &id, expected_revision, &reason),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::Materialize {
+                        database,
+                        id,
+                        expected_revision,
+                        task_id,
+                    }),
+            }) => materialize_schedule(&database, &id, expected_revision, &task_id),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Inspect { database }),
             }) => inspect_schedules(&database, None),
@@ -382,6 +398,36 @@ fn release_schedule(
     let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
         Ok(output) => output,
         Err(error) => return extension_error("schedule_release_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn materialize_schedule(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    raw_task_id: &str,
+) -> ExitCode {
+    let id = match ScheduleId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let task_id = match TaskId::new(raw_task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return extension_error("invalid_task_id", error),
+    };
+    let mut store = match ScheduleStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_materialization_failed", error),
+    };
+    let scheduled = match store.materialize(&id, expected_revision, task_id) {
+        Ok(scheduled) => scheduled,
+        Err(error) => return extension_error("schedule_materialization_failed", error),
+    };
+    let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_materialization_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS
