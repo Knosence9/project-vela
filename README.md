@@ -164,6 +164,18 @@ latest-release, and task-binding evidence. A missing or invalid database fails
 without creating storage or printing partial JSON. Inspection does not choose a
 cutoff, mutate lifecycle state, dispatch, or execute work.
 
+Inspect only pending schedules due at or before one explicit caller-owned cutoff
+without reading ambient time:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule due path/to/events.sqlite3 1754049600000
+```
+
+The command uses the same read-only database and compact schedule-object
+contract, while preserving the kernel's due-instant then exact-ID ordering. An
+invalid cutoff fails during argument parsing without opening or creating the
+database. Due inspection does not claim, dispatch, materialize, or execute work.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
@@ -276,6 +288,7 @@ The first milestone is the **evidence loop**:
 103. Bind pending schedule cancellation and claiming to exact persisted revisions so stale observers cannot consume recovered intent. ✅
 104. Open existing event-log and schedule evidence through an explicit read-only SQLite boundary without creating a database or initializing event schema. ✅
 105. Inspect durable one-shot schedule inventory through deterministic JSON without granting CLI mutation authority. ✅
+106. Inspect pending schedules due by one explicit cutoff through deterministic JSON without reading time or granting CLI mutation authority. ✅
 
 ## Project documents
 
