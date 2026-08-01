@@ -161,8 +161,22 @@ The command emits one compact JSON document whose `schedules` array is ordered
 by exact schedule ID. Each entry preserves the exact ID, goal, Unix-millisecond
 due instant, lowercase lifecycle status, revision, and nullable cancellation,
 latest-release, and task-binding evidence. A missing or invalid database fails
-without creating storage or printing partial JSON. Inspection does not choose a
-cutoff, mutate lifecycle state, dispatch, or execute work.
+without creating storage or printing partial JSON. Inventory inspection cannot
+read time, choose a due cutoff, mutate lifecycle state, dispatch, or execute
+work.
+
+Inspect schedules with one exact persisted lifecycle status:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule status path/to/events.sqlite3 pending
+```
+
+The final argument must be exactly `pending`, `cancelled`, `claimed`, or
+`materialized`. Validation happens before storage access. The command uses the
+same complete schedule-object shape and exact-ID ordering as inventory
+inspection; no matches produce an empty `schedules` array. Status inspection is
+read-only and cannot read time, mutate, claim, dispatch, retry, materialize, or
+execute work.
 
 Inspect only pending schedules due at or before one explicit caller-owned cutoff
 without reading ambient time:
@@ -315,6 +329,7 @@ The first milestone is the **evidence loop**:
 106. Inspect pending schedules due by one explicit cutoff through deterministic JSON without reading time or granting CLI mutation authority. ✅
 107. Inspect one exact durable schedule's typed lifecycle history through deterministic JSON without granting CLI lifecycle authority. ✅
 108. Resolve durable schedule provenance from one exact task identity through deterministic JSON without granting CLI lifecycle authority. ✅
+109. Inspect durable schedules by one exact lifecycle status through deterministic JSON without granting CLI lifecycle authority. ✅
 
 ## Project documents
 
