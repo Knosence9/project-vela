@@ -150,6 +150,19 @@ nix develop --command cargo run --locked -p vela-dev -- extension invoke path/to
 
 The explicit command authorizes only that one selected version-one `Pure` tool invocation. It uses a fresh process-local registry, default resource limits, and a fresh guest store; successful output is one compact JSON value. Malformed `INPUT_JSON` and discovery, selection, activation, authorization, guest, trap, resource-limit, or malformed-output failures emit one escaped diagnostic without partial stdout. Invocation does not persist activation or permission, grant host capabilities, retry, or run skills and workflows.
 
+Create one inert durable one-shot schedule in the exact caller-selected
+event-log database:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule create path/to/events.sqlite3 schedule-id 'exact task goal' 1750000000000
+```
+
+The command validates the exact ID and non-empty goal before opening writable
+storage, appends one pending intent, and emits its complete compact JSON
+projection. It may create the selected database. Duplicate IDs and storage
+failures produce one escaped diagnostic without replacing existing intent.
+Creation does not read ambient time, claim, dispatch, retry, or execute work.
+
 Inspect every durable one-shot schedule in an existing event-log database without
 granting the CLI write or creation authority:
 
