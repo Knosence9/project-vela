@@ -84,7 +84,9 @@ pub enum EventLogError {
     Storage(rusqlite::Error),
     Encode(serde_json::Error),
     UnsupportedJournalMode(String),
-    IncompatibleEventSchema,
+    IncompatibleEventSchema {
+        reason: String,
+    },
     InvalidEventType,
     InvalidPayloadVersion(u32),
     InvalidExpectedVersion(u64),
@@ -111,8 +113,11 @@ impl fmt::Display for EventLogError {
                     "event log requires WAL journal mode, found {mode}"
                 )
             }
-            Self::IncompatibleEventSchema => {
-                formatter.write_str("event log has an incompatible events table schema")
+            Self::IncompatibleEventSchema { reason } => {
+                write!(
+                    formatter,
+                    "event log has an incompatible events table schema: {reason}"
+                )
             }
             Self::InvalidEventType => formatter.write_str("event type must not be empty"),
             Self::InvalidPayloadVersion(version) => {
@@ -155,7 +160,7 @@ impl std::error::Error for EventLogError {
             Self::Storage(error) => Some(error),
             Self::Encode(error) => Some(error),
             Self::UnsupportedJournalMode(_)
-            | Self::IncompatibleEventSchema
+            | Self::IncompatibleEventSchema { .. }
             | Self::InvalidEventType
             | Self::InvalidPayloadVersion(_)
             | Self::InvalidExpectedVersion(_)
@@ -712,7 +717,9 @@ fn validate_event_schema(connection: &Connection) -> Result<(), EventLogError> {
         .optional()?
         .is_some();
     if !exists {
-        return Err(EventLogError::IncompatibleEventSchema);
+        return Err(EventLogError::IncompatibleEventSchema {
+            reason: "events table is missing".to_owned(),
+        });
     }
 
     let mut statement = connection.prepare("PRAGMA table_info(events)")?;
@@ -734,7 +741,9 @@ fn validate_event_schema(connection: &Connection) -> Result<(), EventLogError> {
         ("payload".to_owned(), "BLOB".to_owned(), true, 0),
     ];
     if columns != expected {
-        return Err(EventLogError::IncompatibleEventSchema);
+        return Err(EventLogError::IncompatibleEventSchema {
+            reason: "events table columns do not match the required schema".to_owned(),
+        });
     }
     Ok(())
 }

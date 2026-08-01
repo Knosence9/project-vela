@@ -154,7 +154,8 @@ fn read_only_open_requires_existing_initialized_storage_without_creating_it() {
 
     assert!(matches!(
         EventLog::open_read_only(&incompatible),
-        Err(EventLogError::IncompatibleEventSchema)
+        Err(EventLogError::IncompatibleEventSchema { reason })
+            if reason == "events table is missing"
     ));
     let connection = rusqlite::Connection::open(&incompatible).unwrap();
     let event_tables: u64 = connection
@@ -178,7 +179,8 @@ fn read_only_open_requires_existing_initialized_storage_without_creating_it() {
 
     assert!(matches!(
         EventLog::open_read_only(&malformed),
-        Err(EventLogError::IncompatibleEventSchema)
+        Err(EventLogError::IncompatibleEventSchema { reason })
+            if reason == "events table columns do not match the required schema"
     ));
     let schema: String = rusqlite::Connection::open(&malformed)
         .unwrap()

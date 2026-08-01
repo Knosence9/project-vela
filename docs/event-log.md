@@ -24,7 +24,7 @@ The public error variants are the compatibility surface. `EventLogError` and `Re
 - `EventLogError::InvalidPayloadVersion` reports an invalid caller-supplied payload version; no row is written.
 - `EventLogError::InvalidExpectedVersion` reports `ExpectedVersion::Exact(0)` before payload encoding; no row is written.
 - `EventLogError::UnsupportedJournalMode` reports the effective SQLite journal mode when opening cannot establish WAL (for example, `memory` for `:memory:`).
-- `EventLogError::IncompatibleEventSchema` reports that read-only open found no compatible `events` table; inspection never initializes or repairs that storage.
+- `EventLogError::IncompatibleEventSchema` reports whether read-only open found a missing `events` table or mismatched required columns; inspection never initializes or repairs that storage.
 - `EventLogError::InvalidStoredVersion` rejects any stored stream version below `1` before expected-version matching, even when a higher valid row would otherwise mask it; no row is written.
 - `EventLogError::VersionGap` reports the first missing version and the first stored version observed after the gap when append encounters a stream that does not start at `1` or contains an internal gap, including gaps wider than one version; the event is not encoded and no row is written.
 - `ReplayError::UnsupportedEvent` carries the authoritative stored `event_type` and `payload_version`, even if a decoder supplies different context in its `DecodeError`.
@@ -44,6 +44,6 @@ failures without an adapter.
 
 The persisted row contains only `stream_id`, `stream_version`, `event_type`, `payload_version`, and JSON `payload`. No timestamp, event ID, actor, correlation metadata, snapshot, batch append, async runtime, or distributed guarantee is part of this slice.
 
-Read-only open removes main-database creation, schema initialization, and event-append authority from the connection; it is not a database snapshot, filesystem permission manager, encryption or secrecy boundary. SQLite may still create or update `-wal` and `-shm` coordination sidecars for an existing WAL database when filesystem permissions allow it. The operating system and SQLite remain authoritative, and concurrent committed WAL changes may become visible to later read transactions.
+Read-only open removes main-database creation, schema initialization, and event-append authority from the connection; it is not a database snapshot, filesystem permission manager, encryption or secrecy boundary. SQLite may still create or update `-wal` and `-shm` coordination sidecars for an existing WAL database when filesystem permissions allow it. Callers opening from a non-writable directory must ensure both sidecars already exist. This API does not use or support SQLite's `immutable=1` URI option, so it does not support immutable read-only media. The operating system and SQLite remain authoritative, and concurrent committed WAL changes may become visible to later read transactions.
 
 See [ADR-0002](adr/0002-typed-sqlite-event-log.md) for the durability boundary and rationale.
