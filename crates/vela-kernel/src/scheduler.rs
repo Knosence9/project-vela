@@ -380,6 +380,13 @@ impl ScheduleStore {
             .map_err(ScheduleStoreError::EventLog)
     }
 
+    /// Opens existing schedule evidence without database creation or write authority.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, ScheduleStoreError> {
+        EventLog::open_read_only(path)
+            .map(|event_log| Self { event_log })
+            .map_err(ScheduleStoreError::EventLog)
+    }
+
     pub fn schedule(
         &mut self,
         id: ScheduleId,
