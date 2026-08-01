@@ -304,6 +304,158 @@ fn due_schedule_inspection_fails_closed_without_creating_storage() {
 }
 
 #[test]
+fn inspects_exact_schedule_history_as_revision_ordered_json() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).expect("writable schedule store");
+    let id = ScheduleId::new("history\nintent").unwrap();
+    let scheduled = store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("run \"carefully\"").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+        )
+        .unwrap();
+    let claimed = store
+        .claim(
+            &id,
+            scheduled.revision(),
+            ScheduleInstant::from_unix_millis(10),
+        )
+        .unwrap();
+    let released = store
+        .release(
+            &id,
+            claimed.revision(),
+            ScheduleRelease::new("worker\trecovery").unwrap(),
+        )
+        .unwrap();
+    let reclaimed = store
+        .claim(
+            &id,
+            released.revision(),
+            ScheduleInstant::from_unix_millis(10),
+        )
+        .unwrap();
+    store
+        .materialize(
+            &id,
+            reclaimed.revision(),
+            TaskId::new("task\nbound").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "history",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"id\":\"history\\nintent\",\"history\":[",
+            "{\"revision\":1,\"type\":\"created\",\"goal\":\"run \\\"carefully\\\"\",\"due_at_unix_millis\":10},",
+            "{\"revision\":2,\"type\":\"claimed\"},",
+            "{\"revision\":3,\"type\":\"released\",\"reason\":\"worker\\trecovery\"},",
+            "{\"revision\":4,\"type\":\"claimed\"},",
+            "{\"revision\":5,\"type\":\"materialized\",\"task_id\":\"task\\nbound\"}",
+            "]}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn schedule_history_preserves_cancellation_and_missing_stream_semantics() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).expect("writable schedule store");
+    let id = ScheduleId::new("cancelled").unwrap();
+    let scheduled = store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("stop later").unwrap(),
+            ScheduleInstant::from_unix_millis(30),
+        )
+        .unwrap();
+    store
+        .cancel(
+            &id,
+            scheduled.revision(),
+            ScheduleCancellation::new("operator request").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "history",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"id\":\"cancelled\",\"history\":[",
+            "{\"revision\":1,\"type\":\"created\",\"goal\":\"stop later\",\"due_at_unix_millis\":30},",
+            "{\"revision\":2,\"type\":\"cancelled\",\"reason\":\"operator request\"}",
+            "]}\n"
+        ));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "history",
+            database.to_str().expect("UTF-8 database path"),
+            "missing",
+        ])
+        .assert()
+        .success()
+        .stdout("{\"id\":\"missing\",\"history\":null}\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn schedule_history_rejects_invalid_input_before_storage_and_never_creates_storage() {
+    let directory = tempdir().expect("schedule database directory");
+    let missing = directory.path().join("missing.sqlite3");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "history",
+            missing.to_str().expect("UTF-8 database path"),
+            "   ",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: invalid_schedule_id:"));
+    assert!(!missing.exists());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "history",
+            missing.to_str().expect("UTF-8 database path"),
+            "valid",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: schedule_history_failed:"));
+    assert!(!missing.exists());
+}
+
+#[test]
 fn record_help_describes_development_records() {
     let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
 

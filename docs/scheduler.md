@@ -52,6 +52,21 @@ The due command does not read ambient time or infer that returned work should
 run. It cannot mutate, claim, release, cancel, materialize, dispatch, retry, or
 execute a schedule or task.
 
+`vela-dev schedule history DATABASE SCHEDULE_ID` validates the exact schedule
+ID before opening the caller-selected database read-only, then emits one compact
+JSON document containing `id` and `history`. Existing histories are arrays in
+exact revision order. Every entry contains `revision` and a lowercase `type`;
+creation also contains exact `goal` and `due_at_unix_millis`, cancellation and
+release contain exact `reason`, and materialization contains exact `task_id`.
+JSON serialization escapes every caller-authored string. A valid missing ID is
+represented by `{"id":"missing","history":null}` rather than an empty history.
+
+Blank IDs fail before storage access with `invalid_schedule_id`. Open, WAL,
+schema, replay, projection, and serialization failures emit one escaped
+`schedule_history_failed` diagnostic and no partial stdout. Missing storage is
+never created. History inspection cannot mutate lifecycle state, read ambient
+time, dispatch, retry, or execute a schedule or task.
+
 ## Authority boundary
 
 The caller owns every status filter, every cutoff supplied to `list_due` or `claim`, every cancellation, claim, exact revision supplied to a mutation, task-ID binding decision, and action taken from a listed, due, claimed, materialized, historical, or task-provenance result. Full, status-filtered, historical, and task-provenance discovery are read-only and grant no authority; `open_read_only` additionally removes SQLite write and creation authority but is not a snapshot, secrecy boundary, or filesystem permission grant. Cancellation prevents future due selection but does not interrupt work already selected elsewhere. A revision identifies one exact persisted observation and prevents an earlier observer or claimant from consuming later lifecycle state; it is not worker identity, a permission grant, a lease, or proof of liveness. A claim is only a durable reservation, release is only caller-authored recovery evidence, and materialization only creates inert active task state: none infers worker health, starts or advances a workflow, calls a provider, invokes a tool, grants or revokes permission, sleeps, retries, or executes task work.
