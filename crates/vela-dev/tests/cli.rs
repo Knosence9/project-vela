@@ -53,6 +53,144 @@ fn help_identifies_vela_developer_tooling() {
 }
 
 #[test]
+fn creates_one_durable_schedule_as_deterministic_complete_json() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "create",
+            database.to_str().expect("UTF-8 database path"),
+            "intent\n42",
+            "preserve \"exact\" goal",
+            "123",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"id\":\"intent\\n42\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"due_at_unix_millis\":123,\"status\":\"pending\",\"revision\":1,",
+            "\"cancellation\":null,\"latest_release\":null,\"task_id\":null}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = ScheduleStore::open_read_only(&database).expect("read-only schedule store");
+    let scheduled = store
+        .load(&ScheduleId::new("intent\n42").unwrap())
+        .unwrap()
+        .expect("persisted schedule");
+    assert_eq!(scheduled.goal().as_str(), "preserve \"exact\" goal");
+    assert_eq!(scheduled.due_at().unix_millis(), 123);
+    assert_eq!(scheduled.revision(), 1);
+}
+
+#[test]
+fn schedule_creation_rejects_duplicates_without_rewriting_the_original() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "create",
+            database.to_str().expect("UTF-8 database path"),
+            "same-id",
+            "original",
+            "10",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "create",
+            database.to_str().expect("UTF-8 database path"),
+            "same-id",
+            "replacement",
+            "20",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: schedule_creation_failed:"));
+
+    let store = ScheduleStore::open_read_only(&database).expect("read-only schedule store");
+    let scheduled = store
+        .load(&ScheduleId::new("same-id").unwrap())
+        .unwrap()
+        .expect("original schedule");
+    assert_eq!(scheduled.goal().as_str(), "original");
+    assert_eq!(scheduled.due_at().unix_millis(), 10);
+    assert_eq!(scheduled.revision(), 1);
+}
+
+#[test]
+fn schedule_creation_validates_before_storage_and_reports_storage_failures() {
+    let directory = tempdir().expect("schedule database directory");
+
+    for (name, id, goal, expected_error) in [
+        ("invalid-id.sqlite3", " ", "goal", "invalid_schedule_id"),
+        ("invalid-goal.sqlite3", "id", "", "invalid_task_goal"),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "schedule",
+                "create",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                goal,
+                "1",
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+        assert!(!database.exists());
+    }
+
+    let invalid_due = directory.path().join("invalid-due.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "create",
+            invalid_due.to_str().expect("UTF-8 database path"),
+            "id",
+            "goal",
+            "not-a-millisecond",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "invalid value 'not-a-millisecond'",
+        ));
+    assert!(!invalid_due.exists());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "create",
+            directory.path().to_str().expect("UTF-8 database path"),
+            "id",
+            "goal",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: schedule_creation_failed:"));
+}
+
+#[test]
 fn inspects_durable_schedules_as_deterministic_complete_json() {
     let directory = tempdir().expect("schedule database directory");
     let database = directory.path().join("events.sqlite3");

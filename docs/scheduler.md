@@ -23,6 +23,23 @@ The `vela-kernel` crate provides an inert first scheduler boundary: callers can 
 - Cancellation and claiming are exact-revision competing transitions from pending. Racing operations append exactly one event; racing releases likewise append exactly one recovery event, and the loser receives typed `ConcurrentModification` evidence identifying the expected and persisted revisions. Racing materializations commit one complete schedule/task pair and no orphan stream. A complete intervening claim/release cycle that returns a schedule to the same status is reported through the same typed conflict rather than a raw event-log error.
 - Status changes only through persisted lifecycle events; due time alone never changes status.
 
+## Writable CLI creation
+
+`vela-dev schedule create DATABASE SCHEDULE_ID GOAL DUE_AT_UNIX_MILLIS`
+validates the exact caller-owned ID and non-empty task goal before opening the
+exact caller-selected database through `ScheduleStore::open`. The due instant is
+a parsed non-negative `u64`; invalid syntax is rejected by the CLI before the
+command runs. Success appends exactly one `schedule.created` event and emits the
+complete compact pending schedule object used by inspection, including revision
+`1` and null lifecycle evidence. Exact caller-authored strings are JSON escaped.
+
+Creation may initialize the selected database. Invalid IDs and goals emit
+`invalid_schedule_id` or `invalid_task_goal` without creating storage. Duplicate
+IDs, open, WAL, schema, append, and serialization failures emit one escaped
+`schedule_creation_failed` diagnostic and no partial stdout; duplicate failure
+does not replace the original intent. The command cannot read ambient time,
+claim, cancel, release, materialize, dispatch, retry, or execute work.
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database
