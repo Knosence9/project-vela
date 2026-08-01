@@ -464,9 +464,11 @@ impl ScheduleStore {
         Ok(matches.pop())
     }
 
+    /// Withdraws one exact pending revision without granting interruption authority.
     pub fn cancel(
         &mut self,
         id: &ScheduleId,
+        expected_revision: u64,
         cancellation: ScheduleCancellation,
     ) -> Result<ScheduledTask, ScheduleStoreError> {
         let Some(mut scheduled) = self.load(id)? else {
@@ -474,6 +476,7 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
+        validate_revision(id, &scheduled, expected_revision)?;
         if let Some(error) = terminal_schedule_error(id, &scheduled) {
             return Err(error);
         }
@@ -483,7 +486,7 @@ impl ScheduleStore {
         };
         match self.event_log.append(
             &schedule_stream(id),
-            ExpectedVersion::Exact(scheduled.revision),
+            ExpectedVersion::Exact(expected_revision),
             &event,
         ) {
             Ok(_) => {
@@ -492,19 +495,9 @@ impl ScheduleStore {
                 Ok(scheduled)
             }
             Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
-                Some(current) if current.status() == ScheduleStatus::Cancelled => {
-                    Err(ScheduleStoreError::AlreadyCancelled {
-                        schedule_id: id.clone(),
-                    })
-                }
-                Some(current) if current.status() == ScheduleStatus::Claimed => {
-                    Err(ScheduleStoreError::AlreadyClaimed {
-                        schedule_id: id.clone(),
-                    })
-                }
                 Some(current) => Err(ScheduleStoreError::ConcurrentModification {
                     schedule_id: id.clone(),
-                    expected_revision: scheduled.revision,
+                    expected_revision,
                     current_revision: current.revision,
                 }),
                 None => Err(ScheduleStoreError::NotFound {
@@ -515,10 +508,11 @@ impl ScheduleStore {
         }
     }
 
-    /// Durably reserves one due intent without dispatching or executing it.
+    /// Durably reserves one exact due revision without dispatching or executing it.
     pub fn claim(
         &mut self,
         id: &ScheduleId,
+        expected_revision: u64,
         cutoff: ScheduleInstant,
     ) -> Result<ScheduledTask, ScheduleStoreError> {
         let Some(mut scheduled) = self.load(id)? else {
@@ -526,6 +520,7 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
+        validate_revision(id, &scheduled, expected_revision)?;
         if let Some(error) = terminal_schedule_error(id, &scheduled) {
             return Err(error);
         }
@@ -539,7 +534,7 @@ impl ScheduleStore {
 
         match self.event_log.append(
             &schedule_stream(id),
-            ExpectedVersion::Exact(scheduled.revision),
+            ExpectedVersion::Exact(expected_revision),
             &ScheduleEvent::Claimed {},
         ) {
             Ok(_) => {
@@ -548,19 +543,9 @@ impl ScheduleStore {
                 Ok(scheduled)
             }
             Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
-                Some(current) if current.status() == ScheduleStatus::Cancelled => {
-                    Err(ScheduleStoreError::AlreadyCancelled {
-                        schedule_id: id.clone(),
-                    })
-                }
-                Some(current) if current.status() == ScheduleStatus::Claimed => {
-                    Err(ScheduleStoreError::AlreadyClaimed {
-                        schedule_id: id.clone(),
-                    })
-                }
                 Some(current) => Err(ScheduleStoreError::ConcurrentModification {
                     schedule_id: id.clone(),
-                    expected_revision: scheduled.revision,
+                    expected_revision,
                     current_revision: current.revision,
                 }),
                 None => Err(ScheduleStoreError::NotFound {
