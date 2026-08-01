@@ -33,9 +33,9 @@ fn queries_complete_typed_schedule_history_after_reopening() {
     store
         .schedule(id.clone(), goal.clone(), instant(42))
         .unwrap();
-    store.claim(&id, instant(42)).unwrap();
+    store.claim(&id, 1, instant(42)).unwrap();
     store.release(&id, 2, release.clone()).unwrap();
-    store.claim(&id, instant(42)).unwrap();
+    store.claim(&id, 3, instant(42)).unwrap();
     store.materialize(&id, 4, task_id.clone()).unwrap();
     drop(store);
 
@@ -82,7 +82,7 @@ fn schedule_history_preserves_cancellation_and_returns_none_for_missing_id() {
     store
         .schedule(id.clone(), goal.clone(), instant(7))
         .unwrap();
-    store.cancel(&id, reason.clone()).unwrap();
+    store.cancel(&id, 1, reason.clone()).unwrap();
 
     assert_eq!(
         store
@@ -121,7 +121,7 @@ fn finds_materialized_schedule_by_exact_task_id_after_reopening() {
             instant(42),
         )
         .unwrap();
-    store.claim(&schedule_id, instant(42)).unwrap();
+    store.claim(&schedule_id, 1, instant(42)).unwrap();
     let materialized = store.materialize(&schedule_id, 2, task_id.clone()).unwrap();
     drop(store);
 
@@ -149,7 +149,7 @@ fn task_lookup_fails_closed_for_malformed_history_and_duplicate_bindings() {
                 instant(1),
             )
             .unwrap();
-        store.claim(id, instant(1)).unwrap();
+        store.claim(id, 1, instant(1)).unwrap();
     }
     store.materialize(&first_id, 2, task_id.clone()).unwrap();
     let connection = rusqlite::Connection::open(&path).unwrap();
@@ -297,6 +297,7 @@ fn cancels_pending_schedule_with_exact_reason_after_reopening() {
     let cancelled = store
         .cancel(
             &id,
+            1,
             ScheduleCancellation::new(" Superseded by operator ").unwrap(),
         )
         .unwrap();
@@ -334,7 +335,7 @@ fn racing_cancellations_persist_exactly_one_terminal_reason() {
         std::thread::spawn(move || {
             let mut store = ScheduleStore::open(path).unwrap();
             barrier.wait();
-            store.cancel(&id, ScheduleCancellation::new(reason).unwrap())
+            store.cancel(&id, 1, ScheduleCancellation::new(reason).unwrap())
         })
     });
     let results = handles.map(|handle| handle.join().unwrap());
@@ -343,7 +344,16 @@ fn racing_cancellations_persist_exactly_one_terminal_reason() {
     assert_eq!(
         results
             .iter()
-            .filter(|result| matches!(result, Err(ScheduleStoreError::AlreadyCancelled { .. })))
+            .filter(|result| {
+                matches!(
+                    result,
+                    Err(ScheduleStoreError::ConcurrentModification {
+                        expected_revision: 1,
+                        current_revision: 2,
+                        ..
+                    })
+                )
+            })
             .count(),
         1
     );
@@ -373,7 +383,7 @@ fn claims_due_schedule_and_excludes_it_from_due_work_after_reopening() {
         )
         .unwrap();
 
-    let claimed = store.claim(&id, instant(10)).unwrap();
+    let claimed = store.claim(&id, 1, instant(10)).unwrap();
 
     assert_eq!(claimed.status(), ScheduleStatus::Claimed);
     assert_eq!(
@@ -414,12 +424,13 @@ fn rejects_claiming_future_missing_or_terminal_schedules_without_rewriting_histo
     let cancelled = store
         .cancel(
             &cancelled_id,
+            1,
             ScheduleCancellation::new("Withdrawn").unwrap(),
         )
         .unwrap();
 
     assert!(matches!(
-        store.claim(&pending_id, instant(10)).unwrap_err(),
+        store.claim(&pending_id, 1, instant(10)).unwrap_err(),
         ScheduleStoreError::NotDue {
             schedule_id,
             due_at,
@@ -428,26 +439,51 @@ fn rejects_claiming_future_missing_or_terminal_schedules_without_rewriting_histo
     ));
     assert_eq!(store.load(&pending_id).unwrap(), Some(pending));
     assert!(matches!(
-        store.claim(&missing_id, instant(u64::MAX)).unwrap_err(),
+        store.claim(&missing_id, 1, instant(u64::MAX)).unwrap_err(),
         ScheduleStoreError::NotFound { schedule_id } if schedule_id == missing_id
     ));
     assert!(matches!(
         store
-            .claim(&cancelled_id, instant(u64::MAX))
+            .claim(&cancelled_id, 1, instant(u64::MAX))
+            .unwrap_err(),
+        ScheduleStoreError::ConcurrentModification {
+            expected_revision: 1,
+            current_revision: 2,
+            ..
+        }
+    ));
+    assert!(matches!(
+        store
+            .claim(&cancelled_id, 2, instant(u64::MAX))
             .unwrap_err(),
         ScheduleStoreError::AlreadyCancelled { schedule_id } if schedule_id == cancelled_id
     ));
     assert_eq!(store.load(&cancelled_id).unwrap(), Some(cancelled));
 
-    let claimed = store.claim(&pending_id, instant(11)).unwrap();
+    let claimed = store.claim(&pending_id, 1, instant(11)).unwrap();
     assert!(matches!(
-        store.claim(&pending_id, instant(11)).unwrap_err(),
+        store
+            .cancel(
+                &pending_id,
+                1,
+                ScheduleCancellation::new("stale withdrawal").unwrap(),
+            )
+            .unwrap_err(),
+        ScheduleStoreError::ConcurrentModification {
+            expected_revision: 1,
+            current_revision: 2,
+            ..
+        }
+    ));
+    assert!(matches!(
+        store.claim(&pending_id, 2, instant(11)).unwrap_err(),
         ScheduleStoreError::AlreadyClaimed { schedule_id } if schedule_id == pending_id
     ));
     assert!(matches!(
         store
             .cancel(
                 &pending_id,
+                2,
                 ScheduleCancellation::new("too late").unwrap(),
             )
             .unwrap_err(),
@@ -473,7 +509,7 @@ fn racing_claims_persist_exactly_one_claim() {
         std::thread::spawn(move || {
             let mut store = ScheduleStore::open(path).unwrap();
             barrier.wait();
-            store.claim(&id, instant(1))
+            store.claim(&id, 1, instant(1))
         })
     });
     let results = handles.map(|handle| handle.join().unwrap());
@@ -482,7 +518,16 @@ fn racing_claims_persist_exactly_one_claim() {
     assert_eq!(
         results
             .iter()
-            .filter(|result| matches!(result, Err(ScheduleStoreError::AlreadyClaimed { .. })))
+            .filter(|result| {
+                matches!(
+                    result,
+                    Err(ScheduleStoreError::ConcurrentModification {
+                        expected_revision: 1,
+                        current_revision: 2,
+                        ..
+                    })
+                )
+            })
             .count(),
         1
     );
@@ -518,7 +563,7 @@ fn racing_claim_and_cancellation_commit_one_terminal_transition() {
         std::thread::spawn(move || {
             let mut store = ScheduleStore::open(path).unwrap();
             barrier.wait();
-            store.claim(&id, instant(1))
+            store.claim(&id, 1, instant(1))
         })
     };
     let cancel = {
@@ -528,7 +573,11 @@ fn racing_claim_and_cancellation_commit_one_terminal_transition() {
         std::thread::spawn(move || {
             let mut store = ScheduleStore::open(path).unwrap();
             barrier.wait();
-            store.cancel(&id, ScheduleCancellation::new("operator withdrew").unwrap())
+            store.cancel(
+                &id,
+                1,
+                ScheduleCancellation::new("operator withdrew").unwrap(),
+            )
         })
     };
     let results = [claim.join().unwrap(), cancel.join().unwrap()];
@@ -539,21 +588,18 @@ fn racing_claim_and_cancellation_commit_one_terminal_transition() {
         .load(&id)
         .unwrap()
         .unwrap();
-    match loaded.status() {
-        ScheduleStatus::Claimed => assert!(
-            results
-                .iter()
-                .any(|result| matches!(result, Err(ScheduleStoreError::AlreadyClaimed { .. })))
-        ),
-        ScheduleStatus::Cancelled => assert!(
-            results
-                .iter()
-                .any(|result| matches!(result, Err(ScheduleStoreError::AlreadyCancelled { .. })))
-        ),
-        ScheduleStatus::Pending | ScheduleStatus::Materialized => {
-            panic!("the schedule must be claimed or cancelled")
-        }
-    }
+    assert!(matches!(
+        loaded.status(),
+        ScheduleStatus::Claimed | ScheduleStatus::Cancelled
+    ));
+    assert!(results.iter().any(|result| matches!(
+        result,
+        Err(ScheduleStoreError::ConcurrentModification {
+            expected_revision: 1,
+            current_revision: 2,
+            ..
+        })
+    )));
 }
 
 #[test]
@@ -618,7 +664,11 @@ fn cancellation_requires_content_and_reports_missing_or_terminal_schedules() {
 
     assert!(matches!(
         store
-            .cancel(&missing, ScheduleCancellation::new("No intent").unwrap())
+            .cancel(
+                &missing,
+                1,
+                ScheduleCancellation::new("No intent").unwrap(),
+            )
             .unwrap_err(),
         ScheduleStoreError::NotFound { schedule_id } if schedule_id == missing
     ));
@@ -630,12 +680,16 @@ fn cancellation_requires_content_and_reports_missing_or_terminal_schedules() {
         )
         .unwrap();
     let original = store
-        .cancel(&id, ScheduleCancellation::new("First reason").unwrap())
+        .cancel(&id, 1, ScheduleCancellation::new("First reason").unwrap())
         .unwrap();
 
     assert!(matches!(
         store
-            .cancel(&id, ScheduleCancellation::new("Replacement").unwrap())
+            .cancel(
+                &id,
+                2,
+                ScheduleCancellation::new("Replacement").unwrap(),
+            )
             .unwrap_err(),
         ScheduleStoreError::AlreadyCancelled { schedule_id } if schedule_id == id
     ));
@@ -673,6 +727,7 @@ fn lists_due_intents_in_due_then_exact_id_order() {
     store
         .cancel(
             &ScheduleId::new("beta").unwrap(),
+            1,
             ScheduleCancellation::new("Do not run").unwrap(),
         )
         .unwrap();
@@ -722,11 +777,12 @@ fn lists_every_schedule_in_exact_id_order_after_reopening() {
     store
         .cancel(
             &ScheduleId::new("zeta").unwrap(),
+            1,
             ScheduleCancellation::new(" exact cancellation ").unwrap(),
         )
         .unwrap();
     store
-        .claim(&ScheduleId::new("middle").unwrap(), instant(10))
+        .claim(&ScheduleId::new("middle").unwrap(), 1, instant(10))
         .unwrap();
     TaskStore::open(&path)
         .unwrap()
@@ -778,14 +834,15 @@ fn filters_schedules_by_exact_status_in_id_order_after_reopening() {
     store
         .cancel(
             &ScheduleId::new("cancelled").unwrap(),
+            1,
             ScheduleCancellation::new("withdrawn").unwrap(),
         )
         .unwrap();
     store
-        .claim(&ScheduleId::new("claimed").unwrap(), instant(10))
+        .claim(&ScheduleId::new("claimed").unwrap(), 1, instant(10))
         .unwrap();
     store
-        .claim(&ScheduleId::new("materialized").unwrap(), instant(10))
+        .claim(&ScheduleId::new("materialized").unwrap(), 1, instant(10))
         .unwrap();
     store
         .materialize(
@@ -1014,7 +1071,7 @@ fn releases_claimed_schedule_back_to_due_work_with_exact_recovery_evidence() {
             instant(10),
         )
         .unwrap();
-    store.claim(&id, instant(10)).unwrap();
+    store.claim(&id, 1, instant(10)).unwrap();
 
     let released = store
         .release(
@@ -1045,12 +1102,12 @@ fn released_schedule_can_be_claimed_again_without_changing_intent() {
     store
         .schedule(id.clone(), goal.clone(), instant(7))
         .unwrap();
-    store.claim(&id, instant(7)).unwrap();
+    store.claim(&id, 1, instant(7)).unwrap();
     store
         .release(&id, 2, ScheduleRelease::new("retry reservation").unwrap())
         .unwrap();
 
-    let reclaimed = store.claim(&id, instant(7)).unwrap();
+    let reclaimed = store.claim(&id, 3, instant(7)).unwrap();
 
     assert_eq!(reclaimed.status(), ScheduleStatus::Claimed);
     assert_eq!(reclaimed.goal(), &goal);
@@ -1070,6 +1127,7 @@ fn released_schedule_can_be_claimed_again_without_changing_intent() {
     let cancelled = store
         .cancel(
             &id,
+            5,
             ScheduleCancellation::new("stop after recovery").unwrap(),
         )
         .unwrap();
@@ -1080,6 +1138,80 @@ fn released_schedule_can_be_claimed_again_without_changing_intent() {
     );
     assert_eq!(cancelled.goal(), released_again.goal());
     assert_eq!(cancelled.due_at(), released_again.due_at());
+}
+
+#[test]
+fn stale_pending_observer_cannot_cancel_after_claim_release_cycle() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("stale-pending-cancel").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    let pending = store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Preserve newer recovery state").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    let claimed = store.claim(&id, pending.revision(), instant(1)).unwrap();
+    let released = store
+        .release(
+            &id,
+            claimed.revision(),
+            ScheduleRelease::new("newer recovery").unwrap(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store
+            .cancel(
+                &id,
+                pending.revision(),
+                ScheduleCancellation::new("stale withdrawal").unwrap(),
+            )
+            .unwrap_err(),
+        ScheduleStoreError::ConcurrentModification {
+            expected_revision: 1,
+            current_revision: 3,
+            ..
+        }
+    ));
+    assert_eq!(store.load(&id).unwrap(), Some(released));
+}
+
+#[test]
+fn stale_pending_observer_cannot_claim_after_claim_release_cycle() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("stale-pending-claim").unwrap();
+    let mut store = ScheduleStore::open(&path).unwrap();
+    let pending = store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("Preserve newer claim eligibility").unwrap(),
+            instant(1),
+        )
+        .unwrap();
+    let claimed = store.claim(&id, pending.revision(), instant(1)).unwrap();
+    let released = store
+        .release(
+            &id,
+            claimed.revision(),
+            ScheduleRelease::new("newer recovery").unwrap(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store
+            .claim(&id, pending.revision(), instant(0))
+            .unwrap_err(),
+        ScheduleStoreError::ConcurrentModification {
+            expected_revision: 1,
+            current_revision: 3,
+            ..
+        }
+    ));
+    assert_eq!(store.load(&id).unwrap(), Some(released));
 }
 
 #[test]
@@ -1108,6 +1240,7 @@ fn release_rejects_blank_reasons_and_non_claimed_schedules_without_appending() {
     let cancelled = store
         .cancel(
             &cancelled_id,
+            1,
             ScheduleCancellation::new("withdrawn").unwrap(),
         )
         .unwrap();
@@ -1159,7 +1292,7 @@ fn racing_releases_append_once_and_impossible_release_history_fails_closed() {
             instant(1),
         )
         .unwrap();
-    store.claim(&id, instant(1)).unwrap();
+    store.claim(&id, 1, instant(1)).unwrap();
     let barrier = Arc::new(Barrier::new(2));
     let handles = ["first recovery", "second recovery"].map(|reason| {
         let path = path.clone();
@@ -1216,7 +1349,7 @@ fn replay_rejects_malformed_release_evidence() {
             instant(1),
         )
         .unwrap();
-    store.claim(&id, instant(1)).unwrap();
+    store.claim(&id, 1, instant(1)).unwrap();
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute(
@@ -1257,7 +1390,7 @@ fn materializes_claimed_schedule_and_task_atomically_after_reopening() {
     store
         .schedule(schedule_id.clone(), goal.clone(), instant(10))
         .unwrap();
-    store.claim(&schedule_id, instant(10)).unwrap();
+    store.claim(&schedule_id, 1, instant(10)).unwrap();
     store
         .release(
             &schedule_id,
@@ -1265,7 +1398,7 @@ fn materializes_claimed_schedule_and_task_atomically_after_reopening() {
             ScheduleRelease::new("recover before materialization").unwrap(),
         )
         .unwrap();
-    store.claim(&schedule_id, instant(10)).unwrap();
+    store.claim(&schedule_id, 3, instant(10)).unwrap();
 
     let materialized = store.materialize(&schedule_id, 4, task_id.clone()).unwrap();
 
@@ -1325,10 +1458,11 @@ fn materialization_rejects_invalid_states_and_task_collisions_without_writes() {
     store
         .cancel(
             &cancelled_id,
+            1,
             ScheduleCancellation::new("withdrawn").unwrap(),
         )
         .unwrap();
-    let claimed = store.claim(&claimed_id, instant(1)).unwrap();
+    let claimed = store.claim(&claimed_id, 1, instant(1)).unwrap();
     TaskStore::open(&path)
         .unwrap()
         .start(
@@ -1400,7 +1534,7 @@ fn racing_materializations_commit_exactly_one_schedule_task_pair() {
             instant(1),
         )
         .unwrap();
-    store.claim(&schedule_id, instant(1)).unwrap();
+    store.claim(&schedule_id, 1, instant(1)).unwrap();
     let barrier = Arc::new(Barrier::new(2));
     let handles = ["first-task", "second-task"].map(|task_id| {
         let path = path.clone();
@@ -1512,7 +1646,7 @@ fn stale_claim_revision_cannot_release_a_later_claim() {
             instant(1),
         )
         .unwrap();
-    let first_claim = store.claim(&id, instant(1)).unwrap();
+    let first_claim = store.claim(&id, 1, instant(1)).unwrap();
     store
         .release(
             &id,
@@ -1520,7 +1654,7 @@ fn stale_claim_revision_cannot_release_a_later_claim() {
             ScheduleRelease::new("first claimant stopped").unwrap(),
         )
         .unwrap();
-    let second_claim = store.claim(&id, instant(1)).unwrap();
+    let second_claim = store.claim(&id, 3, instant(1)).unwrap();
 
     assert!(matches!(
         store
@@ -1553,7 +1687,7 @@ fn stale_claim_revision_cannot_materialize_a_later_claim() {
             instant(1),
         )
         .unwrap();
-    let first_claim = store.claim(&id, instant(1)).unwrap();
+    let first_claim = store.claim(&id, 1, instant(1)).unwrap();
     store
         .release(
             &id,
@@ -1561,7 +1695,7 @@ fn stale_claim_revision_cannot_materialize_a_later_claim() {
             ScheduleRelease::new("handoff").unwrap(),
         )
         .unwrap();
-    let second_claim = store.claim(&id, instant(1)).unwrap();
+    let second_claim = store.claim(&id, 3, instant(1)).unwrap();
 
     assert!(matches!(
         store
