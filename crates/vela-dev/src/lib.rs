@@ -56,6 +56,8 @@ pub enum Command {
 pub enum ScheduleCommand {
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
+    /// Print one exact durable schedule through a read-only storage boundary.
+    Get { database: PathBuf, id: String },
     /// Print durable schedules with one exact lifecycle status.
     Status { database: PathBuf, status: String },
     /// Print pending schedules due by one explicit Unix-millisecond cutoff.
@@ -121,6 +123,9 @@ impl Cli {
                 command: Some(ScheduleCommand::Inspect { database }),
             }) => inspect_schedules(&database, None),
             Some(Command::Schedule {
+                command: Some(ScheduleCommand::Get { database, id }),
+            }) => inspect_schedule(&database, &id),
+            Some(Command::Schedule {
                 command: Some(ScheduleCommand::Status { database, status }),
             }) => inspect_schedules_by_status(&database, &status),
             Some(Command::Schedule {
@@ -159,6 +164,12 @@ struct ScheduleInspection<'a> {
 }
 
 #[derive(Serialize)]
+struct ScheduleLookup<'a> {
+    id: &'a str,
+    schedule: Option<ScheduleInspection<'a>>,
+}
+
+#[derive(Serialize)]
 struct ScheduleTaskInspection<'a> {
     task_id: &'a str,
     schedule: Option<ScheduleInspection<'a>>,
@@ -194,6 +205,30 @@ enum ScheduleHistoryEventInspection<'a> {
     Materialized {
         task_id: &'a str,
     },
+}
+
+fn inspect_schedule(database: &Path, raw_id: &str) -> ExitCode {
+    let id = match ScheduleId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_lookup_failed", error),
+    };
+    let scheduled = match store.load(&id) {
+        Ok(scheduled) => scheduled,
+        Err(error) => return extension_error("schedule_lookup_failed", error),
+    };
+    let output = match serde_json::to_string(&ScheduleLookup {
+        id: id.as_str(),
+        schedule: scheduled.as_ref().map(schedule_inspection),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn inspect_schedule_history(database: &Path, raw_id: &str) -> ExitCode {
