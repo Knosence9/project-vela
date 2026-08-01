@@ -225,6 +225,11 @@ impl ScheduledTask {
     pub fn task_id(&self) -> Option<&TaskId> {
         self.task_id.as_ref()
     }
+
+    /// The exact persisted revision represented by this projection.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
 }
 
 #[derive(Debug)]
@@ -566,10 +571,11 @@ impl ScheduleStore {
         }
     }
 
-    /// Returns a claimed intent to pending eligibility with exact recovery evidence.
+    /// Returns an exact claimed revision to pending eligibility with recovery evidence.
     pub fn release(
         &mut self,
         id: &ScheduleId,
+        expected_revision: u64,
         release: ScheduleRelease,
     ) -> Result<ScheduledTask, ScheduleStoreError> {
         let Some(mut scheduled) = self.load(id)? else {
@@ -577,6 +583,7 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
+        validate_revision(id, &scheduled, expected_revision)?;
         require_claimed(id, &scheduled)?;
 
         let event = ScheduleEvent::Released {
@@ -584,7 +591,7 @@ impl ScheduleStore {
         };
         match self.event_log.append(
             &schedule_stream(id),
-            ExpectedVersion::Exact(scheduled.revision),
+            ExpectedVersion::Exact(expected_revision),
             &event,
         ) {
             Ok(_) => {
@@ -596,7 +603,7 @@ impl ScheduleStore {
             Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
                 Some(current) => Err(ScheduleStoreError::ConcurrentModification {
                     schedule_id: id.clone(),
-                    expected_revision: scheduled.revision,
+                    expected_revision,
                     current_revision: current.revision,
                 }),
                 None => Err(ScheduleStoreError::NotFound {
@@ -607,10 +614,11 @@ impl ScheduleStore {
         }
     }
 
-    /// Atomically turns one claimed intent into one inert active task.
+    /// Atomically turns one exact claimed revision into one inert active task.
     pub fn materialize(
         &mut self,
         id: &ScheduleId,
+        expected_revision: u64,
         task_id: TaskId,
     ) -> Result<ScheduledTask, ScheduleStoreError> {
         let Some(mut scheduled) = self.load(id)? else {
@@ -618,9 +626,9 @@ impl ScheduleStore {
                 schedule_id: id.clone(),
             });
         };
+        validate_revision(id, &scheduled, expected_revision)?;
         require_claimed(id, &scheduled)?;
 
-        let expected_revision = scheduled.revision;
         let schedule_event = ScheduleEvent::Materialized {
             task_id: task_id.clone(),
         };
@@ -787,6 +795,22 @@ fn terminal_schedule_error(
                 .clone()
                 .expect("materialized status always carries a task ID"),
         }),
+    }
+}
+
+fn validate_revision(
+    id: &ScheduleId,
+    scheduled: &ScheduledTask,
+    expected_revision: u64,
+) -> Result<(), ScheduleStoreError> {
+    if scheduled.revision == expected_revision {
+        Ok(())
+    } else {
+        Err(ScheduleStoreError::ConcurrentModification {
+            schedule_id: id.clone(),
+            expected_revision,
+            current_revision: scheduled.revision,
+        })
     }
 }
 

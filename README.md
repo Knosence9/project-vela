@@ -258,6 +258,7 @@ The first milestone is the **evidence loop**:
 99. Filter durable one-shot schedule inventory by exact persisted lifecycle status without granting execution authority. ✅
 100. Query one exact durable schedule's complete typed lifecycle history without granting execution authority. ✅
 101. Resolve a materialized schedule from its exact task identity without granting lifecycle authority. ✅
+102. Bind schedule release and materialization to one exact persisted claim revision so stale claimants cannot consume later claims. ✅
 
 ## Project documents
 
