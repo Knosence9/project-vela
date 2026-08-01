@@ -359,6 +359,207 @@ fn schedule_cancellation_validates_before_storage_and_reports_storage_failures()
 }
 
 #[test]
+fn claims_one_exact_due_schedule_revision_as_complete_json() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = ScheduleId::new("intent\n42").unwrap();
+    let mut store = ScheduleStore::open(&database).unwrap();
+    store
+        .schedule(
+            id.clone(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(123),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "claim",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+            "1",
+            "123",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"id\":\"intent\\n42\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"due_at_unix_millis\":123,\"status\":\"claimed\",\"revision\":2,",
+            "\"cancellation\":null,\"latest_release\":null,\"task_id\":null}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = ScheduleStore::open_read_only(&database).unwrap();
+    let claimed = store.load(&id).unwrap().expect("claimed schedule");
+    assert_eq!(claimed.revision(), 2);
+}
+
+#[test]
+fn schedule_claim_rejects_future_stale_missing_and_terminal_intent_without_append() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let future_id = ScheduleId::new("future").unwrap();
+    let claimed_id = ScheduleId::new("claimed").unwrap();
+    let cancelled_id = ScheduleId::new("cancelled").unwrap();
+    let materialized_id = ScheduleId::new("materialized").unwrap();
+    let mut store = ScheduleStore::open(&database).unwrap();
+    store
+        .schedule(
+            future_id.clone(),
+            TaskGoal::new("future goal").unwrap(),
+            ScheduleInstant::from_unix_millis(2),
+        )
+        .unwrap();
+    let claimed = store
+        .schedule(
+            claimed_id.clone(),
+            TaskGoal::new("claimed goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+        )
+        .unwrap();
+    store
+        .claim(
+            &claimed_id,
+            claimed.revision(),
+            ScheduleInstant::from_unix_millis(1),
+        )
+        .unwrap();
+    let cancelled = store
+        .schedule(
+            cancelled_id.clone(),
+            TaskGoal::new("cancelled goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+        )
+        .unwrap();
+    store
+        .cancel(
+            &cancelled_id,
+            cancelled.revision(),
+            ScheduleCancellation::new("operator request").unwrap(),
+        )
+        .unwrap();
+    let materialized = store
+        .schedule(
+            materialized_id.clone(),
+            TaskGoal::new("materialized goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+        )
+        .unwrap();
+    let materialized = store
+        .claim(
+            &materialized_id,
+            materialized.revision(),
+            ScheduleInstant::from_unix_millis(1),
+        )
+        .unwrap();
+    store
+        .materialize(
+            &materialized_id,
+            materialized.revision(),
+            TaskId::new("materialized-task").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    for (id, revision, cutoff) in [
+        (future_id.as_str(), "1", "1"),
+        (future_id.as_str(), "0", "2"),
+        ("missing", "1", "1"),
+        (claimed_id.as_str(), "2", "1"),
+        (cancelled_id.as_str(), "2", "1"),
+        (materialized_id.as_str(), "3", "1"),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "schedule",
+                "claim",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                revision,
+                cutoff,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with("$: schedule_claim_failed:"));
+    }
+
+    let store = ScheduleStore::open_read_only(&database).unwrap();
+    assert_eq!(store.load(&future_id).unwrap().unwrap().revision(), 1);
+    assert_eq!(store.load(&claimed_id).unwrap().unwrap().revision(), 2);
+    assert_eq!(store.load(&cancelled_id).unwrap().unwrap().revision(), 2);
+    assert_eq!(store.load(&materialized_id).unwrap().unwrap().revision(), 3);
+}
+
+#[test]
+fn schedule_claim_validates_before_storage_and_reports_storage_failures() {
+    let directory = tempdir().expect("schedule database directory");
+
+    for (name, id, revision, cutoff, code, expected_error) in [
+        (
+            "invalid-id.sqlite3",
+            " ",
+            "1",
+            "1",
+            1,
+            "invalid_schedule_id",
+        ),
+        (
+            "invalid-revision.sqlite3",
+            "id",
+            "not-a-revision",
+            "1",
+            2,
+            "invalid value 'not-a-revision'",
+        ),
+        (
+            "invalid-cutoff.sqlite3",
+            "id",
+            "1",
+            "not-a-cutoff",
+            2,
+            "invalid value 'not-a-cutoff'",
+        ),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "schedule",
+                "claim",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                revision,
+                cutoff,
+            ])
+            .assert()
+            .code(code)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains(expected_error));
+        assert!(!database.exists());
+    }
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "claim",
+            directory.path().to_str().expect("UTF-8 database path"),
+            "id",
+            "1",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: schedule_claim_failed:"));
+}
+
+#[test]
 fn inspects_durable_schedules_as_deterministic_complete_json() {
     let directory = tempdir().expect("schedule database directory");
     let database = directory.path().join("events.sqlite3");
