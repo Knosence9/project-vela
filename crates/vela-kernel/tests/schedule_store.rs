@@ -1747,3 +1747,131 @@ fn stale_claim_revision_cannot_materialize_a_later_claim() {
             .is_none()
     );
 }
+
+#[test]
+fn claims_next_due_schedule_in_due_then_exact_id_order() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&path).unwrap();
+    let cancelled_id = ScheduleId::new("cancelled").unwrap();
+    let first_id = ScheduleId::new("alpha").unwrap();
+    let second_id = ScheduleId::new("zeta").unwrap();
+    let later_id = ScheduleId::new("later").unwrap();
+    for (id, due_at) in [
+        (&cancelled_id, 1),
+        (&second_id, 5),
+        (&first_id, 5),
+        (&later_id, 6),
+    ] {
+        store
+            .schedule(
+                id.clone(),
+                TaskGoal::new(format!("goal-{id}")).unwrap(),
+                instant(due_at),
+            )
+            .unwrap();
+    }
+    store
+        .cancel(
+            &cancelled_id,
+            1,
+            ScheduleCancellation::new("withdrawn").unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(store.claim_next_due(instant(4)).unwrap(), None);
+    let first = store.claim_next_due(instant(5)).unwrap().unwrap();
+    assert_eq!(first.id(), &first_id);
+    assert_eq!(first.status(), ScheduleStatus::Claimed);
+    assert_eq!(first.revision(), 2);
+    let second = store.claim_next_due(instant(5)).unwrap().unwrap();
+    assert_eq!(second.id(), &second_id);
+    assert_eq!(store.claim_next_due(instant(5)).unwrap(), None);
+
+    drop(store);
+    let reopened = ScheduleStore::open(&path).unwrap();
+    assert_eq!(reopened.load(&first_id).unwrap(), Some(first));
+    assert_eq!(reopened.load(&second_id).unwrap(), Some(second));
+    assert_eq!(reopened.list_due(instant(6)).unwrap()[0].id(), &later_id);
+}
+
+#[test]
+fn racing_next_due_claims_reserve_distinct_schedules() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&path).unwrap();
+    for id in ["first", "second"] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(format!("goal-{id}")).unwrap(),
+                instant(1),
+            )
+            .unwrap();
+    }
+    drop(store);
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = [(), ()].map(|()| {
+        let path = path.clone();
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let mut store = ScheduleStore::open(path).unwrap();
+            barrier.wait();
+            store.claim_next_due(instant(1)).unwrap().unwrap()
+        })
+    });
+    let claimed = handles.map(|handle| handle.join().unwrap());
+
+    assert_ne!(claimed[0].id(), claimed[1].id());
+    assert!(
+        claimed
+            .iter()
+            .all(|item| item.status() == ScheduleStatus::Claimed)
+    );
+    assert!(
+        ScheduleStore::open(&path)
+            .unwrap()
+            .list_due(instant(1))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn next_due_claim_fails_closed_before_skipping_corrupt_schedule_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&path).unwrap();
+    for id in ["corrupt", "valid"] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(format!("goal-{id}")).unwrap(),
+                instant(1),
+            )
+            .unwrap();
+    }
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'schedule:corrupt'",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store.claim_next_due(instant(1)).unwrap_err(),
+        ScheduleStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            ..
+        })
+    ));
+    assert_eq!(
+        store
+            .load(&ScheduleId::new("valid").unwrap())
+            .unwrap()
+            .unwrap()
+            .status(),
+        ScheduleStatus::Pending
+    );
+}
