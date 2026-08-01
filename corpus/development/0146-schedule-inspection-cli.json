@@ -44,7 +44,8 @@
     "Build inspection CLIs over typed domain projections instead of duplicating storage interpretation with direct SQL.",
     "Serialize the complete response before writing stdout so failures cannot leave a plausible partial document.",
     "Deterministic ordering and JSON escaping make persisted operational evidence scriptable and safe to compare.",
-    "An observation command should omit mutation options rather than relying only on user restraint."
+    "An observation command should omit mutation options rather than relying only on user restraint.",
+    "A rate-limited review status is not substantive merge evidence; keep auto-merge disabled until exact-head review completes."
   ],
   "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/818"},
   "sanitation": {"passed": true, "blockers": []},

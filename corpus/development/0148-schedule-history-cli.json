@@ -44,7 +44,8 @@
     "Expose already-validated typed history rather than raw event rows at the CLI boundary.",
     "Preserve null for a missing aggregate so absence is not confused with an existing empty lifecycle.",
     "Validate exact identities before filesystem access and preserve accepted strings without hidden normalization.",
-    "Keep a one-use event mapping local until real duplication justifies shared abstraction."
+    "Keep a one-use event mapping local until real duplication justifies shared abstraction.",
+    "Require substantive review of the exact PR head before treating a successful review status as merge evidence."
   ],
   "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/822"},
   "sanitation": {"passed": true, "blockers": []},

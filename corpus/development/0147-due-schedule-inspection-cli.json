@@ -44,7 +44,8 @@
     "Accept time as explicit caller evidence when a read-only query does not need ambient clock authority.",
     "Parse bounded input before opening storage so invalid requests cannot trigger filesystem side effects.",
     "Reuse kernel ordering and filtering instead of recreating scheduler semantics in the CLI.",
-    "Due inspection identifies candidates; it does not reserve, claim, dispatch, or execute them."
+    "Due inspection identifies candidates; it does not reserve, claim, dispatch, or execute them.",
+    "A rate-limited review status is not substantive merge evidence; keep auto-merge disabled until exact-head review completes."
   ],
   "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/820"},
   "sanitation": {"passed": true, "blockers": []},
