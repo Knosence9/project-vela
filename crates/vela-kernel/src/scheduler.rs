@@ -658,6 +658,27 @@ impl ScheduleStore {
         }
     }
 
+    /// Reserves the earliest still-pending due intent without dispatching or executing it.
+    ///
+    /// Selection uses the same due-instant then exact-ID order as [`Self::list_due`].
+    /// A competing persisted transition causes selection to restart so callers either
+    /// receive one claimed schedule or observe that no eligible intent remains.
+    pub fn claim_next_due(
+        &mut self,
+        cutoff: ScheduleInstant,
+    ) -> Result<Option<ScheduledTask>, ScheduleStoreError> {
+        loop {
+            let Some(next) = self.list_due(cutoff)?.into_iter().next() else {
+                return Ok(None);
+            };
+            match self.claim(next.id(), next.revision(), cutoff) {
+                Ok(claimed) => return Ok(Some(claimed)),
+                Err(ScheduleStoreError::ConcurrentModification { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Returns intents due at or before the caller-owned cutoff, ordered by instant then ID.
     pub fn list_due(
         &self,
