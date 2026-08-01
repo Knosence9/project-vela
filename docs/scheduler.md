@@ -40,6 +40,27 @@ IDs, open, WAL, schema, append, and serialization failures emit one escaped
 does not replace the original intent. The command cannot read ambient time,
 claim, cancel, release, materialize, dispatch, retry, or execute work.
 
+## Writable CLI cancellation
+
+`vela-dev schedule cancel DATABASE SCHEDULE_ID EXPECTED_REVISION REASON`
+validates the exact caller-owned ID and non-blank cancellation reason before
+opening the exact caller-selected database through `ScheduleStore::open`. The
+revision is parsed as a non-negative `u64` by the CLI. Success delegates the
+exact optimistic-concurrency check to `ScheduleStore::cancel`, appends one
+`schedule.cancelled` event, and emits the complete compact cancelled schedule
+object used by creation and inspection, including its resulting revision and
+exact cancellation evidence.
+
+Invalid IDs and reasons emit `invalid_schedule_id` or
+`invalid_schedule_cancellation` without accessing storage. Missing schedules,
+stale revisions, invalid lifecycle states, open, WAL, schema, append, replay,
+and serialization failures emit one escaped `schedule_cancellation_failed`
+diagnostic, non-zero status, and no partial stdout. Failed lifecycle operations
+append no cancellation evidence. The command cannot read ambient time,
+interrupt selected work, claim, release, materialize, dispatch, retry, or
+execute a schedule or task. The expected revision identifies one persisted
+observation; it is not worker identity, a lease, or a permission grant.
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database

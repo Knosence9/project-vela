@@ -11,7 +11,8 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleStatus, ScheduleStore, ScheduledTask,
+    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleStatus,
+    ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -60,6 +61,13 @@ pub enum ScheduleCommand {
         id: String,
         goal: String,
         due_at_unix_millis: u64,
+    },
+    /// Cancel one exact pending schedule revision.
+    Cancel {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        reason: String,
     },
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
@@ -135,6 +143,15 @@ impl Cli {
                         due_at_unix_millis,
                     }),
             }) => create_schedule(&database, &id, &goal, due_at_unix_millis),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::Cancel {
+                        database,
+                        id,
+                        expected_revision,
+                        reason,
+                    }),
+            }) => cancel_schedule(&database, &id, expected_revision, &reason),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Inspect { database }),
             }) => inspect_schedules(&database, None),
@@ -243,6 +260,36 @@ fn create_schedule(database: &Path, raw_id: &str, raw_goal: &str, due_at: u64) -
     let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
         Ok(output) => output,
         Err(error) => return extension_error("schedule_creation_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn cancel_schedule(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    raw_reason: &str,
+) -> ExitCode {
+    let id = match ScheduleId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let cancellation = match ScheduleCancellation::new(raw_reason) {
+        Ok(cancellation) => cancellation,
+        Err(error) => return extension_error("invalid_schedule_cancellation", error),
+    };
+    let mut store = match ScheduleStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_cancellation_failed", error),
+    };
+    let scheduled = match store.cancel(&id, expected_revision, cancellation) {
+        Ok(scheduled) => scheduled,
+        Err(error) => return extension_error("schedule_cancellation_failed", error),
+    };
+    let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_cancellation_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS
