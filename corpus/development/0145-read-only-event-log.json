@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Open existing event-log state read-only",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/815 with an explicit fail-closed read-only event-log boundary reusable by typed schedule projections.",
+    "acceptance_criteria": [
+      "Open only an existing SQLite event log with read-only/no-create flags and query-only defense in depth.",
+      "Validate WAL mode and the expected events-table contract without changing pragmas or schema.",
+      "Expose ScheduleStore projections through the same boundary while mutation attempts append no event.",
+      "Document filesystem and SQLite sidecar limitations without claiming snapshot, secrecy, or immutable-media guarantees."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED read-only storage coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused tests failed because EventLog::open_read_only and ScheduleStore::open_read_only did not exist.",
+      "patch": "Added missing-file non-creation, existing WAL projection, mutation rejection, schema absence, incompatible mode, and reopen tests."
+    },
+    {
+      "summary": "Implemented a validated no-create observation boundary.",
+      "outcome": "success",
+      "diagnostic": "Existing constructors requested write settings and initialized schema, so observation itself required mutation authority.",
+      "patch": "Opened SQLite with read-only flags, enabled query_only, validated journal mode and required event columns, and reused the event log from ScheduleStore."
+    },
+    {
+      "summary": "Addressed both substantive hosted review findings.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that incompatible schemas lacked operator diagnostics and that documentation omitted WAL/SHM sidecar prerequisites and the lack of immutable=1 support.",
+      "patch": "Added distinct missing-table and column-mismatch reasons with RED-to-GREEN coverage, then documented sidecar and immutable-media limitations in one follow-up commit."
+    }
+  ],
+  "outcome": {
+    "summary": "Typed callers can inspect existing durable scheduler state without schema initialization or event mutation, while incompatible storage fails closed with useful diagnostics.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test event_log", "status": "passed"},
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30683018184", "status": "passed"},
+      {"command": "Pull request 816 squash merge 250b87280b830cf4a79dcf450cf27f397b9bbc40", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Observation needs an explicit storage boundary; reusing a write constructor with good intentions still grants creation and mutation authority.",
+    "Read-only mode should validate the schema it depends on rather than silently initialize or accept an incompatible database.",
+    "SQLite read-only access may still depend on WAL and SHM sidecars, so filesystem read-only media requires a different explicit contract.",
+    "Review diagnostics should distinguish a missing table from incompatible required columns while preserving fail-closed behavior.",
+    "A false-green rate-limited review status is not substantive review evidence and must not race auto-merge."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/event_log.rs", "url": "https://github.com/Knosence9/project-vela/pull/816"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

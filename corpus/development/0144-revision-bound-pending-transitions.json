@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Bind pending schedule transitions to exact revisions",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/813 by preventing stale pending observers from cancelling or claiming newer recovery state.",
+    "acceptance_criteria": [
+      "Require an exact expected revision for pending cancellation and claiming.",
+      "Validate revision evidence before lifecycle-state or due-cutoff interpretation.",
+      "Preserve typed expected/current revision conflicts without appending a cancellation or claim event.",
+      "Keep revision evidence separate from permission, worker, lease, clock, liveness, dispatch, and execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED stale-pending-observer coverage.",
+      "outcome": "failure",
+      "diagnostic": "New integration tests failed to compile because cancel and claim accepted no expected revision.",
+      "patch": "Added claim/release ABA tests proving an earlier pending observer cannot cancel or claim the recovered pending revision."
+    },
+    {
+      "summary": "Completed the revision-bound mutation contract.",
+      "outcome": "success",
+      "diagnostic": "Reloading by schedule ID allowed a stale observer to act on whichever pending revision happened to be current.",
+      "patch": "Required exact revisions for cancel and claim, validated them before state and cutoff checks, and used them for guarded appends and race evidence."
+    },
+    {
+      "summary": "Preserved exact-head review discipline.",
+      "outcome": "success",
+      "diagnostic": "The automatic CodeRabbit review remained pending after local and hosted quality gates completed, so auto-merge stayed unarmed until substantive review finished.",
+      "patch": "The completed walkthrough reviewed all five changed files, found no actionable issue, and confirmed the linked scope and authority exclusions."
+    }
+  ],
+  "outcome": {
+    "summary": "Every one-shot schedule mutation now identifies the exact persisted lifecycle observation it is authorized to change.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-kernel --test schedule_store", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30679713440", "status": "passed"},
+      {"command": "Pull request 814 squash merge f099590de87c1c61626f748e8015c9889e8cefc7", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Optimistic concurrency should cover every mutation, not only transitions that appear operationally expensive.",
+    "Check stale revisions before due cutoffs or lifecycle state so callers receive evidence about the actual authority mismatch.",
+    "Race-time append conflicts and preflight stale observations should share one typed expected/current revision contract.",
+    "A pending state can recur after recovery, so state equality alone cannot prevent ABA consumption."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/814"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
