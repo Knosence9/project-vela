@@ -717,6 +717,7 @@ impl RecurrenceStore {
         id: RecurrenceId,
         events: Vec<RecurrenceEvent>,
     ) -> Result<Option<FixedIntervalRecurrence>, RecurrenceStoreError> {
+        let event_count = events.len();
         match events.as_slice() {
             [] => Ok(None),
             [
@@ -727,14 +728,15 @@ impl RecurrenceStore {
                     occurrence_count,
                 },
             ] => {
+                let invalid_history = || RecurrenceStoreError::InvalidHistory { event_count };
                 let anchor = ScheduleInstant::from_unix_millis(*anchor_unix_millis);
                 let interval = ScheduleInterval::from_millis(*interval_millis)
-                    .expect("decoded recurrence intervals are positive");
-                let occurrence_count = OccurrenceCount::new(*occurrence_count)
-                    .expect("decoded recurrence counts are positive");
+                    .map_err(|_| invalid_history())?;
+                let occurrence_count =
+                    OccurrenceCount::new(*occurrence_count).map_err(|_| invalid_history())?;
                 let final_occurrence = anchor
                     .checked_advance_by(interval, occurrence_count.final_offset())
-                    .expect("decoded recurrence ranges are representable");
+                    .map_err(|_| invalid_history())?;
                 Ok(Some(FixedIntervalRecurrence {
                     id,
                     goal: goal.clone(),
@@ -745,9 +747,44 @@ impl RecurrenceStore {
                     revision: 1,
                 }))
             }
-            _ => Err(RecurrenceStoreError::InvalidHistory {
-                event_count: events.len(),
-            }),
+            _ => Err(RecurrenceStoreError::InvalidHistory { event_count }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod recurrence_projection_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_decoded_recurrence_definitions_fail_as_invalid_history() {
+        for event in [
+            RecurrenceEvent::Created {
+                goal: TaskGoal::new("Invalid interval").unwrap(),
+                anchor_unix_millis: 1,
+                interval_millis: 0,
+                occurrence_count: 1,
+            },
+            RecurrenceEvent::Created {
+                goal: TaskGoal::new("Invalid count").unwrap(),
+                anchor_unix_millis: 1,
+                interval_millis: 1,
+                occurrence_count: 0,
+            },
+            RecurrenceEvent::Created {
+                goal: TaskGoal::new("Invalid range").unwrap(),
+                anchor_unix_millis: u64::MAX,
+                interval_millis: 1,
+                occurrence_count: 2,
+            },
+        ] {
+            assert!(matches!(
+                RecurrenceStore::project(
+                    RecurrenceId::new("invalid-definition").unwrap(),
+                    vec![event]
+                ),
+                Err(RecurrenceStoreError::InvalidHistory { event_count: 1 })
+            ));
         }
     }
 }

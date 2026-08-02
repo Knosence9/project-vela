@@ -313,6 +313,10 @@ fn rejects_invalid_persisted_interval_count_and_range_values() {
             store.load(&id).unwrap_err(),
             RecurrenceStoreError::Replay(ReplayError::MalformedPayload { .. })
         ));
+        assert!(matches!(
+            store.list().unwrap_err(),
+            RecurrenceStoreError::Replay(ReplayError::MalformedPayload { .. })
+        ));
     }
 }
 
