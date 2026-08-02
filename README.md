@@ -448,6 +448,8 @@ The first milestone is the **evidence loop**:
 114. Materialize one exact claimed durable schedule revision through deterministic JSON without granting dispatch or execution authority. ✅
 115. Reserve the next deterministic due schedule through revision-bound optimistic concurrency without granting dispatch or execution authority. ✅
 116. Reserve the next deterministic due schedule through compact CLI JSON without reading ambient time or granting dispatch authority. ✅
+117. Atomically materialize the next deterministic due schedule as one caller-identified inert active task without granting execution authority. ✅
+118. Materialize the next deterministic due schedule through compact CLI JSON without reading ambient time or granting dispatch authority. ✅
 
 ## Project documents
 
