@@ -49,6 +49,7 @@
   },
   "lessons": [
     "Expose the kernel's atomic operation directly rather than reconstructing selection and two-stream persistence in scripts.",
+    "A substantive review suggested extracting a shared serialization helper; the low-value suggestion was not applied, and the simple shared response shape was retained.",
     "Validate caller-owned identity before opening writable storage and emit no partial JSON on failure.",
     "A green rate-limited status is not review evidence; wait for capacity and require a genuine substantive review of the exact head."
   ],

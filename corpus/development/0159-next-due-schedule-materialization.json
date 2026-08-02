@@ -49,6 +49,7 @@
   },
   "lessons": [
     "When identity is already caller-owned, one atomic schedule/task append avoids inventing claim-recovery policy.",
+    "The review found ambiguous documentation about whether task.started was new and what complete projection success returned; the ADR and scheduler wording were aligned before merge.",
     "Replay must explicitly validate every newly legal transition while retaining fail-closed corruption behavior.",
     "A rate-limited incremental review is false green; preserve the PR until the exact head receives substantive review."
   ],
