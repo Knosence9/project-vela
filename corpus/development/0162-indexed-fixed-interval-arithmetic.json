@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Derive indexed fixed-interval occurrence instants",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/855 by calculating caller-owned zero-based fixed-interval occurrence instants in constant time without persisting recurrence.",
+    "acceptance_criteria": [
+      "Return the anchor for offset zero, preserve one-step equivalence for offset one, and derive ordinary offsets with checked multiplication and addition.",
+      "Accept every exactly representable result including u64::MAX and preserve the anchor, interval, and offset on either overflow stage.",
+      "Keep the existing one-step API compatible and document the absence of persistence, occurrence identity, catch-up, clock, dispatch, and execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED indexed-occurrence behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused kernel test failed to compile with six E0599 diagnostics because ScheduleInstant::checked_advance_by did not exist.",
+      "patch": "Added tests for offsets zero and one, ordinary indexed advancement, exact u64::MAX, multiplication overflow, addition overflow, and typed operand accessors."
+    },
+    {
+      "summary": "Implemented constant-time fail-closed occurrence arithmetic.",
+      "outcome": "success",
+      "diagnostic": "Repeated one-step advancement would be proportional to the occurrence offset, while unchecked multiplication could wrap before checked addition observed the elapsed duration.",
+      "patch": "Added checked_advance_by and ScheduleOccurrenceError using checked multiplication and addition, preserved the one-step API, and recorded zero-based semantics and authority exclusions in ADR-0036 and scheduler documentation."
+    },
+    {
+      "summary": "Completed substantive exact-head review after a false-green cooldown.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit initially reported Review limit reached even though its status context was green, so that run could not satisfy the review gate.",
+      "patch": "Kept auto-merge disabled, waited past the stated cooldown, deliberately resumed one review, and merged only after CodeRabbit reviewed all five changed files with no actionable comments and zero unresolved threads."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can derive exact zero-based fixed-interval occurrence instants in constant time with typed evidence for multiplication or addition overflow.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30743648980/job/91485377170",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 856 squash merge 712f3290364a034060c1fceae3d8211b8e987451",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Zero-based occurrence arithmetic keeps the immutable anchor at offset zero and makes anchor plus interval times offset explicit.",
+    "Check multiplication before addition so large offsets cannot wrap into apparently valid elapsed durations.",
+    "An arithmetic offset is caller-owned input, not durable occurrence identity, execution count, authorization, or catch-up policy.",
+    "A false-green rate-limited review must be deliberately resumed after cooldown and completed on the exact head before merge."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/856"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

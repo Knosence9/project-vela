@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Define overflow-safe fixed-interval schedule arithmetic",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/853 by establishing deterministic positive fixed-millisecond intervals and checked one-step advancement before persisting recurrence.",
+    "acceptance_criteria": [
+      "Preserve every positive interval exactly and reject zero with a typed error.",
+      "Advance one caller-owned instant with checked addition, including exact u64::MAX success, and preserve both operands on overflow.",
+      "Document that arithmetic reads no clock and grants no recurrence, lifecycle, dispatch, retry, or worker authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED fixed-interval behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused kernel test failed to compile with E0432 and E0599 because ScheduleInterval and ScheduleInstant::checked_advance did not exist.",
+      "patch": "Added focused tests for positive interval preservation, zero rejection, ordinary advancement, exact u64::MAX success, and typed overflow evidence."
+    },
+    {
+      "summary": "Implemented the bounded arithmetic prerequisite.",
+      "outcome": "success",
+      "diagnostic": "Future fixed-interval recurrence needed one deterministic arithmetic rule, while wrapping, saturation, civil time, and ambient clocks would hide invalid timing or widen authority.",
+      "patch": "Added ScheduleInterval, ScheduleIntervalError, ScheduleAdvanceError, and checked one-step ScheduleInstant advancement, then recorded the contract in ADR-0035 and scheduler documentation."
+    },
+    {
+      "summary": "Preserved exact-head review discipline through temporary review limits.",
+      "outcome": "success",
+      "diagnostic": "The initial CodeRabbit status was rate limited and therefore false-green despite successful Rust CI.",
+      "patch": "Kept auto-merge disabled through the stated cooldown, deliberately resumed review afterward, and merged only after CodeRabbit substantively reviewed all four changed files with no actionable comments."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel can represent exact positive fixed-millisecond intervals and advance caller-owned instants without wrapping, saturation, persistence, or clock authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30741228223/job/91478927046",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 854 squash merge a284e80528881fb9ce822088eb0d8fd6f9e11cf9",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Define exact checked arithmetic before making a recurrence format durable.",
+    "Positive fixed milliseconds avoid zero-progress loops and defer calendar, time-zone, and parser policy.",
+    "Typed overflow evidence should preserve every rejected operand instead of wrapping or saturating.",
+    "A rate-limited green status is not review evidence; wait for substantive review of the exact head before merge."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/854"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
