@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Claim the next due schedule through deterministic CLI JSON",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/843 by exposing kernel-owned deterministic next-due reservation without widening CLI authority.",
+    "acceptance_criteria": [
+      "Delegate one exact caller cutoff to ScheduleStore::claim_next_due.",
+      "Emit the complete claimed projection or explicit null when no work is eligible.",
+      "Fail closed with schedule_claim_failed and no partial stdout, clock, dispatch, materialization, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI tests failed because claim-next was not a recognized subcommand.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The deterministic operation existed only in the kernel, while CLI callers otherwise had to recreate selection and widen the race surface.",
+      "patch": "Added the command and optional output wrapper, reused complete schedule projection, and covered deterministic selection, absence, and corruption."
+    },
+    {
+      "summary": "Fixed the substantive review finding and waited for exact-head review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that the README omitted schedule_claim_failed and the no-partial-stdout guarantee; the first incremental review of the fix was rate limited.",
+      "patch": "Documented the stable failure contract, resolved the thread, kept auto-merge disabled through the cooldown, and resumed review only after the shared budget allowed it."
+    }
+  ],
+  "outcome": {
+    "summary": "CLI callers can atomically reserve earliest due work without recreating selection policy or receiving execution authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30724615602/job/91433892834",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 844 squash merge 9b16e2b95f28cb209231c4a8061dcbb21531347e",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Expose one kernel selection operation instead of a list-then-claim race in scripts.",
+    "Document stable failure diagnostics and no-partial-stdout behavior as part of the automation contract.",
+    "A rate-limited CodeRabbit status is false green; resume after cooldown and require genuine exact-head review before merge."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/844"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

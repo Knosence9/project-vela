@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Release one exact claimed schedule revision",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/837 by exposing revision-bound recovery from claimed to pending with exact caller rationale.",
+    "acceptance_criteria": [
+      "Validate identity and non-blank release reason before storage access.",
+      "Delegate exact lifecycle and revision checks to ScheduleStore::release.",
+      "Preserve exact recovery evidence and append nothing on rejected transitions."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused integration test failed because release was an unrecognized subcommand.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The capability existed below the requested boundary or required one new typed kernel operation.",
+      "patch": "Added a thin release adapter, stable diagnostics, complete JSON serialization, and stale, missing, wrong-state, and storage coverage."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can explicitly release one claimed revision without inferred worker state, lease expiry, retry, dispatch, or execution.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30715980264/job/91411490196",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 838 squash merge 28fb400e8fce4a6816b75fb78927a5a9bc2d021f",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Recovery rationale should remain caller-owned exact evidence.",
+    "Release authority must not imply worker death, lease expiry, or automatic retry policy."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/838"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

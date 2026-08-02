@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect one exact durable schedule",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/829 by exposing exact schedule lookup through deterministic read-only CLI JSON.",
+    "acceptance_criteria": [
+      "Validate one exact schedule identity before storage access.",
+      "Return the complete projection or null for an absent valid identity.",
+      "Fail closed on malformed state without partial output or mutation authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused tests failed because get was not a recognized schedule subcommand.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The capability existed below the requested boundary or required one new typed kernel operation.",
+      "patch": "Added validated read-only ScheduleStore::load routing and reused the complete schedule projection."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can distinguish a complete exact schedule from valid absence without direct storage access.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30704971929/job/91382401442",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 830 squash merge 75f80561e71cb6ffd12c387b87d5e7aa0a631710",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Preserve null as valid absence instead of conflating it with failure.",
+    "Keep exact lookup read-only and reuse the authoritative kernel projection."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/830"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

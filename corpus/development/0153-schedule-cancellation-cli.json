@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Cancel one pending schedule revision",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/833 by exposing revision-bound cancellation with exact caller-owned rationale through the CLI.",
+    "acceptance_criteria": [
+      "Validate schedule identity and non-blank reason before storage access.",
+      "Cancel only the exact observed pending revision and emit the complete projection.",
+      "Reject stale, missing, or wrong-state requests without appending evidence."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Cancellation tests initially had no command implementation and failed at CLI parsing.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The capability existed below the requested boundary or required one new typed kernel operation.",
+      "patch": "Added the exact-revision ScheduleStore::cancel adapter, stable diagnostics, persistence coverage, and complete JSON output."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can cancel one observed pending revision without clock, claim, dispatch, or execution authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30710804373/job/91397803627",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 834 squash merge 815a5d9a377cc110dec355c871a4a8e96932e3ce",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Optimistic revision evidence belongs at the mutation boundary.",
+    "Rejected lifecycle transitions must append no plausible cancellation evidence."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/834"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

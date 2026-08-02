@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reserve the next due schedule deterministically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/841 by centralizing earliest-due selection and persisted race handling in the scheduler kernel.",
+    "acceptance_criteria": [
+      "Select pending work by due instant then exact schedule ID through an explicit cutoff.",
+      "Return none when no eligible work exists and restart selection after persisted optimistic conflicts.",
+      "Fail closed on malformed history without ambient clock, dispatch, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Schedule-store tests failed because claim_next_due did not exist.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The capability existed below the requested boundary or required one new typed kernel operation.",
+      "patch": "Composed list_due ordering with exact-revision claim, retried persisted selection conflicts, and added ordering, persistence, concurrency, and corruption tests."
+    }
+  ],
+  "outcome": {
+    "summary": "Concurrent callers can reserve distinct earliest-due schedules while malformed durable evidence still blocks selection.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30720799116/job/91424120519",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 842 squash merge 8d04bf004153de84c32c31bf562ab2c0b0619d2f",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Centralize deterministic selection where ordering and optimistic concurrency can be enforced together.",
+    "Retry only a persisted selection race; do not broaden that mechanism into execution retry policy.",
+    "Repeated concurrent tests supplement, but do not replace, deterministic contract coverage."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/842"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Claim one exact due schedule revision",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/835 by exposing exact revision-bound schedule reservation with a caller-owned cutoff.",
+    "acceptance_criteria": [
+      "Validate identity and numeric inputs before storage access.",
+      "Delegate revision, lifecycle, and inclusive due checks to ScheduleStore::claim.",
+      "Fail closed without dispatch, worker identity, materialization, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused claim integration tests failed because claim was an unrecognized subcommand.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The capability existed below the requested boundary or required one new typed kernel operation.",
+      "patch": "Added a thin claim adapter, reused complete schedule serialization, and covered future, stale, missing, terminal, malformed, and storage failures."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can reserve one exact due intent while time selection and all execution authority remain explicit and external.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30713997512/job/91406330953",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 836 squash merge 6bdce3c3ae41e663d7d5507315d2c974422cfe1a",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Pass time as caller-owned evidence instead of reading ambient time.",
+    "Reservation is inert lifecycle state, not worker identity, permission, or dispatch."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/836"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect schedules by lifecycle status",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/827 by exposing the typed status projection through deterministic read-only CLI JSON.",
+    "acceptance_criteria": [
+      "Accept only the four exact lifecycle status names before storage access.",
+      "Return complete matching projections in exact-ID order or an empty array.",
+      "Fail closed without partial output, storage creation, or mutation authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused tests failed because status was not a recognized schedule subcommand.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The capability existed below the requested boundary or required one new typed kernel operation.",
+      "patch": "Added status filtering, strict pre-storage validation, and shared inventory serialization over ScheduleStore::list_by_status."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can inspect schedules by exact lifecycle status without duplicating lifecycle semantics or gaining mutation authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30702282657/job/91375275658",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 828 squash merge 67605e2b5386139491553dc4a986f4646ff0e9f5",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Validate bounded enum spellings before filesystem access.",
+    "Reuse typed kernel filtering and one shared complete projection instead of interpreting state in scripts."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/828"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
