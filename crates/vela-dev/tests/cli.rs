@@ -2433,6 +2433,196 @@ fn gets_one_finite_recurrence_as_deterministic_complete_json() {
 }
 
 #[test]
+fn pages_exact_finite_recurrence_occurrences_as_deterministic_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            RecurrenceId::new("exact\nid").unwrap(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    store
+        .create(
+            RecurrenceId::new("unrelated").unwrap(),
+            TaskGoal::new("unrelated goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'recurrence:unrelated'",
+            [],
+        )
+        .unwrap();
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "occurrences",
+            database.to_str().expect("UTF-8 database path"),
+            "exact\nid",
+            "1",
+            "2",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"occurrences\":[",
+            "{\"recurrence_id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",\"offset\":1,\"unix_millis\":15,\"definition_revision\":1},",
+            "{\"recurrence_id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",\"offset\":2,\"unix_millis\":20,\"definition_revision\":1}",
+            "],\"next_offset\":3}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "occurrences",
+            database.to_str().expect("UTF-8 database path"),
+            "exact\nid",
+            "3",
+            "2",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"occurrences\":[",
+            "{\"recurrence_id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",\"offset\":3,\"unix_millis\":25,\"definition_revision\":1}",
+            "],\"next_offset\":null}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn recurrence_occurrence_paging_validates_inputs_before_storage_access() {
+    let directory = tempdir().expect("recurrence database directory");
+
+    for (name, id, page_size, expected_error) in [
+        ("invalid-id.sqlite3", "", "1", "invalid_recurrence_id"),
+        (
+            "zero-size.sqlite3",
+            "valid",
+            "0",
+            "invalid_occurrence_page_size",
+        ),
+        (
+            "oversized.sqlite3",
+            "valid",
+            "1025",
+            "invalid_occurrence_page_size",
+        ),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "occurrences",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                "0",
+                page_size,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+        assert!(!database.exists());
+    }
+}
+
+#[test]
+fn recurrence_occurrence_paging_fails_closed_for_missing_invalid_or_corrupt_evidence() {
+    let directory = tempdir().expect("recurrence database directory");
+    let missing = directory.path().join("missing.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "occurrences",
+            missing.to_str().expect("UTF-8 database path"),
+            "absent",
+            "0",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_lookup_failed:",
+        ));
+    assert!(!missing.exists());
+
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            RecurrenceId::new("exact").unwrap(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    for (id, start, expected_error) in [
+        ("absent", "0", "recurrence_not_found"),
+        ("exact", "1", "recurrence_occurrence_out_of_range"),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "occurrences",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                start,
+                "1",
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+    }
+
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'recurrence:exact'",
+            [],
+        )
+        .unwrap();
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "occurrences",
+            database.to_str().expect("UTF-8 database path"),
+            "exact",
+            "0",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_lookup_failed:",
+        ));
+}
+
+#[test]
 fn recurrence_lookup_validates_id_and_reports_missing_evidence_without_creation() {
     let directory = tempdir().expect("recurrence database directory");
     let missing_database = directory.path().join("missing.sqlite3");

@@ -455,6 +455,9 @@ The first milestone is the **evidence loop**:
 121. Project one exact finite recurrence occurrence with complete read-only provenance and typed bounds without granting persistence or execution authority. ✅
 122. Page finite recurrence occurrences through allocation-bounded ordered read-only projections with deterministic cursors and no lifecycle authority. ✅
 123. Inspect every finite recurrence definition through deterministic fail-closed read-only inventory without granting storage mutation or execution authority. ✅
+124. Create one immutable finite recurrence definition through deterministic CLI JSON without granting occurrence or execution authority. ✅
+125. Inspect one exact finite recurrence definition through deterministic read-only CLI JSON without scanning unrelated streams. ✅
+126. Page one exact durable recurrence's occurrences through bounded deterministic CLI JSON without granting lifecycle or execution authority. ✅
 
 ## Project documents
 

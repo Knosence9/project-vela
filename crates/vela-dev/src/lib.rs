@@ -11,9 +11,10 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    FixedIntervalRecurrence, OccurrenceCount, RecurrenceId, RecurrenceStore, ScheduleCancellation,
-    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
-    ScheduleStatus, ScheduleStore, ScheduledTask,
+    FixedIntervalRecurrence, OccurrenceCount, OccurrencePageSize, RecurrenceId,
+    RecurrenceOccurrence, RecurrenceStore, ScheduleCancellation, ScheduleHistoryEvent, ScheduleId,
+    ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStatus, ScheduleStore,
+    ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -72,6 +73,13 @@ pub enum RecurrenceCommand {
     },
     /// Print one finite recurrence selected by exact ID through a read-only boundary.
     Get { database: PathBuf, id: String },
+    /// Page exact occurrences for one finite recurrence through a read-only boundary.
+    Occurrences {
+        database: PathBuf,
+        id: String,
+        start_offset: u64,
+        page_size: u64,
+    },
     /// Print every finite recurrence through a read-only storage boundary.
     Inspect { database: PathBuf },
 }
@@ -294,6 +302,15 @@ impl Cli {
                 command: Some(RecurrenceCommand::Get { database, id }),
             }) => get_recurrence(&database, &id),
             Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::Occurrences {
+                        database,
+                        id,
+                        start_offset,
+                        page_size,
+                    }),
+            }) => page_recurrence_occurrences(&database, &id, start_offset, page_size),
+            Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Inspect { database }),
             }) => inspect_recurrences(&database),
             _ => ExitCode::SUCCESS,
@@ -315,6 +332,21 @@ struct RecurrenceInspection<'a> {
     occurrence_count: u64,
     final_occurrence_unix_millis: u64,
     revision: u64,
+}
+
+#[derive(Serialize)]
+struct RecurrenceOccurrencePageInspection<'a> {
+    occurrences: Vec<RecurrenceOccurrenceInspection<'a>>,
+    next_offset: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct RecurrenceOccurrenceInspection<'a> {
+    recurrence_id: &'a str,
+    goal: &'a str,
+    offset: u64,
+    unix_millis: u64,
+    definition_revision: u64,
 }
 
 #[derive(Serialize)]
@@ -755,6 +787,66 @@ fn get_recurrence(database: &Path, raw_id: &str) -> ExitCode {
     };
     println!("{output}");
     ExitCode::SUCCESS
+}
+
+fn page_recurrence_occurrences(
+    database: &Path,
+    raw_id: &str,
+    start_offset: u64,
+    raw_page_size: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let page_size = match OccurrencePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_occurrence_page_size", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    };
+    let recurrence = match store.load(&id) {
+        Ok(Some(recurrence)) => recurrence,
+        Ok(None) => {
+            return extension_error(
+                "recurrence_not_found",
+                format!("recurrence {:?} does not exist", id.as_str()),
+            );
+        }
+        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    };
+    let page = match recurrence.occurrences_page(start_offset, page_size) {
+        Ok(page) => page,
+        Err(error) => return extension_error("recurrence_occurrence_out_of_range", error),
+    };
+    let inspection = RecurrenceOccurrencePageInspection {
+        occurrences: page
+            .occurrences()
+            .iter()
+            .map(recurrence_occurrence_inspection)
+            .collect(),
+        next_offset: page.next_offset(),
+    };
+    let output = match serde_json::to_string(&inspection) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn recurrence_occurrence_inspection(
+    occurrence: &RecurrenceOccurrence,
+) -> RecurrenceOccurrenceInspection<'_> {
+    RecurrenceOccurrenceInspection {
+        recurrence_id: occurrence.recurrence_id().as_str(),
+        goal: occurrence.goal().as_str(),
+        offset: occurrence.offset(),
+        unix_millis: occurrence.instant().unix_millis(),
+        definition_revision: occurrence.recurrence_revision(),
+    }
 }
 
 fn inspect_recurrences(database: &Path) -> ExitCode {
