@@ -2,8 +2,9 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
-        OccurrenceCount, RecurrenceId, RecurrenceOccurrenceLookupError, RecurrenceStore,
-        RecurrenceStoreError, ScheduleInstant, ScheduleInterval,
+        OccurrenceCount, OccurrencePageSize, OccurrencePageSizeError, RecurrenceId,
+        RecurrenceOccurrenceLookupError, RecurrenceStore, RecurrenceStoreError, ScheduleInstant,
+        ScheduleInterval,
     },
     task::TaskGoal,
 };
@@ -329,4 +330,134 @@ fn projects_the_maximum_instant_and_rejects_offsets_outside_the_finite_range() {
             other => panic!("unexpected error: {other}"),
         }
     }
+}
+
+#[test]
+fn pages_occurrences_in_order_with_complete_provenance_and_a_stable_cursor() {
+    let directory = tempdir().unwrap();
+    let id = RecurrenceId::new(" paged ").unwrap();
+    let goal = TaskGoal::new("Preserve paged evidence").unwrap();
+    let recurrence = RecurrenceStore::open(directory.path().join("events.sqlite3"))
+        .unwrap()
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(5),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(5).unwrap(),
+        )
+        .unwrap();
+
+    let first_page = recurrence
+        .occurrences_page(0, OccurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(first_page.next_offset(), Some(1));
+    assert_eq!(first_page.occurrences().len(), 1);
+    assert_eq!(first_page.occurrences()[0].offset(), 0);
+    assert_eq!(first_page.occurrences()[0].instant(), instant(5));
+
+    let page = recurrence
+        .occurrences_page(1, OccurrencePageSize::new(2).unwrap())
+        .unwrap();
+
+    assert_eq!(page.next_offset(), Some(3));
+    assert_eq!(page.occurrences().len(), 2);
+    for (occurrence, expected_offset, expected_instant) in [
+        (page.occurrences()[0].clone(), 1, 12),
+        (page.occurrences()[1].clone(), 2, 19),
+    ] {
+        assert_eq!(occurrence.recurrence_id(), &id);
+        assert_eq!(occurrence.goal(), &goal);
+        assert_eq!(occurrence.offset(), expected_offset);
+        assert_eq!(occurrence.instant(), instant(expected_instant));
+        assert_eq!(occurrence.recurrence_revision(), 1);
+    }
+}
+
+#[test]
+fn truncates_the_final_page_and_rejects_invalid_start_offsets() {
+    let directory = tempdir().unwrap();
+    let id = RecurrenceId::new("final-page").unwrap();
+    let count = OccurrenceCount::new(3).unwrap();
+    let recurrence = RecurrenceStore::open(directory.path().join("events.sqlite3"))
+        .unwrap()
+        .create(
+            id.clone(),
+            TaskGoal::new("Finish paging").unwrap(),
+            instant(u64::MAX - 2),
+            ScheduleInterval::from_millis(1).unwrap(),
+            count,
+        )
+        .unwrap();
+
+    let page = recurrence
+        .occurrences_page(1, OccurrencePageSize::new(1024).unwrap())
+        .unwrap();
+    assert_eq!(
+        page.occurrences()
+            .iter()
+            .map(|occurrence| (occurrence.offset(), occurrence.instant()))
+            .collect::<Vec<_>>(),
+        vec![(1, instant(u64::MAX - 1)), (2, instant(u64::MAX))]
+    );
+    assert_eq!(page.next_offset(), None);
+
+    let arithmetic_boundary =
+        RecurrenceStore::open(directory.path().join("boundary-events.sqlite3"))
+            .unwrap()
+            .create(
+                RecurrenceId::new("offset-boundary").unwrap(),
+                TaskGoal::new("Bound page arithmetic").unwrap(),
+                instant(0),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(u64::MAX).unwrap(),
+            )
+            .unwrap();
+    let boundary_page = arithmetic_boundary
+        .occurrences_page(u64::MAX - 2, OccurrencePageSize::new(1024).unwrap())
+        .unwrap();
+    assert_eq!(boundary_page.occurrences().len(), 2);
+    assert_eq!(boundary_page.occurrences()[0].offset(), u64::MAX - 2);
+    assert_eq!(
+        boundary_page.occurrences()[0].instant(),
+        instant(u64::MAX - 2)
+    );
+    assert_eq!(boundary_page.occurrences()[1].offset(), u64::MAX - 1);
+    assert_eq!(
+        boundary_page.occurrences()[1].instant(),
+        instant(u64::MAX - 1)
+    );
+    assert_eq!(boundary_page.next_offset(), None);
+
+    for start_offset in [3, u64::MAX] {
+        assert!(matches!(
+            recurrence
+                .occurrences_page(start_offset, OccurrencePageSize::new(1).unwrap())
+                .unwrap_err(),
+            RecurrenceOccurrenceLookupError::OutOfRange {
+                recurrence_id,
+                requested_offset,
+                occurrence_count,
+            } if recurrence_id == id
+                && requested_offset == start_offset
+                && occurrence_count == count
+        ));
+    }
+}
+
+#[test]
+fn page_sizes_are_positive_and_bounded_before_allocation() {
+    assert_eq!(OccurrencePageSize::MAX, 1024);
+    assert_eq!(
+        OccurrencePageSize::new(0).unwrap_err(),
+        OccurrencePageSizeError::Zero
+    );
+    assert_eq!(
+        OccurrencePageSize::new(1025).unwrap_err(),
+        OccurrencePageSizeError::TooLarge {
+            requested: 1025,
+            maximum: 1024,
+        }
+    );
+    assert_eq!(OccurrencePageSize::new(1024).unwrap().get(), 1024);
 }
