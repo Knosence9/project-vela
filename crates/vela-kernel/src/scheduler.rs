@@ -129,6 +129,25 @@ impl ScheduleInstant {
         self.0
     }
 
+    /// Derives one zero-based fixed-interval occurrence without iteration,
+    /// wrapping, or saturation.
+    pub fn checked_advance_by(
+        self,
+        interval: ScheduleInterval,
+        offset: u64,
+    ) -> Result<Self, ScheduleOccurrenceError> {
+        interval
+            .millis()
+            .checked_mul(offset)
+            .and_then(|elapsed| self.0.checked_add(elapsed))
+            .map(Self)
+            .ok_or(ScheduleOccurrenceError {
+                instant: self,
+                interval,
+                offset,
+            })
+    }
+
     /// Advances by one exact fixed interval without wrapping or saturation.
     pub fn checked_advance(self, interval: ScheduleInterval) -> Result<Self, ScheduleAdvanceError> {
         self.0
@@ -169,6 +188,42 @@ impl fmt::Display for ScheduleIntervalError {
 }
 
 impl Error for ScheduleIntervalError {}
+
+/// Evidence that an indexed fixed-interval occurrence exceeded the instant range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScheduleOccurrenceError {
+    instant: ScheduleInstant,
+    interval: ScheduleInterval,
+    offset: u64,
+}
+
+impl ScheduleOccurrenceError {
+    pub const fn instant(&self) -> ScheduleInstant {
+        self.instant
+    }
+
+    pub const fn interval(&self) -> ScheduleInterval {
+        self.interval
+    }
+
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+}
+
+impl fmt::Display for ScheduleOccurrenceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "schedule instant {} cannot advance by interval {} milliseconds at offset {}",
+            self.instant.unix_millis(),
+            self.interval.millis(),
+            self.offset
+        )
+    }
+}
+
+impl Error for ScheduleOccurrenceError {}
 
 /// Evidence that exact fixed-interval advancement exceeded the instant range.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

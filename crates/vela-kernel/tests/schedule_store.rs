@@ -43,6 +43,51 @@ fn fixed_intervals_advance_instants_exactly_and_fail_closed_on_overflow() {
 }
 
 #[test]
+fn indexed_fixed_intervals_derive_exact_instants_and_preserve_overflow_evidence() {
+    let interval = ScheduleInterval::from_millis(7).unwrap();
+    assert_eq!(
+        instant(5).checked_advance_by(interval, 0).unwrap(),
+        instant(5)
+    );
+    assert_eq!(
+        instant(5).checked_advance_by(interval, 1).unwrap(),
+        instant(5).checked_advance(interval).unwrap()
+    );
+    assert_eq!(
+        instant(5).checked_advance_by(interval, 3).unwrap(),
+        instant(26)
+    );
+
+    let maximum_offset = (u64::MAX - 5) / 2;
+    assert_eq!(
+        instant(5)
+            .checked_advance_by(ScheduleInterval::from_millis(2).unwrap(), maximum_offset)
+            .unwrap(),
+        instant(u64::MAX)
+    );
+
+    let multiplication_interval = ScheduleInterval::from_millis(u64::MAX).unwrap();
+    let multiplication_error = instant(0)
+        .checked_advance_by(multiplication_interval, 2)
+        .unwrap_err();
+    assert_eq!(multiplication_error.instant(), instant(0));
+    assert_eq!(multiplication_error.interval(), multiplication_interval);
+    assert_eq!(multiplication_error.offset(), 2);
+
+    let addition_interval = ScheduleInterval::from_millis(1).unwrap();
+    let addition_error = instant(u64::MAX)
+        .checked_advance_by(addition_interval, 1)
+        .unwrap_err();
+    assert_eq!(addition_error.instant(), instant(u64::MAX));
+    assert_eq!(addition_error.interval(), addition_interval);
+    assert_eq!(addition_error.offset(), 1);
+    assert_eq!(
+        addition_error.to_string(),
+        "schedule instant 18446744073709551615 cannot advance by interval 1 milliseconds at offset 1"
+    );
+}
+
+#[test]
 fn schedule_ids_require_content_without_normalizing_exact_values() {
     assert!(ScheduleId::new(" \t").is_err());
     let exact = ScheduleId::new(" Morning ").unwrap();
