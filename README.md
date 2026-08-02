@@ -232,6 +232,23 @@ with one escaped diagnostic, no orphan task, and no schedule append.
 Materialization does not read ambient time, infer worker identity, dispatch,
 advance a workflow, call a provider or tool, retry, or execute work.
 
+Atomically materialize the earliest pending due schedule as one caller-identified
+inert active task:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule materialize-next path/to/events.sqlite3 1750000000000 task-id
+```
+
+The command validates the exact task identity and numeric cutoff before opening
+writable storage, then delegates deterministic due-instant/exact-ID selection and
+atomic schedule/task persistence to the kernel. Success emits
+`{"schedule":...}` with the complete materialized projection, or
+`{"schedule":null}` when no eligible work remains. Task-ID collisions and
+storage or replay failures emit `schedule_materialization_failed`, no partial
+stdout, no schedule append, and no orphan task. The command does not read
+ambient time, generate identity, dispatch, advance a workflow, call a provider
+or tool, grant permission, retry work, or execute anything.
+
 Inspect every durable one-shot schedule in an existing event-log database without
 granting the CLI write or creation authority:
 

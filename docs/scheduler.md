@@ -144,6 +144,28 @@ identity, infer worker state, dispatch, materialize, grant permission, sleep, or
 execute work. Existing exact-ID claiming remains available when the caller owns
 selection and an observed revision.
 
+## Writable CLI next-due materialization
+
+`vela-dev schedule materialize-next DATABASE CUTOFF_UNIX_MILLIS TASK_ID`
+validates the exact caller-owned task identity before opening the selected
+database through `ScheduleStore::open`; clap parses the cutoff as a non-negative
+`u64` before command execution. The kernel selects pending work by due instant
+then exact schedule ID and atomically appends `schedule.materialized` plus
+`task.started`. Success emits one compact JSON document whose `schedule` field
+is the complete materialized projection, or `null` when no eligible work
+remains.
+
+Invalid task IDs emit `invalid_task_id` without accessing storage. Task-ID
+collisions, open, WAL, schema, replay, append, and serialization failures emit
+one escaped `schedule_materialization_failed` diagnostic and no partial stdout.
+Task-ID collisions and lifecycle or storage failures before commit leave both the
+selected schedule and task stream unchanged; the atomic kernel append never
+persists only one side. The command does not read ambient time, generate
+identity, dispatch, advance a workflow, call a provider or tool, grant
+permission, retry work, or execute anything. Existing exact claimed-revision
+materialization remains available when the caller owns selection and recovery
+semantics.
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database

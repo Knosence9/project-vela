@@ -95,6 +95,12 @@ pub enum ScheduleCommand {
         expected_revision: u64,
         task_id: String,
     },
+    /// Atomically materialize the earliest due schedule as an inert active task.
+    MaterializeNext {
+        database: PathBuf,
+        cutoff_unix_millis: u64,
+        task_id: String,
+    },
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
     /// Print one exact durable schedule through a read-only storage boundary.
@@ -213,6 +219,14 @@ impl Cli {
                     }),
             }) => materialize_schedule(&database, &id, expected_revision, &task_id),
             Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::MaterializeNext {
+                        database,
+                        cutoff_unix_millis,
+                        task_id,
+                    }),
+            }) => materialize_next_schedule(&database, cutoff_unix_millis, &task_id),
+            Some(Command::Schedule {
                 command: Some(ScheduleCommand::Inspect { database }),
             }) => inspect_schedules(&database, None),
             Some(Command::Schedule {
@@ -263,7 +277,7 @@ struct ScheduleLookup<'a> {
 }
 
 #[derive(Serialize)]
-struct NextScheduleClaim<'a> {
+struct NextScheduleResult<'a> {
     schedule: Option<ScheduleInspection<'a>>,
 }
 
@@ -400,7 +414,7 @@ fn claim_next_schedule(database: &Path, cutoff_unix_millis: u64) -> ExitCode {
             Ok(scheduled) => scheduled,
             Err(error) => return extension_error("schedule_claim_failed", error),
         };
-    let output = match serde_json::to_string(&NextScheduleClaim {
+    let output = match serde_json::to_string(&NextScheduleResult {
         schedule: scheduled.as_ref().map(schedule_inspection),
     }) {
         Ok(output) => output,
@@ -463,6 +477,36 @@ fn materialize_schedule(
         Err(error) => return extension_error("schedule_materialization_failed", error),
     };
     let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_materialization_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn materialize_next_schedule(
+    database: &Path,
+    cutoff_unix_millis: u64,
+    raw_task_id: &str,
+) -> ExitCode {
+    let task_id = match TaskId::new(raw_task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return extension_error("invalid_task_id", error),
+    };
+    let mut store = match ScheduleStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_materialization_failed", error),
+    };
+    let scheduled = match store.materialize_next_due(
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+        task_id,
+    ) {
+        Ok(scheduled) => scheduled,
+        Err(error) => return extension_error("schedule_materialization_failed", error),
+    };
+    let output = match serde_json::to_string(&NextScheduleResult {
+        schedule: scheduled.as_ref().map(schedule_inspection),
+    }) {
         Ok(output) => output,
         Err(error) => return extension_error("schedule_materialization_failed", error),
     };
