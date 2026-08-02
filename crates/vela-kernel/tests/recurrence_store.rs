@@ -142,6 +142,137 @@ fn duplicate_creation_preserves_the_original_definition() {
 }
 
 #[test]
+fn lists_complete_recurrence_definitions_in_exact_id_order() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let later = store
+        .create(
+            RecurrenceId::new("zeta").unwrap(),
+            TaskGoal::new("Later exact goal").unwrap(),
+            instant(11),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let earlier = store
+        .create(
+            RecurrenceId::new(" alpha ").unwrap(),
+            TaskGoal::new("Earlier exact goal").unwrap(),
+            instant(5),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('unrelated', 1, 'other.created', 1, '{}')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let listed = RecurrenceStore::open_read_only(&path)
+        .unwrap()
+        .list()
+        .unwrap();
+    assert_eq!(listed, vec![earlier, later]);
+}
+
+#[test]
+fn read_only_recurrence_inventory_is_empty_and_never_creates_storage() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path),
+        Err(RecurrenceStoreError::EventLog(_))
+    ));
+    assert!(!path.exists());
+
+    RecurrenceStore::open(&path).unwrap();
+    let mut read_only = RecurrenceStore::open_read_only(&path).unwrap();
+    assert!(read_only.list().unwrap().is_empty());
+    assert!(matches!(
+        read_only.create(
+            RecurrenceId::new("blocked").unwrap(),
+            TaskGoal::new("Must remain inert").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        ),
+        Err(RecurrenceStoreError::EventLog(_))
+    ));
+    assert!(read_only.list().unwrap().is_empty());
+}
+
+#[test]
+fn recurrence_inventory_rejects_malformed_owning_stream_ids() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    RecurrenceStore::open(&path)
+        .unwrap()
+        .create(
+            RecurrenceId::new("valid-first").unwrap(),
+            TaskGoal::new("Must fail closed").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET stream_id = 'recurrence:' WHERE stream_id = 'recurrence:valid-first'",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path).unwrap().list().unwrap_err(),
+        RecurrenceStoreError::InvalidStreamId { ref stream_id } if stream_id == "recurrence:"
+    ));
+}
+
+#[test]
+fn recurrence_inventory_rejects_invalid_discovered_histories() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    RecurrenceStore::open(&path)
+        .unwrap()
+        .create(
+            RecurrenceId::new("multiple").unwrap(),
+            TaskGoal::new("Only definition").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('recurrence:multiple', 2, 'recurrence.fixed_interval_created', 1, ?1)",
+            [br#"{"goal":"Second","anchor_unix_millis":2,"interval_millis":1,"occurrence_count":1}"#.as_slice()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .list()
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidHistory { event_count: 2 }
+    ));
+}
+
+#[test]
 fn rejects_invalid_persisted_interval_count_and_range_values() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");

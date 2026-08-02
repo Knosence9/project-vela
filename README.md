@@ -454,6 +454,7 @@ The first milestone is the **evidence loop**:
 120. Persist immutable finite fixed-interval recurrence definitions with prevalidated representable bounds without generating occurrences or granting dispatch authority. ✅
 121. Project one exact finite recurrence occurrence with complete read-only provenance and typed bounds without granting persistence or execution authority. ✅
 122. Page finite recurrence occurrences through allocation-bounded ordered read-only projections with deterministic cursors and no lifecycle authority. ✅
+123. Inspect every finite recurrence definition through deterministic fail-closed read-only inventory without granting storage mutation or execution authority. ✅
 
 ## Project documents
 
