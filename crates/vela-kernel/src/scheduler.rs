@@ -327,6 +327,56 @@ impl fmt::Display for OccurrenceCountError {
 
 impl Error for OccurrenceCountError {}
 
+/// A positive, allocation-bounded recurrence occurrence page size.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccurrencePageSize(u16);
+
+impl OccurrencePageSize {
+    /// The largest accepted occurrence page size.
+    pub const MAX: u64 = 1024;
+
+    /// Validates a caller-owned page size before projection or allocation.
+    pub const fn new(value: u64) -> Result<Self, OccurrencePageSizeError> {
+        if value == 0 {
+            Err(OccurrencePageSizeError::Zero)
+        } else if value > Self::MAX {
+            Err(OccurrencePageSizeError::TooLarge {
+                requested: value,
+                maximum: Self::MAX,
+            })
+        } else {
+            Ok(Self(value as u16))
+        }
+    }
+
+    /// Returns the exact validated page size.
+    pub const fn get(self) -> u64 {
+        self.0 as u64
+    }
+}
+
+/// Why a caller-owned occurrence page size is invalid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OccurrencePageSizeError {
+    Zero,
+    TooLarge { requested: u64, maximum: u64 },
+}
+
+impl fmt::Display for OccurrencePageSizeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Zero => formatter.write_str("recurrence occurrence page size must be positive"),
+            Self::TooLarge { requested, maximum } => write!(
+                formatter,
+                "recurrence occurrence page size {requested} exceeds maximum {maximum}"
+            ),
+        }
+    }
+}
+
+impl Error for OccurrencePageSizeError {}
+
 /// One immutable, inert, finite fixed-interval recurrence definition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FixedIntervalRecurrence {
@@ -391,6 +441,57 @@ impl FixedIntervalRecurrence {
             instant,
             recurrence_revision: self.revision,
         })
+    }
+
+    /// Projects one bounded page in increasing offset order without storage or time access.
+    pub fn occurrences_page(
+        &self,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+    ) -> Result<RecurrenceOccurrencePage, RecurrenceOccurrenceLookupError> {
+        if start_offset >= self.occurrence_count.get() {
+            return Err(RecurrenceOccurrenceLookupError::OutOfRange {
+                recurrence_id: self.id.clone(),
+                requested_offset: start_offset,
+                occurrence_count: self.occurrence_count,
+            });
+        }
+
+        let end_offset = start_offset
+            .saturating_add(page_size.get())
+            .min(self.occurrence_count.get());
+        let mut occurrences = Vec::with_capacity((end_offset - start_offset) as usize);
+        for offset in start_offset..end_offset {
+            occurrences.push(
+                self.occurrence_at(offset)
+                    .expect("page bounds contain only authored recurrence occurrences"),
+            );
+        }
+        let next_offset = (end_offset < self.occurrence_count.get()).then_some(end_offset);
+
+        Ok(RecurrenceOccurrencePage {
+            occurrences,
+            next_offset,
+        })
+    }
+}
+
+/// One bounded, inert page of exact recurrence occurrence projections.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceOccurrencePage {
+    occurrences: Vec<RecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl RecurrenceOccurrencePage {
+    /// Returns the exact occurrence projections in increasing offset order.
+    pub fn occurrences(&self) -> &[RecurrenceOccurrence] {
+        &self.occurrences
+    }
+
+    /// Returns the first unreturned authored offset when another page exists.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
     }
 }
 
