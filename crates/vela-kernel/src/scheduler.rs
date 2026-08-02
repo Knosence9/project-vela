@@ -128,7 +128,77 @@ impl ScheduleInstant {
     pub const fn unix_millis(self) -> u64 {
         self.0
     }
+
+    /// Advances by one exact fixed interval without wrapping or saturation.
+    pub fn checked_advance(self, interval: ScheduleInterval) -> Result<Self, ScheduleAdvanceError> {
+        self.0
+            .checked_add(interval.0)
+            .map(Self)
+            .ok_or(ScheduleAdvanceError {
+                instant: self,
+                interval,
+            })
+    }
 }
+
+/// A deterministic positive fixed interval in exact milliseconds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScheduleInterval(u64);
+
+impl ScheduleInterval {
+    pub const fn from_millis(millis: u64) -> Result<Self, ScheduleIntervalError> {
+        if millis == 0 {
+            Err(ScheduleIntervalError)
+        } else {
+            Ok(Self(millis))
+        }
+    }
+
+    pub const fn millis(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScheduleIntervalError;
+
+impl fmt::Display for ScheduleIntervalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("schedule interval must be greater than zero milliseconds")
+    }
+}
+
+impl Error for ScheduleIntervalError {}
+
+/// Evidence that exact fixed-interval advancement exceeded the instant range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScheduleAdvanceError {
+    instant: ScheduleInstant,
+    interval: ScheduleInterval,
+}
+
+impl ScheduleAdvanceError {
+    pub const fn instant(&self) -> ScheduleInstant {
+        self.instant
+    }
+
+    pub const fn interval(&self) -> ScheduleInterval {
+        self.interval
+    }
+}
+
+impl fmt::Display for ScheduleAdvanceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "schedule instant {} cannot advance by {} milliseconds",
+            self.instant.unix_millis(),
+            self.interval.millis()
+        )
+    }
+}
+
+impl Error for ScheduleAdvanceError {}
 
 /// One inert durable intent to create a task no earlier than a caller-owned instant.
 #[derive(Clone, Debug, Eq, PartialEq)]

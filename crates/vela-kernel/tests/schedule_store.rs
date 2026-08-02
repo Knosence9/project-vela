@@ -4,14 +4,42 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
-        ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleRelease,
-        ScheduleStatus, ScheduleStore, ScheduleStoreError,
+        ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval,
+        ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduleStoreError,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
 
 fn instant(unix_millis: u64) -> ScheduleInstant {
     ScheduleInstant::from_unix_millis(unix_millis)
+}
+
+#[test]
+fn fixed_intervals_advance_instants_exactly_and_fail_closed_on_overflow() {
+    assert_eq!(
+        ScheduleInterval::from_millis(0).unwrap_err().to_string(),
+        "schedule interval must be greater than zero milliseconds"
+    );
+    let interval = ScheduleInterval::from_millis(7).unwrap();
+    assert_eq!(interval.millis(), 7);
+    assert_eq!(instant(5).checked_advance(interval).unwrap(), instant(12));
+
+    let maximum_boundary = ScheduleInterval::from_millis(u64::MAX - 5).unwrap();
+    assert_eq!(
+        instant(5).checked_advance(maximum_boundary).unwrap(),
+        instant(u64::MAX)
+    );
+
+    let overflow_interval = ScheduleInterval::from_millis(2).unwrap();
+    let error = instant(u64::MAX)
+        .checked_advance(overflow_interval)
+        .unwrap_err();
+    assert_eq!(error.instant(), instant(u64::MAX));
+    assert_eq!(error.interval(), overflow_interval);
+    assert_eq!(
+        error.to_string(),
+        "schedule instant 18446744073709551615 cannot advance by 2 milliseconds"
+    );
 }
 
 #[test]
