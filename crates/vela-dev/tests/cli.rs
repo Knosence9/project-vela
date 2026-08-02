@@ -4,7 +4,8 @@ use std::fs;
 use tempfile::tempdir;
 use vela_kernel::{
     scheduler::{
-        ScheduleCancellation, ScheduleId, ScheduleInstant, ScheduleRelease, ScheduleStore,
+        OccurrenceCount, RecurrenceId, RecurrenceStore, ScheduleCancellation, ScheduleId,
+        ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStore,
     },
     task::{TaskGoal, TaskId},
 };
@@ -2379,4 +2380,120 @@ fn validates_development_record_files_with_stable_diagnostics() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("$: unreadable_record"));
+}
+
+#[test]
+fn inspects_finite_recurrences_as_deterministic_complete_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            RecurrenceId::new("z-last").unwrap(),
+            TaskGoal::new("later").unwrap(),
+            ScheduleInstant::from_unix_millis(40),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store
+        .create(
+            RecurrenceId::new("a\nfirst").unwrap(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "inspect",
+            database.to_str().expect("UTF-8 database path"),
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"recurrences\":[",
+            "{\"id\":\"a\\nfirst\",\"goal\":\"preserve \\\"exact\\\" goal\",\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,\"final_occurrence_unix_millis\":20,\"revision\":1},",
+            "{\"id\":\"z-last\",\"goal\":\"later\",\"anchor_unix_millis\":40,\"interval_millis\":2,\"occurrence_count\":1,\"final_occurrence_unix_millis\":40,\"revision\":1}",
+            "]}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn recurrence_inspection_reports_empty_and_missing_storage_without_creation() {
+    let directory = tempdir().expect("recurrence database directory");
+    let empty = directory.path().join("empty.sqlite3");
+    drop(RecurrenceStore::open(&empty).expect("empty recurrence store"));
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "inspect",
+            empty.to_str().expect("UTF-8 database path"),
+        ])
+        .assert()
+        .success()
+        .stdout("{\"recurrences\":[]}\n")
+        .stderr(predicate::str::is_empty());
+
+    let missing = directory.path().join("missing.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "inspect",
+            missing.to_str().expect("UTF-8 database path"),
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_inspection_failed:",
+        ));
+    assert!(!missing.exists());
+}
+
+#[test]
+fn recurrence_inspection_fails_closed_on_corrupt_inventory() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            RecurrenceId::new("corrupt").unwrap(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'recurrence:corrupt'",
+            [],
+        )
+        .unwrap();
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "inspect",
+            database.to_str().expect("UTF-8 database path"),
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_inspection_failed:",
+        ));
 }
