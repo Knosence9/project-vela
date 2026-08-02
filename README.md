@@ -451,6 +451,7 @@ The first milestone is the **evidence loop**:
 117. Atomically materialize the next deterministic due schedule as one caller-identified inert active task without granting execution authority. ✅
 118. Materialize the next deterministic due schedule through compact CLI JSON without reading ambient time or granting dispatch authority. ✅
 119. Derive zero-based fixed-interval occurrence instants with overflow-safe constant-time arithmetic without granting persistence or dispatch authority. ✅
+120. Persist immutable finite fixed-interval recurrence definitions with prevalidated representable bounds without generating occurrences or granting dispatch authority. ✅
 
 ## Project documents
 

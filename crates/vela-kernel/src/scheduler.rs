@@ -16,6 +16,9 @@ const SCHEDULE_RELEASED_EVENT_TYPE: &str = "schedule.released";
 const SCHEDULE_MATERIALIZED_EVENT_TYPE: &str = "schedule.materialized";
 const SCHEDULE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
+const RECURRENCE_CREATED_EVENT_TYPE: &str = "recurrence.fixed_interval_created";
+const RECURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
+const RECURRENCE_STREAM_PREFIX: &str = "recurrence:";
 
 /// An opaque, non-blank identity for one durable schedule intent.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -254,6 +257,265 @@ impl fmt::Display for ScheduleAdvanceError {
 }
 
 impl Error for ScheduleAdvanceError {}
+
+/// An opaque, non-blank identity for one durable recurrence definition.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RecurrenceId(String);
+
+impl RecurrenceId {
+    pub fn new(value: impl Into<String>) -> Result<Self, RecurrenceIdError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            Err(RecurrenceIdError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for RecurrenceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecurrenceIdError;
+
+impl fmt::Display for RecurrenceIdError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("recurrence id must not be blank")
+    }
+}
+
+impl Error for RecurrenceIdError {}
+
+/// The exact positive number of occurrences in a finite recurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccurrenceCount(u64);
+
+impl OccurrenceCount {
+    pub const fn new(value: u64) -> Result<Self, OccurrenceCountError> {
+        if value == 0 {
+            Err(OccurrenceCountError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    const fn final_offset(self) -> u64 {
+        self.0 - 1
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccurrenceCountError;
+
+impl fmt::Display for OccurrenceCountError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("recurrence occurrence count must be greater than zero")
+    }
+}
+
+impl Error for OccurrenceCountError {}
+
+/// One immutable, inert, finite fixed-interval recurrence definition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FixedIntervalRecurrence {
+    id: RecurrenceId,
+    goal: TaskGoal,
+    anchor: ScheduleInstant,
+    interval: ScheduleInterval,
+    occurrence_count: OccurrenceCount,
+    final_occurrence: ScheduleInstant,
+    revision: u64,
+}
+
+impl FixedIntervalRecurrence {
+    pub fn id(&self) -> &RecurrenceId {
+        &self.id
+    }
+
+    pub fn goal(&self) -> &TaskGoal {
+        &self.goal
+    }
+
+    pub const fn anchor(&self) -> ScheduleInstant {
+        self.anchor
+    }
+
+    pub const fn interval(&self) -> ScheduleInterval {
+        self.interval
+    }
+
+    pub const fn occurrence_count(&self) -> OccurrenceCount {
+        self.occurrence_count
+    }
+
+    pub const fn final_occurrence(&self) -> ScheduleInstant {
+        self.final_occurrence
+    }
+
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RecurrenceStoreError {
+    EventLog(EventLogError),
+    Replay(ReplayError),
+    AlreadyExists {
+        recurrence_id: RecurrenceId,
+    },
+    OccurrenceOverflow {
+        recurrence_id: RecurrenceId,
+        source: ScheduleOccurrenceError,
+    },
+    InvalidHistory {
+        event_count: usize,
+    },
+}
+
+impl fmt::Display for RecurrenceStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EventLog(error) => write!(formatter, "recurrence event-log error: {error}"),
+            Self::Replay(error) => write!(formatter, "recurrence replay error: {error}"),
+            Self::AlreadyExists { recurrence_id } => {
+                write!(formatter, "recurrence {recurrence_id} already exists")
+            }
+            Self::OccurrenceOverflow {
+                recurrence_id,
+                source,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} is not representable: {source}"
+            ),
+            Self::InvalidHistory { event_count } => {
+                write!(
+                    formatter,
+                    "invalid recurrence history with {event_count} events"
+                )
+            }
+        }
+    }
+}
+
+impl Error for RecurrenceStoreError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::EventLog(error) => Some(error),
+            Self::Replay(error) => Some(error),
+            Self::OccurrenceOverflow { source, .. } => Some(source),
+            Self::AlreadyExists { .. } | Self::InvalidHistory { .. } => None,
+        }
+    }
+}
+
+/// A synchronous durable store for inert finite fixed-interval recurrence definitions.
+pub struct RecurrenceStore {
+    event_log: EventLog,
+}
+
+impl RecurrenceStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, RecurrenceStoreError> {
+        EventLog::open(path)
+            .map(|event_log| Self { event_log })
+            .map_err(RecurrenceStoreError::EventLog)
+    }
+
+    pub fn create(
+        &mut self,
+        id: RecurrenceId,
+        goal: TaskGoal,
+        anchor: ScheduleInstant,
+        interval: ScheduleInterval,
+        occurrence_count: OccurrenceCount,
+    ) -> Result<FixedIntervalRecurrence, RecurrenceStoreError> {
+        let final_occurrence = anchor
+            .checked_advance_by(interval, occurrence_count.final_offset())
+            .map_err(|source| RecurrenceStoreError::OccurrenceOverflow {
+                recurrence_id: id.clone(),
+                source,
+            })?;
+        let event = RecurrenceEvent::Created {
+            goal: goal.clone(),
+            anchor_unix_millis: anchor.unix_millis(),
+            interval_millis: interval.millis(),
+            occurrence_count: occurrence_count.get(),
+        };
+        match self
+            .event_log
+            .append(&recurrence_stream(&id), ExpectedVersion::NoStream, &event)
+        {
+            Ok(_) => Ok(FixedIntervalRecurrence {
+                id,
+                goal,
+                anchor,
+                interval,
+                occurrence_count,
+                final_occurrence,
+                revision: 1,
+            }),
+            Err(EventLogError::WrongExpectedVersion { .. }) => {
+                Err(RecurrenceStoreError::AlreadyExists { recurrence_id: id })
+            }
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
+    }
+
+    pub fn load(
+        &self,
+        id: &RecurrenceId,
+    ) -> Result<Option<FixedIntervalRecurrence>, RecurrenceStoreError> {
+        let events = self
+            .event_log
+            .replay::<RecurrenceEvent>(&recurrence_stream(id))
+            .map_err(RecurrenceStoreError::Replay)?;
+        match events.as_slice() {
+            [] => Ok(None),
+            [
+                RecurrenceEvent::Created {
+                    goal,
+                    anchor_unix_millis,
+                    interval_millis,
+                    occurrence_count,
+                },
+            ] => {
+                let anchor = ScheduleInstant::from_unix_millis(*anchor_unix_millis);
+                let interval = ScheduleInterval::from_millis(*interval_millis)
+                    .expect("decoded recurrence intervals are positive");
+                let occurrence_count = OccurrenceCount::new(*occurrence_count)
+                    .expect("decoded recurrence counts are positive");
+                let final_occurrence = anchor
+                    .checked_advance_by(interval, occurrence_count.final_offset())
+                    .expect("decoded recurrence ranges are representable");
+                Ok(Some(FixedIntervalRecurrence {
+                    id: id.clone(),
+                    goal: goal.clone(),
+                    anchor,
+                    interval,
+                    occurrence_count,
+                    final_occurrence,
+                    revision: 1,
+                }))
+            }
+            _ => Err(RecurrenceStoreError::InvalidHistory {
+                event_count: events.len(),
+            }),
+        }
+    }
+}
 
 /// One inert durable intent to create a task no earlier than a caller-owned instant.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1023,6 +1285,86 @@ fn require_claimed(id: &ScheduleId, scheduled: &ScheduledTask) -> Result<(), Sch
 fn schedule_stream(id: &ScheduleId) -> StreamId {
     StreamId::new(format!("{SCHEDULE_STREAM_PREFIX}{id}"))
         .expect("a prefixed schedule stream is never empty")
+}
+
+fn recurrence_stream(id: &RecurrenceId) -> StreamId {
+    StreamId::new(format!("{RECURRENCE_STREAM_PREFIX}{id}"))
+        .expect("a prefixed recurrence stream is never empty")
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+enum RecurrenceEvent {
+    Created {
+        goal: TaskGoal,
+        anchor_unix_millis: u64,
+        interval_millis: u64,
+        occurrence_count: u64,
+    },
+}
+
+impl Event for RecurrenceEvent {
+    fn event_type(&self) -> &'static str {
+        match self {
+            Self::Created { .. } => RECURRENCE_CREATED_EVENT_TYPE,
+        }
+    }
+
+    fn payload_version(&self) -> u32 {
+        RECURRENCE_EVENT_PAYLOAD_VERSION
+    }
+
+    fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
+        if event_type != RECURRENCE_CREATED_EVENT_TYPE
+            || payload_version != RECURRENCE_EVENT_PAYLOAD_VERSION
+        {
+            return Err(DecodeError::UnsupportedEvent {
+                event_type: event_type.to_owned(),
+                payload_version,
+            });
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Payload {
+            goal: String,
+            anchor_unix_millis: u64,
+            interval_millis: u64,
+            occurrence_count: u64,
+        }
+
+        let payload: Payload =
+            serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                message: error.to_string(),
+            })?;
+        let goal = TaskGoal::new(payload.goal).map_err(|error: TaskGoalError| {
+            DecodeError::MalformedPayload {
+                message: error.to_string(),
+            }
+        })?;
+        let interval = ScheduleInterval::from_millis(payload.interval_millis).map_err(|error| {
+            DecodeError::MalformedPayload {
+                message: error.to_string(),
+            }
+        })?;
+        let occurrence_count = OccurrenceCount::new(payload.occurrence_count).map_err(|error| {
+            DecodeError::MalformedPayload {
+                message: error.to_string(),
+            }
+        })?;
+        ScheduleInstant::from_unix_millis(payload.anchor_unix_millis)
+            .checked_advance_by(interval, occurrence_count.final_offset())
+            .map_err(|error| DecodeError::MalformedPayload {
+                message: error.to_string(),
+            })?;
+
+        Ok(Self::Created {
+            goal,
+            anchor_unix_millis: payload.anchor_unix_millis,
+            interval_millis: payload.interval_millis,
+            occurrence_count: payload.occurrence_count,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
