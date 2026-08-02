@@ -2497,3 +2497,160 @@ fn recurrence_inspection_fails_closed_on_corrupt_inventory() {
             "$: recurrence_inspection_failed:",
         ));
 }
+
+#[test]
+fn creates_one_finite_recurrence_as_deterministic_complete_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "create",
+            database.to_str().expect("UTF-8 database path"),
+            "exact\nid",
+            "preserve \"exact\" goal",
+            "10",
+            "5",
+            "3",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,",
+            "\"final_occurrence_unix_millis\":20,\"revision\":1}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = RecurrenceStore::open_read_only(&database).expect("read-only recurrence store");
+    let recurrence = store
+        .load(&RecurrenceId::new("exact\nid").unwrap())
+        .unwrap()
+        .expect("persisted recurrence");
+    assert_eq!(recurrence.goal().as_str(), "preserve \"exact\" goal");
+    assert_eq!(recurrence.final_occurrence().unix_millis(), 20);
+    assert_eq!(recurrence.revision(), 1);
+}
+
+#[test]
+fn recurrence_creation_validates_before_opening_storage() {
+    let directory = tempdir().expect("recurrence database directory");
+
+    for (name, id, goal, interval, count, expected_error) in [
+        (
+            "invalid-id.sqlite3",
+            " ",
+            "goal",
+            "1",
+            "1",
+            "invalid_recurrence_id",
+        ),
+        (
+            "invalid-goal.sqlite3",
+            "id",
+            "",
+            "1",
+            "1",
+            "invalid_task_goal",
+        ),
+        (
+            "zero-interval.sqlite3",
+            "id",
+            "goal",
+            "0",
+            "1",
+            "invalid_recurrence_interval",
+        ),
+        (
+            "zero-count.sqlite3",
+            "id",
+            "goal",
+            "1",
+            "0",
+            "invalid_occurrence_count",
+        ),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "create",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                goal,
+                "1",
+                interval,
+                count,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+        assert!(!database.exists());
+    }
+}
+
+#[test]
+fn recurrence_creation_rejects_overflow_and_preserves_duplicates() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "create",
+            database.to_str().expect("UTF-8 database path"),
+            "same-id",
+            "original",
+            "1",
+            "2",
+            "2",
+        ])
+        .assert()
+        .success();
+
+    let max_anchor = u64::MAX.to_string();
+    for (id, goal, anchor, interval, count) in [
+        ("overflow", "goal", max_anchor.as_str(), "1", "2"),
+        ("same-id", "replacement", "5", "3", "4"),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "create",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                goal,
+                anchor,
+                interval,
+                count,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: recurrence_creation_failed:",
+            ));
+    }
+
+    let store = RecurrenceStore::open_read_only(&database).expect("read-only recurrence store");
+    assert!(
+        store
+            .load(&RecurrenceId::new("overflow").unwrap())
+            .unwrap()
+            .is_none()
+    );
+    let original = store
+        .load(&RecurrenceId::new("same-id").unwrap())
+        .unwrap()
+        .expect("original recurrence");
+    assert_eq!(original.goal().as_str(), "original");
+    assert_eq!(original.anchor().unix_millis(), 1);
+    assert_eq!(original.interval().millis(), 2);
+    assert_eq!(original.occurrence_count().get(), 2);
+}

@@ -1,6 +1,6 @@
 # Durable task schedules and finite recurrence definitions
 
-The `vela-kernel` crate provides inert scheduler boundaries: callers can persist one-shot task intent, query which one-shot intents are due, persist and inspect finite fixed-interval recurrence definitions, and project exact recurrence occurrences individually or through bounded pages. These boundaries record or inspect intent only; they do not read a clock, persist generated occurrences, or execute work.
+The `vela-kernel` crate provides inert scheduler boundaries: callers can persist one-shot task intent, query which one-shot intents are due, persist finite fixed-interval recurrence definitions through the kernel or CLI, inspect those definitions, and project exact recurrence occurrences individually or through bounded pages. These boundaries record or inspect intent only; they do not read a clock, persist generated occurrences, or execute work.
 
 ## Observable contract
 
@@ -171,6 +171,30 @@ identity, dispatch, advance a workflow, call a provider or tool, grant
 permission, retry work, or execute anything. Existing exact claimed-revision
 materialization remains available when the caller owns selection and recovery
 semantics.
+
+## Writable recurrence CLI creation
+
+`vela-dev recurrence create DATABASE RECURRENCE_ID GOAL ANCHOR_UNIX_MILLIS
+INTERVAL_MILLIS OCCURRENCE_COUNT` validates the exact caller-owned recurrence ID,
+non-empty task goal, positive fixed interval, and positive finite occurrence
+count before opening the exact selected database through `RecurrenceStore::open`.
+Clap parses the anchor, interval, and count as non-negative `u64` values before
+command execution. Valid creation may initialize the database and delegates
+final-occurrence overflow validation and duplicate protection to the kernel.
+
+Success emits the same complete compact recurrence object used by inspection,
+including exact `id` and `goal`, `anchor_unix_millis`, `interval_millis`,
+`occurrence_count`, `final_occurrence_unix_millis`, and `revision`. Invalid IDs,
+goals, intervals, and counts emit `invalid_recurrence_id`, `invalid_task_goal`,
+`invalid_recurrence_interval`, or `invalid_occurrence_count` without creating
+storage. Duplicate, overflow, open, schema, append, and serialization failures
+emit one escaped `recurrence_creation_failed` diagnostic and no stdout; failed
+creation cannot replace an existing definition or persist an overflowing one.
+
+The command reads no ambient time, generates no identities, persists no
+occurrence lifecycle, and cannot choose catch-up policy, materialize, claim,
+cancel, dispatch, retry, grant permission, or execute work. See
+[ADR-0042](adr/0042-writable-finite-recurrence-cli-creation.md).
 
 ## Read-only recurrence CLI inventory
 
