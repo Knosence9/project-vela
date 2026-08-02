@@ -662,7 +662,9 @@ impl ScheduleStore {
     ///
     /// Selection uses the same due-instant then exact-ID order as [`Self::list_due`].
     /// A competing persisted schedule transition restarts selection. The caller-owned
-    /// task identity is never replaced or regenerated.
+    /// task identity is never replaced or regenerated. If that identity already has a
+    /// task stream, this returns [`ScheduleStoreError::TaskAlreadyExists`] without
+    /// changing the selected schedule.
     pub fn materialize_next_due(
         &mut self,
         cutoff: ScheduleInstant,
