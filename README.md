@@ -190,6 +190,19 @@ materialized, or already-claimed schedules fail with one escaped diagnostic and
 no lifecycle append. Claiming does not read ambient time, identify a worker,
 dispatch, materialize, retry, grant permission, or execute anything.
 
+Claim the earliest pending schedule due by one caller-owned cutoff:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule claim-next path/to/events.sqlite3 1750000000000
+```
+
+The command delegates due-instant then exact-ID selection and revision-bound
+conflict handling to the kernel. Success emits `{"schedule":...}` with the
+complete claimed projection, or `{"schedule":null}` when no eligible work
+remains. Failures emit `schedule_claim_failed` and no partial stdout. It does
+not read ambient time, generate a task ID, identify a worker, dispatch,
+materialize, grant permission, or execute work.
+
 Release one exact observed claim with caller-owned recovery evidence:
 
 ```bash
@@ -417,6 +430,7 @@ The first milestone is the **evidence loop**:
 113. Release one exact claimed durable schedule revision through deterministic JSON without inferring worker state or granting dispatch authority. ✅
 114. Materialize one exact claimed durable schedule revision through deterministic JSON without granting dispatch or execution authority. ✅
 115. Reserve the next deterministic due schedule through revision-bound optimistic concurrency without granting dispatch or execution authority. ✅
+116. Reserve the next deterministic due schedule through compact CLI JSON without reading ambient time or granting dispatch authority. ✅
 
 ## Project documents
 

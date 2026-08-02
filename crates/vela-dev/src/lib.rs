@@ -76,6 +76,11 @@ pub enum ScheduleCommand {
         expected_revision: u64,
         cutoff_unix_millis: u64,
     },
+    /// Claim the earliest due schedule against a caller-owned cutoff.
+    ClaimNext {
+        database: PathBuf,
+        cutoff_unix_millis: u64,
+    },
     /// Release one exact claimed schedule revision with recovery evidence.
     Release {
         database: PathBuf,
@@ -184,6 +189,13 @@ impl Cli {
             }) => claim_schedule(&database, &id, expected_revision, cutoff_unix_millis),
             Some(Command::Schedule {
                 command:
+                    Some(ScheduleCommand::ClaimNext {
+                        database,
+                        cutoff_unix_millis,
+                    }),
+            }) => claim_next_schedule(&database, cutoff_unix_millis),
+            Some(Command::Schedule {
+                command:
                     Some(ScheduleCommand::Release {
                         database,
                         id,
@@ -247,6 +259,11 @@ struct ScheduleInspection<'a> {
 #[derive(Serialize)]
 struct ScheduleLookup<'a> {
     id: &'a str,
+    schedule: Option<ScheduleInspection<'a>>,
+}
+
+#[derive(Serialize)]
+struct NextScheduleClaim<'a> {
     schedule: Option<ScheduleInspection<'a>>,
 }
 
@@ -366,6 +383,26 @@ fn claim_schedule(
         Err(error) => return extension_error("schedule_claim_failed", error),
     };
     let output = match serde_json::to_string(&schedule_inspection(&scheduled)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_claim_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn claim_next_schedule(database: &Path, cutoff_unix_millis: u64) -> ExitCode {
+    let mut store = match ScheduleStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_claim_failed", error),
+    };
+    let scheduled =
+        match store.claim_next_due(ScheduleInstant::from_unix_millis(cutoff_unix_millis)) {
+            Ok(scheduled) => scheduled,
+            Err(error) => return extension_error("schedule_claim_failed", error),
+        };
+    let output = match serde_json::to_string(&NextScheduleClaim {
+        schedule: scheduled.as_ref().map(schedule_inspection),
+    }) {
         Ok(output) => output,
         Err(error) => return extension_error("schedule_claim_failed", error),
     };

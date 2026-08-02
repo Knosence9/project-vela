@@ -125,6 +125,24 @@ identity, dispatch, advance a workflow, call a provider or tool, retry, grant
 permission, or execute work. The expected revision is not worker identity, a
 lease, a permission grant, or proof of liveness.
 
+## Writable CLI next-due claiming
+
+`vela-dev schedule claim-next DATABASE CUTOFF_UNIX_MILLIS` opens the exact
+caller-selected database through `ScheduleStore::open` and supplies the parsed
+non-negative `u64` cutoff to `ScheduleStore::claim_next_due`. The kernel selects
+pending work by due instant then exact schedule ID and retries only after a
+persisted competing transition consumes the selected revision. Success emits
+one compact JSON document whose `schedule` field is the complete claimed
+schedule object, or `null` when no eligible work remains.
+
+Invalid cutoff syntax fails before the command runs. Open, WAL, schema, replay,
+claim, and serialization failures emit one escaped `schedule_claim_failed`
+diagnostic and no partial stdout. Malformed durable state fails closed rather
+than skipping work. The command does not read ambient time, generate task
+identity, infer worker state, dispatch, materialize, grant permission, sleep, or
+execute work. Existing exact-ID claiming remains available when the caller owns
+selection and an observed revision.
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database
