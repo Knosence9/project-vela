@@ -2,8 +2,8 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
-        OccurrenceCount, RecurrenceId, RecurrenceStore, RecurrenceStoreError, ScheduleInstant,
-        ScheduleInterval,
+        OccurrenceCount, RecurrenceId, RecurrenceOccurrenceLookupError, RecurrenceStore,
+        RecurrenceStoreError, ScheduleInstant, ScheduleInterval,
     },
     task::TaskGoal,
 };
@@ -267,4 +267,66 @@ fn rejects_unknown_payload_fields_and_multiple_definition_events() {
         store.load(&multiple_id).unwrap_err(),
         RecurrenceStoreError::InvalidHistory { event_count: 2 }
     ));
+}
+
+#[test]
+fn projects_exact_zero_interior_and_final_occurrences() {
+    let directory = tempdir().unwrap();
+    let id = RecurrenceId::new(" projected ").unwrap();
+    let goal = TaskGoal::new("Preserve exact projection evidence").unwrap();
+    let recurrence = RecurrenceStore::open(directory.path().join("events.sqlite3"))
+        .unwrap()
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(5),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+
+    for (offset, expected_instant) in [(0, 5), (1, 12), (2, 19)] {
+        let occurrence = recurrence.occurrence_at(offset).unwrap();
+        assert_eq!(occurrence.recurrence_id(), &id);
+        assert_eq!(occurrence.goal(), &goal);
+        assert_eq!(occurrence.offset(), offset);
+        assert_eq!(occurrence.instant(), instant(expected_instant));
+        assert_eq!(occurrence.recurrence_revision(), 1);
+    }
+}
+
+#[test]
+fn projects_the_maximum_instant_and_rejects_offsets_outside_the_finite_range() {
+    let directory = tempdir().unwrap();
+    let id = RecurrenceId::new("bounded").unwrap();
+    let count = OccurrenceCount::new(2).unwrap();
+    let recurrence = RecurrenceStore::open(directory.path().join("events.sqlite3"))
+        .unwrap()
+        .create(
+            id.clone(),
+            TaskGoal::new("Reach the exact boundary").unwrap(),
+            instant(u64::MAX - 1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            count,
+        )
+        .unwrap();
+
+    assert_eq!(
+        recurrence.occurrence_at(1).unwrap().instant(),
+        instant(u64::MAX)
+    );
+    for offset in [2, u64::MAX] {
+        match recurrence.occurrence_at(offset).unwrap_err() {
+            RecurrenceOccurrenceLookupError::OutOfRange {
+                recurrence_id,
+                requested_offset,
+                occurrence_count,
+            } => {
+                assert_eq!(recurrence_id, id);
+                assert_eq!(requested_offset, offset);
+                assert_eq!(occurrence_count, count);
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 }
