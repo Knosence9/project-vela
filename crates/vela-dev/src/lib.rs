@@ -12,9 +12,9 @@ use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
     FixedIntervalRecurrence, OccurrenceCount, OccurrencePageSize, RecurrenceId,
-    RecurrenceOccurrence, RecurrenceStore, ScheduleCancellation, ScheduleHistoryEvent, ScheduleId,
-    ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStatus, ScheduleStore,
-    ScheduledTask,
+    RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceStore, ScheduleCancellation,
+    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
+    ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -767,19 +767,9 @@ fn get_recurrence(database: &Path, raw_id: &str) -> ExitCode {
         Ok(id) => id,
         Err(error) => return extension_error("invalid_recurrence_id", error),
     };
-    let store = match RecurrenceStore::open_read_only(database) {
-        Ok(store) => store,
-        Err(error) => return extension_error("recurrence_lookup_failed", error),
-    };
-    let recurrence = match store.load(&id) {
-        Ok(Some(recurrence)) => recurrence,
-        Ok(None) => {
-            return extension_error(
-                "recurrence_not_found",
-                format!("recurrence {:?} does not exist", id.as_str()),
-            );
-        }
-        Err(error) => return extension_error("recurrence_lookup_failed", error),
+    let recurrence = match load_recurrence(database, &id, "recurrence_lookup_failed") {
+        Ok(recurrence) => recurrence,
+        Err(exit_code) => return exit_code,
     };
     let output = match serde_json::to_string(&recurrence_inspection(&recurrence)) {
         Ok(output) => output,
@@ -803,23 +793,16 @@ fn page_recurrence_occurrences(
         Ok(page_size) => page_size,
         Err(error) => return extension_error("invalid_occurrence_page_size", error),
     };
-    let store = match RecurrenceStore::open_read_only(database) {
-        Ok(store) => store,
-        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
-    };
-    let recurrence = match store.load(&id) {
-        Ok(Some(recurrence)) => recurrence,
-        Ok(None) => {
-            return extension_error(
-                "recurrence_not_found",
-                format!("recurrence {:?} does not exist", id.as_str()),
-            );
-        }
-        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    let recurrence = match load_recurrence(database, &id, "recurrence_occurrence_lookup_failed") {
+        Ok(recurrence) => recurrence,
+        Err(exit_code) => return exit_code,
     };
     let page = match recurrence.occurrences_page(start_offset, page_size) {
         Ok(page) => page,
-        Err(error) => return extension_error("recurrence_occurrence_out_of_range", error),
+        Err(error @ RecurrenceOccurrenceLookupError::OutOfRange { .. }) => {
+            return extension_error("recurrence_occurrence_out_of_range", error);
+        }
+        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
     };
     let inspection = RecurrenceOccurrencePageInspection {
         occurrences: page
@@ -835,6 +818,23 @@ fn page_recurrence_occurrences(
     };
     println!("{output}");
     ExitCode::SUCCESS
+}
+
+fn load_recurrence(
+    database: &Path,
+    id: &RecurrenceId,
+    failure_code: &'static str,
+) -> Result<FixedIntervalRecurrence, ExitCode> {
+    let store = RecurrenceStore::open_read_only(database)
+        .map_err(|error| extension_error(failure_code, error))?;
+    match store.load(id) {
+        Ok(Some(recurrence)) => Ok(recurrence),
+        Ok(None) => Err(extension_error(
+            "recurrence_not_found",
+            format!("recurrence {:?} does not exist", id.as_str()),
+        )),
+        Err(error) => Err(extension_error(failure_code, error)),
+    }
 }
 
 fn recurrence_occurrence_inspection(
