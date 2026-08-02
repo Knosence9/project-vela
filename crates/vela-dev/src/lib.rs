@@ -11,8 +11,8 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleRelease,
-    ScheduleStatus, ScheduleStore, ScheduledTask,
+    FixedIntervalRecurrence, RecurrenceStore, ScheduleCancellation, ScheduleHistoryEvent,
+    ScheduleId, ScheduleInstant, ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -50,6 +50,18 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<ScheduleCommand>,
     },
+    /// Inspect durable finite recurrence definitions.
+    Recurrence {
+        #[command(subcommand)]
+        command: Option<RecurrenceCommand>,
+    },
+}
+
+/// Read-only finite recurrence workflows.
+#[derive(Debug, Subcommand)]
+pub enum RecurrenceCommand {
+    /// Print every finite recurrence through a read-only storage boundary.
+    Inspect { database: PathBuf },
 }
 
 /// Durable schedule workflows.
@@ -248,9 +260,28 @@ impl Cli {
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Task { database, task_id }),
             }) => inspect_schedule_task(&database, &task_id),
+            Some(Command::Recurrence {
+                command: Some(RecurrenceCommand::Inspect { database }),
+            }) => inspect_recurrences(&database),
             _ => ExitCode::SUCCESS,
         }
     }
+}
+
+#[derive(Serialize)]
+struct RecurrenceInventory<'a> {
+    recurrences: Vec<RecurrenceInspection<'a>>,
+}
+
+#[derive(Serialize)]
+struct RecurrenceInspection<'a> {
+    id: &'a str,
+    goal: &'a str,
+    anchor_unix_millis: u64,
+    interval_millis: u64,
+    occurrence_count: u64,
+    final_occurrence_unix_millis: u64,
+    revision: u64,
 }
 
 #[derive(Serialize)]
@@ -618,6 +649,38 @@ fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCo
         Err(error) => return extension_error("schedule_inspection_failed", error),
     };
     write_schedule_inventory(&schedules, "schedule_inspection_failed")
+}
+
+fn inspect_recurrences(database: &Path) -> ExitCode {
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_inspection_failed", error),
+    };
+    let recurrences = match store.list() {
+        Ok(recurrences) => recurrences,
+        Err(error) => return extension_error("recurrence_inspection_failed", error),
+    };
+    let inventory = RecurrenceInventory {
+        recurrences: recurrences.iter().map(recurrence_inspection).collect(),
+    };
+    let output = match serde_json::to_string(&inventory) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_inspection_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn recurrence_inspection(recurrence: &FixedIntervalRecurrence) -> RecurrenceInspection<'_> {
+    RecurrenceInspection {
+        id: recurrence.id().as_str(),
+        goal: recurrence.goal().as_str(),
+        anchor_unix_millis: recurrence.anchor().unix_millis(),
+        interval_millis: recurrence.interval().millis(),
+        occurrence_count: recurrence.occurrence_count().get(),
+        final_occurrence_unix_millis: recurrence.final_occurrence().unix_millis(),
+        revision: recurrence.revision(),
+    }
 }
 
 fn inspect_schedules_by_status(database: &Path, raw_status: &str) -> ExitCode {

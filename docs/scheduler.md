@@ -10,7 +10,7 @@ The `vela-kernel` crate provides inert scheduler boundaries: callers can persist
 - `RecurrenceId` preserves one exact non-blank UTF-8 identity in the dedicated internal `recurrence:` stream namespace. `OccurrenceCount` is an exact positive `u64`; offsets are zero-based from the immutable anchor and the final offset is `count - 1`.
 - `FixedIntervalRecurrence` preserves its exact ID, validated `TaskGoal`, anchor, interval, occurrence count, final occurrence, and persisted revision. `RecurrenceStore::create` validates that final occurrence before appending one version-1 `recurrence.fixed_interval_created` event with `ExpectedVersion::NoStream`. Exact ranges ending at `u64::MAX` succeed; overflow fails with typed operand evidence before persistence. Duplicate creation preserves the original definition. `load` returns no definition for a missing stream and otherwise requires exactly one strictly decoded, fully representable creation event. See [ADR-0037](adr/0037-durable-finite-fixed-interval-recurrence-definitions.md).
 - `RecurrenceStore::open_read_only` opens existing recurrence evidence without creating a database or granting SQLite write authority. `list` discovers authoritative recurrence creation streams in one read snapshot, reuses exact history projection, excludes unrelated streams, and returns complete definitions ordered by exact recurrence ID. Empty storage returns an empty list; malformed owning stream IDs, payloads, events, or histories fail closed before any partial inventory is returned. The inventory reads no clock, persists no occurrences or cursors, and grants no lifecycle or execution authority. See [ADR-0040](adr/0040-read-only-finite-recurrence-inventory.md).
-- `FixedIntervalRecurrence::occurrence_at(offset)` projects one exact caller-owned zero-based offset in constant time. A successful `RecurrenceOccurrence` preserves the exact recurrence ID, validated goal, offset, instant, and definition revision. Offset zero is the anchor and `count - 1` is the validated final occurrence, including `u64::MAX`; offsets at or above the count return typed evidence preserving the ID, rejected offset, and exact count. The recurrence-ID/offset coordinate is read-only provenance, not persisted occurrence identity, an idempotency key, a claim, or authority to create or execute work. Lookup reads neither storage nor ambient time. A recurrence CLI remains absent. See [ADR-0038](adr/0038-exact-finite-recurrence-occurrence-projection.md).
+- `FixedIntervalRecurrence::occurrence_at(offset)` projects one exact caller-owned zero-based offset in constant time. A successful `RecurrenceOccurrence` preserves the exact recurrence ID, validated goal, offset, instant, and definition revision. Offset zero is the anchor and `count - 1` is the validated final occurrence, including `u64::MAX`; offsets at or above the count return typed evidence preserving the ID, rejected offset, and exact count. The recurrence-ID/offset coordinate is read-only provenance, not persisted occurrence identity, an idempotency key, a claim, or authority to create or execute work. Lookup reads neither storage nor ambient time. The recurrence CLI inventories definitions only and does not expose occurrence projection. See [ADR-0038](adr/0038-exact-finite-recurrence-occurrence-projection.md).
 - `FixedIntervalRecurrence::occurrences_page(start_offset, page_size)` projects a deterministic allocation-bounded page in increasing offset order. `OccurrencePageSize` accepts 1 through 1024; zero and larger values fail with typed validation evidence before allocation. The start must identify an authored occurrence, final pages truncate at the finite count, and `next_offset` names the first unreturned offset only when another page remains. Bound arithmetic cannot wrap, and every item reuses exact lookup to preserve full provenance. The cursor is read-only projection coordinates, not durable state, due or catch-up policy, or execution authority. See [ADR-0039](adr/0039-bounded-finite-recurrence-occurrence-paging.md).
 - `ScheduledTask` preserves the exact schedule ID, validated `TaskGoal`, due instant, and explicit `ScheduleStatus`. Cancelled schedules also preserve the exact cancellation reason supplied by the caller; materialized schedules preserve the exact caller-owned task ID.
 - `ScheduleStore::schedule` appends one `schedule.created` event at payload version `1` with `ExpectedVersion::NoStream`. A duplicate ID returns `ScheduleStoreError::AlreadyExists` and leaves the original intent unchanged.
@@ -171,6 +171,24 @@ identity, dispatch, advance a workflow, call a provider or tool, grant
 permission, retry work, or execute anything. Existing exact claimed-revision
 materialization remains available when the caller owns selection and recovery
 semantics.
+
+## Read-only recurrence CLI inventory
+
+`vela-dev recurrence inspect DATABASE` opens the exact caller-selected database
+through `RecurrenceStore::open_read_only` and emits one compact JSON document.
+Its `recurrences` array retains the kernel's deterministic exact-ID order. Every
+object contains exact `id` and `goal` strings plus `anchor_unix_millis`,
+`interval_millis`, `occurrence_count`, `final_occurrence_unix_millis`, and
+`revision`. An empty compatible store emits `{"recurrences":[]}`; exact strings
+are JSON escaped.
+
+Open, schema, replay, projection, and serialization failures emit one escaped
+`recurrence_inspection_failed` diagnostic, return non-zero status, and emit no
+partial stdout. Inspecting a missing path does not create a database. The
+command cannot enumerate occurrences, read ambient time, mutate definitions or
+lifecycle state, choose catch-up policy, generate identities, materialize,
+dispatch, retry, grant permission, or execute work. See
+[ADR-0041](adr/0041-read-only-finite-recurrence-cli-inventory.md).
 
 ## Read-only CLI inspection
 
