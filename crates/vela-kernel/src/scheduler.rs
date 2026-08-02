@@ -367,7 +367,92 @@ impl FixedIntervalRecurrence {
     pub const fn revision(&self) -> u64 {
         self.revision
     }
+
+    /// Projects one exact zero-based occurrence without reading storage or time.
+    pub fn occurrence_at(
+        &self,
+        offset: u64,
+    ) -> Result<RecurrenceOccurrence, RecurrenceOccurrenceLookupError> {
+        if offset >= self.occurrence_count.get() {
+            return Err(RecurrenceOccurrenceLookupError::OutOfRange {
+                recurrence_id: self.id.clone(),
+                requested_offset: offset,
+                occurrence_count: self.occurrence_count,
+            });
+        }
+        let instant = self
+            .anchor
+            .checked_advance_by(self.interval, offset)
+            .expect("validated finite recurrence occurrences are representable");
+        Ok(RecurrenceOccurrence {
+            recurrence_id: self.id.clone(),
+            goal: self.goal.clone(),
+            offset,
+            instant,
+            recurrence_revision: self.revision,
+        })
+    }
 }
+
+/// One inert read-only projection from a finite recurrence definition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceOccurrence {
+    recurrence_id: RecurrenceId,
+    goal: TaskGoal,
+    offset: u64,
+    instant: ScheduleInstant,
+    recurrence_revision: u64,
+}
+
+impl RecurrenceOccurrence {
+    pub fn recurrence_id(&self) -> &RecurrenceId {
+        &self.recurrence_id
+    }
+
+    pub fn goal(&self) -> &TaskGoal {
+        &self.goal
+    }
+
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub const fn instant(&self) -> ScheduleInstant {
+        self.instant
+    }
+
+    pub const fn recurrence_revision(&self) -> u64 {
+        self.recurrence_revision
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RecurrenceOccurrenceLookupError {
+    OutOfRange {
+        recurrence_id: RecurrenceId,
+        requested_offset: u64,
+        occurrence_count: OccurrenceCount,
+    },
+}
+
+impl fmt::Display for RecurrenceOccurrenceLookupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutOfRange {
+                recurrence_id,
+                requested_offset,
+                occurrence_count,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} offset {requested_offset} is outside occurrence count {}",
+                occurrence_count.get()
+            ),
+        }
+    }
+}
+
+impl Error for RecurrenceOccurrenceLookupError {}
 
 #[derive(Debug)]
 #[non_exhaustive]

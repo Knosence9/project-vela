@@ -452,6 +452,7 @@ The first milestone is the **evidence loop**:
 118. Materialize the next deterministic due schedule through compact CLI JSON without reading ambient time or granting dispatch authority. ✅
 119. Derive zero-based fixed-interval occurrence instants with overflow-safe constant-time arithmetic without granting persistence or dispatch authority. ✅
 120. Persist immutable finite fixed-interval recurrence definitions with prevalidated representable bounds without generating occurrences or granting dispatch authority. ✅
+121. Project one exact finite recurrence occurrence with complete read-only provenance and typed bounds without granting persistence or execution authority. ✅
 
 ## Project documents
 
