@@ -658,6 +658,52 @@ impl ScheduleStore {
         }
     }
 
+    /// Atomically materializes the earliest pending due intent as one inert active task.
+    ///
+    /// Selection uses the same due-instant then exact-ID order as [`Self::list_due`].
+    /// A competing persisted schedule transition restarts selection. The caller-owned
+    /// task identity is never replaced or regenerated. If that identity already has a
+    /// task stream, this returns [`ScheduleStoreError::TaskAlreadyExists`] without
+    /// changing the selected schedule.
+    pub fn materialize_next_due(
+        &mut self,
+        cutoff: ScheduleInstant,
+        task_id: TaskId,
+    ) -> Result<Option<ScheduledTask>, ScheduleStoreError> {
+        loop {
+            let Some(mut next) = self.list_due(cutoff)?.into_iter().next() else {
+                return Ok(None);
+            };
+            let expected_revision = next.revision();
+            let schedule_event = ScheduleEvent::Materialized {
+                task_id: task_id.clone(),
+            };
+            let task_event = TaskEvent::Started {
+                goal: next.goal.clone(),
+            };
+            match self.event_log.append_pair(
+                &schedule_stream(next.id()),
+                ExpectedVersion::Exact(expected_revision),
+                &schedule_event,
+                &task_stream(&task_id),
+                ExpectedVersion::NoStream,
+                &task_event,
+            ) {
+                Ok(_) => {
+                    next.task_id = Some(task_id);
+                    next.revision += 1;
+                    return Ok(Some(next));
+                }
+                Err(EventLogError::WrongExpectedVersion {
+                    expected: ExpectedVersion::NoStream,
+                    ..
+                }) => return Err(ScheduleStoreError::TaskAlreadyExists { task_id }),
+                Err(EventLogError::WrongExpectedVersion { .. }) => continue,
+                Err(error) => return Err(ScheduleStoreError::EventLog(error)),
+            }
+        }
+    }
+
     /// Reserves the earliest still-pending due intent without dispatching or executing it.
     ///
     /// Selection uses the same due-instant then exact-ID order as [`Self::list_due`].
@@ -774,12 +820,15 @@ impl ScheduleStore {
                 (ScheduleStatus::Pending, ScheduleEvent::Claimed {}) => {
                     scheduled.claimed = true;
                 }
+                (
+                    ScheduleStatus::Pending | ScheduleStatus::Claimed,
+                    ScheduleEvent::Materialized { task_id },
+                ) => {
+                    scheduled.task_id = Some(task_id);
+                }
                 (ScheduleStatus::Claimed, ScheduleEvent::Released { reason }) => {
                     scheduled.claimed = false;
                     scheduled.latest_release = Some(reason);
-                }
-                (ScheduleStatus::Claimed, ScheduleEvent::Materialized { task_id }) => {
-                    scheduled.task_id = Some(task_id);
                 }
                 _ => return Err(ScheduleStoreError::InvalidHistory { event_count }),
             }
