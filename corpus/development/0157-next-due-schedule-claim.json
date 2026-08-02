@@ -47,7 +47,7 @@
     "Repeated concurrent tests supplement, but do not replace, deterministic contract coverage."
   ],
   "provenance": {
-    "repository_path": "crates/vela-kernel/src/schedule.rs",
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
     "url": "https://github.com/Knosence9/project-vela/pull/842"
   },
   "sanitation": {
