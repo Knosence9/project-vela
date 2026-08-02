@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize the next due schedule through deterministic CLI JSON",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/849 by exposing atomic next-due schedule/task materialization without widening CLI authority.",
+    "acceptance_criteria": [
+      "Validate one caller-owned task identity before storage access and delegate the explicit cutoff to ScheduleStore::materialize_next_due.",
+      "Emit the complete materialized schedule projection or explicit null when no work is eligible.",
+      "Fail closed with schedule_materialization_failed and no partial stdout, orphan task, generated identity, clock, dispatch, permission, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because materialize-next was not a recognized schedule subcommand.",
+      "patch": "Added focused command tests for deterministic selection, empty work, invalid task identity, task collision, persistence, and storage failure."
+    },
+    {
+      "summary": "Exposed the bounded atomic operation and refactored its response shape.",
+      "outcome": "success",
+      "diagnostic": "The atomic kernel operation existed, but automation had no deterministic JSON boundary and would otherwise need custom persistence integration.",
+      "patch": "Added schedule materialize-next, reused the next-schedule response type and complete inspection projection, and documented exact success and failure behavior."
+    },
+    {
+      "summary": "Preserved exact-head review discipline after a false-green status.",
+      "outcome": "success",
+      "diagnostic": "The initial CodeRabbit run reached its review limit even though the status appeared green; later substantive review suggested only a low-value serialization helper extraction.",
+      "patch": "Kept auto-merge disabled through the stated cooldown, deliberately resumed review once capacity returned, and retained the simple shared response shape without an unnecessary behavioral change."
+    }
+  ],
+  "outcome": {
+    "summary": "Automation can materialize the earliest due intent and create its caller-identified inert task atomically through compact deterministic JSON.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30735025199/job/91462153693",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 850 squash merge 9c817550917381b0f14b991b89e39c5b3dce4d08",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Expose the kernel's atomic operation directly rather than reconstructing selection and two-stream persistence in scripts.",
+    "Validate caller-owned identity before opening writable storage and emit no partial JSON on failure.",
+    "A green rate-limited status is not review evidence; wait for capacity and require a genuine substantive review of the exact head."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/850"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

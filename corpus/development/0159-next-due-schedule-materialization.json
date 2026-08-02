@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Atomically materialize the next due schedule",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/847 by binding deterministic pending-schedule selection and caller-identified task creation in one atomic kernel operation.",
+    "acceptance_criteria": [
+      "Select the earliest pending due schedule by due instant then exact schedule ID and materialize it as the caller-owned task.",
+      "Return none when no work is due, preserve schedules on task identity collision, and restart only after persisted schedule conflicts.",
+      "Accept direct pending materialization in fail-closed replay and preserve exact history and task provenance without clock, dispatch, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Schedule-store acceptance tests failed because materialize_next_due did not exist.",
+      "patch": "Added focused tests for deterministic selection, no due work, task collision, reopen and provenance, competing transitions, and malformed discovered history."
+    },
+    {
+      "summary": "Implemented the atomic kernel boundary and reconciled lifecycle replay.",
+      "outcome": "success",
+      "diagnostic": "The existing claim-next and exact claimed-materialization operations left an avoidable process-failure gap for callers that already owned a task identity.",
+      "patch": "Selected the exact pending revision, atomically appended schedule.materialized and task.started, retried only persisted schedule conflicts, and accepted both direct pending and explicit claimed materialization histories."
+    },
+    {
+      "summary": "Clarified the exact persistence contract after substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit identified ambiguous documentation about whether task.started was new and what complete projection success returned; incremental review of the correction was temporarily rate limited.",
+      "patch": "Aligned ADR and scheduler wording around ExpectedVersion::NoStream, updated revision and task binding, kept auto-merge disabled through the cooldown, and required genuine exact-head review before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers that already own a cutoff and task identity can atomically consume the deterministic next due intent without a recoverable claim gap or execution authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30732758247/job/91455896455",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 848 squash merge 8913760b673404837c97296c239479dc17819af9",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "When identity is already caller-owned, one atomic schedule/task append avoids inventing claim-recovery policy.",
+    "Replay must explicitly validate every newly legal transition while retaining fail-closed corruption behavior.",
+    "A rate-limited incremental review is false green; preserve the PR until the exact head receives substantive review."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/848"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
