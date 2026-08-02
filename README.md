@@ -199,8 +199,9 @@ nix develop --command cargo run --locked -p vela-dev -- schedule claim-next path
 The command delegates due-instant then exact-ID selection and revision-bound
 conflict handling to the kernel. Success emits `{"schedule":...}` with the
 complete claimed projection, or `{"schedule":null}` when no eligible work
-remains. It does not read ambient time, generate a task ID, identify a worker,
-dispatch, materialize, grant permission, or execute work.
+remains. Failures emit `schedule_claim_failed` and no partial stdout. It does
+not read ambient time, generate a task ID, identify a worker, dispatch,
+materialize, grant permission, or execute work.
 
 Release one exact observed claim with caller-owned recovery evidence:
 
