@@ -348,6 +348,14 @@ fn pages_occurrences_in_order_with_complete_provenance_and_a_stable_cursor() {
         )
         .unwrap();
 
+    let first_page = recurrence
+        .occurrences_page(0, OccurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(first_page.next_offset(), Some(1));
+    assert_eq!(first_page.occurrences().len(), 1);
+    assert_eq!(first_page.occurrences()[0].offset(), 0);
+    assert_eq!(first_page.occurrences()[0].instant(), instant(5));
+
     let page = recurrence
         .occurrences_page(1, OccurrencePageSize::new(2).unwrap())
         .unwrap();
