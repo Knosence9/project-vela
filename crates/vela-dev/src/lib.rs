@@ -11,8 +11,9 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    FixedIntervalRecurrence, RecurrenceStore, ScheduleCancellation, ScheduleHistoryEvent,
-    ScheduleId, ScheduleInstant, ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
+    FixedIntervalRecurrence, OccurrenceCount, RecurrenceId, RecurrenceStore, ScheduleCancellation,
+    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
+    ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -50,16 +51,25 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<ScheduleCommand>,
     },
-    /// Inspect durable finite recurrence definitions.
+    /// Work with durable finite recurrence definitions.
     Recurrence {
         #[command(subcommand)]
         command: Option<RecurrenceCommand>,
     },
 }
 
-/// Read-only finite recurrence workflows.
+/// Finite recurrence workflows.
 #[derive(Debug, Subcommand)]
 pub enum RecurrenceCommand {
+    /// Persist one inert finite fixed-interval recurrence definition.
+    Create {
+        database: PathBuf,
+        id: String,
+        goal: String,
+        anchor_unix_millis: u64,
+        interval_millis: u64,
+        occurrence_count: u64,
+    },
     /// Print every finite recurrence through a read-only storage boundary.
     Inspect { database: PathBuf },
 }
@@ -260,6 +270,24 @@ impl Cli {
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Task { database, task_id }),
             }) => inspect_schedule_task(&database, &task_id),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::Create {
+                        database,
+                        id,
+                        goal,
+                        anchor_unix_millis,
+                        interval_millis,
+                        occurrence_count,
+                    }),
+            }) => create_recurrence(
+                &database,
+                &id,
+                &goal,
+                anchor_unix_millis,
+                interval_millis,
+                occurrence_count,
+            ),
             Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Inspect { database }),
             }) => inspect_recurrences(&database),
@@ -649,6 +677,52 @@ fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCo
         Err(error) => return extension_error("schedule_inspection_failed", error),
     };
     write_schedule_inventory(&schedules, "schedule_inspection_failed")
+}
+
+fn create_recurrence(
+    database: &Path,
+    raw_id: &str,
+    raw_goal: &str,
+    anchor_unix_millis: u64,
+    interval_millis: u64,
+    occurrence_count: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let goal = match TaskGoal::new(raw_goal) {
+        Ok(goal) => goal,
+        Err(error) => return extension_error("invalid_task_goal", error),
+    };
+    let interval = match ScheduleInterval::from_millis(interval_millis) {
+        Ok(interval) => interval,
+        Err(error) => return extension_error("invalid_recurrence_interval", error),
+    };
+    let occurrence_count = match OccurrenceCount::new(occurrence_count) {
+        Ok(count) => count,
+        Err(error) => return extension_error("invalid_occurrence_count", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_creation_failed", error),
+    };
+    let recurrence = match store.create(
+        id,
+        goal,
+        ScheduleInstant::from_unix_millis(anchor_unix_millis),
+        interval,
+        occurrence_count,
+    ) {
+        Ok(recurrence) => recurrence,
+        Err(error) => return extension_error("recurrence_creation_failed", error),
+    };
+    let output = match serde_json::to_string(&recurrence_inspection(&recurrence)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_creation_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn inspect_recurrences(database: &Path) -> ExitCode {
