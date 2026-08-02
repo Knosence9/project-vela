@@ -70,6 +70,8 @@ pub enum RecurrenceCommand {
         interval_millis: u64,
         occurrence_count: u64,
     },
+    /// Print one finite recurrence selected by exact ID through a read-only boundary.
+    Get { database: PathBuf, id: String },
     /// Print every finite recurrence through a read-only storage boundary.
     Inspect { database: PathBuf },
 }
@@ -288,6 +290,9 @@ impl Cli {
                 interval_millis,
                 occurrence_count,
             ),
+            Some(Command::Recurrence {
+                command: Some(RecurrenceCommand::Get { database, id }),
+            }) => get_recurrence(&database, &id),
             Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Inspect { database }),
             }) => inspect_recurrences(&database),
@@ -720,6 +725,33 @@ fn create_recurrence(
     let output = match serde_json::to_string(&recurrence_inspection(&recurrence)) {
         Ok(output) => output,
         Err(error) => return extension_error("recurrence_creation_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn get_recurrence(database: &Path, raw_id: &str) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_lookup_failed", error),
+    };
+    let recurrence = match store.load(&id) {
+        Ok(Some(recurrence)) => recurrence,
+        Ok(None) => {
+            return extension_error(
+                "recurrence_not_found",
+                format!("recurrence {:?} does not exist", id.as_str()),
+            );
+        }
+        Err(error) => return extension_error("recurrence_lookup_failed", error),
+    };
+    let output = match serde_json::to_string(&recurrence_inspection(&recurrence)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_lookup_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS

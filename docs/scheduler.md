@@ -196,6 +196,28 @@ occurrence lifecycle, and cannot choose catch-up policy, materialize, claim,
 cancel, dispatch, retry, grant permission, or execute work. See
 [ADR-0042](adr/0042-writable-finite-recurrence-cli-creation.md).
 
+## Read-only exact recurrence CLI lookup
+
+`vela-dev recurrence get DATABASE RECURRENCE_ID` validates the exact ID before
+storage access, opens only the caller-selected existing database through
+`RecurrenceStore::open_read_only`, and replays only the selected recurrence
+stream through `RecurrenceStore::load`. Success emits the same complete compact
+recurrence object used by creation and inventory, preserving and JSON escaping
+exact `id` and `goal` strings.
+
+Invalid IDs emit `invalid_recurrence_id` before storage access. An absent
+recurrence in a compatible store emits `recurrence_not_found`. Open, schema,
+replay, projection, and serialization failures emit `recurrence_lookup_failed`.
+Every failure is non-zero with one escaped diagnostic and no stdout; a missing
+database is never created. Corruption in unrelated streams cannot block exact
+lookup.
+
+The command cannot enumerate unrelated streams, read ambient time, mutate
+recurrence state, project or persist occurrences, choose catch-up policy,
+generate identities, materialize, claim, cancel, dispatch, retry, grant
+permission, or execute work. See
+[ADR-0043](adr/0043-read-only-exact-finite-recurrence-cli-lookup.md).
+
 ## Read-only recurrence CLI inventory
 
 `vela-dev recurrence inspect DATABASE` opens the exact caller-selected database
