@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize one exact claimed schedule revision",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/839 by exposing atomic schedule-to-task materialization through the explicit CLI boundary.",
+    "acceptance_criteria": [
+      "Validate schedule and task identities before storage access.",
+      "Atomically append schedule materialization and task creation for one exact claimed revision.",
+      "Reject collisions and lifecycle failures without orphan tasks or partial output."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused materialization tests failed because materialize was an unrecognized subcommand.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The capability existed below the requested boundary or required one new typed kernel operation.",
+      "patch": "Added the ScheduleStore::materialize adapter and covered success, stale and wrong-state schedules, task collisions, validation, and storage failures."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can atomically bind one claimed schedule to one task while dispatch, workflow movement, providers, tools, and execution remain external.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30718575627/job/91418356737",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 840 squash merge bf1e26d4320e198a8003afd7ee20e49ed9a9836d",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Cross-stream materialization must be atomic so collisions cannot create orphan tasks.",
+    "Task creation from intent is still not dispatch or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/840"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

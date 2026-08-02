@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Create durable one-shot schedule intent",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/831 by exposing the existing inert schedule creation boundary through an explicit writable CLI command.",
+    "acceptance_criteria": [
+      "Validate caller-owned identity, goal, and due syntax before avoidable storage effects.",
+      "Persist one pending intent and emit its complete deterministic projection.",
+      "Reject duplicates without rewriting original intent or adding execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Three creation tests failed because create was not a recognized schedule subcommand.",
+      "patch": "Added focused integration coverage for the required success, absence or conflict, validation, and fail-closed paths."
+    },
+    {
+      "summary": "Implemented the bounded contract and refactored only demonstrated duplication.",
+      "outcome": "success",
+      "diagnostic": "The capability existed below the requested boundary or required one new typed kernel operation.",
+      "patch": "Added a thin adapter over ScheduleStore::schedule and strengthened duplicate diagnostics and invalid-due pre-storage coverage."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can create one durable inert schedule intent while dispatch, clock, retry, and execution remain outside the CLI.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30707100771/job/91387986714",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 832 squash merge f8956f2c5651a96e71880ebdcd676329728c6fe8",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A writable command should grant only the smallest explicit append authority.",
+    "Duplicate rejection must preserve the original durable intent and should be asserted directly."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/832"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
