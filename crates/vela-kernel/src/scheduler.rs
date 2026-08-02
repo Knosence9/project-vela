@@ -567,6 +567,9 @@ pub enum RecurrenceStoreError {
         recurrence_id: RecurrenceId,
         source: ScheduleOccurrenceError,
     },
+    InvalidStreamId {
+        stream_id: String,
+    },
     InvalidHistory {
         event_count: usize,
     },
@@ -587,6 +590,9 @@ impl fmt::Display for RecurrenceStoreError {
                 formatter,
                 "recurrence {recurrence_id} is not representable: {source}"
             ),
+            Self::InvalidStreamId { stream_id } => {
+                write!(formatter, "invalid recurrence stream id {stream_id:?}")
+            }
             Self::InvalidHistory { event_count } => {
                 write!(
                     formatter,
@@ -603,7 +609,9 @@ impl Error for RecurrenceStoreError {
             Self::EventLog(error) => Some(error),
             Self::Replay(error) => Some(error),
             Self::OccurrenceOverflow { source, .. } => Some(source),
-            Self::AlreadyExists { .. } | Self::InvalidHistory { .. } => None,
+            Self::AlreadyExists { .. }
+            | Self::InvalidStreamId { .. }
+            | Self::InvalidHistory { .. } => None,
         }
     }
 }
@@ -616,6 +624,13 @@ pub struct RecurrenceStore {
 impl RecurrenceStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, RecurrenceStoreError> {
         EventLog::open(path)
+            .map(|event_log| Self { event_log })
+            .map_err(RecurrenceStoreError::EventLog)
+    }
+
+    /// Opens existing recurrence evidence without database creation or write authority.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, RecurrenceStoreError> {
+        EventLog::open_read_only(path)
             .map(|event_log| Self { event_log })
             .map_err(RecurrenceStoreError::EventLog)
     }
@@ -668,6 +683,41 @@ impl RecurrenceStore {
             .event_log
             .replay::<RecurrenceEvent>(&recurrence_stream(id))
             .map_err(RecurrenceStoreError::Replay)?;
+        Self::project(id.clone(), events)
+    }
+
+    /// Returns every durable recurrence definition ordered by exact recurrence ID.
+    pub fn list(&self) -> Result<Vec<FixedIntervalRecurrence>, RecurrenceStoreError> {
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type::<RecurrenceEvent>(RECURRENCE_CREATED_EVENT_TYPE)
+            .map_err(RecurrenceStoreError::Replay)?;
+        let mut recurrences = Vec::with_capacity(streams.len());
+
+        for (stream_id, events) in streams {
+            let Some(external_id) = stream_id.strip_prefix(RECURRENCE_STREAM_PREFIX) else {
+                return Err(RecurrenceStoreError::InvalidStreamId { stream_id });
+            };
+            let id = RecurrenceId::new(external_id).map_err(|_| {
+                RecurrenceStoreError::InvalidStreamId {
+                    stream_id: stream_id.clone(),
+                }
+            })?;
+            let Some(recurrence) = Self::project(id, events)? else {
+                return Err(RecurrenceStoreError::InvalidHistory { event_count: 0 });
+            };
+            recurrences.push(recurrence);
+        }
+
+        recurrences.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(recurrences)
+    }
+
+    fn project(
+        id: RecurrenceId,
+        events: Vec<RecurrenceEvent>,
+    ) -> Result<Option<FixedIntervalRecurrence>, RecurrenceStoreError> {
+        let event_count = events.len();
         match events.as_slice() {
             [] => Ok(None),
             [
@@ -678,16 +728,17 @@ impl RecurrenceStore {
                     occurrence_count,
                 },
             ] => {
+                let invalid_history = || RecurrenceStoreError::InvalidHistory { event_count };
                 let anchor = ScheduleInstant::from_unix_millis(*anchor_unix_millis);
                 let interval = ScheduleInterval::from_millis(*interval_millis)
-                    .expect("decoded recurrence intervals are positive");
-                let occurrence_count = OccurrenceCount::new(*occurrence_count)
-                    .expect("decoded recurrence counts are positive");
+                    .map_err(|_| invalid_history())?;
+                let occurrence_count =
+                    OccurrenceCount::new(*occurrence_count).map_err(|_| invalid_history())?;
                 let final_occurrence = anchor
                     .checked_advance_by(interval, occurrence_count.final_offset())
-                    .expect("decoded recurrence ranges are representable");
+                    .map_err(|_| invalid_history())?;
                 Ok(Some(FixedIntervalRecurrence {
-                    id: id.clone(),
+                    id,
                     goal: goal.clone(),
                     anchor,
                     interval,
@@ -696,9 +747,44 @@ impl RecurrenceStore {
                     revision: 1,
                 }))
             }
-            _ => Err(RecurrenceStoreError::InvalidHistory {
-                event_count: events.len(),
-            }),
+            _ => Err(RecurrenceStoreError::InvalidHistory { event_count }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod recurrence_projection_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_decoded_recurrence_definitions_fail_as_invalid_history() {
+        for event in [
+            RecurrenceEvent::Created {
+                goal: TaskGoal::new("Invalid interval").unwrap(),
+                anchor_unix_millis: 1,
+                interval_millis: 0,
+                occurrence_count: 1,
+            },
+            RecurrenceEvent::Created {
+                goal: TaskGoal::new("Invalid count").unwrap(),
+                anchor_unix_millis: 1,
+                interval_millis: 1,
+                occurrence_count: 0,
+            },
+            RecurrenceEvent::Created {
+                goal: TaskGoal::new("Invalid range").unwrap(),
+                anchor_unix_millis: u64::MAX,
+                interval_millis: 1,
+                occurrence_count: 2,
+            },
+        ] {
+            assert!(matches!(
+                RecurrenceStore::project(
+                    RecurrenceId::new("invalid-definition").unwrap(),
+                    vec![event]
+                ),
+                Err(RecurrenceStoreError::InvalidHistory { event_count: 1 })
+            ));
         }
     }
 }
