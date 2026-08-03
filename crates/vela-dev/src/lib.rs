@@ -1083,13 +1083,19 @@ fn recurrence_occurrence_inspection(
 fn materialized_recurrence_occurrence_inspection(
     materialized: &MaterializedRecurrenceOccurrence,
 ) -> MaterializedRecurrenceOccurrenceInspection<'_> {
-    let occurrence = materialized.occurrence();
+    let RecurrenceOccurrenceInspection {
+        recurrence_id,
+        goal,
+        offset,
+        unix_millis,
+        definition_revision,
+    } = recurrence_occurrence_inspection(materialized.occurrence());
     MaterializedRecurrenceOccurrenceInspection {
-        recurrence_id: occurrence.recurrence_id().as_str(),
-        goal: occurrence.goal().as_str(),
-        offset: occurrence.offset(),
-        unix_millis: occurrence.instant().unix_millis(),
-        definition_revision: occurrence.recurrence_revision(),
+        recurrence_id,
+        goal,
+        offset,
+        unix_millis,
+        definition_revision,
         occurrence_revision: materialized.revision(),
         task_id: materialized.task_id().as_str(),
     }
