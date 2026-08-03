@@ -218,6 +218,31 @@ generate identities, materialize, claim, cancel, dispatch, retry, grant
 permission, or execute work. See
 [ADR-0043](adr/0043-read-only-exact-finite-recurrence-cli-lookup.md).
 
+## Read-only exact recurrence occurrence CLI paging
+
+`vela-dev recurrence occurrences DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`
+validates the exact recurrence ID and the positive, at-most-1024 page size before
+storage access. It opens only the selected existing database through
+`RecurrenceStore::open_read_only`, loads only the selected recurrence stream,
+and delegates bounded projection to `FixedIntervalRecurrence::occurrences_page`.
+
+Success emits `occurrences` in ascending offset order. Every object preserves
+exact `recurrence_id`, `goal`, `offset`, `unix_millis`, and
+`definition_revision`; `next_offset` identifies the first unreturned authored
+offset or is `null` on the final page. Invalid IDs, page sizes, and starts are
+categorized as `invalid_recurrence_id`, `invalid_occurrence_page_size`, and
+`recurrence_occurrence_out_of_range`. Absence emits `recurrence_not_found`;
+storage, exact replay, and serialization failures emit
+`recurrence_occurrence_lookup_failed`. All failures are non-zero with empty
+stdout, missing storage is not created, and unrelated corruption cannot block
+exact paging.
+
+The offset is only a projection coordinate. The command reads no ambient time,
+persists no occurrence identity or cursor, decides no due or catch-up state,
+and cannot mutate, materialize, claim, cancel, dispatch, retry, grant permission,
+or execute work. See
+[ADR-0044](adr/0044-read-only-exact-finite-recurrence-occurrence-cli-paging.md).
+
 ## Read-only recurrence CLI inventory
 
 `vela-dev recurrence inspect DATABASE` opens the exact caller-selected database
