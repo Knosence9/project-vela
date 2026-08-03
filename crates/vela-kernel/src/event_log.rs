@@ -632,6 +632,24 @@ impl EventLog {
         &self,
         event_type: &str,
     ) -> Result<Vec<(String, Vec<E>)>, ReplayError> {
+        self.replay_streams_with_marker::<E>(event_type, None)
+    }
+
+    pub(crate) fn replay_streams_with_event_type_and_json_text<E: Event>(
+        &self,
+        event_type: &str,
+        json_path: &str,
+        value: &str,
+    ) -> Result<Vec<(String, Vec<E>)>, ReplayError> {
+        self.replay_streams_with_marker::<E>(event_type, Some((json_path, value)))
+    }
+
+    fn replay_streams_with_marker<E: Event>(
+        &self,
+        event_type: &str,
+        json_text_match: Option<(&str, &str)>,
+    ) -> Result<Vec<(String, Vec<E>)>, ReplayError> {
+        let (json_path, value) = json_text_match.unzip();
         let mut statement = self
             .connection
             .prepare(
@@ -641,12 +659,16 @@ impl EventLog {
                  WHERE EXISTS (
                      SELECT 1 FROM events AS marker
                      WHERE marker.stream_id = event.stream_id AND marker.event_type = ?1
+                       AND CASE WHEN ?2 IS NULL THEN 1
+                                WHEN json_valid(marker.payload)
+                                THEN json_extract(marker.payload, ?2) = ?3
+                                ELSE 0 END
                  )
                  ORDER BY event.stream_id ASC, event.stream_version ASC",
             )
             .map_err(storage_replay_error)?;
         let mut rows = statement
-            .query([event_type])
+            .query(params![event_type, json_path, value])
             .map_err(storage_replay_error)?;
         let mut streams: Vec<(String, Vec<E>)> = Vec::new();
 
