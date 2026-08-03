@@ -18,6 +18,7 @@ const SCHEDULE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
 const RECURRENCE_CREATED_EVENT_TYPE: &str = "recurrence.fixed_interval_created";
 const RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE: &str = "recurrence.occurrence_persisted";
+const RECURRENCE_OCCURRENCE_MATERIALIZED_EVENT_TYPE: &str = "recurrence.occurrence_materialized";
 const RECURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const RECURRENCE_OCCURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const RECURRENCE_STREAM_PREFIX: &str = "recurrence:";
@@ -531,6 +532,35 @@ impl RecurrenceOccurrence {
     }
 }
 
+/// One exact persisted recurrence occurrence atomically bound to an inert task.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterializedRecurrenceOccurrence {
+    occurrence: RecurrenceOccurrence,
+    revision: u64,
+    task_id: TaskId,
+}
+
+impl MaterializedRecurrenceOccurrence {
+    pub fn occurrence(&self) -> &RecurrenceOccurrence {
+        &self.occurrence
+    }
+
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn task_id(&self) -> &TaskId {
+        &self.task_id
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RecurrenceOccurrenceState {
+    occurrence: RecurrenceOccurrence,
+    revision: u64,
+    task_id: Option<TaskId>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum RecurrenceOccurrenceLookupError {
@@ -583,6 +613,24 @@ pub enum RecurrenceStoreError {
     OccurrenceAlreadyPersisted {
         recurrence_id: RecurrenceId,
         offset: u64,
+    },
+    OccurrenceNotFound {
+        recurrence_id: RecurrenceId,
+        offset: u64,
+    },
+    OccurrenceConcurrentModification {
+        recurrence_id: RecurrenceId,
+        offset: u64,
+        expected_revision: u64,
+        current_revision: u64,
+    },
+    OccurrenceAlreadyMaterialized {
+        recurrence_id: RecurrenceId,
+        offset: u64,
+        task_id: TaskId,
+    },
+    TaskAlreadyExists {
+        task_id: TaskId,
     },
     OccurrenceOverflow {
         recurrence_id: RecurrenceId,
@@ -651,6 +699,33 @@ impl fmt::Display for RecurrenceStoreError {
                 formatter,
                 "recurrence {recurrence_id} occurrence {offset} is already persisted"
             ),
+            Self::OccurrenceNotFound {
+                recurrence_id,
+                offset,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} occurrence {offset} was not found"
+            ),
+            Self::OccurrenceConcurrentModification {
+                recurrence_id,
+                offset,
+                expected_revision,
+                current_revision,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} occurrence {offset} expected revision {expected_revision}, but current revision is {current_revision}"
+            ),
+            Self::OccurrenceAlreadyMaterialized {
+                recurrence_id,
+                offset,
+                task_id,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} occurrence {offset} is already materialized as task {task_id}"
+            ),
+            Self::TaskAlreadyExists { task_id } => {
+                write!(formatter, "task {task_id} already exists")
+            }
             Self::OccurrenceOverflow {
                 recurrence_id,
                 source,
@@ -688,6 +763,10 @@ impl Error for RecurrenceStoreError {
             | Self::ConcurrentModification { .. }
             | Self::OccurrenceOutOfRange { .. }
             | Self::OccurrenceAlreadyPersisted { .. }
+            | Self::OccurrenceNotFound { .. }
+            | Self::OccurrenceConcurrentModification { .. }
+            | Self::OccurrenceAlreadyMaterialized { .. }
+            | Self::TaskAlreadyExists { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. }
             | Self::InvalidOccurrenceHistory { .. } => None,
@@ -814,17 +893,105 @@ impl RecurrenceStore {
         id: &RecurrenceId,
         offset: u64,
     ) -> Result<Option<RecurrenceOccurrence>, RecurrenceStoreError> {
-        let Some(event) = self.replay_occurrence(id, offset)? else {
-            return Ok(None);
-        };
-        let Some(recurrence) = self.load(id)? else {
-            return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+        Ok(self
+            .load_occurrence_state(id, offset)?
+            .map(|state| state.occurrence))
+    }
+
+    /// Loads one exact materialized occurrence binding without scanning unrelated state.
+    pub fn load_materialized_occurrence(
+        &self,
+        id: &RecurrenceId,
+        offset: u64,
+    ) -> Result<Option<MaterializedRecurrenceOccurrence>, RecurrenceStoreError> {
+        Ok(self.load_occurrence_state(id, offset)?.and_then(|state| {
+            state
+                .task_id
+                .map(|task_id| MaterializedRecurrenceOccurrence {
+                    occurrence: state.occurrence,
+                    revision: state.revision,
+                    task_id,
+                })
+        }))
+    }
+
+    /// Atomically binds one exact persisted occurrence revision to a caller-owned task.
+    pub fn materialize_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        task_id: TaskId,
+    ) -> Result<MaterializedRecurrenceOccurrence, RecurrenceStoreError> {
+        let Some(state) = self.load_occurrence_state(id, offset)? else {
+            return Err(RecurrenceStoreError::OccurrenceNotFound {
                 recurrence_id: id.clone(),
                 offset,
-                event_count: 1,
             });
         };
-        Self::validate_occurrence(&recurrence, offset, event).map(Some)
+        if let Some(bound_task_id) = state.task_id {
+            return Err(RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+                recurrence_id: id.clone(),
+                offset,
+                task_id: bound_task_id,
+            });
+        }
+        if state.revision != expected_occurrence_revision {
+            return Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                recurrence_id: id.clone(),
+                offset,
+                expected_revision: expected_occurrence_revision,
+                current_revision: state.revision,
+            });
+        }
+
+        let materialized_event = RecurrenceOccurrenceEvent::Materialized {
+            task_id: task_id.clone(),
+        };
+        let task_event = TaskEvent::Started {
+            goal: state.occurrence.goal().clone(),
+        };
+        match self.event_log.append_pair(
+            &recurrence_occurrence_stream(id, offset),
+            ExpectedVersion::Exact(expected_occurrence_revision),
+            &materialized_event,
+            &task_stream(&task_id),
+            ExpectedVersion::NoStream,
+            &task_event,
+        ) {
+            Ok(_) => Ok(MaterializedRecurrenceOccurrence {
+                occurrence: state.occurrence,
+                revision: expected_occurrence_revision + 1,
+                task_id,
+            }),
+            Err(EventLogError::WrongExpectedVersion {
+                expected: ExpectedVersion::NoStream,
+                ..
+            }) => Err(RecurrenceStoreError::TaskAlreadyExists { task_id }),
+            Err(EventLogError::WrongExpectedVersion { .. }) => {
+                match self.load_occurrence_state(id, offset)? {
+                    Some(RecurrenceOccurrenceState {
+                        task_id: Some(bound_task_id),
+                        ..
+                    }) => Err(RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+                        recurrence_id: id.clone(),
+                        offset,
+                        task_id: bound_task_id,
+                    }),
+                    Some(current) => Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                        recurrence_id: id.clone(),
+                        offset,
+                        expected_revision: expected_occurrence_revision,
+                        current_revision: current.revision,
+                    }),
+                    None => Err(RecurrenceStoreError::OccurrenceNotFound {
+                        recurrence_id: id.clone(),
+                        offset,
+                    }),
+                }
+            }
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
     }
 
     /// Inspects one bounded authored offset window and returns its durable provenance.
@@ -842,12 +1009,10 @@ impl RecurrenceStore {
         let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
         let mut occurrences = Vec::with_capacity(authored_page.occurrences().len());
         for authored in authored_page.occurrences() {
-            if let Some(event) = self.replay_occurrence(id, authored.offset())? {
-                occurrences.push(Self::validate_occurrence(
-                    &recurrence,
-                    authored.offset(),
-                    event,
-                )?);
+            if let Some(state) =
+                self.load_occurrence_state_with_recurrence(&recurrence, authored.offset())?
+            {
+                occurrences.push(state.occurrence);
             }
         }
         Ok(RecurrenceOccurrencePage {
@@ -856,32 +1021,71 @@ impl RecurrenceStore {
         })
     }
 
+    fn load_occurrence_state(
+        &self,
+        id: &RecurrenceId,
+        offset: u64,
+    ) -> Result<Option<RecurrenceOccurrenceState>, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            let events = self.replay_occurrence(id, offset)?;
+            return if events.is_empty() {
+                Ok(None)
+            } else {
+                Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                    recurrence_id: id.clone(),
+                    offset,
+                    event_count: events.len(),
+                })
+            };
+        };
+        self.load_occurrence_state_with_recurrence(&recurrence, offset)
+    }
+
+    fn load_occurrence_state_with_recurrence(
+        &self,
+        recurrence: &FixedIntervalRecurrence,
+        offset: u64,
+    ) -> Result<Option<RecurrenceOccurrenceState>, RecurrenceStoreError> {
+        let events = self.replay_occurrence(recurrence.id(), offset)?;
+        let event_count = events.len();
+        let (persisted, task_id, revision) = match events.as_slice() {
+            [] => return Ok(None),
+            [persisted @ RecurrenceOccurrenceEvent::Persisted { .. }] => (persisted, None, 1),
+            [
+                persisted @ RecurrenceOccurrenceEvent::Persisted { .. },
+                RecurrenceOccurrenceEvent::Materialized { task_id },
+            ] => (persisted, Some(task_id.clone()), 2),
+            _ => {
+                return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                    recurrence_id: recurrence.id().clone(),
+                    offset,
+                    event_count,
+                });
+            }
+        };
+        let occurrence = Self::validate_occurrence(recurrence, offset, event_count, persisted)?;
+        Ok(Some(RecurrenceOccurrenceState {
+            occurrence,
+            revision,
+            task_id,
+        }))
+    }
+
     fn replay_occurrence(
         &self,
         id: &RecurrenceId,
         offset: u64,
-    ) -> Result<Option<RecurrenceOccurrenceEvent>, RecurrenceStoreError> {
-        let events = self
-            .event_log
+    ) -> Result<Vec<RecurrenceOccurrenceEvent>, RecurrenceStoreError> {
+        self.event_log
             .replay::<RecurrenceOccurrenceEvent>(&recurrence_occurrence_stream(id, offset))
-            .map_err(RecurrenceStoreError::Replay)?;
-        let event_count = events.len();
-        let event: Result<[RecurrenceOccurrenceEvent; 1], _> = events.try_into();
-        match event {
-            Ok([event]) => Ok(Some(event)),
-            Err(_) if event_count == 0 => Ok(None),
-            Err(_) => Err(RecurrenceStoreError::InvalidOccurrenceHistory {
-                recurrence_id: id.clone(),
-                offset,
-                event_count,
-            }),
-        }
+            .map_err(RecurrenceStoreError::Replay)
     }
 
     fn validate_occurrence(
         recurrence: &FixedIntervalRecurrence,
         offset: u64,
-        event: RecurrenceOccurrenceEvent,
+        event_count: usize,
+        event: &RecurrenceOccurrenceEvent,
     ) -> Result<RecurrenceOccurrence, RecurrenceStoreError> {
         let id = recurrence.id();
         let RecurrenceOccurrenceEvent::Persisted {
@@ -890,24 +1094,31 @@ impl RecurrenceStore {
             offset: persisted_offset,
             goal,
             unix_millis,
-        } = event;
+        } = event
+        else {
+            return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                recurrence_id: id.clone(),
+                offset,
+                event_count,
+            });
+        };
         let projected = recurrence.occurrence_at(offset).map_err(|_| {
             RecurrenceStoreError::InvalidOccurrenceHistory {
                 recurrence_id: id.clone(),
                 offset,
-                event_count: 1,
+                event_count,
             }
         })?;
-        if recurrence_id != *id
-            || persisted_offset != offset
-            || recurrence_revision != projected.recurrence_revision()
-            || goal != *projected.goal()
-            || unix_millis != projected.instant().unix_millis()
+        if recurrence_id != id
+            || *persisted_offset != offset
+            || *recurrence_revision != projected.recurrence_revision()
+            || goal != projected.goal()
+            || *unix_millis != projected.instant().unix_millis()
         {
             return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
                 recurrence_id: id.clone(),
                 offset,
-                event_count: 1,
+                event_count,
             });
         }
         Ok(projected)
@@ -1810,11 +2021,17 @@ enum RecurrenceOccurrenceEvent {
         goal: TaskGoal,
         unix_millis: u64,
     },
+    Materialized {
+        task_id: TaskId,
+    },
 }
 
 impl Event for RecurrenceOccurrenceEvent {
     fn event_type(&self) -> &'static str {
-        RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE
+        match self {
+            Self::Persisted { .. } => RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE,
+            Self::Materialized { .. } => RECURRENCE_OCCURRENCE_MATERIALIZED_EVENT_TYPE,
+        }
     }
 
     fn payload_version(&self) -> u32 {
@@ -1822,43 +2039,69 @@ impl Event for RecurrenceOccurrenceEvent {
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
-        if event_type != RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE
-            || payload_version != RECURRENCE_OCCURRENCE_EVENT_PAYLOAD_VERSION
-        {
+        if payload_version != RECURRENCE_OCCURRENCE_EVENT_PAYLOAD_VERSION {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
                 payload_version,
             });
         }
 
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Payload {
-            recurrence_id: String,
-            recurrence_revision: u64,
-            offset: u64,
-            goal: String,
-            unix_millis: u64,
-        }
-        let payload: Payload =
-            serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
-                message: error.to_string(),
-            })?;
-        let recurrence_id = RecurrenceId::new(payload.recurrence_id).map_err(|error| {
-            DecodeError::MalformedPayload {
-                message: error.to_string(),
+        match event_type {
+            RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    recurrence_id: String,
+                    recurrence_revision: u64,
+                    offset: u64,
+                    goal: String,
+                    unix_millis: u64,
+                }
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let recurrence_id = RecurrenceId::new(payload.recurrence_id).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let goal =
+                    TaskGoal::new(payload.goal).map_err(|error| DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    })?;
+                Ok(Self::Persisted {
+                    recurrence_id,
+                    recurrence_revision: payload.recurrence_revision,
+                    offset: payload.offset,
+                    goal,
+                    unix_millis: payload.unix_millis,
+                })
             }
-        })?;
-        let goal = TaskGoal::new(payload.goal).map_err(|error| DecodeError::MalformedPayload {
-            message: error.to_string(),
-        })?;
-        Ok(Self::Persisted {
-            recurrence_id,
-            recurrence_revision: payload.recurrence_revision,
-            offset: payload.offset,
-            goal,
-            unix_millis: payload.unix_millis,
-        })
+            RECURRENCE_OCCURRENCE_MATERIALIZED_EVENT_TYPE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    task_id: String,
+                }
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let task_id = TaskId::new(payload.task_id).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(Self::Materialized { task_id })
+            }
+            _ => Err(DecodeError::UnsupportedEvent {
+                event_type: event_type.to_owned(),
+                payload_version,
+            }),
+        }
     }
 }
 

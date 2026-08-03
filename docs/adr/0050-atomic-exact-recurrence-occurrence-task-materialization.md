@@ -1,0 +1,55 @@
+# ADR-0050: Atomic exact recurrence occurrence task materialization
+
+- **Status:** accepted
+- **Date:** 2026-08-03
+- **Decision and execution issue:** [#889](https://github.com/Knosence9/project-vela/issues/889)
+- **Related:** ADR-0045, ADR-0047, ADR-0048
+
+## Context
+
+ADR-0045 gives every persisted finite recurrence occurrence one canonical `(recurrence ID, offset)` stream and strict provenance replay. Those coordinates remain inert: callers can prove persistence but cannot bind one exact occurrence to durable task state without an ad hoc schema or a non-atomic pair of writes.
+
+Catch-up selection, due policy, generated identities, dispatch, and execution remain separate authorities. The smallest responsible next boundary therefore accepts one exact already-persisted coordinate, its observed occurrence revision, and one caller-owned task identity, then records only the atomic provenance binding.
+
+## Decision
+
+`RecurrenceStore::materialize_occurrence(id, offset, expected_occurrence_revision, task_id)` strictly loads and validates the selected recurrence definition and occurrence lifecycle. Absence returns typed `OccurrenceNotFound` evidence. Persisted-only occurrence state is revision 1. The caller must supply that exact observed revision.
+
+On success the store atomically appends a version-1 `recurrence.occurrence_materialized` event to the canonical occurrence stream with `ExpectedVersion::Exact(1)` and the existing version-1 `task.started` event to the caller-owned task stream with `ExpectedVersion::NoStream`. The task receives the occurrence's authoritative exact goal. The returned `MaterializedRecurrenceOccurrence` preserves the validated occurrence, resulting occurrence revision 2, and exact task ID.
+
+Occurrence replay accepts only `persisted` or `persisted -> materialized`. `load_occurrence` and persisted-occurrence paging remain provenance views and return the same occurrence shape for either valid lifecycle state. `load_materialized_occurrence` exposes the optional exact binding. Unsupported events, malformed payloads, invalid order, divergent provenance, or any other history shape fail closed.
+
+A stale occurrence revision, an existing task stream, or a competing materialization leaves both streams unchanged. A materialized occurrence cannot be rebound or replaced. The boundary reads no clock, generates no identity, scans no unrelated coordinates, and grants no catch-up, selection, claim, permission, dispatch, retry, provider/tool, workflow, or execution authority.
+
+## Alternatives considered
+
+### Create a task without binding evidence
+
+Rejected because a process failure between independent writes could leave an orphan task or an occurrence that appears unmaterialized.
+
+### Materialize projected but unpersisted occurrences
+
+Rejected because projection alone is not durable scheduler provenance. Requiring revision-1 occurrence evidence makes the lifecycle transition explicit and concurrency-safe.
+
+### Generate task identities in the kernel
+
+Rejected because identity ownership is caller policy and would add randomness, collision, retry, and ambient-authority decisions.
+
+### Materialize a one-shot schedule first
+
+Rejected because the exact occurrence is already caller-selected and durable. Creating another schedule identity would duplicate intent and add an unnecessary lifecycle before inert task creation.
+
+## Consequences
+
+- One exact persisted recurrence occurrence can be bound to one inert active task without partial writes.
+- Existing occurrence lookup and sparse paging remain behavior-compatible provenance views.
+- Exact task provenance is durably inspectable without global occurrence discovery.
+- Catch-up policy, global selection, CLI exposure, generated identities, claims, workers, dispatch, retries, and execution remain deferred.
+
+## Verification
+
+Strict RED→GREEN tests prove successful atomic binding and reopen, exact task-goal provenance, missing and stale occurrence failures, task-ID collision atomicity, and duplicate/replacement rejection. Existing strict replay, sparse paging, and complete repository quality gates must remain green.
+
+## Revisit when
+
+Reconsider before adding CLI exposure, global materialized-occurrence discovery, catch-up or missed-run selection, generated task identities, recurrence cancellation, claims or leases, workers, clocks, dispatch, retries, or execution.
