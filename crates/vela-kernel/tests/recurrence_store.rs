@@ -596,3 +596,323 @@ fn page_sizes_are_positive_and_bounded_before_allocation() {
     );
     assert_eq!(OccurrencePageSize::new(1024).unwrap().get(), 1024);
 }
+
+#[test]
+fn persists_and_reopens_exact_recurrence_occurrence_provenance() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new(" interval:東京 ").unwrap();
+    let goal = TaskGoal::new("Preserve exact durable provenance").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(u64::MAX - 2),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(store.load_occurrence(&id, 0).unwrap(), None);
+    assert_eq!(store.load_occurrence(&id, 2).unwrap(), None);
+    let first = store
+        .persist_occurrence(&id, recurrence.revision(), 0)
+        .unwrap();
+    let persisted = store
+        .persist_occurrence(&id, recurrence.revision(), 2)
+        .unwrap();
+    assert_eq!(first.offset(), 0);
+    assert_eq!(first.instant(), instant(u64::MAX - 2));
+    assert_eq!(persisted.recurrence_id(), &id);
+    assert_eq!(persisted.goal(), &goal);
+    assert_eq!(persisted.offset(), 2);
+    assert_eq!(persisted.instant(), instant(u64::MAX));
+    assert_eq!(persisted.recurrence_revision(), recurrence.revision());
+    drop(store);
+
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    assert_eq!(reopened.load_occurrence(&id, 0).unwrap(), Some(first));
+    assert_eq!(reopened.load_occurrence(&id, 2).unwrap(), Some(persisted));
+}
+
+#[test]
+fn occurrence_coordinates_are_collision_free_and_duplicates_are_preserved() {
+    let directory = tempdir().unwrap();
+    let mut store = RecurrenceStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let first_id = RecurrenceId::new("a:1").unwrap();
+    let second_id = RecurrenceId::new("a").unwrap();
+    for id in [&first_id, &second_id] {
+        store
+            .create(
+                id.clone(),
+                TaskGoal::new(format!("goal {id}")).unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(2).unwrap(),
+            )
+            .unwrap();
+    }
+
+    let first = store.persist_occurrence(&first_id, 1, 0).unwrap();
+    let second = store.persist_occurrence(&second_id, 1, 1).unwrap();
+    assert_ne!(first, second);
+    assert!(matches!(
+        store.persist_occurrence(&first_id, 1, 0).unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyPersisted { recurrence_id, offset: 0 }
+            if recurrence_id == first_id
+    ));
+    assert_eq!(store.load_occurrence(&first_id, 0).unwrap(), Some(first));
+    assert_eq!(store.load_occurrence(&second_id, 1).unwrap(), Some(second));
+}
+
+#[test]
+fn racing_occurrence_persistence_records_one_exact_coordinate() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-occurrence").unwrap();
+    RecurrenceStore::open(&path)
+        .unwrap()
+        .create(
+            id.clone(),
+            TaskGoal::new("Persist once").unwrap(),
+            instant(4),
+            ScheduleInterval::from_millis(3).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            let id = id.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut store = RecurrenceStore::open(path).unwrap();
+                barrier.wait();
+                store.persist_occurrence(&id, 1, 1)
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                    recurrence_id,
+                    offset: 1,
+                }) if recurrence_id == &id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_occurrence(&id, 1)
+            .unwrap()
+            .unwrap()
+            .instant(),
+        instant(7)
+    );
+}
+
+#[test]
+fn rejects_missing_stale_and_out_of_range_occurrences_before_persistence() {
+    let directory = tempdir().unwrap();
+    let mut store = RecurrenceStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let id = RecurrenceId::new("bounded-persistence").unwrap();
+
+    assert!(matches!(
+        store.persist_occurrence(&id, 1, 0).unwrap_err(),
+        RecurrenceStoreError::NotFound { recurrence_id } if recurrence_id == id
+    ));
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Persist only authored coordinates").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.persist_occurrence(&id, 0, 0).unwrap_err(),
+        RecurrenceStoreError::ConcurrentModification {
+            recurrence_id, expected_revision: 0, current_revision: 1,
+        } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store.persist_occurrence(&id, 1, 2).unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            recurrence_id, requested_offset: 2, ..
+        } if recurrence_id == id
+    ));
+    assert_eq!(store.load_occurrence(&id, 0).unwrap(), None);
+    assert_eq!(store.load_occurrence(&id, 2).unwrap(), None);
+}
+
+#[test]
+fn read_only_recurrence_store_cannot_persist_occurrences() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("read-only-occurrence").unwrap();
+    RecurrenceStore::open(&path)
+        .unwrap()
+        .create(
+            id.clone(),
+            TaskGoal::new("Retain read-only authority").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+
+    let mut read_only = RecurrenceStore::open_read_only(&path).unwrap();
+    assert!(matches!(
+        read_only.persist_occurrence(&id, 1, 0).unwrap_err(),
+        RecurrenceStoreError::EventLog(_)
+    ));
+    assert_eq!(read_only.load_occurrence(&id, 0).unwrap(), None);
+}
+
+#[test]
+fn exact_occurrence_replay_rejects_multiple_event_histories() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("corrupt-occurrence").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Strict replay").unwrap(),
+            instant(3),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let stream_id: String = connection
+        .query_row(
+            "SELECT stream_id FROM events WHERE event_type = 'recurrence.occurrence_persisted'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection.execute(
+        "INSERT INTO events (stream_id, stream_version, event_type, payload_version, payload)
+         VALUES (?1, 2, 'recurrence.occurrence_persisted', 1, ?2)",
+        rusqlite::params![
+            stream_id,
+            br#"{"recurrence_id":"corrupt-occurrence","recurrence_revision":1,"offset":1,"goal":"Strict replay","unix_millis":5}"#.as_slice()
+        ],
+    ).unwrap();
+
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_occurrence(&id, 1)
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidOccurrenceHistory {
+            recurrence_id,
+            offset: 1,
+            event_count: 2,
+        } if recurrence_id == id
+    ));
+}
+
+#[test]
+fn exact_occurrence_replay_rejects_event_and_payload_corruption() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("strict-occurrences").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Validate every field").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    for offset in 0..4 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let mut streams = connection
+        .prepare(
+            "SELECT stream_id FROM events WHERE event_type = 'recurrence.occurrence_persisted'
+             ORDER BY json_extract(payload, '$.offset')",
+        )
+        .unwrap();
+    let stream_ids = streams
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(streams);
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'recurrence.unknown' WHERE stream_id = ?1",
+            [&stream_ids[0]],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload_version = 2 WHERE stream_id = ?1",
+            [&stream_ids[1]],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE stream_id = ?2",
+            rusqlite::params![
+                br#"{"recurrence_id":"strict-occurrences","recurrence_revision":1,"offset":2,"goal":"Validate every field","unix_millis":14,"unexpected":true}"#.as_slice(),
+                &stream_ids[2],
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE stream_id = ?2",
+            rusqlite::params![
+                br#"{"recurrence_id":"strict-occurrences","recurrence_revision":1,"offset":99,"goal":"Validate every field","unix_millis":16}"#.as_slice(),
+                &stream_ids[3],
+            ],
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    for offset in [0, 1] {
+        assert!(matches!(
+            store.load_occurrence(&id, offset).unwrap_err(),
+            RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+        ));
+    }
+    assert!(matches!(
+        store.load_occurrence(&id, 2).unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+    assert!(matches!(
+        store.load_occurrence(&id, 3).unwrap_err(),
+        RecurrenceStoreError::InvalidOccurrenceHistory {
+            recurrence_id,
+            offset: 3,
+            event_count: 1,
+        } if recurrence_id == id
+    ));
+}

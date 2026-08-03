@@ -17,8 +17,10 @@ const SCHEDULE_MATERIALIZED_EVENT_TYPE: &str = "schedule.materialized";
 const SCHEDULE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
 const RECURRENCE_CREATED_EVENT_TYPE: &str = "recurrence.fixed_interval_created";
+const RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE: &str = "recurrence.occurrence_persisted";
 const RECURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const RECURRENCE_STREAM_PREFIX: &str = "recurrence:";
+const RECURRENCE_OCCURRENCE_STREAM_PREFIX: &str = "recurrence-occurrence:";
 
 /// An opaque, non-blank identity for one durable schedule intent.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -259,7 +261,8 @@ impl fmt::Display for ScheduleAdvanceError {
 impl Error for ScheduleAdvanceError {}
 
 /// An opaque, non-blank identity for one durable recurrence definition.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct RecurrenceId(String);
 
 impl RecurrenceId {
@@ -563,6 +566,23 @@ pub enum RecurrenceStoreError {
     AlreadyExists {
         recurrence_id: RecurrenceId,
     },
+    NotFound {
+        recurrence_id: RecurrenceId,
+    },
+    ConcurrentModification {
+        recurrence_id: RecurrenceId,
+        expected_revision: u64,
+        current_revision: u64,
+    },
+    OccurrenceOutOfRange {
+        recurrence_id: RecurrenceId,
+        requested_offset: u64,
+        occurrence_count: OccurrenceCount,
+    },
+    OccurrenceAlreadyPersisted {
+        recurrence_id: RecurrenceId,
+        offset: u64,
+    },
     OccurrenceOverflow {
         recurrence_id: RecurrenceId,
         source: ScheduleOccurrenceError,
@@ -571,6 +591,11 @@ pub enum RecurrenceStoreError {
         stream_id: String,
     },
     InvalidHistory {
+        event_count: usize,
+    },
+    InvalidOccurrenceHistory {
+        recurrence_id: RecurrenceId,
+        offset: u64,
         event_count: usize,
     },
 }
@@ -583,6 +608,33 @@ impl fmt::Display for RecurrenceStoreError {
             Self::AlreadyExists { recurrence_id } => {
                 write!(formatter, "recurrence {recurrence_id} already exists")
             }
+            Self::NotFound { recurrence_id } => {
+                write!(formatter, "recurrence {recurrence_id} was not found")
+            }
+            Self::ConcurrentModification {
+                recurrence_id,
+                expected_revision,
+                current_revision,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} expected revision {expected_revision}, but current revision is {current_revision}"
+            ),
+            Self::OccurrenceOutOfRange {
+                recurrence_id,
+                requested_offset,
+                occurrence_count,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} offset {requested_offset} is outside occurrence count {}",
+                occurrence_count.get()
+            ),
+            Self::OccurrenceAlreadyPersisted {
+                recurrence_id,
+                offset,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} occurrence {offset} is already persisted"
+            ),
             Self::OccurrenceOverflow {
                 recurrence_id,
                 source,
@@ -593,12 +645,18 @@ impl fmt::Display for RecurrenceStoreError {
             Self::InvalidStreamId { stream_id } => {
                 write!(formatter, "invalid recurrence stream id {stream_id:?}")
             }
-            Self::InvalidHistory { event_count } => {
-                write!(
-                    formatter,
-                    "invalid recurrence history with {event_count} events"
-                )
-            }
+            Self::InvalidHistory { event_count } => write!(
+                formatter,
+                "invalid recurrence history with {event_count} events"
+            ),
+            Self::InvalidOccurrenceHistory {
+                recurrence_id,
+                offset,
+                event_count,
+            } => write!(
+                formatter,
+                "invalid recurrence {recurrence_id} occurrence {offset} history with {event_count} events"
+            ),
         }
     }
 }
@@ -610,8 +668,13 @@ impl Error for RecurrenceStoreError {
             Self::Replay(error) => Some(error),
             Self::OccurrenceOverflow { source, .. } => Some(source),
             Self::AlreadyExists { .. }
+            | Self::NotFound { .. }
+            | Self::ConcurrentModification { .. }
+            | Self::OccurrenceOutOfRange { .. }
+            | Self::OccurrenceAlreadyPersisted { .. }
             | Self::InvalidStreamId { .. }
-            | Self::InvalidHistory { .. } => None,
+            | Self::InvalidHistory { .. }
+            | Self::InvalidOccurrenceHistory { .. } => None,
         }
     }
 }
@@ -684,6 +747,121 @@ impl RecurrenceStore {
             .replay::<RecurrenceEvent>(&recurrence_stream(id))
             .map_err(RecurrenceStoreError::Replay)?;
         Self::project(id.clone(), events)
+    }
+
+    /// Persists one exact authored occurrence without selecting or executing work.
+    pub fn persist_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        expected_revision: u64,
+        offset: u64,
+    ) -> Result<RecurrenceOccurrence, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        if recurrence.revision() != expected_revision {
+            return Err(RecurrenceStoreError::ConcurrentModification {
+                recurrence_id: id.clone(),
+                expected_revision,
+                current_revision: recurrence.revision(),
+            });
+        }
+        let occurrence = recurrence
+            .occurrence_at(offset)
+            .map_err(|error| match error {
+                RecurrenceOccurrenceLookupError::OutOfRange {
+                    recurrence_id,
+                    requested_offset,
+                    occurrence_count,
+                } => RecurrenceStoreError::OccurrenceOutOfRange {
+                    recurrence_id,
+                    requested_offset,
+                    occurrence_count,
+                },
+            })?;
+        let event = RecurrenceOccurrenceEvent::Persisted {
+            recurrence_id: id.clone(),
+            recurrence_revision: occurrence.recurrence_revision(),
+            offset,
+            goal: occurrence.goal().clone(),
+            unix_millis: occurrence.instant().unix_millis(),
+        };
+        match self.event_log.append(
+            &recurrence_occurrence_stream(id, offset),
+            ExpectedVersion::NoStream,
+            &event,
+        ) {
+            Ok(_) => Ok(occurrence),
+            Err(EventLogError::WrongExpectedVersion { .. }) => {
+                Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                    recurrence_id: id.clone(),
+                    offset,
+                })
+            }
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
+    }
+
+    /// Loads one exact persisted occurrence coordinate without scanning recurrence state.
+    pub fn load_occurrence(
+        &self,
+        id: &RecurrenceId,
+        offset: u64,
+    ) -> Result<Option<RecurrenceOccurrence>, RecurrenceStoreError> {
+        let events = self
+            .event_log
+            .replay::<RecurrenceOccurrenceEvent>(&recurrence_occurrence_stream(id, offset))
+            .map_err(RecurrenceStoreError::Replay)?;
+        let event_count = events.len();
+        let [
+            RecurrenceOccurrenceEvent::Persisted {
+                recurrence_id,
+                recurrence_revision,
+                offset: persisted_offset,
+                goal,
+                unix_millis,
+            },
+        ] = events.as_slice()
+        else {
+            return if event_count == 0 {
+                Ok(None)
+            } else {
+                Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                    recurrence_id: id.clone(),
+                    offset,
+                    event_count,
+                })
+            };
+        };
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                recurrence_id: id.clone(),
+                offset,
+                event_count,
+            });
+        };
+        let projected = recurrence.occurrence_at(offset).map_err(|_| {
+            RecurrenceStoreError::InvalidOccurrenceHistory {
+                recurrence_id: id.clone(),
+                offset,
+                event_count,
+            }
+        })?;
+        if recurrence_id != id
+            || *persisted_offset != offset
+            || *recurrence_revision != projected.recurrence_revision()
+            || goal != projected.goal()
+            || *unix_millis != projected.instant().unix_millis()
+        {
+            return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                recurrence_id: id.clone(),
+                offset,
+                event_count,
+            });
+        }
+        Ok(Some(projected))
     }
 
     /// Returns every durable recurrence definition ordered by exact recurrence ID.
@@ -1562,6 +1740,76 @@ fn schedule_stream(id: &ScheduleId) -> StreamId {
 fn recurrence_stream(id: &RecurrenceId) -> StreamId {
     StreamId::new(format!("{RECURRENCE_STREAM_PREFIX}{id}"))
         .expect("a prefixed recurrence stream is never empty")
+}
+
+fn recurrence_occurrence_stream(id: &RecurrenceId, offset: u64) -> StreamId {
+    StreamId::new(format!(
+        "{RECURRENCE_OCCURRENCE_STREAM_PREFIX}{}:{id}:{offset}",
+        id.as_str().len()
+    ))
+    .expect("a prefixed recurrence occurrence stream is never empty")
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+enum RecurrenceOccurrenceEvent {
+    Persisted {
+        recurrence_id: RecurrenceId,
+        recurrence_revision: u64,
+        offset: u64,
+        goal: TaskGoal,
+        unix_millis: u64,
+    },
+}
+
+impl Event for RecurrenceOccurrenceEvent {
+    fn event_type(&self) -> &'static str {
+        RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE
+    }
+
+    fn payload_version(&self) -> u32 {
+        RECURRENCE_EVENT_PAYLOAD_VERSION
+    }
+
+    fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
+        if event_type != RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE
+            || payload_version != RECURRENCE_EVENT_PAYLOAD_VERSION
+        {
+            return Err(DecodeError::UnsupportedEvent {
+                event_type: event_type.to_owned(),
+                payload_version,
+            });
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Payload {
+            recurrence_id: String,
+            recurrence_revision: u64,
+            offset: u64,
+            goal: String,
+            unix_millis: u64,
+        }
+        let payload: Payload =
+            serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
+                message: error.to_string(),
+            })?;
+        let recurrence_id = RecurrenceId::new(payload.recurrence_id).map_err(|error| {
+            DecodeError::MalformedPayload {
+                message: error.to_string(),
+            }
+        })?;
+        let goal = TaskGoal::new(payload.goal).map_err(|error| DecodeError::MalformedPayload {
+            message: error.to_string(),
+        })?;
+        Ok(Self::Persisted {
+            recurrence_id,
+            recurrence_revision: payload.recurrence_revision,
+            offset: payload.offset,
+            goal,
+            unix_millis: payload.unix_millis,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
