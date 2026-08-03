@@ -601,6 +601,21 @@ pub enum RecurrenceStoreError {
     },
 }
 
+impl From<RecurrenceOccurrenceLookupError> for RecurrenceStoreError {
+    fn from(error: RecurrenceOccurrenceLookupError) -> Self {
+        let RecurrenceOccurrenceLookupError::OutOfRange {
+            recurrence_id,
+            requested_offset,
+            occurrence_count,
+        } = error;
+        Self::OccurrenceOutOfRange {
+            recurrence_id,
+            requested_offset,
+            occurrence_count,
+        }
+    }
+}
+
 impl fmt::Display for RecurrenceStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -769,19 +784,7 @@ impl RecurrenceStore {
                 current_revision: recurrence.revision(),
             });
         }
-        let occurrence = recurrence
-            .occurrence_at(offset)
-            .map_err(|error| match error {
-                RecurrenceOccurrenceLookupError::OutOfRange {
-                    recurrence_id,
-                    requested_offset,
-                    occurrence_count,
-                } => RecurrenceStoreError::OccurrenceOutOfRange {
-                    recurrence_id,
-                    requested_offset,
-                    occurrence_count,
-                },
-            })?;
+        let occurrence = recurrence.occurrence_at(offset)?;
         let event = RecurrenceOccurrenceEvent::Persisted {
             recurrence_id: id.clone(),
             recurrence_revision: occurrence.recurrence_revision(),
@@ -836,19 +839,7 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
-        let authored_page = recurrence
-            .occurrences_page(start_offset, page_size)
-            .map_err(|error| match error {
-                RecurrenceOccurrenceLookupError::OutOfRange {
-                    recurrence_id,
-                    requested_offset,
-                    occurrence_count,
-                } => RecurrenceStoreError::OccurrenceOutOfRange {
-                    recurrence_id,
-                    requested_offset,
-                    occurrence_count,
-                },
-            })?;
+        let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
         let mut occurrences = Vec::with_capacity(authored_page.occurrences().len());
         for authored in authored_page.occurrences() {
             if let Some(event) = self.replay_occurrence(id, authored.offset())? {
