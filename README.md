@@ -325,6 +325,22 @@ emits `task_id` plus either the complete deterministic schedule object or
 closed without partial output. Task lookup cannot mutate lifecycle state,
 dispatch, or execute work.
 
+Inspect one exact persisted recurrence occurrence without granting write,
+inventory, catch-up, or execution authority:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence occurrence path/to/events.sqlite3 recurrence-id 0
+```
+
+The command validates the exact recurrence ID before opening the existing
+database read-only, then emits compact JSON preserving the persisted coordinate's
+exact ID, goal, offset, Unix-millisecond instant, and definition revision. A
+valid absent coordinate emits `recurrence_occurrence_not_found`; malformed
+selected provenance fails closed as `recurrence_occurrence_lookup_failed`.
+Missing storage is never created. Exact lookup does not project unpersisted
+coordinates, scan occurrence inventory, read time, choose catch-up policy,
+materialize, dispatch, or execute work.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
@@ -460,6 +476,7 @@ The first milestone is the **evidence loop**:
 126. Page one exact durable recurrence's occurrences through bounded deterministic CLI JSON without granting lifecycle or execution authority. ✅
 127. Persist one exact finite recurrence occurrence as canonical fail-closed durable provenance without selecting, materializing, or executing work. ✅
 128. Persist one exact recurrence occurrence through deterministic writable CLI JSON without granting catch-up, materialization, or execution authority. ✅
+129. Inspect one exact persisted recurrence occurrence through deterministic read-only CLI JSON without scanning unrelated streams or granting lifecycle authority. ✅
 
 ## Project documents
 

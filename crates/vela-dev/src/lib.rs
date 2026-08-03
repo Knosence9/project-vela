@@ -80,6 +80,12 @@ pub enum RecurrenceCommand {
         start_offset: u64,
         page_size: u64,
     },
+    /// Print one exact persisted occurrence through a read-only boundary.
+    Occurrence {
+        database: PathBuf,
+        id: String,
+        offset: u64,
+    },
     /// Persist provenance for one exact authored recurrence occurrence.
     Persist {
         database: PathBuf,
@@ -317,6 +323,14 @@ impl Cli {
                         page_size,
                     }),
             }) => page_recurrence_occurrences(&database, &id, start_offset, page_size),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::Occurrence {
+                        database,
+                        id,
+                        offset,
+                    }),
+            }) => get_recurrence_occurrence(&database, &id, offset),
             Some(Command::Recurrence {
                 command:
                     Some(RecurrenceCommand::Persist {
@@ -829,6 +843,36 @@ fn page_recurrence_occurrences(
         next_offset: page.next_offset(),
     };
     let output = match serde_json::to_string(&inspection) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn get_recurrence_occurrence(database: &Path, raw_id: &str, offset: u64) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    };
+    let occurrence = match store.load_occurrence(&id, offset) {
+        Ok(Some(occurrence)) => occurrence,
+        Ok(None) => {
+            return extension_error(
+                "recurrence_occurrence_not_found",
+                format!(
+                    "recurrence occurrence ({:?}, {offset}) does not exist",
+                    id.as_str()
+                ),
+            );
+        }
+        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    };
+    let output = match serde_json::to_string(&recurrence_occurrence_inspection(&occurrence)) {
         Ok(output) => output,
         Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
     };

@@ -267,6 +267,29 @@ no identity, and cannot create schedules or tasks, claim, cancel, dispatch,
 retry, grant permission, or execute work. See
 [ADR-0046](adr/0046-writable-exact-recurrence-occurrence-provenance-cli.md).
 
+## Read-only exact persisted recurrence occurrence CLI lookup
+
+`vela-dev recurrence occurrence DATABASE RECURRENCE_ID OFFSET` validates the
+exact recurrence ID before storage access; clap parses the zero-based offset as
+a non-negative `u64` before command execution. It opens only the caller-selected
+existing database through `RecurrenceStore::open_read_only` and delegates
+canonical coordinate lookup and complete definition/provenance validation to
+`RecurrenceStore::load_occurrence`.
+
+Success emits one compact occurrence object preserving exact `recurrence_id`,
+`goal`, `offset`, `unix_millis`, and `definition_revision`. Invalid IDs emit
+`invalid_recurrence_id`; valid absent coordinates emit
+`recurrence_occurrence_not_found`; storage, strict selected-stream replay,
+provenance validation, and serialization failures emit
+`recurrence_occurrence_lookup_failed`. All failures are non-zero with empty
+stdout. Missing storage is not created, and unrelated corruption cannot block
+exact lookup.
+
+The command reads no ambient time, persists nothing, enumerates no occurrence
+inventory, and cannot choose due or catch-up policy, generate identity,
+materialize, claim, cancel, dispatch, retry, grant permission, or execute work.
+See [ADR-0047](adr/0047-read-only-exact-persisted-recurrence-occurrence-cli.md).
+
 ## Read-only recurrence CLI inventory
 
 `vela-dev recurrence inspect DATABASE` opens the exact caller-selected database
