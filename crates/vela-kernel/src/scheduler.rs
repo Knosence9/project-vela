@@ -554,6 +554,25 @@ impl MaterializedRecurrenceOccurrence {
     }
 }
 
+/// One bounded, inert page of exact materialized recurrence occurrences.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterializedRecurrenceOccurrencePage {
+    occurrences: Vec<MaterializedRecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl MaterializedRecurrenceOccurrencePage {
+    /// Returns the materialized bindings in increasing authored offset order.
+    pub fn occurrences(&self) -> &[MaterializedRecurrenceOccurrence] {
+        &self.occurrences
+    }
+
+    /// Returns the first authored offset not inspected, if one remains.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RecurrenceOccurrenceState {
     occurrence: RecurrenceOccurrence,
@@ -1082,6 +1101,40 @@ impl RecurrenceStore {
             }
         }
         Ok(RecurrenceOccurrencePage {
+            occurrences,
+            next_offset: authored_page.next_offset(),
+        })
+    }
+
+    /// Inspects one bounded authored offset window and returns its materialized bindings.
+    pub fn materialized_occurrences_page(
+        &self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+    ) -> Result<MaterializedRecurrenceOccurrencePage, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
+        let mut occurrences = Vec::with_capacity(authored_page.occurrences().len());
+        for authored in authored_page.occurrences() {
+            let Some(state) =
+                self.load_occurrence_state_with_recurrence(&recurrence, authored.offset())?
+            else {
+                continue;
+            };
+            if let Some(task_id) = state.task_id {
+                occurrences.push(MaterializedRecurrenceOccurrence {
+                    occurrence: state.occurrence,
+                    revision: state.revision,
+                    task_id,
+                });
+            }
+        }
+        Ok(MaterializedRecurrenceOccurrencePage {
             occurrences,
             next_offset: authored_page.next_offset(),
         })
