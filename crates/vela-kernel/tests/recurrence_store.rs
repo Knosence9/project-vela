@@ -765,8 +765,33 @@ fn materialized_occurrence_replay_rejects_invalid_task_binding_payloads() {
         .unwrap();
     drop(store);
 
-    rusqlite::Connection::open(&path)
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(CAST(payload AS TEXT), '$.goal', 'Corrupt') AS BLOB)
+             WHERE event_type = 'recurrence.occurrence_persisted'",
+            [],
+        )
+        .unwrap();
+    let error = RecurrenceStore::open_read_only(&path)
         .unwrap()
+        .load_materialized_occurrence(&id, 0)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RecurrenceStoreError::InvalidOccurrenceHistory { event_count: 2, .. }
+        ),
+        "{error:?}"
+    );
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(CAST(payload AS TEXT), '$.goal', 'Reject corrupt binding') AS BLOB)
+             WHERE event_type = 'recurrence.occurrence_persisted'",
+            [],
+        )
+        .unwrap();
+    connection
         .execute(
             "UPDATE events SET payload = ?1 WHERE event_type = 'recurrence.occurrence_materialized'",
             [br#"{"task_id":""}"#.as_slice()],

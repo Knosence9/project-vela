@@ -969,15 +969,15 @@ impl RecurrenceStore {
                 ..
             }) => Err(RecurrenceStoreError::TaskAlreadyExists { task_id }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
-                let current = self.load_occurrence_state(id, offset)?;
-                match current {
-                    Some(current) if current.task_id.is_some() => {
-                        Err(RecurrenceStoreError::OccurrenceAlreadyMaterialized {
-                            recurrence_id: id.clone(),
-                            offset,
-                            task_id: current.task_id.expect("checked materialized binding"),
-                        })
-                    }
+                match self.load_occurrence_state(id, offset)? {
+                    Some(RecurrenceOccurrenceState {
+                        task_id: Some(bound_task_id),
+                        ..
+                    }) => Err(RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+                        recurrence_id: id.clone(),
+                        offset,
+                        task_id: bound_task_id,
+                    }),
                     Some(current) => Err(RecurrenceStoreError::OccurrenceConcurrentModification {
                         recurrence_id: id.clone(),
                         offset,
@@ -1063,7 +1063,7 @@ impl RecurrenceStore {
                 });
             }
         };
-        let occurrence = Self::validate_occurrence(recurrence, offset, persisted)?;
+        let occurrence = Self::validate_occurrence(recurrence, offset, event_count, persisted)?;
         Ok(Some(RecurrenceOccurrenceState {
             occurrence,
             revision,
@@ -1084,6 +1084,7 @@ impl RecurrenceStore {
     fn validate_occurrence(
         recurrence: &FixedIntervalRecurrence,
         offset: u64,
+        event_count: usize,
         event: &RecurrenceOccurrenceEvent,
     ) -> Result<RecurrenceOccurrence, RecurrenceStoreError> {
         let id = recurrence.id();
@@ -1098,14 +1099,14 @@ impl RecurrenceStore {
             return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
                 recurrence_id: id.clone(),
                 offset,
-                event_count: 1,
+                event_count,
             });
         };
         let projected = recurrence.occurrence_at(offset).map_err(|_| {
             RecurrenceStoreError::InvalidOccurrenceHistory {
                 recurrence_id: id.clone(),
                 offset,
-                event_count: 1,
+                event_count,
             }
         })?;
         if recurrence_id != id
@@ -1117,7 +1118,7 @@ impl RecurrenceStore {
             return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
                 recurrence_id: id.clone(),
                 offset,
-                event_count: 1,
+                event_count,
             });
         }
         Ok(projected)
