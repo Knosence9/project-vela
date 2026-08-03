@@ -20,7 +20,7 @@
       "summary": "Implemented the direct read-only paging adapter.",
       "outcome": "success",
       "diagnostic": "Reimplementing sparse selection or cursor semantics in the CLI would duplicate the kernel contract and widen the corruption domain.",
-      "patch": "Added recurrence persisted over RecurrenceStore::persisted_occurrences_page, reused page JSON serialization, mapped deterministic diagnostics, and documented the narrow authority boundary in ADR-0049 and scheduler guidance."
+      "patch": "Added the persisted-occurrence paging CLI backed by RecurrenceStore::persisted_occurrences_page, reused page JSON serialization, mapped deterministic diagnostics, and documented the narrow authority boundary in ADR-0049 and scheduler guidance."
     },
     {
       "summary": "Preserved merge safety through review throttling.",
