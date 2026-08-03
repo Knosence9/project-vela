@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Project exact finite recurrence occurrences",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/861 by projecting one caller-selected zero-based occurrence from a validated durable recurrence.",
+    "acceptance_criteria": [
+      "Return exact recurrence identity, goal, offset, instant, and definition revision for every authored coordinate.",
+      "Reject offsets at or above the finite occurrence count with typed evidence preserving the requested offset and count.",
+      "Keep projection read-only and free of persisted occurrence identity, clocks, catch-up policy, dispatch, retries, and execution."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED exact-projection coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused recurrence-store test failed with an unresolved RecurrenceOccurrenceLookupError import and a missing occurrence_at method.",
+      "patch": "Added first, interior, final, maximum-instant, and out-of-range projection tests."
+    },
+    {
+      "summary": "Implemented exact read-only occurrence projection.",
+      "outcome": "success",
+      "diagnostic": "Callers needed a bounded way to derive one authored coordinate without converting arithmetic into durable lifecycle state.",
+      "patch": "Added RecurrenceOccurrence, a typed out-of-range error, occurrence_at over checked indexed arithmetic, and ADR-0038."
+    },
+    {
+      "summary": "Preserved exact-head review discipline.",
+      "outcome": "success",
+      "diagnostic": "The initial CodeRabbit run was rate limited and therefore could not satisfy the substantive review gate.",
+      "patch": "Waited through the cooldown, deliberately resumed review within the shared budget, and merged only after exact-head CI and zero unresolved threads."
+    }
+  ],
+  "outcome": {
+    "summary": "A validated recurrence can project one exact authored occurrence with complete inert provenance and typed finite-bound failures.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0164-exact-finite-recurrence-occurrence-projection.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30750720585/job/91504178200", "status": "passed"},
+      {"command": "Pull request 862 squash merge 638a80c84466675193486bbf56bfb196accf48e4", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Zero-based occurrence offsets map directly onto the immutable recurrence anchor.",
+    "Projection provenance should include the definition revision even when definitions are currently immutable.",
+    "An occurrence projection is inert evidence, not durable identity or execution permission.",
+    "False-green rate-limited reviews require a later substantive exact-head run."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/862"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

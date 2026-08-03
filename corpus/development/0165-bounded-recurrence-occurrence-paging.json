@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page finite recurrence occurrences safely",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/863 by projecting deterministic allocation-bounded pages of authored finite recurrence coordinates.",
+    "acceptance_criteria": [
+      "Accept page sizes from one through 1024 and reject zero or larger allocations with typed errors.",
+      "Return ordered exact occurrences, truncate the final page, and expose only the first unreturned authored offset as the continuation coordinate.",
+      "Preserve checked arithmetic and document that the offset is not a durable cursor, claim, due decision, or execution state."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED bounded-paging coverage.",
+      "outcome": "failure",
+      "diagnostic": "The recurrence-store test failed with unresolved OccurrencePageSize types and a missing occurrences_page method.",
+      "patch": "Added tests for interior and final pages, invalid starts and sizes, exact u64 boundaries, provenance, and continuation offsets."
+    },
+    {
+      "summary": "Implemented allocation-bounded deterministic paging.",
+      "outcome": "success",
+      "diagnostic": "Bulk recurrence projection needed a hard allocation bound and checked continuation arithmetic rather than unbounded collection or ambient cursor state.",
+      "patch": "Added OccurrencePageSize, bounded occurrences_page projection reusing occurrence_at, truncation semantics, and ADR-0039."
+    },
+    {
+      "summary": "Strengthened the zero-based contract during review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that interior-page tests did not pin a page beginning at offset zero and the recurrence anchor.",
+      "patch": "Added zero-offset anchor and cursor coverage, resolved the thread, waited through the incremental-review cooldown, and merged only after substantive exact-head review."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can page finite recurrence projections in stable authored order with a fixed allocation ceiling and inert continuation coordinates.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0165-bounded-recurrence-occurrence-paging.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30754499867/job/91514242199", "status": "passed"},
+      {"command": "Pull request 864 squash merge ee750a3dc45b6516629ca4b2d42349a292a7a773", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A public page size should bound allocation before projection begins.",
+    "The continuation coordinate is the first unreturned authored offset, not persisted scheduler state.",
+    "Tests must pin offset zero explicitly to prevent one-based regressions.",
+    "CodeRabbit found that interior-page coverage did not pin offset zero; anchor and continuation tests were added, the thread was resolved, and the fix received substantive incremental review.",
+    "Review fixes need substantive incremental coverage before merge."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/864"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

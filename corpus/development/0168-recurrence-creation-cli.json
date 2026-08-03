@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Create finite recurrence definitions through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/869 by exposing explicit writable creation of validated finite recurrence definitions.",
+    "acceptance_criteria": [
+      "Validate recurrence identity, goal, positive interval, and positive count before storage access, then validate the representable final instant in the kernel before appending a definition stream.",
+      "Persist through the existing kernel boundary and emit the exact deterministic recurrence JSON shape.",
+      "Fail closed on invalid, overflowing, or duplicate input without reading a clock, generating identity, persisting occurrences, dispatching, or executing."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED writable CLI coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI integration test failed because recurrence create was not recognized.",
+      "patch": "Added creation, reopen, validation, overflow, duplicate, output, primitive pre-storage failure coverage, and kernel overflow no-stream coverage."
+    },
+    {
+      "summary": "Implemented explicit typed recurrence creation.",
+      "outcome": "success",
+      "diagnostic": "The durable kernel contract existed, but callers lacked a narrow command that preflighted primitive caller values before storage access and delegated derived range validation to the persistence boundary.",
+      "patch": "Added recurrence create argument handling, typed primitive preflight validation, RecurrenceStore::create delegation with final-occurrence validation before append, shared JSON projection, diagnostics, and ADR-0042."
+    },
+    {
+      "summary": "Kept the write boundary behind the complete review gate.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit initially reported Review limit reached and later remained pending after one deliberate resume.",
+      "patch": "Left auto-merge unarmed while review was pending and merged after exact-head Rust CI and CodeRabbit's recent-review summary covered base e22b5b5 through head 94cae1c with no actionable comments."
+    }
+  ],
+  "outcome": {
+    "summary": "The developer CLI can explicitly create one validated finite recurrence definition while leaving every occurrence and execution decision deferred.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0168-recurrence-creation-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30764813412/job/91541517909", "status": "passed"},
+      {"command": "Pull request 870 squash merge d60c6db0190b26af7a83a3e45636d63fa5ed583d", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Validate primitive caller-owned values before opening a writable database, and validate derived final-occurrence representability in the kernel before append.",
+    "A creation adapter should reuse kernel persistence and the established response projection instead of duplicating invariants.",
+    "Definition creation grants only exact persistence authority, not occurrence lifecycle or execution authority.",
+    "A pending or rate-limited review cannot satisfy merge readiness."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/870"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect finite recurrence inventory read-only",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/865 by listing authoritative finite recurrence definitions deterministically without creating or mutating storage.",
+    "acceptance_criteria": [
+      "Open only existing recurrence storage read-only and return valid definitions in exact identifier order.",
+      "Ignore unrelated stream namespaces while failing closed on malformed recurrence stream identifiers, events, values, and histories.",
+      "Share strict exact projection and grant no clock, occurrence lifecycle, catch-up, dispatch, retry, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED inventory behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The recurrence integration test failed because open_read_only, list, and InvalidStreamId did not exist.",
+      "patch": "Added tests for deterministic listing, non-creation, unrelated streams, invalid identifiers, malformed histories, and read-only enforcement."
+    },
+    {
+      "summary": "Implemented deterministic read-only inventory.",
+      "outcome": "success",
+      "diagnostic": "Operators needed discovery without giving the read path write authority or weakening exact recurrence replay.",
+      "patch": "Added read-only store opening, exact recurrence stream discovery and ordering, shared projection, typed invalid-stream evidence, and ADR-0040."
+    },
+    {
+      "summary": "Removed a corruption-triggered panic during review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found database-decoded zero intervals, zero counts, or overflowing final occurrences could reach expect-based assumptions during inventory projection.",
+      "patch": "Mapped invalid decoded definitions to InvalidHistory, added direct-SQL corruption tests, resolved the thread, and merged after CodeRabbit's recent-review summary covered 5ade67d1 through exact head a86234f3 with no actionable comments."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can discover valid finite recurrence definitions in deterministic order through a strictly read-only, fail-closed inventory boundary.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0166-read-only-recurrence-inventory.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30759257542/job/91526747254", "status": "passed"},
+      {"command": "Pull request 866 squash merge c37fe38c2357374c2f382cabe6f175bb867e6307", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Read-only discovery must not create a missing database as a side effect.",
+    "Validate every database-decoded invariant before constructing trusted recurrence values.",
+    "CodeRabbit found an expect-based panic risk for corrupted zero intervals, zero counts, and overflowing final occurrences; invalid decoded definitions now map to InvalidHistory with direct-SQL regression coverage.",
+    "Unrelated namespaces should not block recurrence inventory, but malformed owning streams must fail closed.",
+    "An acknowledged fix thread is not a substitute for substantive exact-head incremental review."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/866"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

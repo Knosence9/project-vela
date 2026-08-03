@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect one finite recurrence by exact ID",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/871 by exposing exact read-only recurrence lookup without scanning unrelated streams.",
+    "acceptance_criteria": [
+      "Validate the caller-supplied recurrence ID before storage access and replay only its exact owning stream.",
+      "Emit the established complete deterministic recurrence JSON shape for a found definition.",
+      "Fail closed for missing storage, absent identity, or malformed exact evidence while ignoring unrelated corruption and preserving read-only authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED exact-lookup CLI coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI integration test failed because recurrence get was not recognized.",
+      "patch": "Added exact success, invalid identity, missing database, absent recurrence, malformed selected stream, unrelated corruption, and non-mutation coverage."
+    },
+    {
+      "summary": "Implemented exact read-only recurrence lookup.",
+      "outcome": "success",
+      "diagnostic": "Inventory filtering would perform unrelated work and let unrelated corrupt streams block a caller-selected lookup.",
+      "patch": "Added recurrence get using typed identity validation and RecurrenceStore::load, reused recurrence JSON projection, categorized failures, and ADR-0043."
+    },
+    {
+      "summary": "Recorded the exact-head review limitation and merge disposition.",
+      "outcome": "success",
+      "diagnostic": "The initial CodeRabbit run was rate limited; its later exact-head no-actionable-comments summary also reported 14 UNAVAILABLE: Connection dropped, so the review evidence was inconclusive.",
+      "patch": "Kept auto-merge disabled through the cooldown and shared-budget checks; after exact-head Rust success, the no-actionable summary yielded no findings or follow-ups, and the merge authority accepted the remaining review limitation."
+    }
+  ],
+  "outcome": {
+    "summary": "The CLI retrieves one exact finite recurrence deterministically without scanning unrelated streams or mutating the selected database.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0169-exact-recurrence-lookup-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30767102293/job/91547654921", "status": "passed"},
+      {"command": "Pull request 872 squash merge 647fb439d771b3753a8cbcf31961a916ca83be2f", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Exact lookup should address one owning stream instead of filtering a full inventory.",
+    "Validate identity before touching storage so invalid input cannot create or inspect a database.",
+    "Unrelated corruption must not block a caller-selected exact read.",
+    "The exact-head CodeRabbit summary reported both no actionable comments and a connection-dropped tool failure; auto-merge remained disabled through cooldown and verification checks, but the run was inconclusive and supplied no findings or follow-ups.",
+    "Successful local verification does not waive substantive exact-head review."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/872"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
