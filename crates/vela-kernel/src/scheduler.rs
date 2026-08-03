@@ -632,6 +632,10 @@ pub enum RecurrenceStoreError {
     TaskAlreadyExists {
         task_id: TaskId,
     },
+    AmbiguousTaskBinding {
+        task_id: TaskId,
+        occurrence_count: usize,
+    },
     OccurrenceOverflow {
         recurrence_id: RecurrenceId,
         source: ScheduleOccurrenceError,
@@ -726,6 +730,13 @@ impl fmt::Display for RecurrenceStoreError {
             Self::TaskAlreadyExists { task_id } => {
                 write!(formatter, "task {task_id} already exists")
             }
+            Self::AmbiguousTaskBinding {
+                task_id,
+                occurrence_count,
+            } => write!(
+                formatter,
+                "task {task_id} is bound to {occurrence_count} recurrence occurrences"
+            ),
             Self::OccurrenceOverflow {
                 recurrence_id,
                 source,
@@ -767,6 +778,7 @@ impl Error for RecurrenceStoreError {
             | Self::OccurrenceConcurrentModification { .. }
             | Self::OccurrenceAlreadyMaterialized { .. }
             | Self::TaskAlreadyExists { .. }
+            | Self::AmbiguousTaskBinding { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. }
             | Self::InvalidOccurrenceHistory { .. } => None,
@@ -915,6 +927,60 @@ impl RecurrenceStore {
         }))
     }
 
+    /// Resolves exact recurrence-occurrence provenance for one materialized task.
+    pub fn find_materialized_by_task_id(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<Option<MaterializedRecurrenceOccurrence>, RecurrenceStoreError> {
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_and_json_text::<RecurrenceOccurrenceEvent>(
+                RECURRENCE_OCCURRENCE_MATERIALIZED_EVENT_TYPE,
+                "$.task_id",
+                task_id.as_str(),
+            )
+            .map_err(RecurrenceStoreError::Replay)?;
+        let mut matches = Vec::with_capacity(streams.len());
+        for (stream_id, events) in streams {
+            let Some((id, offset)) = parse_recurrence_occurrence_stream(&stream_id) else {
+                return Err(RecurrenceStoreError::InvalidStreamId { stream_id });
+            };
+            let Some(recurrence) = self.load(&id)? else {
+                return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                    recurrence_id: id,
+                    offset,
+                    event_count: events.len(),
+                });
+            };
+            let Some(state) = Self::project_occurrence_state(&recurrence, offset, &events)? else {
+                return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                    recurrence_id: id,
+                    offset,
+                    event_count: events.len(),
+                });
+            };
+            let Some(bound_task_id) = state.task_id else {
+                return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                    recurrence_id: id,
+                    offset,
+                    event_count: events.len(),
+                });
+            };
+            matches.push(MaterializedRecurrenceOccurrence {
+                occurrence: state.occurrence,
+                revision: state.revision,
+                task_id: bound_task_id,
+            });
+        }
+        if matches.len() > 1 {
+            return Err(RecurrenceStoreError::AmbiguousTaskBinding {
+                task_id: task_id.clone(),
+                occurrence_count: matches.len(),
+            });
+        }
+        Ok(matches.pop())
+    }
+
     /// Atomically binds one exact persisted occurrence revision to a caller-owned task.
     pub fn materialize_occurrence(
         &mut self,
@@ -1047,8 +1113,16 @@ impl RecurrenceStore {
         offset: u64,
     ) -> Result<Option<RecurrenceOccurrenceState>, RecurrenceStoreError> {
         let events = self.replay_occurrence(recurrence.id(), offset)?;
+        Self::project_occurrence_state(recurrence, offset, &events)
+    }
+
+    fn project_occurrence_state(
+        recurrence: &FixedIntervalRecurrence,
+        offset: u64,
+        events: &[RecurrenceOccurrenceEvent],
+    ) -> Result<Option<RecurrenceOccurrenceState>, RecurrenceStoreError> {
         let event_count = events.len();
-        let (persisted, task_id, revision) = match events.as_slice() {
+        let (persisted, task_id, revision) = match events {
             [] => return Ok(None),
             [persisted @ RecurrenceOccurrenceEvent::Persisted { .. }] => (persisted, None, 1),
             [
@@ -2009,6 +2083,17 @@ fn recurrence_occurrence_stream(id: &RecurrenceId, offset: u64) -> StreamId {
         id.as_str().len()
     ))
     .expect("a prefixed recurrence occurrence stream is never empty")
+}
+
+fn parse_recurrence_occurrence_stream(stream_id: &str) -> Option<(RecurrenceId, u64)> {
+    let encoded = stream_id.strip_prefix(RECURRENCE_OCCURRENCE_STREAM_PREFIX)?;
+    let (id_length, remainder) = encoded.split_once(':')?;
+    let id_length = id_length.parse::<usize>().ok()?;
+    let id_text = remainder.get(..id_length)?;
+    let offset_text = remainder.get(id_length..)?.strip_prefix(':')?;
+    let id = RecurrenceId::new(id_text).ok()?;
+    let offset = offset_text.parse::<u64>().ok()?;
+    (recurrence_occurrence_stream(&id, offset).as_str() == stream_id).then_some((id, offset))
 }
 
 #[derive(Clone, Debug, Serialize)]

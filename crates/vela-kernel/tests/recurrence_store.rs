@@ -679,6 +679,149 @@ fn atomically_materializes_one_persisted_occurrence_as_an_inert_task() {
 }
 
 #[test]
+fn resolves_materialized_recurrence_provenance_by_exact_task_id() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("task-provenance:東京").unwrap();
+    let task_id = TaskId::new("exact recurrence task").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Resolve exact provenance").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    let materialized = store
+        .materialize_occurrence(&id, 1, 1, task_id.clone())
+        .unwrap();
+    drop(store);
+
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    assert_eq!(
+        reopened.find_materialized_by_task_id(&task_id).unwrap(),
+        Some(materialized)
+    );
+    assert_eq!(
+        reopened
+            .find_materialized_by_task_id(&TaskId::new("unrelated").unwrap())
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn recurrence_task_provenance_rejects_ambiguous_durable_bindings() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let duplicate_task_id = TaskId::new("duplicate-binding").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for (id, task_id) in [
+        ("first", duplicate_task_id.clone()),
+        ("second", TaskId::new("second-binding").unwrap()),
+    ] {
+        let id = RecurrenceId::new(id).unwrap();
+        store
+            .create(
+                id.clone(),
+                TaskGoal::new("Detect ambiguity").unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+        store.persist_occurrence(&id, 1, 0).unwrap();
+        store.materialize_occurrence(&id, 0, 1, task_id).unwrap();
+    }
+    drop(store);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = CAST(json_object('task_id', ?1) AS BLOB)
+             WHERE event_type = 'recurrence.occurrence_materialized' AND json_extract(payload, '$.task_id') = 'second-binding'",
+            [duplicate_task_id.as_str()],
+        )
+        .unwrap();
+
+    let error = RecurrenceStore::open_read_only(&path)
+        .unwrap()
+        .find_materialized_by_task_id(&duplicate_task_id)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RecurrenceStoreError::AmbiguousTaskBinding {
+                ref task_id,
+                occurrence_count: 2
+            } if task_id == &duplicate_task_id
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn recurrence_task_provenance_validates_candidates_and_isolates_unrelated_corruption() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let selected_id = RecurrenceId::new("selected").unwrap();
+    let selected_task_id = TaskId::new("selected-task").unwrap();
+    let unrelated_id = RecurrenceId::new("unrelated").unwrap();
+    let unrelated_task_id = TaskId::new("unrelated-task").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for (id, task_id) in [
+        (&selected_id, selected_task_id.clone()),
+        (&unrelated_id, unrelated_task_id),
+    ] {
+        store
+            .create(
+                id.clone(),
+                TaskGoal::new(format!("Goal for {id}")).unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+        store.persist_occurrence(id, 1, 0).unwrap();
+        store.materialize_occurrence(id, 0, 1, task_id).unwrap();
+    }
+    drop(store);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = X'00'
+             WHERE event_type = 'recurrence.occurrence_materialized' AND json_extract(payload, '$.task_id') = 'unrelated-task'",
+            [],
+        )
+        .unwrap();
+
+    assert!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .find_materialized_by_task_id(&selected_task_id)
+            .unwrap()
+            .is_some()
+    );
+
+    connection
+        .execute(
+            "UPDATE events SET payload = CAST(json_set(payload, '$.goal', 'Divergent goal') AS BLOB)
+             WHERE event_type = 'recurrence.occurrence_persisted' AND json_extract(payload, '$.recurrence_id') = 'selected'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .find_materialized_by_task_id(&selected_task_id)
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidOccurrenceHistory { event_count: 2, .. }
+    ));
+}
+
+#[test]
 fn occurrence_materialization_failures_leave_both_streams_unchanged() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");

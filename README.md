@@ -495,6 +495,9 @@ The first milestone is the **evidence loop**:
 129. Inspect one exact persisted recurrence occurrence through deterministic read-only CLI JSON without scanning unrelated streams or granting lifecycle authority. ✅
 130. Page sparse persisted recurrence provenance through bounded exact-recurrence authored-offset windows without granting global discovery or lifecycle authority. ✅
 131. Page sparse persisted recurrence provenance through bounded deterministic CLI JSON without granting global discovery or lifecycle authority. ✅
+132. Atomically materialize one exact persisted recurrence occurrence as one caller-identified inert active task without granting execution authority. ✅
+133. Materialize one exact persisted recurrence occurrence through deterministic writable CLI JSON without granting catch-up, dispatch, or execution authority. ✅
+134. Resolve one exact materialized recurrence occurrence from its task identity without granting lifecycle or execution authority. ✅
 
 ## Project documents
 
