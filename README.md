@@ -458,6 +458,7 @@ The first milestone is the **evidence loop**:
 124. Create one immutable finite recurrence definition through deterministic CLI JSON without granting occurrence or execution authority. ✅
 125. Inspect one exact finite recurrence definition through deterministic read-only CLI JSON without scanning unrelated streams. ✅
 126. Page one exact durable recurrence's occurrences through bounded deterministic CLI JSON without granting lifecycle or execution authority. ✅
+127. Persist one exact finite recurrence occurrence as canonical fail-closed durable provenance without selecting, materializing, or executing work. ✅
 
 ## Project documents
 
