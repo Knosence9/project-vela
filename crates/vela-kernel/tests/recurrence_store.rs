@@ -6,7 +6,7 @@ use vela_kernel::{
         RecurrenceOccurrenceLookupError, RecurrenceStore, RecurrenceStoreError, ScheduleInstant,
         ScheduleInterval,
     },
-    task::TaskGoal,
+    task::{TaskGoal, TaskId, TaskStore},
 };
 
 fn instant(unix_millis: u64) -> ScheduleInstant {
@@ -637,6 +637,152 @@ fn persists_and_reopens_exact_recurrence_occurrence_provenance() {
 }
 
 #[test]
+fn atomically_materializes_one_persisted_occurrence_as_an_inert_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("materialize:東京").unwrap();
+    let goal = TaskGoal::new("Run the exact recurring task").unwrap();
+    let task_id = TaskId::new("recurrence-task").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    let occurrence = store.persist_occurrence(&id, 1, 1).unwrap();
+
+    let materialized = store
+        .materialize_occurrence(&id, 1, 1, task_id.clone())
+        .unwrap();
+
+    assert_eq!(materialized.occurrence(), &occurrence);
+    assert_eq!(materialized.revision(), 2);
+    assert_eq!(materialized.task_id(), &task_id);
+    drop(store);
+
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    assert_eq!(reopened.load_occurrence(&id, 1).unwrap(), Some(occurrence));
+    assert_eq!(
+        reopened.load_materialized_occurrence(&id, 1).unwrap(),
+        Some(materialized)
+    );
+    let task = TaskStore::open(&path)
+        .unwrap()
+        .load(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.goal(), &goal);
+}
+
+#[test]
+fn occurrence_materialization_failures_leave_both_streams_unchanged() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("materialization-failures").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Materialize once").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    let existing_task = TaskId::new("existing-task").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(existing_task.clone(), TaskGoal::new("Existing").unwrap())
+        .unwrap();
+
+    assert!(matches!(
+        store
+            .materialize_occurrence(&id, 1, 1, TaskId::new("missing-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotFound { recurrence_id, offset: 1 }
+            if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .materialize_occurrence(&id, 0, 0, TaskId::new("stale-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            recurrence_id, offset: 0, expected_revision: 0, current_revision: 1,
+        } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .materialize_occurrence(&id, 0, 1, existing_task.clone())
+            .unwrap_err(),
+        RecurrenceStoreError::TaskAlreadyExists { task_id } if task_id == existing_task
+    ));
+    assert_eq!(store.load_materialized_occurrence(&id, 0).unwrap(), None);
+
+    let task_id = TaskId::new("first-binding").unwrap();
+    store
+        .materialize_occurrence(&id, 0, 1, task_id.clone())
+        .unwrap();
+    assert!(matches!(
+        store
+            .materialize_occurrence(&id, 0, 2, TaskId::new("replacement").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+            recurrence_id, offset: 0, task_id: bound,
+        } if recurrence_id == id && bound == task_id
+    ));
+    assert!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&TaskId::new("replacement").unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn materialized_occurrence_replay_rejects_invalid_task_binding_payloads() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("corrupt-materialization").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject corrupt binding").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    store
+        .materialize_occurrence(&id, 0, 1, TaskId::new("bound-task").unwrap())
+        .unwrap();
+    drop(store);
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE event_type = 'recurrence.occurrence_materialized'",
+            [br#"{"task_id":""}"#.as_slice()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_materialized_occurrence(&id, 0)
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+}
+
+#[test]
 fn pages_sparse_persisted_occurrences_by_authored_offset_window() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -887,6 +1033,63 @@ fn racing_occurrence_persistence_records_one_exact_coordinate() {
             .instant(),
         instant(7)
     );
+}
+
+#[test]
+fn racing_occurrence_materializations_commit_one_complete_binding() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-materialization").unwrap();
+    let mut setup = RecurrenceStore::open(&path).unwrap();
+    setup
+        .create(
+            id.clone(),
+            TaskGoal::new("Materialize exactly once").unwrap(),
+            instant(4),
+            ScheduleInterval::from_millis(3).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    setup.persist_occurrence(&id, 1, 0).unwrap();
+    drop(setup);
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = ["race-task-a", "race-task-b"].map(|raw_task_id| {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            let mut store = RecurrenceStore::open(path).unwrap();
+            barrier.wait();
+            store.materialize_occurrence(&id, 0, 1, TaskId::new(raw_task_id).unwrap())
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let winner = results
+        .iter()
+        .find_map(|result| result.as_ref().ok())
+        .unwrap();
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    assert_eq!(
+        reopened
+            .load_materialized_occurrence(&id, 0)
+            .unwrap()
+            .unwrap(),
+        *winner
+    );
+    for raw_task_id in ["race-task-a", "race-task-b"] {
+        let task_id = TaskId::new(raw_task_id).unwrap();
+        assert_eq!(
+            TaskStore::open(&path)
+                .unwrap()
+                .load(&task_id)
+                .unwrap()
+                .is_some(),
+            winner.task_id() == &task_id
+        );
+    }
 }
 
 #[test]
