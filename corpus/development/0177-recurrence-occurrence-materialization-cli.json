@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize a persisted recurrence occurrence through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/891 by exposing exact revision-bound recurrence-occurrence task materialization through deterministic writable CLI JSON.",
+    "acceptance_criteria": [
+      "Validate recurrence and task identities before opening writable storage and require the caller's observed occurrence revision.",
+      "Delegate atomic materialization to the recurrence store and emit complete recurrence, occurrence revision, and task binding provenance.",
+      "Emit one escaped deterministic diagnostic and no stdout for missing, stale, already-materialized, collision, storage, replay, append, or serialization failures."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED writable CLI coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused success test failed because materialize was not a recognized recurrence subcommand.",
+      "patch": "Added integration tests for durable success and reopen, exact output, identity validation, missing and stale evidence, collisions, duplicate materialization, atomicity, and deterministic failure output."
+    },
+    {
+      "summary": "Implemented the exact writable adapter.",
+      "outcome": "success",
+      "diagnostic": "Creating tasks separately or deriving occurrence state in the CLI would bypass the kernel's revision and atomicity contract.",
+      "patch": "Added recurrence materialize, opened the selected store writable only after identity validation, delegated to RecurrenceStore::materialize_occurrence, serialized exact provenance, and documented the boundary in ADR-0051 and scheduler guidance."
+    },
+    {
+      "summary": "Applied review refactoring and held the exact head through throttling.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit identified duplicated occurrence-field mapping; after the fix, the incremental exact-head review was rate limited and its green status was not genuine merge evidence.",
+      "patch": "Reused recurrence_occurrence_inspection for shared fields, reran just verify and the Rust quality gate, kept auto-merge disabled through the cooldown, and merged only after CodeRabbit completed a genuine exact-head incremental review with zero unresolved threads."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can atomically bind one exact persisted recurrence occurrence to a caller-owned task through deterministic CLI JSON without granting scheduling or execution policy.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0177-recurrence-occurrence-materialization-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 177 records: 177 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30826345811/job/91728851946", "status": "passed"},
+      {"command": "Pull request 892 squash merge 2f74db6f0687b8733f027f3d6bd5f99ed9a1c1e7", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Writable CLI commands should validate simple identities before opening storage and leave revision, replay, and atomicity decisions to the kernel.",
+    "Successful output should include the caller-observed transition result, including occurrence revision and bound task identity, rather than reconstruct it independently.",
+    "Shared occurrence inspection prevents read and write JSON projections from drifting as provenance fields evolve.",
+    "Exact-head Rust success does not override a rate-limited automated review; the green status remains false until a genuine incremental review completes.",
+    "The command grants one exact provenance binding only, not recurrence selection, clocks, catch-up, due policy, dispatch, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/892"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
