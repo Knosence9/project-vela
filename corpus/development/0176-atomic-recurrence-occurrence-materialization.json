@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize one exact persisted recurrence occurrence atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/889 by binding one revision-observed persisted occurrence to one caller-owned inert task without partial durable state.",
+    "acceptance_criteria": [
+      "Require an exact persisted recurrence coordinate, observed occurrence revision, and caller-owned task identity while deriving the task goal from immutable recurrence provenance.",
+      "Atomically append the occurrence materialization and task start while rejecting missing, stale, duplicate, replacement, and task collision requests with typed evidence.",
+      "Replay persisted-to-materialized histories strictly, preserve existing occurrence views, and grant no due, catch-up, dispatch, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED atomic materialization coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused recurrence-store test failed because materialize_occurrence, materialized lookup, and typed materialization errors did not exist.",
+      "patch": "Added success, reopen, exact goal provenance, missing and stale occurrence, duplicate binding, task collision, concurrent materialization, atomicity, and malformed-history tests."
+    },
+    {
+      "summary": "Implemented strict replay and atomic task binding.",
+      "outcome": "success",
+      "diagnostic": "Independent occurrence and task appends could orphan one side, while accepting a projected coordinate without revision-one evidence would erase durable scheduler provenance.",
+      "patch": "Added persisted-to-materialized lifecycle replay and EventLog::append_pair over occurrence revision 1 and task NoStream, with typed conflict mapping and ADR-0050 authority documentation."
+    },
+    {
+      "summary": "Corrected review-identified durable-history evidence.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that validation hardcoded event_count 1 even when a malformed persisted event belonged to a two-event materialized history, and noted an avoidable expect in conflict mapping.",
+      "patch": "Passed the actual replay event count through validation, added a two-event corruption assertion, pattern-matched the bound task ID without expect, reran verification, and obtained a no-actionable-comments exact-head review."
+    }
+  ],
+  "outcome": {
+    "summary": "The recurrence store now binds exact revision-observed occurrence provenance to caller-owned inert tasks atomically and replays both lifecycle states with strict typed evidence.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0176-atomic-recurrence-occurrence-materialization.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 177 records: 177 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30815009181/job/91690467819", "status": "passed"},
+      {"command": "Pull request 890 squash merge 65a71b9442d0c58cd47fac2cd73d1794e3d7d2c6", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A materialization boundary should require durable coordinate evidence and its exact observed revision rather than accept an unpersisted projection.",
+    "Paired event-log append keeps occurrence provenance and caller-owned task creation atomic under collisions and concurrency.",
+    "Strict replay evidence must report the true durable history size even when validation fails while inspecting the first event.",
+    "Pattern matching an optional binding avoids an unnecessary panic path while preserving typed conflict distinctions.",
+    "Materialization records provenance only; catch-up selection, due policy, generated identity, dispatch, retry, and execution remain separate authorities."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/890"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

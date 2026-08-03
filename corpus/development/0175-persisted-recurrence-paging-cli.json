@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page persisted recurrence occurrences through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/887 by exposing bounded sparse persisted-occurrence provenance through one deterministic read-only CLI command.",
+    "acceptance_criteria": [
+      "Validate recurrence identity and bounded page size before opening storage, then delegate paging to the authoritative recurrence store.",
+      "Emit ordered compact JSON with complete occurrence provenance and the authored-offset continuation cursor.",
+      "Fail closed for missing definitions, invalid starts, selected corruption, storage, and serialization errors without creating or mutating storage."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED CLI integration coverage.",
+      "outcome": "failure",
+      "diagnostic": "The deterministic persisted-occurrence paging test failed because persisted was not a recognized recurrence subcommand.",
+      "patch": "Added tests for sparse and final pages, cursor progress, full provenance, validation ordering, missing evidence, selected corruption, unrelated-corruption isolation, and read-only behavior."
+    },
+    {
+      "summary": "Implemented the direct read-only paging adapter.",
+      "outcome": "success",
+      "diagnostic": "Reimplementing sparse selection or cursor semantics in the CLI would duplicate the kernel contract and widen the corruption domain.",
+      "patch": "Added the persisted-occurrence paging CLI backed by RecurrenceStore::persisted_occurrences_page, reused page JSON serialization, mapped deterministic diagnostics, and documented the narrow authority boundary in ADR-0049 and scheduler guidance."
+    },
+    {
+      "summary": "Preserved merge safety through review throttling.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit initially returned a false-green rate-limited status with a 32-minute cooldown; its later exact-head review suggested a low-value validation helper that would couple parsing to ExitCode.",
+      "patch": "Kept auto-merge disabled through the cooldown, deliberately resumed review once, retained the two short command-local validation mappings, and merged only after the exact-head Rust gate, substantive review, and zero unresolved threads."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can page sparse persisted recurrence provenance through deterministic read-only CLI JSON while kernel paging, validation, cursor, and corruption semantics remain authoritative.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0175-persisted-recurrence-paging-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 177 records: 177 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30806814716/job/91663982595", "status": "passed"},
+      {"command": "Pull request 888 squash merge 91bb4092110d126f474583e3d3e09b0a274c2b47", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "CLI paging should delegate sparse selection and authored-offset cursor semantics to the kernel rather than infer them from returned rows.",
+    "Input validation before storage access preserves deterministic diagnostics and guarantees invalid requests do not create a database.",
+    "A green automated-review status is not merge evidence when the review body reports throttling; preserve the exact head until a genuine review completes.",
+    "Small command-local validation adapters can remain explicit when extracting them would couple domain parsing to process exit behavior.",
+    "Read-only persisted provenance does not grant global discovery, due policy, materialization, dispatch, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/888"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
