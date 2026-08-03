@@ -1,6 +1,6 @@
 # Durable task schedules and finite recurrence definitions
 
-The `vela-kernel` crate provides inert scheduler boundaries: callers can persist one-shot task intent, query which one-shot intents are due, persist finite fixed-interval recurrence definitions through the kernel or CLI, inspect those definitions, project exact recurrence occurrences individually or through bounded pages, persist and inspect exact occurrence provenance, page sparse persisted provenance through bounded authored-offset windows, and atomically bind one exact persisted occurrence to a caller-owned inert task. These boundaries record, inspect, or materialize intent only; they do not read a clock, choose catch-up policy, dispatch work, or execute it.
+The `vela-kernel` crate provides inert scheduler boundaries: callers can persist one-shot task intent, query which one-shot intents are due, persist finite fixed-interval recurrence definitions through the kernel or CLI, inspect those definitions, project exact recurrence occurrences individually or through bounded pages, persist and inspect exact occurrence provenance, page sparse persisted provenance through bounded authored-offset windows, and atomically bind one exact persisted occurrence to a caller-owned inert task through the kernel or CLI. These boundaries record, inspect, or materialize intent only; they do not read a clock, choose catch-up policy, dispatch work, or execute it.
 
 ## Observable contract
 
@@ -268,6 +268,31 @@ The command reads no ambient time, chooses no due or catch-up policy, generates
 no identity, and cannot create schedules or tasks, claim, cancel, dispatch,
 retry, grant permission, or execute work. See
 [ADR-0046](adr/0046-writable-exact-recurrence-occurrence-provenance-cli.md).
+
+## Writable exact recurrence occurrence materialization CLI
+
+`vela-dev recurrence materialize DATABASE RECURRENCE_ID OFFSET
+EXPECTED_OCCURRENCE_REVISION TASK_ID` validates both exact caller-owned
+identities before storage access; clap parses the zero-based offset and observed
+occurrence revision as non-negative `u64` values before command execution. It
+opens only the caller-selected database through `RecurrenceStore::open` and
+delegates strict replay, exact optimistic concurrency, lifecycle validation,
+task-stream uniqueness, and the atomic append to
+`RecurrenceStore::materialize_occurrence`.
+
+Success emits one compact object preserving exact `recurrence_id`, `goal`,
+`offset`, `unix_millis`, `definition_revision`, resulting
+`occurrence_revision`, and `task_id`. Invalid identities emit
+`invalid_recurrence_id` or `invalid_task_id` without creating storage. Missing,
+stale, already-materialized, or task-colliding inputs, plus open, replay,
+append, and serialization failures, emit
+`recurrence_occurrence_materialization_failed`, return non-zero, and emit no
+partial stdout. Every failed operation leaves both streams unchanged.
+
+The command reads no clock, generates no identity, scans no unrelated
+coordinate, and grants no catch-up, selection, claim, lease, dispatch, retry,
+permission, provider/tool, workflow, or execution authority. See
+[ADR-0051](adr/0051-writable-exact-recurrence-occurrence-task-materialization-cli.md).
 
 ## Read-only exact persisted recurrence occurrence CLI lookup
 
