@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect one persisted recurrence occurrence through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/881 by exposing exact read-only persisted occurrence lookup without scanning unrelated streams.",
+    "acceptance_criteria": [
+      "Validate recurrence identity before opening storage and address one exact recurrence-and-offset coordinate.",
+      "Emit compact deterministic occurrence provenance JSON for a found immutable record.",
+      "Distinguish invalid identity, absent storage or coordinate, selected corruption, and infrastructure failure while ignoring unrelated corruption and preserving read-only authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED exact persisted-occurrence CLI coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused CLI integration tests failed because recurrence occurrence was not a recognized subcommand.",
+      "patch": "Added success, invalid identity, missing database, absent coordinate, selected corruption, unrelated corruption isolation, output, and non-mutation tests."
+    },
+    {
+      "summary": "Implemented exact read-only persisted lookup.",
+      "outcome": "success",
+      "diagnostic": "Inventory-based discovery would inspect unrelated streams and allow unrelated corruption to block a caller-selected coordinate.",
+      "patch": "Added recurrence occurrence, validated identity before read-only open, delegated exact replay to RecurrenceStore::load_occurrence, reused occurrence JSON, categorized diagnostics, and documented ADR-0047."
+    },
+    {
+      "summary": "Waited for substantive review capacity.",
+      "outcome": "success",
+      "diagnostic": "The initial CodeRabbit status was rate limited and therefore could not authorize auto-merge.",
+      "patch": "Left auto-merge unarmed, resumed after cooldown, and merged after exact-head no-actionable-comments review, successful Rust quality gate, and zero unresolved threads."
+    }
+  ],
+  "outcome": {
+    "summary": "The CLI retrieves one exact immutable persisted recurrence occurrence in read-only mode with deterministic output and corruption isolation.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0173-exact-persisted-recurrence-occurrence-cli.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 174 records: 174 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30787962304/job/91605262685",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 882 squash merge 5307fff5f75efb46f3cb6e017bb5456df55a0207",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Exact coordinate lookup should address its owning stream instead of filtering an inventory.",
+    "Read-only opening and pre-open identity validation make non-mutation part of the enforced boundary.",
+    "Selected malformed provenance must fail closed while unrelated malformed streams remain outside the lookup domain.",
+    "Distinct absent-coordinate and corruption diagnostics preserve actionable failure taxonomy.",
+    "Rate-limited false-green review states must not race auto-merge."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/882"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

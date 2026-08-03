@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page persisted recurrence occurrences safely",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/883 by paging sparse persisted provenance for one exact recurrence through bounded authored-offset windows.",
+    "acceptance_criteria": [
+      "Load one authoritative recurrence and inspect only persisted coordinates selected by a bounded authored window of at most 1024 offsets.",
+      "Return ordered sparse results and advance the caller-owned cursor by authored offsets even when the page contains gaps.",
+      "Fail closed for selected corruption while isolating malformed records outside the requested recurrence and window, without granting lifecycle or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED persisted-occurrence paging coverage.",
+      "outcome": "failure",
+      "diagnostic": "Recurrence-store tests failed because persisted_occurrences_page did not exist.",
+      "patch": "Added sparse, gap, final, missing definition, bounds, reopen, selected corruption, and out-of-window corruption-isolation tests."
+    },
+    {
+      "summary": "Implemented bounded sparse exact-coordinate replay.",
+      "outcome": "success",
+      "diagnostic": "Scanning occurrence streams or deriving a cursor from returned rows would blur the corruption domain and stall sparse pagination.",
+      "patch": "Projected the bounded authored window once, replayed only selected exact coordinate streams, validated returned records against the authoritative recurrence, and documented cursor and authority contracts in ADR-0048."
+    },
+    {
+      "summary": "Applied the substantive review refactor.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit identified duplicated OutOfRange conversion in exact persistence and persisted paging flows.",
+      "patch": "Added one From conversion, removed both duplicate mappings, reran just verify, waited through incremental review throttling, and obtained a no-actionable-comments exact-head review before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "The recurrence store pages sparse immutable provenance through bounded authored-offset windows with deterministic cursor progress, authoritative validation, and narrow corruption isolation.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0174-bounded-persisted-occurrence-paging.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 174 records: 174 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30793964648/job/91623266609",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 884 squash merge d349f580e7ebf77d8af16f6ba312fd8d0bba9fe8",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Sparse paging cursors should advance by the authored coordinate window rather than the number of returned persisted rows.",
+    "Project the authoritative recurrence once per page and reuse canonical exact-coordinate replay instead of reloading the definition per coordinate.",
+    "Only malformed selected coordinates belong to the page's corruption domain; unrelated recurrence and out-of-window corruption remain isolated.",
+    "Centralized error conversion keeps exact and paged APIs aligned as their shared taxonomy evolves.",
+    "Read-only provenance paging does not grant persisted cursors, due policy, claims, materialization, dispatch, retries, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/884"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
