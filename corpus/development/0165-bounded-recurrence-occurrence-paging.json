@@ -34,6 +34,8 @@
     "verified": true,
     "verification": [
       {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0165-bounded-recurrence-occurrence-paging.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30754499867/job/91514242199", "status": "passed"},
       {"command": "Pull request 864 squash merge ee750a3dc45b6516629ca4b2d42349a292a7a773", "status": "passed"}
     ]
@@ -42,6 +44,7 @@
     "A public page size should bound allocation before projection begins.",
     "The continuation coordinate is the first unreturned authored offset, not persisted scheduler state.",
     "Tests must pin offset zero explicitly to prevent one-based regressions.",
+    "CodeRabbit found that interior-page coverage did not pin offset zero; anchor and continuation tests were added, the thread was resolved, and the fix received substantive incremental review.",
     "Review fixes need substantive incremental coverage before merge."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/864"},

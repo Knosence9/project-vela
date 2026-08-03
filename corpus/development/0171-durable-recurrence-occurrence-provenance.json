@@ -34,6 +34,8 @@
     "verified": true,
     "verification": [
       {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0171-durable-recurrence-occurrence-provenance.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30776901715/job/91573997107", "status": "passed"},
       {"command": "Pull request 876 squash merge f6b4115d25ac1421a1c6fae29f90b905fdab8ac0", "status": "passed"}
     ]
@@ -42,6 +44,7 @@
     "Canonical composite stream keys need an injective encoding that remains safe when identifiers contain delimiters.",
     "Persisted occurrence provenance must be checked against the authoritative definition and revision both before append and during replay.",
     "Configure concurrency behavior explicitly and avoid version-sensitive SQLite BLOB-to-JSON assumptions.",
+    "CodeRabbit findings led to an explicit five-second busy timeout, text-cast SQLite JSON tests, separate occurrence payload versioning, pinned length-prefix stream keys, and guarded definition revision; every thread was resolved before exact-head re-review.",
     "A persisted occurrence is evidence only; due policy, claims, materialization, dispatch, retries, and execution remain separate authority boundaries."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/876"},

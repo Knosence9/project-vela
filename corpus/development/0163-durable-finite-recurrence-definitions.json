@@ -5,7 +5,7 @@
     "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/859 by durably storing immutable, validated finite recurrence definitions without granting scheduling or execution authority.",
     "acceptance_criteria": [
       "Persist and reload exact recurrence identity, goal, anchor, positive interval, positive occurrence count, final instant, and revision.",
-      "Reject invalid, overflowing, duplicate, malformed, unsupported, and multi-event definition state with typed evidence.",
+      "Reject invalid, overflowing, malformed, unsupported, and multi-event definition state with typed evidence; reject duplicate creation while preserving the original definition.",
       "Document that definition persistence does not persist occurrences, read a clock, choose catch-up policy, dispatch, retry, or execute work."
     ]
   },
@@ -34,6 +34,8 @@
     "verified": true,
     "verification": [
       {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0163-durable-finite-recurrence-definitions.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30747824308/job/91496366243", "status": "passed"},
       {"command": "Pull request 860 squash merge e39597f2f450f566c5270142dbfafd2da1b635a9", "status": "passed"}
     ]

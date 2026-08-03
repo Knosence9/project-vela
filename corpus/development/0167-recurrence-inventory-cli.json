@@ -34,6 +34,8 @@
     "verified": true,
     "verification": [
       {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0167-recurrence-inventory-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30762353684/job/91535052549", "status": "passed"},
       {"command": "Pull request 868 squash merge e22b5b5eeaf2ca97a8faad987d1f308fbde11b9e", "status": "passed"}
     ]

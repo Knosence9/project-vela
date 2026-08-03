@@ -34,6 +34,8 @@
     "verified": true,
     "verification": [
       {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0166-read-only-recurrence-inventory.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 171 records: 171 valid, 0 invalid", "status": "passed"},
       {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30759257542/job/91526747254", "status": "passed"},
       {"command": "Pull request 866 squash merge c37fe38c2357374c2f382cabe6f175bb867e6307", "status": "passed"}
     ]
@@ -41,6 +43,7 @@
   "lessons": [
     "Read-only discovery must not create a missing database as a side effect.",
     "Validate every database-decoded invariant before constructing trusted recurrence values.",
+    "CodeRabbit found an expect-based panic risk for corrupted zero intervals, zero counts, and overflowing final occurrences; invalid decoded definitions now map to InvalidHistory with direct-SQL regression coverage.",
     "Unrelated namespaces should not block recurrence inventory, but malformed owning streams must fail closed.",
     "An acknowledged fix thread is not a substitute for substantive exact-head incremental review."
   ],
