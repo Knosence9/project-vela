@@ -59,6 +59,7 @@
     "Sparse paging cursors should advance by the authored coordinate window rather than the number of returned persisted rows.",
     "Project the authoritative recurrence once per page and reuse canonical exact-coordinate replay instead of reloading the definition per coordinate.",
     "Only malformed selected coordinates belong to the page's corruption domain; unrelated recurrence and out-of-window corruption remain isolated.",
+    "CodeRabbit found duplicated OutOfRange conversion in the exact and paged flows; one shared From conversion was added and both duplicate mappings were removed.",
     "Centralized error conversion keeps exact and paged APIs aligned as their shared taxonomy evolves.",
     "Read-only provenance paging does not grant persisted cursors, due policy, claims, materialization, dispatch, retries, or execution authority."
   ],
