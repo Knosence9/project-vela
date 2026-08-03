@@ -477,6 +477,7 @@ The first milestone is the **evidence loop**:
 127. Persist one exact finite recurrence occurrence as canonical fail-closed durable provenance without selecting, materializing, or executing work. ✅
 128. Persist one exact recurrence occurrence through deterministic writable CLI JSON without granting catch-up, materialization, or execution authority. ✅
 129. Inspect one exact persisted recurrence occurrence through deterministic read-only CLI JSON without scanning unrelated streams or granting lifecycle authority. ✅
+130. Page sparse persisted recurrence provenance through bounded exact-recurrence authored-offset windows without granting global discovery or lifecycle authority. ✅
 
 ## Project documents
 

@@ -480,7 +480,7 @@ impl FixedIntervalRecurrence {
     }
 }
 
-/// One bounded, inert page of exact recurrence occurrence projections.
+/// One bounded, inert page of exact projected or durably validated recurrence occurrences.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecurrenceOccurrencePage {
     occurrences: Vec<RecurrenceOccurrence>,
@@ -488,12 +488,12 @@ pub struct RecurrenceOccurrencePage {
 }
 
 impl RecurrenceOccurrencePage {
-    /// Returns the exact occurrence projections in increasing offset order.
+    /// Returns the exact occurrences present in this page in increasing offset order.
     pub fn occurrences(&self) -> &[RecurrenceOccurrence] {
         &self.occurrences
     }
 
-    /// Returns the first unreturned authored offset when another page exists.
+    /// Returns the first uninspected authored offset when another window exists.
     pub const fn next_offset(&self) -> Option<u64> {
         self.next_offset
     }
@@ -811,58 +811,115 @@ impl RecurrenceStore {
         id: &RecurrenceId,
         offset: u64,
     ) -> Result<Option<RecurrenceOccurrence>, RecurrenceStoreError> {
-        let events = self
-            .event_log
-            .replay::<RecurrenceOccurrenceEvent>(&recurrence_occurrence_stream(id, offset))
-            .map_err(RecurrenceStoreError::Replay)?;
-        let event_count = events.len();
-        let [
-            RecurrenceOccurrenceEvent::Persisted {
-                recurrence_id,
-                recurrence_revision,
-                offset: persisted_offset,
-                goal,
-                unix_millis,
-            },
-        ] = events.as_slice()
-        else {
-            return if event_count == 0 {
-                Ok(None)
-            } else {
-                Err(RecurrenceStoreError::InvalidOccurrenceHistory {
-                    recurrence_id: id.clone(),
-                    offset,
-                    event_count,
-                })
-            };
+        let Some(event) = self.replay_occurrence(id, offset)? else {
+            return Ok(None);
         };
         let Some(recurrence) = self.load(id)? else {
             return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
                 recurrence_id: id.clone(),
                 offset,
-                event_count,
+                event_count: 1,
             });
         };
+        Self::validate_occurrence(&recurrence, offset, event).map(Some)
+    }
+
+    /// Inspects one bounded authored offset window and returns its durable provenance.
+    pub fn persisted_occurrences_page(
+        &self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+    ) -> Result<RecurrenceOccurrencePage, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        let authored_page = recurrence
+            .occurrences_page(start_offset, page_size)
+            .map_err(|error| match error {
+                RecurrenceOccurrenceLookupError::OutOfRange {
+                    recurrence_id,
+                    requested_offset,
+                    occurrence_count,
+                } => RecurrenceStoreError::OccurrenceOutOfRange {
+                    recurrence_id,
+                    requested_offset,
+                    occurrence_count,
+                },
+            })?;
+        let mut occurrences = Vec::with_capacity(authored_page.occurrences().len());
+        for authored in authored_page.occurrences() {
+            if let Some(event) = self.replay_occurrence(id, authored.offset())? {
+                occurrences.push(Self::validate_occurrence(
+                    &recurrence,
+                    authored.offset(),
+                    event,
+                )?);
+            }
+        }
+        Ok(RecurrenceOccurrencePage {
+            occurrences,
+            next_offset: authored_page.next_offset(),
+        })
+    }
+
+    fn replay_occurrence(
+        &self,
+        id: &RecurrenceId,
+        offset: u64,
+    ) -> Result<Option<RecurrenceOccurrenceEvent>, RecurrenceStoreError> {
+        let events = self
+            .event_log
+            .replay::<RecurrenceOccurrenceEvent>(&recurrence_occurrence_stream(id, offset))
+            .map_err(RecurrenceStoreError::Replay)?;
+        let event_count = events.len();
+        let event: Result<[RecurrenceOccurrenceEvent; 1], _> = events.try_into();
+        match event {
+            Ok([event]) => Ok(Some(event)),
+            Err(_) if event_count == 0 => Ok(None),
+            Err(_) => Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                recurrence_id: id.clone(),
+                offset,
+                event_count,
+            }),
+        }
+    }
+
+    fn validate_occurrence(
+        recurrence: &FixedIntervalRecurrence,
+        offset: u64,
+        event: RecurrenceOccurrenceEvent,
+    ) -> Result<RecurrenceOccurrence, RecurrenceStoreError> {
+        let id = recurrence.id();
+        let RecurrenceOccurrenceEvent::Persisted {
+            recurrence_id,
+            recurrence_revision,
+            offset: persisted_offset,
+            goal,
+            unix_millis,
+        } = event;
         let projected = recurrence.occurrence_at(offset).map_err(|_| {
             RecurrenceStoreError::InvalidOccurrenceHistory {
                 recurrence_id: id.clone(),
                 offset,
-                event_count,
+                event_count: 1,
             }
         })?;
-        if recurrence_id != id
-            || *persisted_offset != offset
-            || *recurrence_revision != projected.recurrence_revision()
-            || goal != projected.goal()
-            || *unix_millis != projected.instant().unix_millis()
+        if recurrence_id != *id
+            || persisted_offset != offset
+            || recurrence_revision != projected.recurrence_revision()
+            || goal != *projected.goal()
+            || unix_millis != projected.instant().unix_millis()
         {
             return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
                 recurrence_id: id.clone(),
                 offset,
-                event_count,
+                event_count: 1,
             });
         }
-        Ok(Some(projected))
+        Ok(projected)
     }
 
     /// Returns every durable recurrence definition ordered by exact recurrence ID.
