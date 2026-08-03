@@ -341,6 +341,22 @@ Missing storage is never created. Exact lookup does not project unpersisted
 coordinates, scan occurrence inventory, read time, choose catch-up policy,
 materialize, dispatch, or execute work.
 
+Page one exact recurrence's sparse persisted occurrence provenance without
+granting global discovery or lifecycle authority:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence persisted path/to/events.sqlite3 recurrence-id 0 100
+```
+
+The command validates the exact recurrence ID and bounded page size before
+opening the existing database read-only. It emits only durable coordinates from
+the selected authored window in ascending offset order; gaps are omitted and
+`next_offset` advances by inspected authored coordinates, including across empty
+pages. Missing storage is never created, and malformed selected-window evidence
+fails closed. Paging reads no time, persists no cursor, performs no global
+inventory, and cannot choose catch-up policy, materialize, dispatch, or execute
+work.
+
 See [`docs/development-record-v1.md`](docs/development-record-v1.md) for the version 1 shape, invariants, stable diagnostics, and exit statuses.
 
 ## Development status
@@ -478,6 +494,7 @@ The first milestone is the **evidence loop**:
 128. Persist one exact recurrence occurrence through deterministic writable CLI JSON without granting catch-up, materialization, or execution authority. ✅
 129. Inspect one exact persisted recurrence occurrence through deterministic read-only CLI JSON without scanning unrelated streams or granting lifecycle authority. ✅
 130. Page sparse persisted recurrence provenance through bounded exact-recurrence authored-offset windows without granting global discovery or lifecycle authority. ✅
+131. Page sparse persisted recurrence provenance through bounded deterministic CLI JSON without granting global discovery or lifecycle authority. ✅
 
 ## Project documents
 

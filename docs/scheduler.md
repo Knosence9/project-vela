@@ -291,6 +291,34 @@ inventory, and cannot choose due or catch-up policy, generate identity,
 materialize, claim, cancel, dispatch, retry, grant permission, or execute work.
 See [ADR-0047](adr/0047-read-only-exact-persisted-recurrence-occurrence-cli.md).
 
+## Read-only persisted recurrence occurrence CLI paging
+
+`vela-dev recurrence persisted DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`
+validates the exact recurrence ID and positive, at-most-1024 page size before
+storage access. It opens only the caller-selected existing database through
+`RecurrenceStore::open_read_only` and delegates sparse authored-window paging to
+`RecurrenceStore::persisted_occurrences_page`.
+
+Success emits compact JSON with durable `occurrences` in ascending offset order
+and `next_offset` naming the first uninspected authored coordinate or `null` at
+the finite end. Missing coordinates are omitted, so a valid all-gap window emits
+an empty array with an advancing cursor. Every returned object preserves exact
+`recurrence_id`, `goal`, `offset`, `unix_millis`, and `definition_revision`.
+
+Invalid IDs and page sizes emit `invalid_recurrence_id` and
+`invalid_occurrence_page_size` before storage access. Missing definitions emit
+`recurrence_not_found`; invalid starts emit
+`recurrence_occurrence_out_of_range`. Open, replay, selected-window corruption,
+paging, and serialization failures emit
+`persisted_recurrence_occurrence_lookup_failed`. All failures are non-zero with
+empty stdout, missing storage is not created, and unrelated or out-of-window
+corruption cannot block the selected page.
+
+The command reads no ambient time, persists nothing, performs no global
+inventory, and cannot choose catch-up policy, generate identity, materialize,
+claim, cancel, dispatch, retry, grant permission, or execute work. See
+[ADR-0049](adr/0049-read-only-persisted-recurrence-occurrence-cli-paging.md).
+
 ## Read-only recurrence CLI inventory
 
 `vela-dev recurrence inspect DATABASE` opens the exact caller-selected database
@@ -397,4 +425,4 @@ read ambient time, dispatch, retry, or execute a schedule or task.
 
 The caller owns every status filter, every cutoff supplied to `list_due`, `claim`, `claim_next_due`, or `materialize_next_due`, every cancellation, claim, exact revision supplied to a mutation, task-ID binding decision, and action taken from a listed, exact, due, claimed, materialized, historical, or task-provenance result. Full, exact, status-filtered, historical, and task-provenance discovery are read-only and grant no authority; `open_read_only` additionally removes SQLite write and creation authority but is not a snapshot, secrecy boundary, or filesystem permission grant. Cancellation prevents future due selection but does not interrupt work already selected elsewhere. A revision identifies one exact persisted observation and prevents an earlier observer or claimant from consuming later lifecycle state; it is not worker identity, a permission grant, a lease, or proof of liveness. A claim is only a durable reservation, release is only caller-authored recovery evidence, and materialization only creates inert active task state: none infers worker health, starts or advances a workflow, calls a provider, invokes a tool, grants or revokes permission, sleeps, retries, or executes task work.
 
-Dispatch, occurrence inventory and lifecycle, catch-up policy, cron syntax, time zones, worker identity, distributed leases, automatic claim expiry, retries, and execution outcomes are intentionally deferred. Finite fixed-interval definitions from [ADR-0037](adr/0037-durable-finite-fixed-interval-recurrence-definitions.md) are inert immutable intent; exact projections and bounded pages remain read-only until callers explicitly persist one coordinate through [ADR-0045](adr/0045-durable-exact-recurrence-occurrence-provenance.md). Persisted provenance grants no catch-up, schedule/task materialization, cancellation, claim, dispatch, or execution authority. A process failure after a successful one-shot claim leaves the schedule claimed until an explicit caller releases or materializes it. See [ADR-0034](adr/0034-durable-one-shot-task-schedule-intent.md) for the one-shot lifecycle decision and rationale.
+Dispatch, global occurrence inventory and mutable lifecycle, catch-up policy, cron syntax, time zones, worker identity, distributed leases, automatic claim expiry, retries, and execution outcomes are intentionally deferred. Finite fixed-interval definitions from [ADR-0037](adr/0037-durable-finite-fixed-interval-recurrence-definitions.md) are inert immutable intent; exact projections and bounded pages remain read-only until callers explicitly persist one coordinate through [ADR-0045](adr/0045-durable-exact-recurrence-occurrence-provenance.md). Persisted provenance grants no catch-up, schedule/task materialization, cancellation, claim, dispatch, or execution authority. A process failure after a successful one-shot claim leaves the schedule claimed until an explicit caller releases or materializes it. See [ADR-0034](adr/0034-durable-one-shot-task-schedule-intent.md) for the one-shot lifecycle decision and rationale.

@@ -12,9 +12,10 @@ use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
     FixedIntervalRecurrence, OccurrenceCount, OccurrencePageSize, RecurrenceId,
-    RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceStore, ScheduleCancellation,
-    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
-    ScheduleStatus, ScheduleStore, ScheduledTask,
+    RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
+    RecurrenceStore, RecurrenceStoreError, ScheduleCancellation, ScheduleHistoryEvent, ScheduleId,
+    ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStatus, ScheduleStore,
+    ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -75,6 +76,13 @@ pub enum RecurrenceCommand {
     Get { database: PathBuf, id: String },
     /// Page exact occurrences for one finite recurrence through a read-only boundary.
     Occurrences {
+        database: PathBuf,
+        id: String,
+        start_offset: u64,
+        page_size: u64,
+    },
+    /// Page persisted provenance for one finite recurrence through a read-only boundary.
+    Persisted {
         database: PathBuf,
         id: String,
         start_offset: u64,
@@ -323,6 +331,15 @@ impl Cli {
                         page_size,
                     }),
             }) => page_recurrence_occurrences(&database, &id, start_offset, page_size),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::Persisted {
+                        database,
+                        id,
+                        start_offset,
+                        page_size,
+                    }),
+            }) => page_persisted_recurrence_occurrences(&database, &id, start_offset, page_size),
             Some(Command::Recurrence {
                 command:
                     Some(RecurrenceCommand::Occurrence {
@@ -834,20 +851,67 @@ fn page_recurrence_occurrences(
         }
         Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
     };
-    let inspection = RecurrenceOccurrencePageInspection {
+    let output = match serialize_recurrence_occurrence_page(&page) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn page_persisted_recurrence_occurrences(
+    database: &Path,
+    raw_id: &str,
+    start_offset: u64,
+    raw_page_size: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let page_size = match OccurrencePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_occurrence_page_size", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error("persisted_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    let page = match store.persisted_occurrences_page(&id, start_offset, page_size) {
+        Ok(page) => page,
+        Err(error @ RecurrenceStoreError::NotFound { .. }) => {
+            return extension_error("recurrence_not_found", error);
+        }
+        Err(error @ RecurrenceStoreError::OccurrenceOutOfRange { .. }) => {
+            return extension_error("recurrence_occurrence_out_of_range", error);
+        }
+        Err(error) => {
+            return extension_error("persisted_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    let output = match serialize_recurrence_occurrence_page(&page) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error("persisted_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn serialize_recurrence_occurrence_page(
+    page: &RecurrenceOccurrencePage,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&RecurrenceOccurrencePageInspection {
         occurrences: page
             .occurrences()
             .iter()
             .map(recurrence_occurrence_inspection)
             .collect(),
         next_offset: page.next_offset(),
-    };
-    let output = match serde_json::to_string(&inspection) {
-        Ok(output) => output,
-        Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
-    };
-    println!("{output}");
-    ExitCode::SUCCESS
+    })
 }
 
 fn get_recurrence_occurrence(database: &Path, raw_id: &str, offset: u64) -> ExitCode {
