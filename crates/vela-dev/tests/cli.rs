@@ -7,7 +7,7 @@ use vela_kernel::{
         OccurrenceCount, RecurrenceId, RecurrenceStore, ScheduleCancellation, ScheduleId,
         ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStore,
     },
-    task::{TaskGoal, TaskId},
+    task::{TaskGoal, TaskId, TaskStore},
 };
 
 const ECHO_COMPONENT: &str = r#"
@@ -2782,6 +2782,208 @@ fn recurrence_occurrence_persistence_fails_closed_for_invalid_coordinates() {
         .unwrap()
         .expect("original persisted occurrence");
     assert_eq!(occurrence.instant().unix_millis(), 10);
+}
+
+#[test]
+fn materializes_exact_recurrence_occurrence_as_deterministic_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact\nid").unwrap();
+    let task_id = TaskId::new("task\nid").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 2).unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "materialize",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+            "2",
+            "1",
+            task_id.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"recurrence_id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"offset\":2,\"unix_millis\":20,\"definition_revision\":1,",
+            "\"occurrence_revision\":2,\"task_id\":\"task\\nid\"}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    let materialized = store
+        .load_materialized_occurrence(&id, 2)
+        .unwrap()
+        .expect("materialized occurrence");
+    assert_eq!(materialized.revision(), 2);
+    assert_eq!(materialized.task_id(), &task_id);
+    let tasks = TaskStore::open(&database).expect("reopened task store");
+    let task = tasks.load(&task_id).unwrap().expect("materialized task");
+    assert_eq!(task.goal().as_str(), "preserve \"exact\" goal");
+}
+
+#[test]
+fn recurrence_occurrence_materialization_validates_ids_before_storage_access() {
+    let directory = tempdir().expect("recurrence database directory");
+
+    for (name, id, task_id, expected_error) in [
+        (
+            "invalid-recurrence.sqlite3",
+            "",
+            "task",
+            "invalid_recurrence_id",
+        ),
+        ("invalid-task.sqlite3", "valid", "", "invalid_task_id"),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "materialize",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                "0",
+                "1",
+                task_id,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+        assert!(!database.exists());
+    }
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "materialize",
+            directory.path().to_str().expect("UTF-8 directory path"),
+            "valid",
+            "0",
+            "1",
+            "task",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_materialization_failed:",
+        ));
+}
+
+#[test]
+fn recurrence_occurrence_materialization_fails_closed_for_invalid_state() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    for offset in 0..=2 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    drop(store);
+    let occupied = TaskId::new("occupied").unwrap();
+    TaskStore::open(&database)
+        .unwrap()
+        .start(occupied.clone(), TaskGoal::new("occupied goal").unwrap())
+        .unwrap();
+
+    let assert_failure = |id: &str, offset: &str, revision: &str, task_id: &str| {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "materialize",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                offset,
+                revision,
+                task_id,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: recurrence_occurrence_materialization_failed:",
+            ));
+    };
+
+    assert_failure("exact", "3", "1", "missing-occurrence");
+    assert_failure("exact", "0", "2", "stale");
+    assert_failure("exact", "1", "1", occupied.as_str());
+
+    let first_task = TaskId::new("first-binding").unwrap();
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "materialize",
+            database.to_str().expect("UTF-8 database path"),
+            "exact",
+            "2",
+            "1",
+            first_task.as_str(),
+        ])
+        .assert()
+        .success();
+    assert_failure("exact", "2", "2", "replacement");
+
+    let store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    assert!(
+        store
+            .load_materialized_occurrence(&id, 0)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .load_materialized_occurrence(&id, 1)
+            .unwrap()
+            .is_none()
+    );
+    let materialized = store
+        .load_materialized_occurrence(&id, 2)
+        .unwrap()
+        .expect("original materialization");
+    assert_eq!(materialized.task_id(), &first_task);
+
+    let tasks = TaskStore::open(&database).expect("reopened task store");
+    for absent in ["missing-occurrence", "stale", "replacement"] {
+        assert!(tasks.load(&TaskId::new(absent).unwrap()).unwrap().is_none());
+    }
+    assert_eq!(
+        tasks
+            .load(&occupied)
+            .unwrap()
+            .expect("original occupied task")
+            .goal()
+            .as_str(),
+        "occupied goal"
+    );
+    assert!(tasks.load(&first_task).unwrap().is_some());
 }
 
 #[test]

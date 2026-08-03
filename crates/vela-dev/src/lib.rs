@@ -11,8 +11,8 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    FixedIntervalRecurrence, OccurrenceCount, OccurrencePageSize, RecurrenceId,
-    RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
+    FixedIntervalRecurrence, MaterializedRecurrenceOccurrence, OccurrenceCount, OccurrencePageSize,
+    RecurrenceId, RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
     RecurrenceStore, RecurrenceStoreError, ScheduleCancellation, ScheduleHistoryEvent, ScheduleId,
     ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStatus, ScheduleStore,
     ScheduledTask,
@@ -100,6 +100,14 @@ pub enum RecurrenceCommand {
         id: String,
         expected_revision: u64,
         offset: u64,
+    },
+    /// Atomically bind one persisted occurrence to a caller-owned inert task.
+    Materialize {
+        database: PathBuf,
+        id: String,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        task_id: String,
     },
     /// Print every finite recurrence through a read-only storage boundary.
     Inspect { database: PathBuf },
@@ -358,6 +366,22 @@ impl Cli {
                     }),
             }) => persist_recurrence_occurrence(&database, &id, expected_revision, offset),
             Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::Materialize {
+                        database,
+                        id,
+                        offset,
+                        expected_occurrence_revision,
+                        task_id,
+                    }),
+            }) => materialize_recurrence_occurrence(
+                &database,
+                &id,
+                offset,
+                expected_occurrence_revision,
+                &task_id,
+            ),
+            Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Inspect { database }),
             }) => inspect_recurrences(&database),
             _ => ExitCode::SUCCESS,
@@ -394,6 +418,17 @@ struct RecurrenceOccurrenceInspection<'a> {
     offset: u64,
     unix_millis: u64,
     definition_revision: u64,
+}
+
+#[derive(Serialize)]
+struct MaterializedRecurrenceOccurrenceInspection<'a> {
+    recurrence_id: &'a str,
+    goal: &'a str,
+    offset: u64,
+    unix_millis: u64,
+    definition_revision: u64,
+    occurrence_revision: u64,
+    task_id: &'a str,
 }
 
 #[derive(Serialize)]
@@ -976,6 +1011,46 @@ fn persist_recurrence_occurrence(
     ExitCode::SUCCESS
 }
 
+fn materialize_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    offset: u64,
+    expected_occurrence_revision: u64,
+    raw_task_id: &str,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let task_id = match TaskId::new(raw_task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return extension_error("invalid_task_id", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error("recurrence_occurrence_materialization_failed", error);
+        }
+    };
+    let materialized =
+        match store.materialize_occurrence(&id, offset, expected_occurrence_revision, task_id) {
+            Ok(materialized) => materialized,
+            Err(error) => {
+                return extension_error("recurrence_occurrence_materialization_failed", error);
+            }
+        };
+    let output = match serde_json::to_string(&materialized_recurrence_occurrence_inspection(
+        &materialized,
+    )) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error("recurrence_occurrence_materialization_failed", error);
+        }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
 fn load_recurrence(
     database: &Path,
     id: &RecurrenceId,
@@ -1002,6 +1077,27 @@ fn recurrence_occurrence_inspection(
         offset: occurrence.offset(),
         unix_millis: occurrence.instant().unix_millis(),
         definition_revision: occurrence.recurrence_revision(),
+    }
+}
+
+fn materialized_recurrence_occurrence_inspection(
+    materialized: &MaterializedRecurrenceOccurrence,
+) -> MaterializedRecurrenceOccurrenceInspection<'_> {
+    let RecurrenceOccurrenceInspection {
+        recurrence_id,
+        goal,
+        offset,
+        unix_millis,
+        definition_revision,
+    } = recurrence_occurrence_inspection(materialized.occurrence());
+    MaterializedRecurrenceOccurrenceInspection {
+        recurrence_id,
+        goal,
+        offset,
+        unix_millis,
+        definition_revision,
+        occurrence_revision: materialized.revision(),
+        task_id: materialized.task_id().as_str(),
     }
 }
 
