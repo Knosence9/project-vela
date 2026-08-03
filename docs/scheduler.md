@@ -346,6 +346,28 @@ inventory, and cannot choose catch-up policy, generate identity, materialize,
 claim, cancel, dispatch, retry, grant permission, or execute work. See
 [ADR-0049](adr/0049-read-only-persisted-recurrence-occurrence-cli-paging.md).
 
+## Read-only recurrence task-provenance CLI
+
+`vela-dev recurrence task DATABASE TASK_ID` validates the exact caller-owned
+task identity before storage access, opens only the selected existing database
+through `RecurrenceStore::open_read_only`, and delegates strict selected-stream
+replay, canonical coordinate recovery, definition validation, and ambiguity
+detection to `RecurrenceStore::find_materialized_by_task_id`.
+
+Success emits one compact JSON object containing exact `task_id` and
+`occurrence`. A bound result uses the complete materialized occurrence shape:
+`recurrence_id`, `goal`, `offset`, `unix_millis`, `definition_revision`,
+`occurrence_revision`, and `task_id`. A valid unbound identity emits
+`"occurrence":null`. Every caller-authored string is JSON escaped.
+
+Invalid identities emit `invalid_task_id` before storage access. Open, replay,
+ambiguity, provenance, and serialization failures emit
+`recurrence_task_lookup_failed`, return non-zero, and emit no stdout. Missing
+storage is never created. The command reads no clock, mutates nothing,
+enumerates no unrelated occurrence, and grants no catch-up, due-selection,
+dispatch, workflow, provider/tool, permission, retry, or execution authority.
+See [ADR-0053](adr/0053-read-only-recurrence-task-provenance-cli.md).
+
 ## Read-only recurrence CLI inventory
 
 `vela-dev recurrence inspect DATABASE` opens the exact caller-selected database

@@ -109,6 +109,8 @@ pub enum RecurrenceCommand {
         expected_occurrence_revision: u64,
         task_id: String,
     },
+    /// Resolve one materialized occurrence from an exact task identity.
+    Task { database: PathBuf, task_id: String },
     /// Print every finite recurrence through a read-only storage boundary.
     Inspect { database: PathBuf },
 }
@@ -382,6 +384,9 @@ impl Cli {
                 &task_id,
             ),
             Some(Command::Recurrence {
+                command: Some(RecurrenceCommand::Task { database, task_id }),
+            }) => inspect_recurrence_task(&database, &task_id),
+            Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Inspect { database }),
             }) => inspect_recurrences(&database),
             _ => ExitCode::SUCCESS,
@@ -429,6 +434,12 @@ struct MaterializedRecurrenceOccurrenceInspection<'a> {
     definition_revision: u64,
     occurrence_revision: u64,
     task_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct RecurrenceTaskInspection<'a> {
+    task_id: &'a str,
+    occurrence: Option<MaterializedRecurrenceOccurrenceInspection<'a>>,
 }
 
 #[derive(Serialize)]
@@ -1099,6 +1110,32 @@ fn materialized_recurrence_occurrence_inspection(
         occurrence_revision: materialized.revision(),
         task_id: materialized.task_id().as_str(),
     }
+}
+
+fn inspect_recurrence_task(database: &Path, raw_task_id: &str) -> ExitCode {
+    let task_id = match TaskId::new(raw_task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return extension_error("invalid_task_id", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_task_lookup_failed", error),
+    };
+    let materialized = match store.find_materialized_by_task_id(&task_id) {
+        Ok(materialized) => materialized,
+        Err(error) => return extension_error("recurrence_task_lookup_failed", error),
+    };
+    let output = match serde_json::to_string(&RecurrenceTaskInspection {
+        task_id: task_id.as_str(),
+        occurrence: materialized
+            .as_ref()
+            .map(materialized_recurrence_occurrence_inspection),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_task_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn inspect_recurrences(database: &Path) -> ExitCode {

@@ -325,6 +325,20 @@ emits `task_id` plus either the complete deterministic schedule object or
 closed without partial output. Task lookup cannot mutate lifecycle state,
 dispatch, or execute work.
 
+Resolve the exact materialized recurrence occurrence bound to one caller-owned
+task identity:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence task path/to/events.sqlite3 task-id
+```
+
+The command validates the exact task ID before opening existing storage
+read-only and emits `task_id` plus either the complete deterministic materialized
+occurrence object or `"occurrence":null` for an unbound identity. Missing
+storage remains missing, and malformed or ambiguous selected bindings fail
+closed without partial output. Recurrence task lookup cannot read time, mutate,
+enumerate unrelated coordinates, dispatch, or execute work.
+
 Inspect one exact persisted recurrence occurrence without granting write,
 inventory, catch-up, or execution authority:
 
@@ -498,6 +512,7 @@ The first milestone is the **evidence loop**:
 132. Atomically materialize one exact persisted recurrence occurrence as one caller-identified inert active task without granting execution authority. ✅
 133. Materialize one exact persisted recurrence occurrence through deterministic writable CLI JSON without granting catch-up, dispatch, or execution authority. ✅
 134. Resolve one exact materialized recurrence occurrence from its task identity without granting lifecycle or execution authority. ✅
+135. Inspect exact materialized recurrence provenance by task identity through deterministic read-only CLI JSON without granting discovery or execution authority. ✅
 
 ## Project documents
 
