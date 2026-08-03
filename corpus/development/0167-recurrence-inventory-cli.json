@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Expose finite recurrence inventory through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/867 by rendering the kernel recurrence inventory as deterministic compact JSON from a read-only developer command.",
+    "acceptance_criteria": [
+      "Provide recurrence inspect over one caller-selected existing database without creating or mutating it.",
+      "Emit complete recurrence fields in deterministic identifier order, including an empty array for an empty valid store.",
+      "Fail non-zero with one escaped diagnostic and no partial stdout for missing, unreadable, or corrupted storage."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED recurrence CLI coverage.",
+      "outcome": "failure",
+      "diagnostic": "Three focused CLI integration tests failed because recurrence was not a recognized command.",
+      "patch": "Added success, empty-inventory, missing-storage, corruption, ordering, and non-mutation command coverage."
+    },
+    {
+      "summary": "Implemented a minimal read-only inventory adapter.",
+      "outcome": "success",
+      "diagnostic": "The kernel already owned discovery and validation, so the CLI only needed argument dispatch, deterministic serialization, and stable diagnostics.",
+      "patch": "Added recurrence inspect over RecurrenceStore::open_read_only and list, compact response types, categorized failures, help text, and ADR-0041."
+    },
+    {
+      "summary": "Waited for genuine review capacity before merge.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit initially returned Review limit reached, making its green status a false green.",
+      "patch": "Preserved exact head efa96add with auto-merge disabled, resumed once after cooldown and budget checks, and merged after CodeRabbit's recent-review summary covered the complete base-to-head range with no actionable comments."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can inspect the complete finite recurrence inventory as deterministic JSON without granting the CLI write or execution authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30762353684/job/91535052549", "status": "passed"},
+      {"command": "Pull request 868 squash merge e22b5b5eeaf2ca97a8faad987d1f308fbde11b9e", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Keep validation and ordering in the kernel and make the CLI a thin serialization boundary.",
+    "Fail before stdout so consumers never mistake partial inventory for authoritative state.",
+    "An inspection command should preserve missing storage rather than initialize it.",
+    "Review cooldowns are merge blockers, not timing hints to ignore."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/868"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

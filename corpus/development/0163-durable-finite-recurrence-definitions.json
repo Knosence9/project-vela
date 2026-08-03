@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist finite fixed-interval recurrence definitions",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/859 by durably storing immutable, validated finite recurrence definitions without granting scheduling or execution authority.",
+    "acceptance_criteria": [
+      "Persist and reload exact recurrence identity, goal, anchor, positive interval, positive occurrence count, final instant, and revision.",
+      "Reject invalid, overflowing, duplicate, malformed, unsupported, and multi-event definition state with typed evidence.",
+      "Document that definition persistence does not persist occurrences, read a clock, choose catch-up policy, dispatch, retry, or execute work."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED recurrence-store coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused recurrence-store test failed to compile because the recurrence persistence API and types did not exist.",
+      "patch": "Added integration coverage for exact persistence and reopen, duplicate creation, invalid values, overflow, and corrupted histories."
+    },
+    {
+      "summary": "Implemented immutable versioned definition streams.",
+      "outcome": "success",
+      "diagnostic": "Finite recurrence arithmetic was already validated, but no durable definition boundary preserved its authored identity and exact projection inputs.",
+      "patch": "Added typed recurrence identifiers and counts, strict version-1 event encoding and replay, exact load and create operations, and ADR-0037."
+    },
+    {
+      "summary": "Held the merge gate through a false-green review cooldown.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit initially reported a review limit, so its green status did not constitute substantive exact-head review evidence.",
+      "patch": "Kept auto-merge disabled, resumed review after the cooldown and shared-budget check, and merged only after exact-head CI, genuine review, and resolved threads."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela durably stores and strictly replays immutable finite fixed-interval recurrence definitions while leaving occurrence lifecycle and execution authority deferred.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30747824308/job/91496366243", "status": "passed"},
+      {"command": "Pull request 860 squash merge e39597f2f450f566c5270142dbfafd2da1b635a9", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Validate the representable final occurrence before making a recurrence definition durable.",
+    "One immutable event per definition keeps replay strict and leaves future mutation semantics explicit.",
+    "Persisting authored timing intent is not permission to decide due state or execute work.",
+    "A rate-limited green review status must not arm merge."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/860"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

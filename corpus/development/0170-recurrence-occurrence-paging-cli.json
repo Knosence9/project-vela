@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page finite recurrence occurrences through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/873 by composing exact recurrence replay with bounded occurrence paging in one read-only command.",
+    "acceptance_criteria": [
+      "Validate recurrence identity and page size before storage access, then load only the selected recurrence stream.",
+      "Emit ordered compact occurrence JSON with exact provenance and the first unreturned authored offset or null.",
+      "Preserve categorized failures and grant no persisted cursor, due, catch-up, materialization, claim, dispatch, retry, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED occurrence-paging CLI coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused CLI integration tests failed because recurrence occurrences was not recognized.",
+      "patch": "Added paging, final-page, invalid identity and size, out-of-range, missing and corrupt storage, exact-stream isolation, output, and non-mutation tests."
+    },
+    {
+      "summary": "Implemented the minimal read-only paging composition.",
+      "outcome": "success",
+      "diagnostic": "The kernel already owned exact replay and bounded arithmetic, so duplicating either in the CLI would weaken a tested boundary.",
+      "patch": "Composed RecurrenceStore::load with occurrences_page, reused borrowed JSON projection, added stable diagnostics and ADR-0044."
+    },
+    {
+      "summary": "Applied and re-reviewed error-taxonomy findings.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit identified duplicated exact-load flow and a future non-exhaustive lookup-error taxonomy that could be misclassified.",
+      "patch": "Centralized exact recurrence loading, preserved out-of-range versus infrastructure failures, reran pinned verification, and merged after CodeRabbit covered 38410d1 through exact head 294ec1f with no actionable comments."
+    }
+  ],
+  "outcome": {
+    "summary": "The CLI pages one exact durable finite recurrence in stable order through existing read-only kernel contracts and deterministic diagnostics.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30771267797/job/91558724730", "status": "passed"},
+      {"command": "Pull request 874 squash merge e8329b9aac5df7037073825f472532f848615699", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Compose exact load and bounded projection rather than scanning inventory or duplicating arithmetic.",
+    "Keep domain out-of-range failures distinct from storage and future infrastructure failures.",
+    "A continuation offset in output remains inert caller-owned projection state.",
+    "Review-fix commits require their own substantive incremental coverage."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/874"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

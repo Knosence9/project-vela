@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist exact recurrence occurrence provenance",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/875 by durably recording one immutable exact finite-recurrence coordinate without granting due or execution authority.",
+    "acceptance_criteria": [
+      "Use a canonical collision-free stream identity for recurrence ID and zero-based offset, then persist exact projected provenance once.",
+      "Validate the authoritative definition, requested revision, finite coordinate, payload version, event discriminator, stream identity, and complete single-event replay history.",
+      "Return typed missing, stale, out-of-range, duplicate, read-only, and corruption evidence while keeping occurrence records inert."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED durable-occurrence coverage.",
+      "outcome": "failure",
+      "diagnostic": "Recurrence-store integration tests failed because occurrence persistence, exact loading, and their typed errors did not exist.",
+      "patch": "Added persistence and reopen, coordinate isolation, duplicate and concurrent writes, validation, read-only, collision, and malformed-history tests."
+    },
+    {
+      "summary": "Implemented strict immutable occurrence streams.",
+      "outcome": "success",
+      "diagnostic": "Projected occurrences were reproducible but could not serve as durable provenance for later lifecycle slices without a canonical exact-coordinate record.",
+      "patch": "Added versioned occurrence events, length-prefixed collision-free stream keys, strict exact replay, typed errors, authoritative projection validation, and ADR-0045."
+    },
+    {
+      "summary": "Hardened concurrency and corruption portability during review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found reliance on rusqlite's default busy timeout and SQLite's version-sensitive acceptance of JSON stored as BLOB in json_extract; it also suggested clearer stream and version contracts.",
+      "patch": "Set an explicit five-second busy timeout, cast test payloads to text for JSON extraction, separated occurrence payload versioning, pinned length-prefix keys, guarded definition revision, resolved every thread, and obtained CodeRabbit's no-actionable-comments review summary for 43965d4 through exact head de56d31 after cooldown."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela durably records and strictly reloads one immutable exact recurrence occurrence coordinate as inert provenance tied to its authoritative definition revision.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30776901715/job/91573997107", "status": "passed"},
+      {"command": "Pull request 876 squash merge f6b4115d25ac1421a1c6fae29f90b905fdab8ac0", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Canonical composite stream keys need an injective encoding that remains safe when identifiers contain delimiters.",
+    "Persisted occurrence provenance must be checked against the authoritative definition and revision both before append and during replay.",
+    "Configure concurrency behavior explicitly and avoid version-sensitive SQLite BLOB-to-JSON assumptions.",
+    "A persisted occurrence is evidence only; due policy, claims, materialization, dispatch, retries, and execution remain separate authority boundaries."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/876"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
