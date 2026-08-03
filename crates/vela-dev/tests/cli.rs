@@ -2961,17 +2961,29 @@ fn recurrence_task_lookup_reports_ambiguous_corrupted_bindings() {
             "$: recurrence_task_lookup_failed: \"task duplicate-task is bound to 2 recurrence occurrences\"\n",
         );
 
-    rusqlite::Connection::open(&database)
-        .unwrap()
-        .execute_batch(
-            "UPDATE events SET payload = CAST(json_object('task_id', 'second-task') AS BLOB)
-             WHERE event_type = 'recurrence.occurrence_materialized'
-               AND stream_id LIKE 'recurrence-occurrence:6:second:%';
-             UPDATE events SET payload = X'7B7D'
-             WHERE event_type = 'recurrence.occurrence_persisted'
-               AND stream_id LIKE 'recurrence-occurrence:5:first:%';",
-        )
-        .unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE events SET payload = CAST(json_object('task_id', 'second-task') AS BLOB)
+                 WHERE event_type = 'recurrence.occurrence_materialized'
+                   AND stream_id LIKE 'recurrence-occurrence:6:second:%'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE events SET payload = X'7B7D'
+                 WHERE event_type = 'recurrence.occurrence_persisted'
+                   AND stream_id LIKE 'recurrence-occurrence:5:first:%'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
     Command::cargo_bin("vela-dev")
         .expect("vela-dev binary")
         .args([
@@ -2984,7 +2996,7 @@ fn recurrence_task_lookup_reports_ambiguous_corrupted_bindings() {
         .code(1)
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::starts_with(
-            "$: recurrence_task_lookup_failed:",
+            "$: recurrence_task_lookup_failed: \"recurrence replay error:",
         ));
 }
 
