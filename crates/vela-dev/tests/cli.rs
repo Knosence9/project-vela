@@ -3528,6 +3528,237 @@ fn persisted_recurrence_occurrence_paging_fails_closed_for_missing_or_invalid_ev
 }
 
 #[test]
+fn pages_sparse_materialized_recurrence_occurrences_as_deterministic_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    let id = RecurrenceId::new("exact\nid").unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(5).unwrap(),
+        )
+        .unwrap();
+    for offset in [1, 2, 3] {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    store
+        .materialize_occurrence(&id, 1, 1, TaskId::new("task\none").unwrap())
+        .unwrap();
+    store
+        .materialize_occurrence(&id, 3, 1, TaskId::new("task-three").unwrap())
+        .unwrap();
+    drop(store);
+
+    for (start, size, expected) in [
+        (
+            "0",
+            "3",
+            concat!(
+                "{\"occurrences\":[{\"recurrence_id\":\"exact\\nid\",",
+                "\"goal\":\"preserve \\\"exact\\\" goal\",\"offset\":1,",
+                "\"unix_millis\":15,\"definition_revision\":1,",
+                "\"occurrence_revision\":2,\"task_id\":\"task\\none\"}],",
+                "\"next_offset\":3}\n"
+            ),
+        ),
+        ("2", "1", "{\"occurrences\":[],\"next_offset\":3}\n"),
+        (
+            "3",
+            "2",
+            concat!(
+                "{\"occurrences\":[{\"recurrence_id\":\"exact\\nid\",",
+                "\"goal\":\"preserve \\\"exact\\\" goal\",\"offset\":3,",
+                "\"unix_millis\":25,\"definition_revision\":1,",
+                "\"occurrence_revision\":2,\"task_id\":\"task-three\"}],",
+                "\"next_offset\":null}\n"
+            ),
+        ),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "materialized",
+                database.to_str().expect("UTF-8 database path"),
+                "exact\nid",
+                start,
+                size,
+            ])
+            .assert()
+            .success()
+            .stdout(expected)
+            .stderr(predicate::str::is_empty());
+    }
+}
+
+#[test]
+fn materialized_recurrence_occurrence_paging_validates_before_storage_access() {
+    let directory = tempdir().expect("recurrence database directory");
+    for (name, id, page_size, expected_error) in [
+        ("invalid-id.sqlite3", "", "1", "invalid_recurrence_id"),
+        (
+            "zero-size.sqlite3",
+            "valid",
+            "0",
+            "invalid_occurrence_page_size",
+        ),
+        (
+            "oversized.sqlite3",
+            "valid",
+            "1025",
+            "invalid_occurrence_page_size",
+        ),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "materialized",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                "0",
+                page_size,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+        assert!(!database.exists());
+    }
+}
+
+#[test]
+fn materialized_recurrence_occurrence_paging_categorizes_bounds_and_corruption() {
+    let directory = tempdir().expect("recurrence database directory");
+    let missing = directory.path().join("missing.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "materialized",
+            missing.to_str().unwrap(),
+            "exact",
+            "0",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: materialized_recurrence_occurrence_lookup_failed:",
+        ));
+    assert!(!missing.exists());
+
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    let id = RecurrenceId::new("exact").unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    for offset in 0..4 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+        store
+            .materialize_occurrence(
+                &id,
+                offset,
+                1,
+                TaskId::new(format!("task-{offset}")).unwrap(),
+            )
+            .unwrap();
+    }
+    let unrelated = RecurrenceId::new("unrelated").unwrap();
+    store
+        .create(
+            unrelated.clone(),
+            TaskGoal::new("unrelated goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&unrelated, 1, 0).unwrap();
+    store
+        .materialize_occurrence(&unrelated, 0, 1, TaskId::new("unrelated-task").unwrap())
+        .unwrap();
+    drop(store);
+
+    for (id, start, expected_error) in [
+        ("absent", "0", "recurrence_not_found"),
+        ("exact", "4", "recurrence_occurrence_out_of_range"),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "materialized",
+                database.to_str().unwrap(),
+                id,
+                start,
+                "1",
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+    }
+
+    assert_eq!(
+        rusqlite::Connection::open(&database)
+            .unwrap()
+            .execute(
+                "UPDATE events SET payload_version = 2
+                 WHERE event_type = 'recurrence.occurrence_materialized'
+                   AND json_extract(CAST(payload AS TEXT), '$.task_id')
+                       IN ('task-3', 'unrelated-task')",
+                [],
+            )
+            .unwrap(),
+        2
+    );
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "materialized",
+            database.to_str().unwrap(),
+            "exact",
+            "0",
+            "3",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"next_offset\":3"))
+        .stderr(predicate::str::is_empty());
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "materialized",
+            database.to_str().unwrap(),
+            "exact",
+            "3",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: materialized_recurrence_occurrence_lookup_failed:",
+        ));
+}
+
+#[test]
 fn recurrence_lookup_validates_id_and_reports_missing_evidence_without_creation() {
     let directory = tempdir().expect("recurrence database directory");
     let missing_database = directory.path().join("missing.sqlite3");
