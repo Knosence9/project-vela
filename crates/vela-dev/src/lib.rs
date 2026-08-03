@@ -80,6 +80,13 @@ pub enum RecurrenceCommand {
         start_offset: u64,
         page_size: u64,
     },
+    /// Persist provenance for one exact authored recurrence occurrence.
+    Persist {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        offset: u64,
+    },
     /// Print every finite recurrence through a read-only storage boundary.
     Inspect { database: PathBuf },
 }
@@ -310,6 +317,15 @@ impl Cli {
                         page_size,
                     }),
             }) => page_recurrence_occurrences(&database, &id, start_offset, page_size),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::Persist {
+                        database,
+                        id,
+                        expected_revision,
+                        offset,
+                    }),
+            }) => persist_recurrence_occurrence(&database, &id, expected_revision, offset),
             Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Inspect { database }),
             }) => inspect_recurrences(&database),
@@ -815,6 +831,38 @@ fn page_recurrence_occurrences(
     let output = match serde_json::to_string(&inspection) {
         Ok(output) => output,
         Err(error) => return extension_error("recurrence_occurrence_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn persist_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    offset: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error("recurrence_occurrence_persistence_failed", error);
+        }
+    };
+    let occurrence = match store.persist_occurrence(&id, expected_revision, offset) {
+        Ok(occurrence) => occurrence,
+        Err(error) => {
+            return extension_error("recurrence_occurrence_persistence_failed", error);
+        }
+    };
+    let output = match serde_json::to_string(&recurrence_occurrence_inspection(&occurrence)) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error("recurrence_occurrence_persistence_failed", error);
+        }
     };
     println!("{output}");
     ExitCode::SUCCESS

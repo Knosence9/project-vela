@@ -2505,6 +2505,138 @@ fn pages_exact_finite_recurrence_occurrences_as_deterministic_json() {
 }
 
 #[test]
+fn persists_exact_recurrence_occurrence_as_deterministic_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            RecurrenceId::new("exact\nid").unwrap(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "persist",
+            database.to_str().expect("UTF-8 database path"),
+            "exact\nid",
+            "1",
+            "2",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"recurrence_id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"offset\":2,\"unix_millis\":20,\"definition_revision\":1}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    let occurrence = store
+        .load_occurrence(&RecurrenceId::new("exact\nid").unwrap(), 2)
+        .unwrap()
+        .expect("persisted occurrence");
+    assert_eq!(occurrence.instant().unix_millis(), 20);
+}
+
+#[test]
+fn recurrence_occurrence_persistence_validates_id_before_storage_access() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("missing.sqlite3");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "persist",
+            database.to_str().expect("UTF-8 database path"),
+            "",
+            "1",
+            "0",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: invalid_recurrence_id:"));
+    assert!(!database.exists());
+}
+
+#[test]
+fn recurrence_occurrence_persistence_fails_closed_for_invalid_coordinates() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            RecurrenceId::new("exact").unwrap(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    for (id, revision, offset) in [
+        ("absent", "1", "0"),
+        ("exact", "2", "0"),
+        ("exact", "1", "2"),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "persist",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                revision,
+                offset,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: recurrence_occurrence_persistence_failed:",
+            ));
+    }
+
+    let command = || {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "persist",
+                database.to_str().expect("UTF-8 database path"),
+                "exact",
+                "1",
+                "0",
+            ])
+            .assert()
+    };
+    command().success();
+    command()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_persistence_failed:",
+        ));
+
+    let store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    let occurrence = store
+        .load_occurrence(&RecurrenceId::new("exact").unwrap(), 0)
+        .unwrap()
+        .expect("original persisted occurrence");
+    assert_eq!(occurrence.instant().unix_millis(), 10);
+}
+
+#[test]
 fn recurrence_occurrence_paging_validates_inputs_before_storage_access() {
     let directory = tempdir().expect("recurrence database directory");
 

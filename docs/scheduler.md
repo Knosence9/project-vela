@@ -244,6 +244,29 @@ and cannot mutate, materialize, claim, cancel, dispatch, retry, grant permission
 or execute work. See
 [ADR-0044](adr/0044-read-only-exact-finite-recurrence-occurrence-cli-paging.md).
 
+## Writable exact recurrence occurrence provenance CLI
+
+`vela-dev recurrence persist DATABASE RECURRENCE_ID EXPECTED_REVISION OFFSET`
+validates the exact recurrence ID before storage access; clap parses the expected
+definition revision and zero-based offset as non-negative `u64` values before
+command execution. It opens only the caller-selected database through
+`RecurrenceStore::open` and delegates exact definition replay, revision and
+bounds validation, duplicate protection, projection, and append to
+`RecurrenceStore::persist_occurrence`.
+
+Success emits one compact occurrence object preserving exact `recurrence_id`,
+`goal`, `offset`, `unix_millis`, and `definition_revision`. Invalid IDs emit
+`invalid_recurrence_id` without creating storage. Missing definitions, stale
+revisions, out-of-range offsets, duplicate coordinates, invalid durable history,
+open, replay, append, and serialization failures emit
+`recurrence_occurrence_persistence_failed`, return non-zero, and emit no partial
+stdout. Failed persistence cannot replace an existing coordinate.
+
+The command reads no ambient time, chooses no due or catch-up policy, generates
+no identity, and cannot create schedules or tasks, claim, cancel, dispatch,
+retry, grant permission, or execute work. See
+[ADR-0046](adr/0046-writable-exact-recurrence-occurrence-provenance-cli.md).
+
 ## Read-only recurrence CLI inventory
 
 `vela-dev recurrence inspect DATABASE` opens the exact caller-selected database
