@@ -1,4 +1,4 @@
-use std::{fmt, path::Path};
+use std::{fmt, path::Path, time::Duration};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
@@ -308,6 +308,7 @@ pub struct EventLog {
 impl EventLog {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, EventLogError> {
         let connection = Connection::open(path)?;
+        connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         let journal_mode: String =
             connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;

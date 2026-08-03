@@ -657,6 +657,27 @@ fn occurrence_coordinates_are_collision_free_and_duplicates_are_preserved() {
     let first = store.persist_occurrence(&first_id, 1, 0).unwrap();
     let second = store.persist_occurrence(&second_id, 1, 1).unwrap();
     assert_ne!(first, second);
+    let connection = rusqlite::Connection::open(directory.path().join("events.sqlite3")).unwrap();
+    let mut key_statement = connection
+        .prepare(
+            "SELECT stream_id FROM events
+             WHERE event_type = 'recurrence.occurrence_persisted' ORDER BY stream_id",
+        )
+        .unwrap();
+    let keys = key_statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        keys,
+        vec![
+            "recurrence-occurrence:1:a:1".to_owned(),
+            "recurrence-occurrence:3:a:1:0".to_owned(),
+        ]
+    );
+    drop(key_statement);
+    drop(connection);
     assert!(matches!(
         store.persist_occurrence(&first_id, 1, 0).unwrap_err(),
         RecurrenceStoreError::OccurrenceAlreadyPersisted { recurrence_id, offset: 0 }
@@ -855,7 +876,7 @@ fn exact_occurrence_replay_rejects_event_and_payload_corruption() {
     let mut streams = connection
         .prepare(
             "SELECT stream_id FROM events WHERE event_type = 'recurrence.occurrence_persisted'
-             ORDER BY json_extract(payload, '$.offset')",
+             ORDER BY json_extract(CAST(payload AS TEXT), '$.offset')",
         )
         .unwrap();
     let stream_ids = streams

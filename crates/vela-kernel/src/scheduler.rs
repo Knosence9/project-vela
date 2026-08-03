@@ -19,6 +19,7 @@ const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
 const RECURRENCE_CREATED_EVENT_TYPE: &str = "recurrence.fixed_interval_created";
 const RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE: &str = "recurrence.occurrence_persisted";
 const RECURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
+const RECURRENCE_OCCURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const RECURRENCE_STREAM_PREFIX: &str = "recurrence:";
 const RECURRENCE_OCCURRENCE_STREAM_PREFIX: &str = "recurrence-occurrence:";
 
@@ -1742,6 +1743,7 @@ fn recurrence_stream(id: &RecurrenceId) -> StreamId {
         .expect("a prefixed recurrence stream is never empty")
 }
 
+/// Encodes a coordinate with the ID byte length so separator-containing IDs cannot collide.
 fn recurrence_occurrence_stream(id: &RecurrenceId, offset: u64) -> StreamId {
     StreamId::new(format!(
         "{RECURRENCE_OCCURRENCE_STREAM_PREFIX}{}:{id}:{offset}",
@@ -1768,12 +1770,12 @@ impl Event for RecurrenceOccurrenceEvent {
     }
 
     fn payload_version(&self) -> u32 {
-        RECURRENCE_EVENT_PAYLOAD_VERSION
+        RECURRENCE_OCCURRENCE_EVENT_PAYLOAD_VERSION
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
         if event_type != RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE
-            || payload_version != RECURRENCE_EVENT_PAYLOAD_VERSION
+            || payload_version != RECURRENCE_OCCURRENCE_EVENT_PAYLOAD_VERSION
         {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
