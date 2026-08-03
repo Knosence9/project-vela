@@ -1,0 +1,55 @@
+# ADR-0054: Bounded materialized recurrence occurrence paging
+
+- **Status:** accepted
+- **Date:** 2026-08-03
+- **Decision and execution issue:** [#899](https://github.com/Knosence9/project-vela/issues/899)
+- **Related:** ADR-0048, ADR-0050, ADR-0052
+
+## Context
+
+ADR-0050 atomically binds one exact persisted recurrence occurrence to one inert caller-owned task, while ADR-0052 resolves one binding from its task identity. Callers still cannot inspect materialized bindings across a bounded range of one known recurrence without issuing one exact lookup per authored coordinate.
+
+A global materialized-occurrence inventory would add unrelated discovery, ordering, allocation, and corruption-domain policy. ADR-0048 already provides a finite authored-offset cursor and allocation bound scoped to one immutable recurrence. Reusing that model is the smallest responsible discovery boundary.
+
+## Decision
+
+`RecurrenceStore::materialized_occurrences_page(id, start_offset, page_size)` strictly loads one exact recurrence definition. A missing definition returns typed `NotFound` evidence. `OccurrencePageSize` remains the shared positive `1..=1024` work and allocation bound, and a start at or beyond the authored occurrence count returns typed `OccurrenceOutOfRange` evidence.
+
+The method inspects exactly the authored offset window beginning at `start_offset`, in ascending order. It returns only complete `MaterializedRecurrenceOccurrence` bindings. Missing and persisted-only coordinates are omitted, so a valid page may be empty. `next_offset` is the first uninspected authored offset, or `None` when the inspected window reaches the finite definition end; cursor progress depends on inspected coordinates rather than result density.
+
+The selected definition is replayed once. Every selected existing occurrence stream is canonically replayed and validated against that authoritative definition. Selected-window corruption fails closed before a partial page is returned. Corruption in unrelated recurrence definitions or coordinates outside the selected window cannot block the page.
+
+The boundary works through `open_read_only`, reads no ambient clock, and mutates nothing. Returned bindings and cursors are inspection evidence only; they grant no catch-up, due-selection, identity generation, lifecycle mutation, claim, permission, dispatch, retry, provider/tool, workflow, or execution authority.
+
+## Alternatives considered
+
+### Inventory every materialized occurrence globally
+
+Rejected because one caller-selected recurrence already provides a finite stable cursor space. Global discovery would broaden authority, allocation, ordering, and corruption policy unnecessarily.
+
+### Return persisted-only coordinates with a null task
+
+Rejected because this boundary specifically inventories materialized bindings. Mixing lifecycle states would duplicate the existing persisted provenance page and weaken the result contract.
+
+### Advance by the number of returned bindings
+
+Rejected because sparse pages could stall or require unbounded scanning. Advancing by inspected authored coordinates preserves deterministic bounded work, including empty pages.
+
+### Add a CLI adapter in the same slice
+
+Rejected because the kernel page shape, sparse cursor semantics, and corruption isolation should be validated independently before fixing an automation JSON contract.
+
+## Consequences
+
+- Callers can inspect sparse materialized task bindings with bounded work and allocation.
+- Persisted-only gaps are omitted while the cursor still advances deterministically.
+- Exact lookup, reverse task lookup, and page lookup share strict canonical occurrence replay and authoritative definition validation.
+- Global inventory, CLI exposure, repair, catch-up policy, lifecycle expansion, dispatch, and execution remain deferred.
+
+## Verification
+
+Strict RED→GREEN tests prove sparse ordered bindings with complete provenance, omission of persisted-only coordinates, empty-gap progress, final-page truncation, read-only reopen, missing-definition and out-of-range errors, selected-window fail-closed corruption, and isolation from unrelated and out-of-window corruption. The complete repository quality gate must pass.
+
+## Revisit when
+
+Reconsider before adding global materialized-occurrence inventory, a persisted cursor, task-binding repair, mutable recurrence definitions, catch-up or missed-run selection, generated task identities, lifecycle expansion, workers, clocks, dispatch, retries, or execution.
