@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist exact recurrence occurrence provenance through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/879 by exposing the kernel's revision-bound exact occurrence persistence as a bounded CLI command.",
+    "acceptance_criteria": [
+      "Validate recurrence identity before storage access and delegate revision, bounds, duplicate, and replay guarantees to the recurrence store.",
+      "Emit the established compact deterministic occurrence JSON after one successful append.",
+      "Keep persisted provenance inert and grant no due, claim, materialization, dispatch, retry, or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED writable recurrence CLI coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused CLI integration tests failed because recurrence persist was not a recognized subcommand.",
+      "patch": "Added success, pre-open identity validation, missing, stale, out-of-range, duplicate, reopen, exact JSON, and first-write preservation tests."
+    },
+    {
+      "summary": "Implemented the minimal persistence adapter.",
+      "outcome": "success",
+      "diagnostic": "Reimplementing projection or append validation in the CLI would duplicate the kernel's authoritative permission boundary.",
+      "patch": "Added recurrence persist, delegated mutation to RecurrenceStore::persist_occurrence, reused occurrence serialization, categorized failures, and documented ADR-0046."
+    },
+    {
+      "summary": "Preserved merge through review throttling.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit initially returned a false-green rate-limited status instead of substantive review evidence.",
+      "patch": "Kept auto-merge disabled through the stated cooldown, deliberately resumed review, and merged only after the exact head had a no-actionable-comments review and successful Rust quality gate."
+    }
+  ],
+  "outcome": {
+    "summary": "The CLI now records one exact immutable recurrence occurrence with deterministic output while preserving the kernel-owned revision and execution-authority boundaries.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0172-recurrence-occurrence-persistence-cli.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 174 records: 174 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30784371262/job/91595027984",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 880 squash merge 814cf960ad4bc4e44d47c0bf43bfb6879fd13ec9",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A writable CLI should adapt the kernel's mutation contract rather than reproduce authoritative projection or append checks.",
+    "Validate identity before opening storage so malformed input cannot create or mutate a database.",
+    "Duplicate persistence must preserve the first immutable occurrence record.",
+    "A green rate-limited review status is not review evidence; preserve merge state until substantive review capacity returns.",
+    "Persisted occurrence provenance remains evidence rather than execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/880"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
