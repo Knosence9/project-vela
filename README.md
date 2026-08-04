@@ -354,6 +354,22 @@ storage access; missing storage remains missing, and selected corruption fails
 closed without partial output. Paging reads no clock, mutates nothing, and
 grants no catch-up, dispatch, permission, or execution authority.
 
+Page one exact finite recurrence through an explicit inclusive due cutoff:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence due path/to/events.sqlite3 recurrence-id 0 128 1754049600000
+```
+
+The command validates the exact identity and bounded page size before opening
+existing storage read-only, then emits complete occurrences in authored-offset
+order. `next_offset` identifies the first uninspected coordinate after a full
+page, the first future coordinate when the cutoff stops selection, or `null`
+only at the finite definition end. An empty page can therefore preserve a
+non-null cursor for a later caller-owned cutoff. Missing storage remains missing,
+and selected malformed definition evidence fails closed without partial JSON.
+The command reads no clock, persists no cursor, chooses no catch-up policy, and
+cannot generate identity, materialize, dispatch, or execute work.
+
 Inspect one exact persisted recurrence occurrence without granting write,
 inventory, catch-up, or execution authority:
 
@@ -531,6 +547,7 @@ The first milestone is the **evidence loop**:
 136. Page sparse materialized recurrence bindings through bounded exact-recurrence authored-offset windows without granting global discovery or lifecycle authority. ✅
 137. Page sparse materialized recurrence bindings through bounded deterministic CLI JSON without granting global discovery or lifecycle authority. ✅
 138. Page one exact finite recurrence through an inclusive caller-owned due cutoff with a resumable bounded cursor and no catch-up or execution authority. ✅
+139. Page one exact recurrence's due occurrences through deterministic read-only CLI JSON without reading ambient time or granting catch-up or execution authority. ✅
 
 ## Project documents
 
