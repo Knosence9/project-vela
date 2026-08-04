@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page materialized recurrence occurrence bindings",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/899 by inspecting complete materialized task bindings through one allocation-bounded exact-recurrence authored window.",
+    "acceptance_criteria": [
+      "Inspect at most the validated page-size bound and return bindings in ascending authored-offset order.",
+      "Advance the cursor by inspected authored coordinates across missing and persisted-only gaps.",
+      "Fail closed on selected-window corruption while isolating unrelated and out-of-window evidence."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Kernel integration tests failed because materialized_occurrences_page did not exist.",
+      "patch": "Added focused integration coverage for the acceptance contract before adding production behavior."
+    },
+    {
+      "summary": "Implemented the bounded contract.",
+      "outcome": "success",
+      "diagnostic": "Added bounded authored-window paging over canonical strict occurrence replay and returned only complete materialized projections.",
+      "patch": "Added bounded authored-window paging over canonical strict occurrence replay and returned only complete materialized projections."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "Independent review and the substantive automated walkthrough found no actionable defect; the exact one-commit head passed the Rust quality gate.",
+      "patch": "Reused definition paging, occurrence-state validation, and the shared page-size/error contracts. Reran the complete repository quality gate after the exact implementation state was ready."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel pages sparse materialized recurrence bindings deterministically without treating gaps as cursor termination or broadening lifecycle authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0180-materialized-recurrence-paging.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 185 records: 185 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30857526521/job/91831900863",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 900 squash merge 2c42c86ba93a07f40b5ca5d6c2607f18fac6402a",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Sparse result density must not control cursor progress; authored coordinates are the stable paging domain.",
+    "Selected-window corruption should fail the page before partial output, while unrelated evidence remains outside the query boundary.",
+    "Reusing exact occurrence replay keeps paging provenance aligned with single-coordinate lookup.",
+    "Materialized inspection is read-only and grants no due selection, catch-up, dispatch, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/900"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

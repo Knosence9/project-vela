@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist due recurrence pages atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/907 by persisting one bounded exact-recurrence due page as an all-or-nothing provenance unit.",
+    "acceptance_criteria": [
+      "Validate the observed immutable definition revision and select through the caller-owned inclusive cutoff.",
+      "Recheck the recurrence prerequisite and every selected absent coordinate in one immediate transaction.",
+      "Persist the complete page or none on duplicate, stale, corruption, serialization, storage, or competing-write failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Recurrence-store integration tests failed because persist_due_occurrences_page did not exist.",
+      "patch": "Added focused integration coverage for the acceptance contract before adding production behavior."
+    },
+    {
+      "summary": "Implemented the bounded contract.",
+      "outcome": "success",
+      "diagnostic": "Added shared due selection and atomic multi-stream append with typed stale, duplicate, bounds, and corruption failures.",
+      "patch": "Added shared due selection and atomic multi-stream append with typed stale, duplicate, bounds, and corruption failures."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit suggested an additional non-empty cutoff-truncated transaction case. The finding was non-blocking because due selection/cursor truncation and committed-page atomicity were already tested independently, but it preserved a concrete lesson to combine policy and transaction assertions when extending the suite.",
+      "patch": "Reused one due-page projection helper and kept the event-log batch helper crate-private. Reran the complete repository quality gate after the exact implementation state was ready."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel records a caller-selected bounded due unit without partial-page provenance or hidden clock, cursor, identity, or execution policy.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0184-atomic-due-recurrence-persistence.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 185 records: 185 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30875465340/job/91885925123",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 908 squash merge 4b0831c1100b2d105f6d76bc1aaa031289ab19d4",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Repeated single-coordinate writes cannot provide page-level crash atomicity; all selected streams need one transaction.",
+    "The immutable recurrence prerequisite and selected stream absence must be rechecked inside the write transaction.",
+    "Existing provenance should fail explicitly rather than become implicit sparse idempotency.",
+    "Combined cutoff-truncation and commit tests are valuable future defense even when each contract is already proven independently.",
+    "Atomic persistence records provenance only and grants no materialization, dispatch, retry, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/908"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

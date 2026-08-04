@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist due recurrence pages through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/909 by exposing atomic bounded due-page provenance persistence through a thin deterministic writable CLI adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity and page size before writable storage access and require the observed definition revision.",
+      "Delegate due selection and all-or-nothing persistence to the kernel and emit complete occurrence-page JSON.",
+      "Emit one categorized escaped diagnostic with no stdout and no selected prefix on every failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI integration test failed because persist-due was an unrecognized recurrence subcommand.",
+      "patch": "Added focused integration coverage for the acceptance contract before adding production behavior."
+    },
+    {
+      "summary": "Implemented the bounded contract.",
+      "outcome": "success",
+      "diagnostic": "Added recurrence persist-due and delegated validated identity, revision, cursor, page size, and cutoff directly to RecurrenceStore::persist_due_occurrences_page.",
+      "patch": "Added recurrence persist-due and delegated validated identity, revision, cursor, page size, and cutoff directly to RecurrenceStore::persist_due_occurrences_page."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "Independent codex review reported no actionable correctness findings, the substantive automated review completed without actionable comments, and the exact one-commit head passed the Rust quality gate.",
+      "patch": "Reused occurrence-page serialization and retained all selection and transaction policy in the kernel. Reran the complete repository quality gate after the exact implementation state was ready."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can persist one bounded due recurrence page atomically through deterministic JSON without the CLI inventing clock, catch-up, identity, or execution policy.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0185-atomic-due-recurrence-persistence-cli.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 185 records: 185 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30877713826/job/91892420056",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 910 squash merge b70592c5cb6f64e49761afc33e1525f212a76e79",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A writable CLI should preserve the kernel atomic unit rather than loop over exact-coordinate commands.",
+    "Validation of simple identity and allocation bounds should happen before storage access; revision and transaction checks belong to the kernel.",
+    "Read-only due and writable persist-due output should share one exact page projection.",
+    "The command persists provenance only and cannot generate task identities, materialize, dispatch, retry, grant permission, or execute work."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/910"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
