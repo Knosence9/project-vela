@@ -530,6 +530,7 @@ The first milestone is the **evidence loop**:
 135. Inspect exact materialized recurrence provenance by task identity through deterministic read-only CLI JSON without granting discovery or execution authority. ✅
 136. Page sparse materialized recurrence bindings through bounded exact-recurrence authored-offset windows without granting global discovery or lifecycle authority. ✅
 137. Page sparse materialized recurrence bindings through bounded deterministic CLI JSON without granting global discovery or lifecycle authority. ✅
+138. Page one exact finite recurrence through an inclusive caller-owned due cutoff with a resumable bounded cursor and no catch-up or execution authority. ✅
 
 ## Project documents
 
