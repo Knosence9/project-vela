@@ -11,8 +11,9 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    FixedIntervalRecurrence, MaterializedRecurrenceOccurrence, OccurrenceCount, OccurrencePageSize,
-    RecurrenceId, RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
+    FixedIntervalRecurrence, MaterializedRecurrenceOccurrence,
+    MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize, RecurrenceId,
+    RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
     RecurrenceStore, RecurrenceStoreError, ScheduleCancellation, ScheduleHistoryEvent, ScheduleId,
     ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStatus, ScheduleStore,
     ScheduledTask,
@@ -83,6 +84,13 @@ pub enum RecurrenceCommand {
     },
     /// Page persisted provenance for one finite recurrence through a read-only boundary.
     Persisted {
+        database: PathBuf,
+        id: String,
+        start_offset: u64,
+        page_size: u64,
+    },
+    /// Page materialized task bindings for one recurrence through a read-only boundary.
+    Materialized {
         database: PathBuf,
         id: String,
         start_offset: u64,
@@ -352,6 +360,15 @@ impl Cli {
             }) => page_persisted_recurrence_occurrences(&database, &id, start_offset, page_size),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::Materialized {
+                        database,
+                        id,
+                        start_offset,
+                        page_size,
+                    }),
+            }) => page_materialized_recurrence_occurrences(&database, &id, start_offset, page_size),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::Occurrence {
                         database,
                         id,
@@ -434,6 +451,12 @@ struct MaterializedRecurrenceOccurrenceInspection<'a> {
     definition_revision: u64,
     occurrence_revision: u64,
     task_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct MaterializedRecurrenceOccurrencePageInspection<'a> {
+    occurrences: Vec<MaterializedRecurrenceOccurrenceInspection<'a>>,
+    next_offset: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -955,6 +978,61 @@ fn serialize_recurrence_occurrence_page(
             .occurrences()
             .iter()
             .map(recurrence_occurrence_inspection)
+            .collect(),
+        next_offset: page.next_offset(),
+    })
+}
+
+fn page_materialized_recurrence_occurrences(
+    database: &Path,
+    raw_id: &str,
+    start_offset: u64,
+    raw_page_size: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let page_size = match OccurrencePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_occurrence_page_size", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error("materialized_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    let page = match store.materialized_occurrences_page(&id, start_offset, page_size) {
+        Ok(page) => page,
+        Err(error @ RecurrenceStoreError::NotFound { .. }) => {
+            return extension_error("recurrence_not_found", error);
+        }
+        Err(error @ RecurrenceStoreError::OccurrenceOutOfRange { .. }) => {
+            return extension_error("recurrence_occurrence_out_of_range", error);
+        }
+        Err(error) => {
+            return extension_error("materialized_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    let output = match serialize_materialized_recurrence_occurrence_page(&page) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error("materialized_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn serialize_materialized_recurrence_occurrence_page(
+    page: &MaterializedRecurrenceOccurrencePage,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&MaterializedRecurrenceOccurrencePageInspection {
+        occurrences: page
+            .occurrences()
+            .iter()
+            .map(materialized_recurrence_occurrence_inspection)
             .collect(),
         next_offset: page.next_offset(),
     })

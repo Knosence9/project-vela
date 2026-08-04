@@ -339,6 +339,21 @@ storage remains missing, and malformed or ambiguous selected bindings fail
 closed without partial output. Recurrence task lookup cannot read time, mutate,
 enumerate unrelated coordinates, dispatch, or execute work.
 
+Page complete materialized task bindings for one exact recurrence through a
+bounded read-only authored-offset window:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence materialized path/to/events.sqlite3 recurrence-id 0 128
+```
+
+The command emits bindings in ascending offset order with exact recurrence,
+occurrence-revision, and task provenance. Missing and persisted-only coordinates
+are omitted while `next_offset` advances by inspected authored coordinates, so
+empty sparse pages still make deterministic progress. Validation precedes
+storage access; missing storage remains missing, and selected corruption fails
+closed without partial output. Paging reads no clock, mutates nothing, and
+grants no catch-up, dispatch, permission, or execution authority.
+
 Inspect one exact persisted recurrence occurrence without granting write,
 inventory, catch-up, or execution authority:
 
@@ -514,6 +529,7 @@ The first milestone is the **evidence loop**:
 134. Resolve one exact materialized recurrence occurrence from its task identity without granting lifecycle or execution authority. ✅
 135. Inspect exact materialized recurrence provenance by task identity through deterministic read-only CLI JSON without granting discovery or execution authority. ✅
 136. Page sparse materialized recurrence bindings through bounded exact-recurrence authored-offset windows without granting global discovery or lifecycle authority. ✅
+137. Page sparse materialized recurrence bindings through bounded deterministic CLI JSON without granting global discovery or lifecycle authority. ✅
 
 ## Project documents
 
