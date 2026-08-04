@@ -282,6 +282,37 @@ materialization, claim, dispatch, workflow, provider/tool, permission, retry, or
 execution authority. See
 [ADR-0057](adr/0057-read-only-due-recurrence-occurrence-cli-paging.md).
 
+## Writable atomic due recurrence occurrence CLI paging
+
+`vela-dev recurrence persist-due DATABASE RECURRENCE_ID EXPECTED_REVISION
+START_OFFSET PAGE_SIZE CUTOFF_UNIX_MILLIS` validates the exact recurrence ID and
+positive, at-most-1024 page size before storage access; clap parses the observed
+definition revision, authored offset, and caller-owned cutoff as non-negative
+`u64` values. It opens only the selected database through
+`RecurrenceStore::open` and delegates selection, revision validation, duplicate
+protection, and atomic persistence to
+`RecurrenceStore::persist_due_occurrences_page`.
+
+Success emits complete persisted occurrences in ascending authored-offset order.
+Every object preserves exact `recurrence_id`, `goal`, `offset`, `unix_millis`,
+and `definition_revision`. `next_offset` advances after a full page, identifies
+the first future authored coordinate when cutoff truncates selection, preserves
+an unchanged cursor for an empty future-horizon page, and is `null` only at the
+finite definition end.
+
+Invalid IDs and page sizes emit `invalid_recurrence_id` and
+`invalid_occurrence_page_size` without accessing storage. Missing definitions,
+stale revisions, out-of-range starts, duplicates, selected corruption,
+concurrency, open, persistence, and serialization failures emit
+`due_recurrence_occurrence_persistence_failed`, return non-zero, and emit no
+stdout. Every failure persists none of the selected page.
+
+The command reads no ambient clock, persists no cursor, generates no identity,
+and grants no global discovery, catch-up policy, materialization, task lifecycle,
+claim, dispatch, workflow, provider/tool, permission, retry, or execution
+authority. See
+[ADR-0059](adr/0059-writable-atomic-due-recurrence-page-cli.md).
+
 ## Writable exact recurrence occurrence provenance CLI
 
 `vela-dev recurrence persist DATABASE RECURRENCE_ID EXPECTED_REVISION OFFSET`
@@ -536,6 +567,6 @@ read ambient time, dispatch, retry, or execute a schedule or task.
 
 ## Authority boundary
 
-The caller owns every status filter, every cutoff supplied to `list_due`, `claim`, `claim_next_due`, `materialize_next_due`, or recurrence `due_occurrences_page`/CLI paging, every cancellation, claim, exact revision supplied to a mutation, task-ID binding decision, and action taken from a listed, exact, due, claimed, materialized, historical, or task-provenance result. Full, exact, status-filtered, historical, and task-provenance discovery are read-only and grant no authority; `open_read_only` additionally removes SQLite write and creation authority but is not a snapshot, secrecy boundary, or filesystem permission grant. Cancellation prevents future due selection but does not interrupt work already selected elsewhere. A revision identifies one exact persisted observation and prevents an earlier observer or claimant from consuming later lifecycle state; it is not worker identity, a permission grant, a lease, or proof of liveness. A claim is only a durable reservation, release is only caller-authored recovery evidence, and materialization only creates inert active task state: none infers worker health, starts or advances a workflow, calls a provider, invokes a tool, grants or revokes permission, sleeps, retries, or executes task work. Exact recurrence task-provenance lookup selects only the caller-owned task identity, validates every selected occurrence binding, and treats duplicate bindings as corruption; it grants no lifecycle or execution authority.
+The caller owns every status filter, every cutoff supplied to `list_due`, `claim`, `claim_next_due`, `materialize_next_due`, or recurrence due paging and persistence, every cancellation, claim, exact revision supplied to a mutation, task-ID binding decision, and action taken from a listed, exact, due, claimed, materialized, historical, or task-provenance result. Full, exact, status-filtered, historical, and task-provenance discovery are read-only and grant no authority; `open_read_only` additionally removes SQLite write and creation authority but is not a snapshot, secrecy boundary, or filesystem permission grant. Cancellation prevents future due selection but does not interrupt work already selected elsewhere. A revision identifies one exact persisted observation and prevents an earlier observer or claimant from consuming later lifecycle state; it is not worker identity, a permission grant, a lease, or proof of liveness. A claim is only a durable reservation, release is only caller-authored recovery evidence, and materialization only creates inert active task state: none infers worker health, starts or advances a workflow, calls a provider, invokes a tool, grants or revokes permission, sleeps, retries, or executes task work. Exact recurrence task-provenance lookup selects only the caller-owned task identity, validates every selected occurrence binding, and treats duplicate bindings as corruption; it grants no lifecycle or execution authority.
 
 Dispatch, global occurrence inventory, lifecycle beyond one exact persisted-to-materialized transition, catch-up policy, cron syntax, time zones, worker identity, distributed leases, automatic claim expiry, retries, and execution outcomes are intentionally deferred. Finite fixed-interval definitions from [ADR-0037](adr/0037-durable-finite-fixed-interval-recurrence-definitions.md) are inert immutable intent; exact projections and bounded pages remain read-only until callers explicitly persist one coordinate through [ADR-0045](adr/0045-durable-exact-recurrence-occurrence-provenance.md). Persisted provenance alone grants no catch-up, selection, cancellation, claim, dispatch, or execution authority; an explicit exact-revision call may atomically bind it to one inert caller-owned task through [ADR-0050](adr/0050-atomic-exact-recurrence-occurrence-task-materialization.md). A process failure after a successful one-shot claim leaves the schedule claimed until an explicit caller releases or materializes it. See [ADR-0034](adr/0034-durable-one-shot-task-schedule-intent.md) for the one-shot lifecycle decision and rationale.

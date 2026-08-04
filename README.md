@@ -370,6 +370,23 @@ and selected malformed definition evidence fails closed without partial JSON.
 The command reads no clock, persists no cursor, chooses no catch-up policy, and
 cannot generate identity, materialize, dispatch, or execute work.
 
+Atomically persist one exact recurrence's bounded due page through the same
+explicit cutoff and one observed definition revision:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence persist-due path/to/events.sqlite3 recurrence-id 1 0 128 1754049600000
+```
+
+The command validates identity and page bounds before opening writable storage,
+then delegates inclusive selection, cursor semantics, duplicate protection, and
+all-or-nothing persistence to the kernel. Success emits the same complete JSON
+page shape as read-only due paging. Missing or stale definitions, invalid starts,
+duplicates, selected corruption, and storage failures emit no partial JSON and
+persist no selected prefix. An empty future-horizon page keeps its unchanged
+cursor; a later caller-owned cutoff can resume it. The command reads no ambient
+clock, persists no cursor, generates no identity, and cannot choose catch-up
+policy, materialize tasks, dispatch, or execute work.
+
 Inspect one exact persisted recurrence occurrence without granting write,
 inventory, catch-up, or execution authority:
 
@@ -548,6 +565,8 @@ The first milestone is the **evidence loop**:
 137. Page sparse materialized recurrence bindings through bounded deterministic CLI JSON without granting global discovery or lifecycle authority. ✅
 138. Page one exact finite recurrence through an inclusive caller-owned due cutoff with a resumable bounded cursor and no catch-up or execution authority. ✅
 139. Page one exact recurrence's due occurrences through deterministic read-only CLI JSON without reading ambient time or granting catch-up or execution authority. ✅
+140. Atomically persist one exact recurrence's bounded due page without partial provenance or granting catch-up or execution authority. ✅
+141. Persist one exact recurrence's bounded due page through deterministic writable CLI JSON without reading ambient time or granting catch-up or execution authority. ✅
 
 ## Project documents
 

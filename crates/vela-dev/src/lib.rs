@@ -90,6 +90,15 @@ pub enum RecurrenceCommand {
         page_size: u64,
         cutoff_unix_millis: u64,
     },
+    /// Atomically persist one bounded page through a caller-owned inclusive cutoff.
+    PersistDue {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        start_offset: u64,
+        page_size: u64,
+        cutoff_unix_millis: u64,
+    },
     /// Page persisted provenance for one finite recurrence through a read-only boundary.
     Persisted {
         database: PathBuf,
@@ -369,6 +378,24 @@ impl Cli {
             }) => page_due_recurrence_occurrences(
                 &database,
                 &id,
+                start_offset,
+                page_size,
+                cutoff_unix_millis,
+            ),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::PersistDue {
+                        database,
+                        id,
+                        expected_revision,
+                        start_offset,
+                        page_size,
+                        cutoff_unix_millis,
+                    }),
+            }) => persist_due_recurrence_occurrences(
+                &database,
+                &id,
+                expected_revision,
                 start_offset,
                 page_size,
                 cutoff_unix_millis,
@@ -989,6 +1016,50 @@ fn page_due_recurrence_occurrences(
     let output = match serialize_recurrence_occurrence_page(&page) {
         Ok(output) => output,
         Err(error) => return extension_error("due_recurrence_occurrence_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn persist_due_recurrence_occurrences(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    start_offset: u64,
+    raw_page_size: u64,
+    cutoff_unix_millis: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let page_size = match OccurrencePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_occurrence_page_size", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error("due_recurrence_occurrence_persistence_failed", error);
+        }
+    };
+    let page = match store.persist_due_occurrences_page(
+        &id,
+        expected_revision,
+        start_offset,
+        page_size,
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+    ) {
+        Ok(page) => page,
+        Err(error) => {
+            return extension_error("due_recurrence_occurrence_persistence_failed", error);
+        }
+    };
+    let output = match serialize_recurrence_occurrence_page(&page) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error("due_recurrence_occurrence_persistence_failed", error);
+        }
     };
     println!("{output}");
     ExitCode::SUCCESS
