@@ -754,6 +754,234 @@ fn due_occurrence_pages_preserve_exact_boundaries_and_typed_lookup_failures() {
 }
 
 #[test]
+fn atomically_persists_one_bounded_due_occurrence_page() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("due-persistence").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Persist bounded due work").unwrap(),
+            instant(5),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+
+    let first = store
+        .persist_due_occurrences_page(
+            &id,
+            recurrence.revision(),
+            0,
+            OccurrencePageSize::new(2).unwrap(),
+            instant(19),
+        )
+        .unwrap();
+    assert_eq!(
+        first
+            .occurrences()
+            .iter()
+            .map(|occurrence| (occurrence.offset(), occurrence.instant()))
+            .collect::<Vec<_>>(),
+        vec![(0, instant(5)), (1, instant(12))]
+    );
+    assert_eq!(first.next_offset(), Some(2));
+
+    let final_page = store
+        .persist_due_occurrences_page(
+            &id,
+            recurrence.revision(),
+            first.next_offset().unwrap(),
+            OccurrencePageSize::new(4).unwrap(),
+            instant(26),
+        )
+        .unwrap();
+    assert_eq!(
+        final_page
+            .occurrences()
+            .iter()
+            .map(|occurrence| (occurrence.offset(), occurrence.instant()))
+            .collect::<Vec<_>>(),
+        vec![(2, instant(19)), (3, instant(26))]
+    );
+    assert_eq!(final_page.next_offset(), None);
+    drop(store);
+
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    for offset in 0..4 {
+        let occurrence = reopened.load_occurrence(&id, offset).unwrap().unwrap();
+        assert_eq!(occurrence.offset(), offset);
+        assert_eq!(occurrence.recurrence_revision(), recurrence.revision());
+    }
+}
+
+#[test]
+fn due_page_persistence_rejects_existing_coordinates_atomically() {
+    let directory = tempdir().unwrap();
+    let id = RecurrenceId::new("atomic-due-persistence").unwrap();
+    let mut store = RecurrenceStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Persist all or nothing").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    store
+        .persist_occurrence(&id, recurrence.revision(), 1)
+        .unwrap();
+
+    let error = store
+        .persist_due_occurrences_page(
+            &id,
+            recurrence.revision(),
+            0,
+            OccurrencePageSize::new(3).unwrap(),
+            instant(3),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RecurrenceStoreError::OccurrenceAlreadyPersisted {
+            recurrence_id,
+            offset: 1,
+        } if recurrence_id == id
+    ));
+    assert_eq!(store.load_occurrence(&id, 0).unwrap(), None);
+    assert_eq!(store.load_occurrence(&id, 2).unwrap(), None);
+}
+
+#[test]
+fn due_page_persistence_rejects_selected_corruption_without_a_partial_append() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("corrupt-due-persistence").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Fail closed before the batch").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    store
+        .persist_occurrence(&id, recurrence.revision(), 1)
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE event_type = 'recurrence.occurrence_persisted'",
+            [br#"{}"#.as_slice()],
+        )
+        .unwrap();
+
+    let error = store
+        .persist_due_occurrences_page(
+            &id,
+            recurrence.revision(),
+            0,
+            OccurrencePageSize::new(2).unwrap(),
+            instant(2),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RecurrenceStoreError::Replay(ReplayError::MalformedPayload { .. })
+        ),
+        "unexpected error: {error:?}"
+    );
+    assert_eq!(store.load_occurrence(&id, 0).unwrap(), None);
+}
+
+#[test]
+fn due_page_persistence_preserves_preflight_failures_and_future_horizons() {
+    let directory = tempdir().unwrap();
+    let id = RecurrenceId::new("due-preflight").unwrap();
+    let mut store = RecurrenceStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Keep policy caller owned").unwrap(),
+            instant(u64::MAX - 1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+
+    let future = store
+        .persist_due_occurrences_page(
+            &id,
+            recurrence.revision(),
+            0,
+            OccurrencePageSize::new(2).unwrap(),
+            instant(u64::MAX - 2),
+        )
+        .unwrap();
+    assert!(future.occurrences().is_empty());
+    assert_eq!(future.next_offset(), Some(0));
+
+    assert!(matches!(
+        store
+            .persist_due_occurrences_page(
+                &id,
+                recurrence.revision() + 1,
+                0,
+                OccurrencePageSize::new(2).unwrap(),
+                instant(u64::MAX),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::ConcurrentModification {
+            recurrence_id,
+            expected_revision: 2,
+            current_revision: 1,
+        } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .persist_due_occurrences_page(
+                &id,
+                recurrence.revision(),
+                2,
+                OccurrencePageSize::new(1).unwrap(),
+                instant(u64::MAX),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            recurrence_id,
+            requested_offset: 2,
+            ..
+        } if recurrence_id == id
+    ));
+    assert_eq!(store.load_occurrence(&id, 0).unwrap(), None);
+    assert_eq!(store.load_occurrence(&id, 1).unwrap(), None);
+
+    let boundary = store
+        .persist_due_occurrences_page(
+            &id,
+            recurrence.revision(),
+            0,
+            OccurrencePageSize::new(2).unwrap(),
+            instant(u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        boundary
+            .occurrences()
+            .iter()
+            .map(|occurrence| occurrence.instant())
+            .collect::<Vec<_>>(),
+        vec![instant(u64::MAX - 1), instant(u64::MAX)]
+    );
+    assert_eq!(boundary.next_offset(), None);
+}
+
+#[test]
 fn persists_and_reopens_exact_recurrence_occurrence_provenance() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -1528,6 +1756,72 @@ fn racing_occurrence_persistence_records_one_exact_coordinate() {
             .instant(),
         instant(7)
     );
+}
+
+#[test]
+fn racing_due_page_persistence_commits_one_complete_page() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-due-page").unwrap();
+    RecurrenceStore::open(&path)
+        .unwrap()
+        .create(
+            id.clone(),
+            TaskGoal::new("Persist one complete page").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            let id = id.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut store = RecurrenceStore::open(path).unwrap();
+                barrier.wait();
+                store.persist_due_occurrences_page(
+                    &id,
+                    1,
+                    0,
+                    OccurrencePageSize::new(3).unwrap(),
+                    instant(3),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                    recurrence_id,
+                    offset: 0,
+                }) if recurrence_id == &id
+            ))
+            .count(),
+        1
+    );
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    for offset in 0..3 {
+        assert_eq!(
+            reopened
+                .load_occurrence(&id, offset)
+                .unwrap()
+                .unwrap()
+                .offset(),
+            offset
+        );
+    }
 }
 
 #[test]
