@@ -445,6 +445,80 @@ impl EventLog {
         Ok((first_version, second_version))
     }
 
+    /// Atomically appends one event to each distinct, previously absent stream while a
+    /// prerequisite stream remains at the caller-observed revision.
+    pub(crate) fn append_to_new_streams_if_unchanged<E: Event>(
+        &mut self,
+        entries: &[(&StreamId, &E)],
+        prerequisite: &StreamId,
+        prerequisite_expected: ExpectedVersion,
+    ) -> Result<(), EventLogError> {
+        if matches!(prerequisite_expected, ExpectedVersion::Exact(0)) {
+            return Err(EventLogError::InvalidExpectedVersion(0));
+        }
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut encoded = Vec::with_capacity(entries.len());
+        for (stream, event) in entries {
+            let event_type = event.event_type();
+            if event_type.is_empty() {
+                return Err(EventLogError::InvalidEventType);
+            }
+            let payload_version = event.payload_version();
+            if payload_version == 0 {
+                return Err(EventLogError::InvalidPayloadVersion(payload_version));
+            }
+            let current = current_stream_version(&self.connection, stream)?;
+            if current.is_some() {
+                return Err(EventLogError::WrongExpectedVersion {
+                    expected: ExpectedVersion::NoStream,
+                    current,
+                });
+            }
+            encoded.push((event_type, payload_version, serde_json::to_vec(event)?));
+        }
+        let prerequisite_current = current_stream_version(&self.connection, prerequisite)?;
+        if !expected_version_matches(prerequisite_expected, prerequisite_current) {
+            return Err(EventLogError::WrongExpectedVersion {
+                expected: prerequisite_expected,
+                current: prerequisite_current,
+            });
+        }
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let prerequisite_current = current_stream_version(&transaction, prerequisite)?;
+        if !expected_version_matches(prerequisite_expected, prerequisite_current) {
+            return Err(EventLogError::WrongExpectedVersion {
+                expected: prerequisite_expected,
+                current: prerequisite_current,
+            });
+        }
+        for (stream, _) in entries {
+            let current = current_stream_version(&transaction, stream)?;
+            if current.is_some() {
+                return Err(EventLogError::WrongExpectedVersion {
+                    expected: ExpectedVersion::NoStream,
+                    current,
+                });
+            }
+        }
+
+        for ((stream, _), (event_type, payload_version, payload)) in entries.iter().zip(encoded) {
+            transaction.execute(
+                "INSERT INTO events
+                 (stream_id, stream_version, event_type, payload_version, payload)
+                 VALUES (?1, 1, ?2, ?3, ?4)",
+                params![stream.as_str(), event_type, payload_version, payload],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     fn append_guarded<E: Event>(
         &mut self,
         stream: &StreamId,

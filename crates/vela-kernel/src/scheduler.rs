@@ -1119,6 +1119,110 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
+        Self::project_due_occurrences_page(&recurrence, start_offset, page_size, cutoff)
+    }
+
+    /// Atomically persists one bounded exact-recurrence page selected by a caller cutoff.
+    pub fn persist_due_occurrences_page(
+        &mut self,
+        id: &RecurrenceId,
+        expected_revision: u64,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+    ) -> Result<RecurrenceOccurrencePage, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        if recurrence.revision() != expected_revision {
+            return Err(RecurrenceStoreError::ConcurrentModification {
+                recurrence_id: id.clone(),
+                expected_revision,
+                current_revision: recurrence.revision(),
+            });
+        }
+        let page =
+            Self::project_due_occurrences_page(&recurrence, start_offset, page_size, cutoff)?;
+        if page.occurrences().is_empty() {
+            return Ok(page);
+        }
+
+        for occurrence in page.occurrences() {
+            if self
+                .load_occurrence_state_with_recurrence(&recurrence, occurrence.offset())?
+                .is_some()
+            {
+                return Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                    recurrence_id: id.clone(),
+                    offset: occurrence.offset(),
+                });
+            }
+        }
+
+        let entries = page
+            .occurrences()
+            .iter()
+            .map(|occurrence| {
+                (
+                    recurrence_occurrence_stream(id, occurrence.offset()),
+                    RecurrenceOccurrenceEvent::Persisted {
+                        recurrence_id: id.clone(),
+                        recurrence_revision: occurrence.recurrence_revision(),
+                        offset: occurrence.offset(),
+                        goal: occurrence.goal().clone(),
+                        unix_millis: occurrence.instant().unix_millis(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let entry_refs = entries
+            .iter()
+            .map(|(stream, event)| (stream, event))
+            .collect::<Vec<_>>();
+        match self.event_log.append_to_new_streams_if_unchanged(
+            &entry_refs,
+            &recurrence_stream(id),
+            ExpectedVersion::Exact(expected_revision),
+        ) {
+            Ok(_) => Ok(page),
+            Err(error @ EventLogError::WrongExpectedVersion { .. }) => {
+                let Some(current) = self.load(id)? else {
+                    return Err(RecurrenceStoreError::NotFound {
+                        recurrence_id: id.clone(),
+                    });
+                };
+                if current.revision() != expected_revision {
+                    return Err(RecurrenceStoreError::ConcurrentModification {
+                        recurrence_id: id.clone(),
+                        expected_revision,
+                        current_revision: current.revision(),
+                    });
+                }
+                for occurrence in page.occurrences() {
+                    if self
+                        .load_occurrence_state_with_recurrence(&current, occurrence.offset())?
+                        .is_some()
+                    {
+                        return Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                            recurrence_id: id.clone(),
+                            offset: occurrence.offset(),
+                        });
+                    }
+                }
+                Err(RecurrenceStoreError::EventLog(error))
+            }
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
+    }
+
+    fn project_due_occurrences_page(
+        recurrence: &FixedIntervalRecurrence,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+    ) -> Result<RecurrenceOccurrencePage, RecurrenceStoreError> {
         let mut offset = start_offset;
         let mut occurrences = Vec::with_capacity(page_size.get() as usize);
         while occurrences.len() < page_size.get() as usize {
