@@ -1106,6 +1106,44 @@ impl RecurrenceStore {
         })
     }
 
+    /// Projects one bounded page through an inclusive caller-owned due cutoff.
+    pub fn due_occurrences_page(
+        &self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+    ) -> Result<RecurrenceOccurrencePage, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        let mut offset = start_offset;
+        let mut occurrences = Vec::with_capacity(page_size.get() as usize);
+        while occurrences.len() < page_size.get() as usize {
+            let occurrence = recurrence.occurrence_at(offset)?;
+            if occurrence.instant() > cutoff {
+                return Ok(RecurrenceOccurrencePage {
+                    occurrences,
+                    next_offset: Some(offset),
+                });
+            }
+            occurrences.push(occurrence);
+            if offset == recurrence.occurrence_count().get() - 1 {
+                return Ok(RecurrenceOccurrencePage {
+                    occurrences,
+                    next_offset: None,
+                });
+            }
+            offset += 1;
+        }
+        Ok(RecurrenceOccurrencePage {
+            occurrences,
+            next_offset: Some(offset),
+        })
+    }
+
     /// Inspects one bounded authored offset window and returns its materialized bindings.
     pub fn materialized_occurrences_page(
         &self,

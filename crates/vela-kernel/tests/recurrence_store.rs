@@ -598,6 +598,162 @@ fn page_sizes_are_positive_and_bounded_before_allocation() {
 }
 
 #[test]
+fn pages_due_occurrences_with_an_inclusive_caller_owned_cutoff_and_resume_cursor() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("due-page").unwrap();
+    let goal = TaskGoal::new("Select bounded due work").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(5),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(5).unwrap(),
+        )
+        .unwrap();
+
+    let before_horizon = store
+        .due_occurrences_page(&id, 0, OccurrencePageSize::new(3).unwrap(), instant(4))
+        .unwrap();
+    assert!(before_horizon.occurrences().is_empty());
+    assert_eq!(before_horizon.next_offset(), Some(0));
+
+    let bounded = store
+        .due_occurrences_page(&id, 0, OccurrencePageSize::new(2).unwrap(), instant(19))
+        .unwrap();
+    assert_eq!(
+        bounded
+            .occurrences()
+            .iter()
+            .map(|occurrence| (occurrence.offset(), occurrence.instant()))
+            .collect::<Vec<_>>(),
+        vec![(0, instant(5)), (1, instant(12))]
+    );
+    assert_eq!(bounded.next_offset(), Some(2));
+
+    let cutoff_page = store
+        .due_occurrences_page(&id, 2, OccurrencePageSize::new(3).unwrap(), instant(19))
+        .unwrap();
+    assert_eq!(cutoff_page.occurrences().len(), 1);
+    assert_eq!(cutoff_page.occurrences()[0].recurrence_id(), &id);
+    assert_eq!(cutoff_page.occurrences()[0].goal(), &goal);
+    assert_eq!(cutoff_page.occurrences()[0].offset(), 2);
+    assert_eq!(cutoff_page.occurrences()[0].instant(), instant(19));
+    assert_eq!(cutoff_page.occurrences()[0].recurrence_revision(), 1);
+    assert_eq!(cutoff_page.next_offset(), Some(3));
+
+    drop(store);
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    let resumed = reopened
+        .due_occurrences_page(
+            &id,
+            cutoff_page.next_offset().unwrap(),
+            OccurrencePageSize::new(3).unwrap(),
+            instant(33),
+        )
+        .unwrap();
+    assert_eq!(
+        resumed
+            .occurrences()
+            .iter()
+            .map(|occurrence| (occurrence.offset(), occurrence.instant()))
+            .collect::<Vec<_>>(),
+        vec![(3, instant(26)), (4, instant(33))]
+    );
+    assert_eq!(resumed.next_offset(), None);
+}
+
+#[test]
+fn due_occurrence_pages_preserve_exact_boundaries_and_typed_lookup_failures() {
+    let directory = tempdir().unwrap();
+    let mut store = RecurrenceStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let id = RecurrenceId::new("due-boundary").unwrap();
+    let count = OccurrenceCount::new(2).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reach the due boundary").unwrap(),
+            instant(u64::MAX - 1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            count,
+        )
+        .unwrap();
+
+    let page = store
+        .due_occurrences_page(
+            &id,
+            0,
+            OccurrencePageSize::new(1024).unwrap(),
+            instant(u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        page.occurrences()
+            .iter()
+            .map(|occurrence| (occurrence.offset(), occurrence.instant()))
+            .collect::<Vec<_>>(),
+        vec![(0, instant(u64::MAX - 1)), (1, instant(u64::MAX))]
+    );
+    assert_eq!(page.next_offset(), None);
+
+    assert!(matches!(
+        store
+            .due_occurrences_page(
+                &id,
+                2,
+                OccurrencePageSize::new(1).unwrap(),
+                instant(u64::MAX),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            recurrence_id,
+            requested_offset: 2,
+            occurrence_count,
+        } if recurrence_id == id && occurrence_count == count
+    ));
+
+    let missing = RecurrenceId::new("missing").unwrap();
+    assert!(matches!(
+        store
+            .due_occurrences_page(
+                &missing,
+                0,
+                OccurrencePageSize::new(1).unwrap(),
+                instant(u64::MAX),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::NotFound { recurrence_id } if recurrence_id == missing
+    ));
+
+    drop(store);
+    rusqlite::Connection::open(directory.path().join("events.sqlite3"))
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = ?1 WHERE stream_id = 'recurrence:due-boundary'",
+            [br#"{"goal":"Invalid","anchor_unix_millis":1,"interval_millis":0,"occurrence_count":1}"#.as_slice()],
+        )
+        .unwrap();
+    let error = RecurrenceStore::open_read_only(directory.path().join("events.sqlite3"))
+        .unwrap()
+        .due_occurrences_page(
+            &id,
+            0,
+            OccurrencePageSize::new(1).unwrap(),
+            instant(u64::MAX),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RecurrenceStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn persists_and_reopens_exact_recurrence_occurrence_provenance() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
