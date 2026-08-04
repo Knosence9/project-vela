@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page due finite recurrence occurrences",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/903 by projecting one bounded exact-recurrence page through an inclusive caller-owned cutoff without reading ambient time.",
+    "acceptance_criteria": [
+      "Return complete occurrences in authored order only while instants are at or before the inclusive cutoff.",
+      "Distinguish temporary future horizons from finite completion with a resumable first-uninspected cursor.",
+      "Preserve bounded allocation, strict selected-definition replay, and typed missing or out-of-range failures."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Kernel integration tests failed because RecurrenceStore::due_occurrences_page did not exist.",
+      "patch": "Added focused integration coverage for the acceptance contract before adding production behavior."
+    },
+    {
+      "summary": "Implemented the bounded contract.",
+      "outcome": "success",
+      "diagnostic": "Added strict exact-definition loading and bounded canonical projection through the caller-supplied cutoff.",
+      "patch": "Added strict exact-definition loading and bounded canonical projection through the caller-supplied cutoff."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "Independent review and the substantive automated walkthrough found no actionable defect; the exact one-commit head passed the Rust quality gate.",
+      "patch": "Reused occurrence projection, OccurrencePageSize, store errors, and page-result contracts. Reran the complete repository quality gate after the exact implementation state was ready."
+    }
+  ],
+  "outcome": {
+    "summary": "Callers can deterministically page due coordinates and resume at a later cutoff without confusing a future horizon with finite completion.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0182-due-recurrence-paging.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 185 records: 185 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30869274403/job/91867696047",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 904 squash merge f9fd09e50f617be7b0dcce0454aca3e33f1f2e1b",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A due cursor must identify the first uninspected authored coordinate so a later cutoff resumes without rescanning.",
+    "The cutoff remains explicit caller authority; the kernel must not read a wall clock or invent catch-up policy.",
+    "Inclusive cutoff behavior and finite-end behavior require separate boundary assertions.",
+    "Read-only due projection persists no cursor or provenance and grants no materialization, dispatch, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/904"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

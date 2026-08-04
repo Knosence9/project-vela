@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page due recurrence occurrences through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/905 by exposing caller-cutoff finite-recurrence due paging through deterministic read-only CLI JSON.",
+    "acceptance_criteria": [
+      "Validate recurrence identity and page size before opening existing storage read-only.",
+      "Emit complete occurrence JSON and preserve resumable cursor semantics across cutoff horizons and finite completion.",
+      "Return deterministic categorized diagnostics with no partial stdout on missing, bounds, replay, projection, or serialization failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because the due recurrence subcommand did not exist.",
+      "patch": "Added focused integration coverage for the acceptance contract before adding production behavior."
+    },
+    {
+      "summary": "Implemented the bounded contract.",
+      "outcome": "success",
+      "diagnostic": "Added recurrence due, supplied the parsed cutoff to RecurrenceStore::due_occurrences_page, and reused occurrence-page serialization.",
+      "patch": "Added recurrence due, supplied the parsed cutoff to RecurrenceStore::due_occurrences_page, and reused occurrence-page serialization."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "Independent review and the substantive automated walkthrough found no actionable defect; the exact one-commit head passed the Rust quality gate.",
+      "patch": "Kept cutoff, cursor, replay, and projection policy in the kernel boundary. Reran the complete repository quality gate after the exact implementation state was ready."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can request bounded due recurrence pages with an explicit cutoff and deterministic resumable JSON without ambient-clock authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0183-due-recurrence-paging-cli.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 185 records: 185 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30872082521/job/91875975498",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 906 squash merge c469bff359a4871f2d9edbf14e86e073ec870e34",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "The CLI should transport an explicit cutoff, not choose current time or add hidden catch-up policy.",
+    "Sharing occurrence-page serialization keeps read-only authored and due projections consistent.",
+    "A non-null unchanged cursor on an empty page is meaningful temporary-horizon evidence.",
+    "The command cannot persist occurrences, generate identities, materialize tasks, dispatch, retry, or execute work."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/906"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

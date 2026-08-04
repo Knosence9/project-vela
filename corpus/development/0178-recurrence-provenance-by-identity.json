@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Resolve materialized recurrence provenance by task identity",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/895 by resolving one exact materialized recurrence occurrence from a caller-owned task identity through strict read-only replay.",
+    "acceptance_criteria": [
+      "Return complete recurrence-occurrence provenance for one exact bound task and None for an unrelated task.",
+      "Reject multiple selected bindings as typed ambiguity and fail closed on malformed selected evidence.",
+      "Isolate exact lookup from malformed unrelated materialization markers and grant no lifecycle or execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Kernel integration tests failed because find_materialized_by_task_id did not exist. Exact absence, ambiguity, selected corruption, and unrelated-marker isolation had no API.",
+      "patch": "Added focused integration coverage for the acceptance contract before adding production behavior."
+    },
+    {
+      "summary": "Implemented the bounded contract.",
+      "outcome": "success",
+      "diagnostic": "Added an exact event-log marker query, canonical occurrence-stream parsing, strict selected-state projection, and typed AmbiguousTaskBinding evidence.",
+      "patch": "Added an exact event-log marker query, canonical occurrence-stream parsing, strict selected-state projection, and typed AmbiguousTaskBinding evidence."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found no current defect; it documented optional decoded-task defense-in-depth and a future event_type index. Both were kept out of the bounded read-contract slice because exact SQL matching was already authoritative and schema migration/performance work requires separate evidence.",
+      "patch": "Shared occurrence-state projection and marker replay paths instead of duplicating persisted/materialized decoding. Reran the complete repository quality gate after the exact implementation state was ready."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel can resolve exact materialized recurrence provenance from a task identity while rejecting ambiguity and isolating unrelated malformed markers.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0178-recurrence-provenance-by-identity.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 185 records: 185 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30842198934/job/91781726457",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 896 squash merge 553b918a5309a341ef51e120ae9a862468a833d3",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Reverse provenance must replay and validate every selected canonical stream instead of trusting marker payloads as a complete projection.",
+    "Exact JSON marker filtering limits corruption scope, while duplicate bindings must remain typed corruption rather than first-row selection.",
+    "Optional indexes and redundant assertions should not silently expand a bounded correctness slice into schema migration work.",
+    "Read-only provenance lookup grants no recurrence lifecycle, catch-up, dispatch, permission, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/896"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

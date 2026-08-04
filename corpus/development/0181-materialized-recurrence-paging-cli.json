@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page materialized recurrence bindings through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/901 by exposing bounded materialized recurrence-occurrence paging through deterministic read-only CLI JSON.",
+    "acceptance_criteria": [
+      "Validate recurrence identity and page size before storage access and open only existing storage read-only.",
+      "Emit complete materialized bindings and authored-coordinate next_offset semantics.",
+      "Fail closed on selected corruption while isolating unrelated and out-of-window evidence."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because recurrence materialized was not recognized.",
+      "patch": "Added focused integration coverage for the acceptance contract before adding production behavior."
+    },
+    {
+      "summary": "Implemented the bounded contract.",
+      "outcome": "success",
+      "diagnostic": "Added the read-only adapter, delegated paging to the kernel, and reused complete materialized-occurrence serialization.",
+      "patch": "Added the read-only adapter, delegated paging to the kernel, and reused complete materialized-occurrence serialization."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found the success test asserted only next_offset and could miss altered bindings. Commit 9343621 asserted the complete three-binding JSON page and next_offset 3; CodeRabbit confirmed the finding addressed.",
+      "patch": "Kept sparse cursor and strict replay policy in RecurrenceStore::materialized_occurrences_page. Reran the complete repository quality gate after the exact implementation state was ready."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can page complete materialized recurrence bindings with deterministic sparse-cursor JSON and no write authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0181-materialized-recurrence-paging-cli.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 185 records: 185 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30864740478/job/91854037164",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 902 squash merge 3d87ebb9de2546d4b96c7a760abda19f351a0f2e",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Cursor-only CLI assertions do not prove selected records; exact machine-readable output should be tested as one contract.",
+    "Read-only adapters should reuse kernel paging and projection rather than duplicate sparse-window semantics.",
+    "Identity and allocation-bound validation should precede filesystem access.",
+    "Inspection does not grant recurrence selection, lifecycle, workflow, provider/tool, permission, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/902"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

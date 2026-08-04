@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect recurrence provenance by task through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/897 by exposing exact recurrence provenance lookup by task identity through deterministic read-only CLI JSON.",
+    "acceptance_criteria": [
+      "Validate task identity before storage access and open only an existing database read-only.",
+      "Emit complete materialized occurrence JSON for a binding and explicit null for an unrelated task.",
+      "Fail closed with deterministic escaped diagnostics for selected corruption or ambiguous bindings."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed with unrecognized subcommand task.",
+      "patch": "Added focused integration coverage for the acceptance contract before adding production behavior."
+    },
+    {
+      "summary": "Implemented the bounded contract.",
+      "outcome": "success",
+      "diagnostic": "Added recurrence task, delegated exact lookup to RecurrenceStore::find_materialized_by_task_id, and reused materialized-occurrence serialization.",
+      "patch": "Added recurrence task, delegated exact lookup to RecurrenceStore::find_materialized_by_task_id, and reused materialized-occurrence serialization."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that corruption setup could pass without proving both SQL updates ran and could accept the wrong error category. Commit 665b39a split the updates, asserted one affected row each, and required the replay-error prefix; CodeRabbit confirmed the finding addressed.",
+      "patch": "Kept replay, ambiguity, and provenance policy in the kernel while sharing the existing complete JSON projection. Reran the complete repository quality gate after the exact implementation state was ready."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can inspect one task identity for complete recurrence provenance without mutating storage or broadening scheduler authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0179-recurrence-provenance-by-identity-cli.json # result: valid development record",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 185 records: 185 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30853505691/job/91818991050",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 898 squash merge 04a285d3dde6b7602c6da9514048d9457965732e",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Corruption tests must assert fixture mutations actually affected the intended rows or they can pass for the wrong durable state.",
+    "Failure assertions should prove the intended replay taxonomy rather than accept any high-level command failure.",
+    "CLI adapters should validate identity before storage access and delegate provenance policy to the kernel.",
+    "An explicit null is deterministic absence evidence, not authority to create or execute work."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/898"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
