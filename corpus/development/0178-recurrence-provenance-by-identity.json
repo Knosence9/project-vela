@@ -58,7 +58,7 @@
   "lessons": [
     "Reverse provenance must replay and validate every selected canonical stream instead of trusting marker payloads as a complete projection.",
     "Exact JSON marker filtering limits corruption scope, while duplicate bindings must remain typed corruption rather than first-row selection.",
-    "Optional indexes and redundant assertions should not silently expand a bounded correctness slice into schema migration work.",
+    "The optional event-type index and decoded-task defense-in-depth assertion were considered but not applied because they would expand the bounded read-contract slice beyond its correctness scope.",
     "Read-only provenance lookup grants no recurrence lifecycle, catch-up, dispatch, permission, retry, or execution authority."
   ],
   "provenance": {
