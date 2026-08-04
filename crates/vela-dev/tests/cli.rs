@@ -3738,7 +3738,19 @@ fn materialized_recurrence_occurrence_paging_categorizes_bounds_and_corruption()
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"next_offset\":3"))
+        .stdout(concat!(
+            "{\"occurrences\":[",
+            "{\"recurrence_id\":\"exact\",\"goal\":\"goal\",\"offset\":0,",
+            "\"unix_millis\":10,\"definition_revision\":1,",
+            "\"occurrence_revision\":2,\"task_id\":\"task-0\"},",
+            "{\"recurrence_id\":\"exact\",\"goal\":\"goal\",\"offset\":1,",
+            "\"unix_millis\":11,\"definition_revision\":1,",
+            "\"occurrence_revision\":2,\"task_id\":\"task-1\"},",
+            "{\"recurrence_id\":\"exact\",\"goal\":\"goal\",\"offset\":2,",
+            "\"unix_millis\":12,\"definition_revision\":1,",
+            "\"occurrence_revision\":2,\"task_id\":\"task-2\"}],",
+            "\"next_offset\":3}\n"
+        ))
         .stderr(predicate::str::is_empty());
     Command::cargo_bin("vela-dev")
         .expect("vela-dev binary")
