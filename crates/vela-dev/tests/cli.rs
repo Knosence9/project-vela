@@ -2811,13 +2811,18 @@ fn recurrence_occurrence_release_validates_and_fails_closed() {
             TaskGoal::new("goal").unwrap(),
             ScheduleInstant::from_unix_millis(10),
             ScheduleInterval::from_millis(5).unwrap(),
-            OccurrenceCount::new(2).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
         )
         .unwrap();
-    store.persist_occurrence(&id, 1, 0).unwrap();
     store.persist_occurrence(&id, 1, 1).unwrap();
+    store.persist_occurrence(&id, 1, 2).unwrap();
     store
-        .materialize_occurrence(&id, 1, 1, TaskId::new("task").unwrap())
+        .claim_occurrence(&id, 2, 1, ScheduleInstant::from_unix_millis(20))
+        .unwrap();
+    store.persist_occurrence(&id, 1, 3).unwrap();
+    let task_id = TaskId::new("task").unwrap();
+    store
+        .materialize_occurrence(&id, 3, 1, task_id.clone())
         .unwrap();
     drop(store);
 
@@ -2834,7 +2839,7 @@ fn recurrence_occurrence_release_validates_and_fails_closed() {
         ]);
         command
     };
-    for (offset, revision) in [("2", "1"), ("0", "0"), ("0", "1"), ("1", "2")] {
+    for (offset, revision) in [("0", "1"), ("1", "1"), ("2", "1"), ("3", "2")] {
         release(offset, revision)
             .assert()
             .code(1)
@@ -2844,8 +2849,23 @@ fn recurrence_occurrence_release_validates_and_fails_closed() {
             ));
     }
 
-    let store = RecurrenceStore::open_read_only(&database).expect("read-only recurrence store");
-    assert!(store.load_released_occurrence(&id, 0).unwrap().is_none());
+    let mut store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    assert!(store.load_occurrence(&id, 0).unwrap().is_none());
+    let claimed = store
+        .load_claimed_occurrence(&id, 2)
+        .unwrap()
+        .expect("claimed occurrence remains claimed");
+    assert_eq!(claimed.revision(), 2);
+    let materialized = store
+        .load_materialized_occurrence(&id, 3)
+        .unwrap()
+        .expect("materialized occurrence remains materialized");
+    assert_eq!(materialized.revision(), 2);
+    assert_eq!(materialized.task_id(), &task_id);
+    let available = store
+        .claim_occurrence(&id, 1, 1, ScheduleInstant::from_unix_millis(15))
+        .expect("available occurrence remains available at revision one");
+    assert_eq!(available.revision(), 2);
 }
 
 #[test]
