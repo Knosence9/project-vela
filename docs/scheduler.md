@@ -283,6 +283,35 @@ materialization, claim, dispatch, workflow, provider/tool, permission, retry, or
 execution authority. See
 [ADR-0057](adr/0057-read-only-due-recurrence-occurrence-cli-paging.md).
 
+## Read-only latest-due recurrence occurrence CLI selection
+
+`vela-dev recurrence latest-due DATABASE RECURRENCE_ID START_OFFSET
+CUTOFF_UNIX_MILLIS` validates the exact recurrence ID before storage access;
+clap parses the authored start and inclusive caller-owned cutoff as non-negative
+`u64` values. It opens only the selected existing database through
+`RecurrenceStore::open_read_only` and delegates selection to
+`RecurrenceStore::latest_due_occurrence` without enumerating skipped backlog.
+
+Success emits compact JSON with `occurrence` containing the complete selected
+`recurrence_id`, `goal`, `offset`, `unix_millis`, and `definition_revision`, or
+`null` when the starting coordinate remains future. `next_offset` is the
+kernel-owned following authored coordinate, the unchanged future cursor, or
+`null` at finite completion. Exact caller-authored strings remain JSON escaped.
+
+Invalid IDs emit `invalid_recurrence_id` before storage access. Missing
+definitions emit `recurrence_not_found`; invalid starts emit
+`recurrence_occurrence_out_of_range`. Other open, strict selected-definition
+replay, projection, and serialization failures emit
+`latest_due_recurrence_occurrence_lookup_failed`, return non-zero, and emit no
+stdout. Missing storage remains missing, and unrelated corruption cannot block
+the exact query.
+
+The command reads no ambient clock, persists no cursor or skip evidence,
+discovers no unrelated definition, generates no identity, and grants no
+occurrence persistence, materialization, task lifecycle, dispatch, workflow,
+provider/tool, permission, retry, or execution authority. See
+[ADR-0061](adr/0061-read-only-latest-due-recurrence-cli.md).
+
 ## Writable atomic due recurrence occurrence CLI paging
 
 `vela-dev recurrence persist-due DATABASE RECURRENCE_ID EXPECTED_REVISION
