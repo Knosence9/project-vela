@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist the latest due recurrence through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/919 by exposing atomic latest-due provenance persistence through a thin deterministic writable CLI adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity before storage access and parse revision, start offset, and caller cutoff as u64 values.",
+      "Delegate guarded selection and persistence to the kernel while preserving future write-free and finite-completion cursor semantics.",
+      "Emit deterministic compact JSON on success and one escaped diagnostic with nonzero status and no partial stdout on failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI integration test failed because persist-latest-due was an unrecognized recurrence subcommand.",
+      "patch": "Added CLI tests for successful persistence, future and finite boundaries, revisions, duplicates, invalid inputs, and selected corruption before dispatch existed."
+    },
+    {
+      "summary": "Implemented the writable adapter.",
+      "outcome": "success",
+      "diagnostic": "Added validated command dispatch, read-write storage delegation to persist_latest_due_occurrence, stable failures, and deterministic response serialization.",
+      "patch": "Implemented the command in crates/vela-dev/src/lib.rs and documented the authority boundary in ADR-0063."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "Initial CodeRabbit rate limiting was explicitly rejected as review evidence. A later genuine review completed with no actionable comments or review threads, and exact head 2157a48e40e0d977001d5481e059c499e25f4ce9 passed the Rust quality gate.",
+      "patch": "Reused one serializer for read-only and writable latest-due responses and kept all selection and transaction policy in the kernel."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can persist one latest-due occurrence atomically without the CLI reading time, generating identity, persisting skipped work, or widening scheduler authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0189-atomic-latest-due-recurrence-persistence-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 193 records: 193 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30976880371/job/92212620032", "status": "passed"},
+      {"command": "Pull request 920 exact head 2157a48e40e0d977001d5481e059c499e25f4ce9 squash merge 6971adefff165a39df03ef49b045abbfd8c1081d", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A writable adapter should preserve one kernel transaction rather than composing a read command with a separate exact-coordinate write.",
+    "Caller-owned cutoff makes the due horizon explicit and prevents the CLI from silently reading ambient time.",
+    "Shared response serialization keeps read-only projection and writable persistence observably aligned.",
+    "The command persists provenance only and cannot generate identity, materialize, dispatch, retry, grant permission, or execute work."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/920"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

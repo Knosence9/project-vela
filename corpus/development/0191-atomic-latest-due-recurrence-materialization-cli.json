@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize the latest due recurrence through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/923 by exposing atomic latest-due occurrence and task materialization through a deterministic writable CLI adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity, numeric inputs, and caller-owned task identity before writable storage access.",
+      "Delegate selection and atomic occurrence-task binding to the kernel and emit deterministic compact JSON with exact cursor semantics.",
+      "Preserve future write-free behavior and all-or-nothing rollback with one stable diagnostic and no partial stdout on failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI integration test failed because materialize-latest-due was an unrecognized recurrence subcommand.",
+      "patch": "Added tests for success, future and finite horizons, invalid inputs, storage-open failures, selected corruption, collisions, and rollback before dispatch existed."
+    },
+    {
+      "summary": "Implemented the writable materialization adapter.",
+      "outcome": "success",
+      "diagnostic": "Added minimal parsing and dispatch that delegates the observed revision, start, cutoff, and exact task identity to materialize_latest_due_occurrence and serializes the complete binding.",
+      "patch": "Implemented the command in crates/vela-dev/src/lib.rs and documented its bounded authority in ADR-0065."
+    },
+    {
+      "summary": "Completed independent and substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "Independent review prompted explicit storage-open and selected-corruption tests. CodeRabbit completed a genuine six-file review with no actionable comments and zero review threads; exact head c7ea529982b4f5c82ffbee630adc0ecf2d585354 passed the Rust quality gate.",
+      "patch": "Reused the existing materialized-occurrence projection, kept transaction policy in the kernel, strengthened failure coverage, and reran the complete repository gate."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can bind one caller-owned task to the latest caller-selected due occurrence without the CLI acquiring clock, identity, scheduler-policy, permission, or execution authority.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0191-atomic-latest-due-recurrence-materialization-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 193 records: 193 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30988141037/job/92247612458", "status": "passed"},
+      {"command": "Pull request 924 exact head c7ea529982b4f5c82ffbee630adc0ecf2d585354 squash merge 80a56713f367bc592f030ae30630510a933083b4", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A CLI adapter should accept a complete task identity from its caller rather than generate identity implicitly.",
+    "Storage-open and selected-corruption failures deserve explicit adapter-level coverage because both must preserve empty stdout and rollback.",
+    "Shared materialized-occurrence serialization keeps kernel and CLI evidence shapes aligned.",
+    "The command creates durable inert state but grants no claim, lease, dispatch, retry, workflow, provider, tool, permission, or execution authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/924"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

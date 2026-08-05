@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize bounded due recurrence pages through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/927 by exposing atomic bounded due-page occurrence and task materialization through a deterministic writable CLI adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity, u64 inputs, page size 1 through 1024, and every caller-owned task identity before writable storage access.",
+      "Delegate task count, uniqueness, selection, and all-or-nothing writes to the kernel and emit ordered bindings with next_offset.",
+      "Emit one stable escaped diagnostic with nonzero status and no partial stdout or durable prefix on every failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI integration test failed because materialize-due was an unrecognized recurrence subcommand.",
+      "patch": "Added CLI tests for ordered success, empty and finite pages, maximum instants, input validation, shape errors, collisions, corruption, and rollback before dispatch existed."
+    },
+    {
+      "summary": "Implemented the bounded writable adapter.",
+      "outcome": "success",
+      "diagnostic": "Added parsing, validation, dispatch, kernel delegation, and deterministic materialized-page serialization; the complete workspace gate included 95 CLI integration tests.",
+      "patch": "Implemented recurrence materialize-due in crates/vela-dev/src/lib.rs and documented its caller-owned cutoff and task vector boundary in ADR-0067."
+    },
+    {
+      "summary": "Recovered from false-green rate limits and applied substantive review.",
+      "outcome": "success",
+      "diagnostic": "The initial CodeRabbit status reported Review limit reached and was explicitly rejected as review evidence. After cooldown, a substantive review of all five changed files found that the maximum-instant success case did not prove empty stderr or durable max-0 and max-1 task bindings. Commit d1d30b3 added those assertions. The incremental status was again rate limited and merge remained disabled; after its cooldown, an exact-head incremental run completed with no new comments and zero unresolved threads, while marking its sole selected test file as skipped because it was similar to previously reviewed code.",
+      "patch": "Strengthened the maximum-boundary test, reopened storage to verify both persisted task bindings, reran targeted and complete gates, and merged only after exact head d1d30b3ce91145640fa4fce35fdd55dd7d256420 completed the exact-head incremental check with its limited scope recorded explicitly."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can atomically materialize one bounded due page using explicit cutoff and task identities, with false-green review statuses excluded from merge evidence.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0193-atomic-due-recurrence-materialization-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 193 records: 193 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/31000689692/job/92288547666", "status": "passed"},
+      {"command": "Pull request 928 exact head d1d30b3ce91145640fa4fce35fdd55dd7d256420 squash merge c192a4b9ac0a83eef26edab2da3aff8f18973683", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A successful CodeRabbit status is false-green evidence when its comment says the review limit was reached.",
+    "After a review fix, the exact new head still needs a completed incremental review; auto-merge must remain disabled through any second cooldown.",
+    "Boundary success tests should verify stderr and reopened durable bindings, not only stdout projection.",
+    "Caller-owned cutoff and ordered task identities keep clock policy and identity allocation outside the CLI and kernel.",
+    "The command grants no claim, lease, dispatch, retry, workflow, provider, tool, permission, or execution authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/928"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

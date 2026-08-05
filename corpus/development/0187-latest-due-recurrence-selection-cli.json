@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Select the latest due recurrence through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/915 by exposing exact latest-due recurrence selection through a thin deterministic read-only CLI adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity before storage access, open existing storage read-only, and delegate arithmetic to the kernel.",
+      "Emit compact escaped JSON preserving occurrence and continuation-cursor semantics for exact, future, and finite-completion results.",
+      "Fail with typed diagnostics, nonzero status, and empty stdout without creating missing storage or granting mutation authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI integration test failed because latest-due was an unrecognized recurrence subcommand.",
+      "patch": "Added CLI tests for bounded results, invalid and missing inputs, missing storage, and selected versus unrelated corruption before dispatch existed."
+    },
+    {
+      "summary": "Implemented the read-only adapter.",
+      "outcome": "success",
+      "diagnostic": "Added validated latest-due dispatch, read-only storage delegation, compact JSON projection, and stable typed error mapping.",
+      "patch": "Implemented the command in crates/vela-dev/src/lib.rs and documented the adapter boundary in ADR-0061."
+    },
+    {
+      "summary": "Applied substantive review findings and verified the exact head.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that a corruption-isolation setup ignored its affected-row count and that documentation overstated one generic diagnostic. Commit 942d21d asserted a nonzero mutation and documented dedicated missing-definition and invalid-start diagnostics; both threads were resolved and the final incremental review found nothing new.",
+      "patch": "Reused existing occurrence serialization, strengthened the isolation test, corrected documentation, and reran the complete quality gate on exact head 942d21d24361dd39f11c150209edc963073945d6."
+    }
+  ],
+  "outcome": {
+    "summary": "Operators can inspect latest-due recurrence state deterministically without the CLI reading time, writing storage, persisting a cursor, or inventing catch-up policy.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0187-latest-due-recurrence-selection-cli.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 193 records: 193 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30969201581/job/92189657010", "status": "passed"},
+      {"command": "Pull request 916 exact head 942d21d24361dd39f11c150209edc963073945d6 squash merge d3d17f08763ad53a9fe67e60401d8a1700d50bbd", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A corruption-isolation test must prove that its fixture actually changed a row rather than silently accepting a stale selector.",
+    "Documentation should preserve dedicated typed exceptions instead of describing every lookup failure as one generic category.",
+    "The CLI should expose kernel projection authority without gaining persistence, scheduler-policy, or execution authority.",
+    "Validate identifiers before storage so malformed input cannot create or inspect a database."
+  ],
+  "provenance": {"repository_path": "crates/vela-dev/src/lib.rs", "url": "https://github.com/Knosence9/project-vela/pull/916"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize a bounded due recurrence page atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/925 by atomically binding one bounded inclusive-cutoff due page to an ordered vector of caller-owned task identities.",
+    "acceptance_criteria": [
+      "Select one exact recurrence page in authored order and require exactly one distinct caller-supplied task identity per selected coordinate.",
+      "Recheck recurrence revision, occurrence stream absence, and task stream absence in one immediate transaction and return ordered bindings plus next_offset.",
+      "Commit the complete page or none on count mismatch, duplicate identity, collision, stale definition, corruption, serialization, storage, or racing-writer failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior and concurrency coverage.",
+      "outcome": "failure",
+      "diagnostic": "Kernel integration tests failed because materialize_due_occurrences_page and its typed task identity shape errors did not exist.",
+      "patch": "Added tests for ordered success, empty future pages, finite and cutoff truncation, count and duplicate rejection, collisions, corruption, rollback, and races before production behavior."
+    },
+    {
+      "summary": "Implemented all-or-nothing page materialization.",
+      "outcome": "success",
+      "diagnostic": "Added an event-log batch primitive and materialize_due_occurrences_page, reusing bounded due-page projection and exact replay to commit every occurrence-task binding together.",
+      "patch": "Implemented the kernel transaction in scheduler.rs and event_log.rs and documented caller-owned cutoff and identity-vector authority in ADR-0066."
+    },
+    {
+      "summary": "Completed substantive exact-head review and bounded refactor disposition.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit's genuine review raised three trivial non-blocking suggestions: wider encode_event reuse, zip-based slice construction, and replacing an unreachable fallback with a typed event-log error. The third was categorized as stability and availability because the no-conflict assumption depends on storage invariants and internal check ordering, so a typed fallback would remove a possible library panic. The one-commit exact head passed the Rust gate and no review thread was reported; all three suggestions were deferred rather than misreported as fixed.",
+      "patch": "Kept the new batch primitive crate-private, reused due-page and materialized-page projections, and avoided unrelated refactoring while preserving the review lessons."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel materializes one caller-selected due page without partial occurrence provenance, orphan tasks, generated identity, ambient clock policy, or execution grants.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0192-atomic-due-recurrence-materialization.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 193 records: 193 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30993210696/job/92263982027", "status": "passed"},
+      {"command": "Pull request 926 exact head 7ed51199351cfad90bfeeb5ecdfd55f614fd166b squash merge 7faafff0ca4c2742c73bdc0dcc8d2dda12538d57", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A page of occurrence-task bindings is one crash-consistency unit and must not be implemented as repeated single-coordinate transactions.",
+    "Task count and order prove that the caller owns identity allocation and binding policy rather than the kernel.",
+    "Future empty pages require zero identities and must perform no writes.",
+    "Substantive review nitpicks should be preserved accurately without claiming they were fixed or treating them as blockers.",
+    "Materialization grants no claim, lease, dispatch, retry, permission, workflow, provider, tool, or execution authority."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/926"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

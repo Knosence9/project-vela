@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize the latest due recurrence occurrence atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/921 by atomically binding one caller-selected latest-due recurrence occurrence to one caller-owned task identity.",
+    "acceptance_criteria": [
+      "Validate the immutable recurrence revision and select the latest authored coordinate through the caller-owned inclusive cutoff.",
+      "Atomically append canonical occurrence revisions one and two plus authoritative-goal task.started without orphan provenance or tasks.",
+      "Write nothing for future horizons and fail closed on missing or stale definitions, corruption, duplicates, task collisions, storage failures, or races."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior and concurrency coverage.",
+      "outcome": "failure",
+      "diagnostic": "Recurrence integration tests failed because materialize_latest_due_occurrence did not exist.",
+      "patch": "Added tests for success and reopen durability, future horizons, finite and maximum boundaries, stale definitions, collisions, corruption, rollback, and competing writers before implementation."
+    },
+    {
+      "summary": "Implemented guarded three-event materialization.",
+      "outcome": "success",
+      "diagnostic": "Added one transaction that reuses latest-due arithmetic, validates recurrence and task prerequisites, and commits persisted occurrence, materialized occurrence, and task start as one unit.",
+      "patch": "Implemented materialize_latest_due_occurrence in scheduler.rs, reused grouped append inputs, and documented the caller-owned cutoff and identity contract in ADR-0064."
+    },
+    {
+      "summary": "Applied actionable review corrections and recorded non-blocking refactor scope.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit identified redundant documentation and maintainability concerns around event naming, metadata validation order, and duplicated helpers. Commit 358c96e corrected the documentation, renamed the ambiguous event variable, and validated metadata before serialization. Helper extraction remained a non-blocking YAGNI refactor; the final incremental review reported no actionable comments and no unresolved thread remained.",
+      "patch": "Applied the concrete documentation and maintainability fixes, retained narrowly scoped latest-due helpers, and reran the complete gate on exact head 358c96ecfe0ac5e89fe76753c67bd816403f2fcf."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel can atomically create an inert task bound to the latest caller-selected due occurrence while leaving cutoff choice, identity allocation, and execution permission outside the operation.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0190-atomic-latest-due-recurrence-materialization.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 193 records: 193 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30982676284/job/92230328697", "status": "passed"},
+      {"command": "Pull request 922 exact head 358c96ecfe0ac5e89fe76753c67bd816403f2fcf squash merge cef172a33d41eb91194e0bf3fc275b527f1cf48c", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Occurrence provenance and authoritative-goal task creation must commit together so neither side can become orphaned.",
+    "Validate all event metadata before serialization to fail before producing partial encoded work.",
+    "Caller-owned cutoff and task identity keep due policy and allocation outside the persistence kernel.",
+    "Materialization creates an inert durable task but grants no claim, lease, dispatch, retry, permission, provider, tool, or execution authority.",
+    "A low-value helper extraction can remain deferred when the concrete correctness findings are fixed and duplication is still bounded."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/922"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
