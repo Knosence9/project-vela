@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, path::Path};
+use std::{collections::HashSet, error::Error, fmt, path::Path};
 
 use serde::Serialize;
 
@@ -689,6 +689,13 @@ pub enum RecurrenceStoreError {
     TaskAlreadyExists {
         task_id: TaskId,
     },
+    TaskCountMismatch {
+        occurrence_count: usize,
+        task_count: usize,
+    },
+    DuplicateTaskId {
+        task_id: TaskId,
+    },
     AmbiguousTaskBinding {
         task_id: TaskId,
         occurrence_count: usize,
@@ -787,6 +794,16 @@ impl fmt::Display for RecurrenceStoreError {
             Self::TaskAlreadyExists { task_id } => {
                 write!(formatter, "task {task_id} already exists")
             }
+            Self::TaskCountMismatch {
+                occurrence_count,
+                task_count,
+            } => write!(
+                formatter,
+                "due page selected {occurrence_count} occurrences, but received {task_count} task ids"
+            ),
+            Self::DuplicateTaskId { task_id } => {
+                write!(formatter, "due page task id {task_id} is duplicated")
+            }
             Self::AmbiguousTaskBinding {
                 task_id,
                 occurrence_count,
@@ -835,6 +852,8 @@ impl Error for RecurrenceStoreError {
             | Self::OccurrenceConcurrentModification { .. }
             | Self::OccurrenceAlreadyMaterialized { .. }
             | Self::TaskAlreadyExists { .. }
+            | Self::TaskCountMismatch { .. }
+            | Self::DuplicateTaskId { .. }
             | Self::AmbiguousTaskBinding { .. }
             | Self::InvalidStreamId { .. }
             | Self::InvalidHistory { .. }
@@ -1352,6 +1371,178 @@ impl RecurrenceStore {
                     });
                 }
                 Err(RecurrenceStoreError::TaskAlreadyExists { task_id })
+            }
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
+    }
+
+    /// Atomically persists and materializes one bounded due page into caller-owned tasks.
+    pub fn materialize_due_occurrences_page(
+        &mut self,
+        id: &RecurrenceId,
+        expected_revision: u64,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+        task_ids: Vec<TaskId>,
+    ) -> Result<MaterializedRecurrenceOccurrencePage, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        if recurrence.revision() != expected_revision {
+            return Err(RecurrenceStoreError::ConcurrentModification {
+                recurrence_id: id.clone(),
+                expected_revision,
+                current_revision: recurrence.revision(),
+            });
+        }
+        let page =
+            Self::project_due_occurrences_page(&recurrence, start_offset, page_size, cutoff)?;
+        if page.occurrences().len() != task_ids.len() {
+            return Err(RecurrenceStoreError::TaskCountMismatch {
+                occurrence_count: page.occurrences().len(),
+                task_count: task_ids.len(),
+            });
+        }
+        let mut distinct_tasks = HashSet::with_capacity(task_ids.len());
+        for task_id in &task_ids {
+            if !distinct_tasks.insert(task_id) {
+                return Err(RecurrenceStoreError::DuplicateTaskId {
+                    task_id: task_id.clone(),
+                });
+            }
+        }
+        if page.occurrences().is_empty() {
+            return Ok(MaterializedRecurrenceOccurrencePage {
+                occurrences: Vec::new(),
+                next_offset: page.next_offset(),
+            });
+        }
+        for occurrence in page.occurrences() {
+            if self
+                .load_occurrence_state_with_recurrence(&recurrence, occurrence.offset())?
+                .is_some()
+            {
+                return Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                    recurrence_id: id.clone(),
+                    offset: occurrence.offset(),
+                });
+            }
+        }
+        for task_id in &task_ids {
+            if !self
+                .event_log
+                .replay::<TaskEvent>(&task_stream(task_id))
+                .map_err(RecurrenceStoreError::Replay)?
+                .is_empty()
+            {
+                return Err(RecurrenceStoreError::TaskAlreadyExists {
+                    task_id: task_id.clone(),
+                });
+            }
+        }
+
+        let occurrence_streams = page
+            .occurrences()
+            .iter()
+            .map(|occurrence| recurrence_occurrence_stream(id, occurrence.offset()))
+            .collect::<Vec<_>>();
+        let persisted_events = page
+            .occurrences()
+            .iter()
+            .map(|occurrence| RecurrenceOccurrenceEvent::Persisted {
+                recurrence_id: id.clone(),
+                recurrence_revision: occurrence.recurrence_revision(),
+                offset: occurrence.offset(),
+                goal: occurrence.goal().clone(),
+                unix_millis: occurrence.instant().unix_millis(),
+            })
+            .collect::<Vec<_>>();
+        let materialized_events = task_ids
+            .iter()
+            .cloned()
+            .map(|task_id| RecurrenceOccurrenceEvent::Materialized { task_id })
+            .collect::<Vec<_>>();
+        let task_streams = task_ids.iter().map(task_stream).collect::<Vec<_>>();
+        let task_events = page
+            .occurrences()
+            .iter()
+            .map(|occurrence| TaskEvent::Started {
+                goal: occurrence.goal().clone(),
+            })
+            .collect::<Vec<_>>();
+        let pair_refs = (0..page.occurrences().len())
+            .map(|index| {
+                (
+                    &occurrence_streams[index],
+                    &persisted_events[index],
+                    &materialized_events[index],
+                )
+            })
+            .collect::<Vec<_>>();
+        let task_refs = (0..task_ids.len())
+            .map(|index| (&task_streams[index], &task_events[index]))
+            .collect::<Vec<_>>();
+
+        match self.event_log.append_pairs_and_new_streams_if_unchanged(
+            &pair_refs,
+            &task_refs,
+            (
+                &recurrence_stream(id),
+                ExpectedVersion::Exact(expected_revision),
+            ),
+        ) {
+            Ok(()) => Ok(MaterializedRecurrenceOccurrencePage {
+                occurrences: page
+                    .occurrences()
+                    .iter()
+                    .cloned()
+                    .zip(task_ids)
+                    .map(|(occurrence, task_id)| MaterializedRecurrenceOccurrence {
+                        occurrence,
+                        revision: 2,
+                        task_id,
+                    })
+                    .collect(),
+                next_offset: page.next_offset(),
+            }),
+            Err(EventLogError::WrongExpectedVersion { .. }) => {
+                let Some(current) = self.load(id)? else {
+                    return Err(RecurrenceStoreError::NotFound {
+                        recurrence_id: id.clone(),
+                    });
+                };
+                if current.revision() != expected_revision {
+                    return Err(RecurrenceStoreError::ConcurrentModification {
+                        recurrence_id: id.clone(),
+                        expected_revision,
+                        current_revision: current.revision(),
+                    });
+                }
+                for occurrence in page.occurrences() {
+                    if self
+                        .load_occurrence_state_with_recurrence(&current, occurrence.offset())?
+                        .is_some()
+                    {
+                        return Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                            recurrence_id: id.clone(),
+                            offset: occurrence.offset(),
+                        });
+                    }
+                }
+                for task_id in task_ids {
+                    if !self
+                        .event_log
+                        .replay::<TaskEvent>(&task_stream(&task_id))
+                        .map_err(RecurrenceStoreError::Replay)?
+                        .is_empty()
+                    {
+                        return Err(RecurrenceStoreError::TaskAlreadyExists { task_id });
+                    }
+                }
+                unreachable!("an unchanged prerequisite and absent target streams cannot conflict")
             }
             Err(error) => Err(RecurrenceStoreError::EventLog(error)),
         }
