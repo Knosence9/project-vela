@@ -97,6 +97,14 @@ pub enum RecurrenceCommand {
         start_offset: u64,
         cutoff_unix_millis: u64,
     },
+    /// Atomically persist the latest due occurrence through one inclusive cutoff.
+    PersistLatestDue {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        start_offset: u64,
+        cutoff_unix_millis: u64,
+    },
     /// Atomically persist one bounded page through a caller-owned inclusive cutoff.
     PersistDue {
         database: PathBuf,
@@ -400,6 +408,22 @@ impl Cli {
             }) => select_latest_due_recurrence_occurrence(
                 &database,
                 &id,
+                start_offset,
+                cutoff_unix_millis,
+            ),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::PersistLatestDue {
+                        database,
+                        id,
+                        expected_revision,
+                        start_offset,
+                        cutoff_unix_millis,
+                    }),
+            }) => persist_latest_due_recurrence_occurrence(
+                &database,
+                &id,
+                expected_revision,
                 start_offset,
                 cutoff_unix_millis,
             ),
@@ -1179,10 +1203,7 @@ fn select_latest_due_recurrence_occurrence(
             return extension_error("latest_due_recurrence_occurrence_lookup_failed", error);
         }
     };
-    let output = match serde_json::to_string(&LatestDueOccurrenceInspection {
-        occurrence: selection.occurrence().map(recurrence_occurrence_inspection),
-        next_offset: selection.next_offset(),
-    }) {
+    let output = match serialize_latest_due_occurrence_selection(&selection) {
         Ok(output) => output,
         Err(error) => {
             return extension_error("latest_due_recurrence_occurrence_lookup_failed", error);
@@ -1190,6 +1211,53 @@ fn select_latest_due_recurrence_occurrence(
     };
     println!("{output}");
     ExitCode::SUCCESS
+}
+
+fn persist_latest_due_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    start_offset: u64,
+    cutoff_unix_millis: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error("latest_due_recurrence_occurrence_persistence_failed", error);
+        }
+    };
+    let selection = match store.persist_latest_due_occurrence(
+        &id,
+        expected_revision,
+        start_offset,
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+    ) {
+        Ok(selection) => selection,
+        Err(error) => {
+            return extension_error("latest_due_recurrence_occurrence_persistence_failed", error);
+        }
+    };
+    let output = match serialize_latest_due_occurrence_selection(&selection) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error("latest_due_recurrence_occurrence_persistence_failed", error);
+        }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn serialize_latest_due_occurrence_selection(
+    selection: &vela_kernel::scheduler::LatestDueOccurrenceSelection,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&LatestDueOccurrenceInspection {
+        occurrence: selection.occurrence().map(recurrence_occurrence_inspection),
+        next_offset: selection.next_offset(),
+    })
 }
 
 fn page_materialized_recurrence_occurrences(

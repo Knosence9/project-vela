@@ -313,6 +313,35 @@ occurrence persistence, materialization, task lifecycle, dispatch, workflow,
 provider/tool, permission, retry, or execution authority. See
 [ADR-0061](adr/0061-read-only-latest-due-recurrence-cli.md).
 
+## Writable atomic latest-due recurrence occurrence CLI persistence
+
+`vela-dev recurrence persist-latest-due DATABASE RECURRENCE_ID
+EXPECTED_REVISION START_OFFSET CUTOFF_UNIX_MILLIS` validates the exact
+recurrence ID before storage access; clap parses the observed definition
+revision, authored start, and inclusive caller-owned cutoff as non-negative
+`u64` values. It opens only the selected database through
+`RecurrenceStore::open` and delegates constant-space selection, revision
+validation, duplicate protection, and atomic persistence to
+`RecurrenceStore::persist_latest_due_occurrence`.
+
+Success emits the same compact shape as read-only latest-due selection.
+`occurrence` contains complete persisted provenance or `null`; `next_offset`
+contains the following authored coordinate, the unchanged future cursor, or
+`null` at finite completion. A future horizon writes nothing, and skipped
+coordinates remain uninspected and unpersisted.
+
+Invalid IDs emit `invalid_recurrence_id` before storage access. Missing or stale
+definitions, invalid starts, duplicates, selected corruption, concurrency,
+open, persistence, and serialization failures emit
+`latest_due_recurrence_occurrence_persistence_failed`, return non-zero, and
+emit no stdout. Every failure appends no selected provenance.
+
+The command reads no ambient clock, persists no cursor or skipped-coordinate
+evidence, discovers no unrelated recurrence, generates no identity, and grants
+no materialization, task lifecycle, claim, dispatch, workflow, provider/tool,
+permission, retry, or execution authority. See
+[ADR-0063](adr/0063-writable-atomic-latest-due-recurrence-cli.md).
+
 ## Writable atomic due recurrence occurrence CLI paging
 
 `vela-dev recurrence persist-due DATABASE RECURRENCE_ID EXPECTED_REVISION
