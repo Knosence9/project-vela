@@ -1344,6 +1344,51 @@ impl RecurrenceStore {
         Ok(matches.pop())
     }
 
+    /// Atomically consumes one exact claimed occurrence into a caller-owned task.
+    pub fn materialize_claimed_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        task_id: TaskId,
+    ) -> Result<MaterializedRecurrenceOccurrence, RecurrenceStoreError> {
+        let Some(state) = self.load_occurrence_state(id, offset)? else {
+            return Err(RecurrenceStoreError::OccurrenceNotFound {
+                recurrence_id: id.clone(),
+                offset,
+            });
+        };
+        if state.revision != expected_occurrence_revision {
+            return Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                recurrence_id: id.clone(),
+                offset,
+                expected_revision: expected_occurrence_revision,
+                current_revision: state.revision,
+            });
+        }
+        if let Some(bound_task_id) = state.task_id {
+            return Err(RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+                recurrence_id: id.clone(),
+                offset,
+                task_id: bound_task_id,
+            });
+        }
+        if !state.claimed {
+            return Err(RecurrenceStoreError::OccurrenceNotClaimed {
+                recurrence_id: id.clone(),
+                offset,
+            });
+        }
+        self.append_occurrence_materialization(
+            id,
+            offset,
+            expected_occurrence_revision,
+            state,
+            task_id,
+            true,
+        )
+    }
+
     /// Atomically binds one exact persisted occurrence revision to a caller-owned task.
     pub fn materialize_occurrence(
         &mut self,
@@ -1379,6 +1424,25 @@ impl RecurrenceStore {
                 offset,
             });
         }
+        self.append_occurrence_materialization(
+            id,
+            offset,
+            expected_occurrence_revision,
+            state,
+            task_id,
+            false,
+        )
+    }
+
+    fn append_occurrence_materialization(
+        &mut self,
+        id: &RecurrenceId,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        state: RecurrenceOccurrenceState,
+        task_id: TaskId,
+        conflict_is_concurrent: bool,
+    ) -> Result<MaterializedRecurrenceOccurrence, RecurrenceStoreError> {
         let materialized_event = RecurrenceOccurrenceEvent::Materialized {
             task_id: task_id.clone(),
         };
@@ -1404,6 +1468,14 @@ impl RecurrenceStore {
             }) => Err(RecurrenceStoreError::TaskAlreadyExists { task_id }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
                 match self.load_occurrence_state(id, offset)? {
+                    Some(current) if conflict_is_concurrent => {
+                        Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                            recurrence_id: id.clone(),
+                            offset,
+                            expected_revision: expected_occurrence_revision,
+                            current_revision: current.revision,
+                        })
+                    }
                     Some(RecurrenceOccurrenceState {
                         task_id: Some(bound_task_id),
                         ..
@@ -2088,7 +2160,8 @@ impl RecurrenceStore {
                 }
                 RecurrenceOccurrenceEvent::Materialized {
                     task_id: bound_task_id,
-                } if !claimed && task_id.is_none() => {
+                } if task_id.is_none() => {
+                    claimed = false;
                     task_id = Some(bound_task_id.clone());
                 }
                 _ => {
