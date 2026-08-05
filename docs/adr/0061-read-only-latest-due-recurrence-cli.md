@@ -14,7 +14,7 @@ ADR-0060 makes latest-only catch-up an explicit constant-space kernel policy for
 
 The command opens only the selected existing database through `RecurrenceStore::open_read_only` and strictly replays only the exact definition. Success emits compact JSON with `occurrence` containing the complete selected occurrence or `null`, plus the kernel-owned `next_offset`. A future start preserves its unchanged cursor; finite completion emits `null`.
 
-Invalid identity, absence, and invalid starts retain stable typed diagnostics. Open, selected replay, projection, and serialization failures share `latest_due_recurrence_occurrence_lookup_failed`, return non-zero, and emit no stdout. Missing storage is not created, and unrelated corruption cannot block the exact query.
+Invalid identity emits `invalid_recurrence_id`, absence emits `recurrence_not_found`, and invalid starts emit `recurrence_occurrence_out_of_range`. Other open, selected replay, projection, and serialization failures share `latest_due_recurrence_occurrence_lookup_failed`, return non-zero, and emit no stdout. Missing storage is not created, and unrelated corruption cannot block the exact query.
 
 The adapter reads no ambient clock, persists no cursor or skip evidence, scans no unrelated definitions, generates no identity, and grants no occurrence persistence, materialization, task lifecycle, dispatch, workflow, provider/tool, permission, retry, or execution authority.
 

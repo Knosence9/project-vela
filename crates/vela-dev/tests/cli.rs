@@ -4158,12 +4158,15 @@ fn latest_due_recurrence_selection_isolates_unrelated_corruption_and_fails_selec
     drop(store);
 
     let connection = rusqlite::Connection::open(&database).unwrap();
-    connection
-        .execute(
-            "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'recurrence:unrelated'",
-            [],
-        )
-        .unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE events SET payload = X'7B7D' WHERE stream_id = 'recurrence:unrelated'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
     Command::cargo_bin("vela-dev")
         .expect("vela-dev binary")
         .args([

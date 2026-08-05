@@ -300,8 +300,8 @@ kernel-owned following authored coordinate, the unchanged future cursor, or
 
 Invalid IDs emit `invalid_recurrence_id` before storage access. Missing
 definitions emit `recurrence_not_found`; invalid starts emit
-`recurrence_occurrence_out_of_range`. Open, strict selected-definition replay,
-projection, and serialization failures emit
+`recurrence_occurrence_out_of_range`. Other open, strict selected-definition
+replay, projection, and serialization failures emit
 `latest_due_recurrence_occurrence_lookup_failed`, return non-zero, and emit no
 stdout. Missing storage remains missing, and unrelated corruption cannot block
 the exact query.
