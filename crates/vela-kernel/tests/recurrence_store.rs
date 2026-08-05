@@ -2612,6 +2612,7 @@ fn claimed_occurrence_materialization_rejects_invalid_states_without_partial_app
             .unwrap_err(),
         RecurrenceStoreError::OccurrenceNotClaimed { offset: 1, .. }
     ));
+    assert_eq!(occurrence_event_count(&path, &id, 1), 3);
 
     store.persist_occurrence(&id, 1, 2).unwrap();
     let terminal_task = TaskId::new("terminal-task").unwrap();
@@ -2628,6 +2629,7 @@ fn claimed_occurrence_materialization_rejects_invalid_states_without_partial_app
             ..
         } if task_id == terminal_task
     ));
+    assert_eq!(occurrence_event_count(&path, &id, 2), 2);
 
     drop(store);
     let mut read_only = RecurrenceStore::open_read_only(&path).unwrap();

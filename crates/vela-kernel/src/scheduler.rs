@@ -692,6 +692,12 @@ struct RecurrenceOccurrenceState {
     task_id: Option<TaskId>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MaterializationConflictKind {
+    Available,
+    Claimed,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum RecurrenceOccurrenceLookupError {
@@ -1383,9 +1389,9 @@ impl RecurrenceStore {
             id,
             offset,
             expected_occurrence_revision,
-            state,
+            state.occurrence,
             task_id,
-            true,
+            MaterializationConflictKind::Claimed,
         )
     }
 
@@ -1428,9 +1434,9 @@ impl RecurrenceStore {
             id,
             offset,
             expected_occurrence_revision,
-            state,
+            state.occurrence,
             task_id,
-            false,
+            MaterializationConflictKind::Available,
         )
     }
 
@@ -1439,15 +1445,15 @@ impl RecurrenceStore {
         id: &RecurrenceId,
         offset: u64,
         expected_occurrence_revision: u64,
-        state: RecurrenceOccurrenceState,
+        occurrence: RecurrenceOccurrence,
         task_id: TaskId,
-        conflict_is_concurrent: bool,
+        conflict_kind: MaterializationConflictKind,
     ) -> Result<MaterializedRecurrenceOccurrence, RecurrenceStoreError> {
         let materialized_event = RecurrenceOccurrenceEvent::Materialized {
             task_id: task_id.clone(),
         };
         let task_event = TaskEvent::Started {
-            goal: state.occurrence.goal().clone(),
+            goal: occurrence.goal().clone(),
         };
         match self.event_log.append_pair(
             &recurrence_occurrence_stream(id, offset),
@@ -1458,7 +1464,7 @@ impl RecurrenceStore {
             &task_event,
         ) {
             Ok(_) => Ok(MaterializedRecurrenceOccurrence {
-                occurrence: state.occurrence,
+                occurrence,
                 revision: expected_occurrence_revision + 1,
                 task_id,
             }),
@@ -1468,7 +1474,7 @@ impl RecurrenceStore {
             }) => Err(RecurrenceStoreError::TaskAlreadyExists { task_id }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
                 match self.load_occurrence_state(id, offset)? {
-                    Some(current) if conflict_is_concurrent => {
+                    Some(current) if conflict_kind == MaterializationConflictKind::Claimed => {
                         Err(RecurrenceStoreError::OccurrenceConcurrentModification {
                             recurrence_id: id.clone(),
                             offset,
