@@ -43,6 +43,7 @@
   "lessons": [
     "Occurrence provenance and authoritative-goal task creation must commit together so neither side can become orphaned.",
     "Validate all event metadata before serialization to fail before producing partial encoded work.",
+    "Review found redundant scheduler wording and an ambiguous event variable name; commit 358c96e corrected both.",
     "Caller-owned cutoff and task identity keep due policy and allocation outside the persistence kernel.",
     "Materialization creates an inert durable task but grants no claim, lease, dispatch, retry, permission, provider, tool, or execution authority.",
     "A low-value helper extraction can remain deferred when the concrete correctness findings are fixed and duplication is still bounded."

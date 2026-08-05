@@ -44,7 +44,8 @@
     "A page of occurrence-task bindings is one crash-consistency unit and must not be implemented as repeated single-coordinate transactions.",
     "Task count and order prove that the caller owns identity allocation and binding policy rather than the kernel.",
     "Future empty pages require zero identities and must perform no writes.",
-    "Substantive review nitpicks should be preserved accurately without claiming they were fixed or treating them as blockers.",
+    "Review suggested broader encode_event reuse and zip-based reference construction; both maintainability suggestions were deferred.",
+    "Review also suggested replacing the unreachable conflict fallback with a typed error because its storage and ordering invariants are not locally provable and a typed fallback would remove a possible library panic; that stability suggestion was deferred.",
     "Materialization grants no claim, lease, dispatch, retry, permission, workflow, provider, tool, or execution authority."
   ],
   "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/926"},
