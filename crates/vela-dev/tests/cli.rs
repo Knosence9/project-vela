@@ -3982,6 +3982,159 @@ fn materialized_recurrence_occurrence_paging_categorizes_bounds_and_corruption()
 }
 
 #[test]
+fn persists_latest_due_recurrence_occurrence_as_resumable_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact\nid").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(5).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let run = |start: &str, cutoff: &str| {
+        let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
+        command.args([
+            "recurrence",
+            "persist-latest-due",
+            database.to_str().unwrap(),
+            id.as_str(),
+            "1",
+            start,
+            cutoff,
+        ]);
+        command
+    };
+    run("0", "23")
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"occurrence\":{\"recurrence_id\":\"exact\\nid\",",
+            "\"goal\":\"preserve \\\"exact\\\" goal\",\"offset\":2,",
+            "\"unix_millis\":20,\"definition_revision\":1},\"next_offset\":3}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+    run("3", "24")
+        .assert()
+        .success()
+        .stdout("{\"occurrence\":null,\"next_offset\":3}\n")
+        .stderr(predicate::str::is_empty());
+    run("3", "30")
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"occurrence\":{\"recurrence_id\":\"exact\\nid\",",
+            "\"goal\":\"preserve \\\"exact\\\" goal\",\"offset\":4,",
+            "\"unix_millis\":30,\"definition_revision\":1},\"next_offset\":null}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    for offset in [0, 1, 3] {
+        assert!(store.load_occurrence(&id, offset).unwrap().is_none());
+    }
+    for offset in [2, 4] {
+        assert!(store.load_occurrence(&id, offset).unwrap().is_some());
+    }
+}
+
+#[test]
+fn latest_due_recurrence_persistence_validates_and_fails_closed() {
+    let directory = tempdir().expect("recurrence database directory");
+    let missing_database = directory.path().join("missing.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "persist-latest-due",
+            missing_database.to_str().unwrap(),
+            "",
+            "1",
+            "0",
+            "10",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: invalid_recurrence_id:"));
+    assert!(!missing_database.exists());
+
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(u64::MAX - 1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let run = |selected_id: &str, revision: &str, start: &str| {
+        let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
+        command.args([
+            "recurrence",
+            "persist-latest-due",
+            database.to_str().unwrap(),
+            selected_id,
+            revision,
+            start,
+            &u64::MAX.to_string(),
+        ]);
+        command
+    };
+    run("exact", "1", "0")
+        .assert()
+        .success()
+        .stdout(format!(
+            "{{\"occurrence\":{{\"recurrence_id\":\"exact\",\"goal\":\"goal\",\"offset\":1,\"unix_millis\":{},\"definition_revision\":1}},\"next_offset\":null}}\n",
+            u64::MAX
+        ));
+    for (selected_id, revision, start) in [
+        ("absent", "1", "0"),
+        ("exact", "2", "0"),
+        ("exact", "1", "2"),
+        ("exact", "1", "0"),
+    ] {
+        run(selected_id, revision, start)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: latest_due_recurrence_occurrence_persistence_failed:",
+            ));
+    }
+
+    assert_eq!(
+        rusqlite::Connection::open(&database)
+            .unwrap()
+            .execute(
+                "UPDATE events SET payload = X'7B7D' \
+                 WHERE event_type = 'recurrence.occurrence_persisted'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
+    run("exact", "1", "0")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: latest_due_recurrence_occurrence_persistence_failed:",
+        ));
+}
+
+#[test]
 fn selects_latest_due_recurrence_occurrence_as_resumable_json() {
     let directory = tempdir().expect("recurrence database directory");
     let database = directory.path().join("events.sqlite3");

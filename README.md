@@ -386,13 +386,21 @@ The explicit cutoff remains caller authority. Selection reads no ambient clock,
 persists no cursor or skip evidence, discovers no unrelated definitions, and
 cannot generate identity, materialize, dispatch, retry, or execute work.
 
-Kernel callers can atomically persist only that explicit latest-due selection
-through `RecurrenceStore::persist_latest_due_occurrence`, binding the selected
-coordinate to one observed immutable definition revision. Skipped coordinates
-remain uninspected and unpersisted; the returned cursor is not durable skip,
-acceptance, or lifecycle evidence. A future horizon writes nothing, while
-duplicates and malformed selected provenance fail closed. This kernel boundary
-does not yet add a writable CLI adapter.
+Atomically persist only that explicit latest-due selection against one observed
+immutable definition revision:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence persist-latest-due path/to/events.sqlite3 recurrence-id 1 0 1754049600000
+```
+
+The command delegates constant-space latest-only selection and the atomic write
+to the kernel. It emits the same complete occurrence and `next_offset` shape as
+read-only selection. Skipped coordinates remain uninspected and unpersisted;
+the returned cursor is not durable skip, acceptance, or lifecycle evidence. A
+future horizon writes nothing, while stale definitions, duplicates, and
+malformed selected provenance fail closed without partial stdout. The command
+reads no clock, generates no identity, and cannot materialize, dispatch, retry,
+or execute work.
 
 Atomically persist one exact recurrence's bounded due page through the same
 explicit cutoff and one observed definition revision:
@@ -594,6 +602,7 @@ The first milestone is the **evidence loop**:
 142. Select the latest due occurrence from one exact finite recurrence through explicit constant-space catch-up policy without reading ambient time or granting lifecycle authority. ✅
 143. Expose exact latest-due recurrence selection through deterministic read-only CLI JSON without adding clock, persistence, discovery, or execution authority. ✅
 144. Atomically persist one exact latest-due recurrence selection without recording skipped work or granting lifecycle or execution authority. ✅
+145. Persist one exact latest-due recurrence selection through deterministic writable CLI JSON without recording skipped work or granting execution authority. ✅
 
 ## Project documents
 
