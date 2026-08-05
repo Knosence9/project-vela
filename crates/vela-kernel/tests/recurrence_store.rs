@@ -2485,6 +2485,296 @@ fn released_occurrence_replay_rejects_malformed_and_impossible_evidence() {
 }
 
 #[test]
+fn atomically_materializes_one_claimed_occurrence_as_an_inert_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("claimed-materialize:東京").unwrap();
+    let goal = TaskGoal::new("Consume the exact claimed work").unwrap();
+    let task_id = TaskId::new("claimed-recurrence-task").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    let occurrence = store.persist_occurrence(&id, 1, 1).unwrap();
+    store.claim_occurrence(&id, 1, 1, instant(15)).unwrap();
+
+    let materialized = store
+        .materialize_claimed_occurrence(&id, 1, 2, task_id.clone())
+        .unwrap();
+
+    assert_eq!(materialized.occurrence(), &occurrence);
+    assert_eq!(materialized.revision(), 3);
+    assert_eq!(materialized.task_id(), &task_id);
+    assert_eq!(store.load_claimed_occurrence(&id, 1).unwrap(), None);
+    drop(store);
+
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    assert_eq!(
+        reopened.load_materialized_occurrence(&id, 1).unwrap(),
+        Some(materialized.clone())
+    );
+    assert_eq!(
+        reopened.find_materialized_by_task_id(&task_id).unwrap(),
+        Some(materialized.clone())
+    );
+    assert_eq!(
+        reopened
+            .materialized_occurrences_page(&id, 0, OccurrencePageSize::new(2).unwrap())
+            .unwrap()
+            .occurrences(),
+        &[materialized]
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .goal(),
+        &goal
+    );
+}
+
+#[test]
+fn claimed_occurrence_materialization_rejects_invalid_states_without_partial_append() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("claimed-materialize-errors").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject invalid claim consumption").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store
+            .materialize_claimed_occurrence(&id, 0, 1, TaskId::new("missing-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotFound { offset: 0, .. }
+    ));
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    assert!(matches!(
+        store
+            .materialize_claimed_occurrence(&id, 0, 1, TaskId::new("available-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotClaimed { offset: 0, .. }
+    ));
+    store.claim_occurrence(&id, 0, 1, instant(1)).unwrap();
+    assert!(matches!(
+        store
+            .materialize_claimed_occurrence(&id, 0, 1, TaskId::new("stale-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            expected_revision: 1,
+            current_revision: 2,
+            ..
+        }
+    ));
+
+    let collision = TaskId::new("claimed-collision").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(collision.clone(), TaskGoal::new("Existing task").unwrap())
+        .unwrap();
+    assert!(matches!(
+        store
+            .materialize_claimed_occurrence(&id, 0, 2, collision.clone())
+            .unwrap_err(),
+        RecurrenceStoreError::TaskAlreadyExists { task_id } if task_id == collision
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 2);
+    assert!(store.load_claimed_occurrence(&id, 0).unwrap().is_some());
+
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    store.claim_occurrence(&id, 1, 1, instant(2)).unwrap();
+    store
+        .release_occurrence(
+            &id,
+            1,
+            2,
+            RecurrenceOccurrenceRelease::new("available again").unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .materialize_claimed_occurrence(&id, 1, 3, TaskId::new("released-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotClaimed { offset: 1, .. }
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 1), 3);
+
+    store.persist_occurrence(&id, 1, 2).unwrap();
+    let terminal_task = TaskId::new("terminal-task").unwrap();
+    store
+        .materialize_occurrence(&id, 2, 1, terminal_task.clone())
+        .unwrap();
+    assert!(matches!(
+        store
+            .materialize_claimed_occurrence(&id, 2, 2, TaskId::new("replacement-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+            offset: 2,
+            task_id,
+            ..
+        } if task_id == terminal_task
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 2), 2);
+
+    drop(store);
+    let mut read_only = RecurrenceStore::open_read_only(&path).unwrap();
+    assert!(matches!(
+        read_only
+            .materialize_claimed_occurrence(&id, 0, 2, TaskId::new("read-only-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::EventLog(_)
+    ));
+    assert!(read_only.load_claimed_occurrence(&id, 0).unwrap().is_some());
+}
+
+#[test]
+fn racing_claimed_materializations_return_one_concurrency_loser() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-claimed-materialization").unwrap();
+    let mut setup = RecurrenceStore::open(&path).unwrap();
+    setup
+        .create(
+            id.clone(),
+            TaskGoal::new("Consume one claim once").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    setup.persist_occurrence(&id, 1, 0).unwrap();
+    setup.claim_occurrence(&id, 0, 1, instant(1)).unwrap();
+    drop(setup);
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = ["claimed-race-a", "claimed-race-b"].map(|raw_task_id| {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            let mut store = RecurrenceStore::open(path).unwrap();
+            barrier.wait();
+            store.materialize_claimed_occurrence(&id, 0, 2, TaskId::new(raw_task_id).unwrap())
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                    expected_revision: 2,
+                    current_revision: 3,
+                    ..
+                })
+            ))
+            .count(),
+        1
+    );
+    let winner = results
+        .iter()
+        .find_map(|result| result.as_ref().ok())
+        .unwrap();
+    for raw_task_id in ["claimed-race-a", "claimed-race-b"] {
+        let task_id = TaskId::new(raw_task_id).unwrap();
+        assert_eq!(
+            TaskStore::open(&path)
+                .unwrap()
+                .load(&task_id)
+                .unwrap()
+                .is_some(),
+            winner.task_id() == &task_id
+        );
+    }
+}
+
+#[test]
+fn claimed_materialization_and_release_compete_for_one_exact_revision() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("claimed-materialize-release-race").unwrap();
+    let task_id = TaskId::new("claimed-race-task").unwrap();
+    let mut setup = RecurrenceStore::open(&path).unwrap();
+    setup
+        .create(
+            id.clone(),
+            TaskGoal::new("Commit one claimed transition").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    setup.persist_occurrence(&id, 1, 0).unwrap();
+    setup.claim_occurrence(&id, 0, 1, instant(1)).unwrap();
+    drop(setup);
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let materialize = {
+        let path = path.clone();
+        let id = id.clone();
+        let task_id = task_id.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            let mut store = RecurrenceStore::open(path).unwrap();
+            barrier.wait();
+            store.materialize_claimed_occurrence(&id, 0, 2, task_id)
+        })
+    };
+    let release = {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            let mut store = RecurrenceStore::open(path).unwrap();
+            barrier.wait();
+            store.release_occurrence(
+                &id,
+                0,
+                2,
+                RecurrenceOccurrenceRelease::new("race recovery").unwrap(),
+            )
+        })
+    };
+    let materialize_result = materialize.join().unwrap();
+    let release_result = release.join().unwrap();
+
+    assert_ne!(materialize_result.is_ok(), release_result.is_ok());
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    let binding = reopened.load_materialized_occurrence(&id, 0).unwrap();
+    assert_eq!(binding.is_some(), materialize_result.is_ok());
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .is_some(),
+        materialize_result.is_ok()
+    );
+    assert_eq!(
+        reopened.load_released_occurrence(&id, 0).unwrap().is_some(),
+        release_result.is_ok()
+    );
+}
+
+#[test]
 fn atomically_materializes_one_persisted_occurrence_as_an_inert_task() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
