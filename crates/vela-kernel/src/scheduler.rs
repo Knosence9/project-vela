@@ -18,6 +18,7 @@ const SCHEDULE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
 const RECURRENCE_CREATED_EVENT_TYPE: &str = "recurrence.fixed_interval_created";
 const RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE: &str = "recurrence.occurrence_persisted";
+const RECURRENCE_OCCURRENCE_CLAIMED_EVENT_TYPE: &str = "recurrence.occurrence_claimed";
 const RECURRENCE_OCCURRENCE_MATERIALIZED_EVENT_TYPE: &str = "recurrence.occurrence_materialized";
 const RECURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const RECURRENCE_OCCURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
@@ -570,6 +571,23 @@ impl RecurrenceOccurrence {
     }
 }
 
+/// One exact persisted recurrence occurrence durably reserved by a caller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimedRecurrenceOccurrence {
+    occurrence: RecurrenceOccurrence,
+    revision: u64,
+}
+
+impl ClaimedRecurrenceOccurrence {
+    pub fn occurrence(&self) -> &RecurrenceOccurrence {
+        &self.occurrence
+    }
+
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
 /// One exact persisted recurrence occurrence atomically bound to an inert task.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterializedRecurrenceOccurrence {
@@ -615,6 +633,7 @@ impl MaterializedRecurrenceOccurrencePage {
 struct RecurrenceOccurrenceState {
     occurrence: RecurrenceOccurrence,
     revision: u64,
+    claimed: bool,
     task_id: Option<TaskId>,
 }
 
@@ -680,6 +699,16 @@ pub enum RecurrenceStoreError {
         offset: u64,
         expected_revision: u64,
         current_revision: u64,
+    },
+    OccurrenceNotDue {
+        recurrence_id: RecurrenceId,
+        offset: u64,
+        due_at: ScheduleInstant,
+        cutoff: ScheduleInstant,
+    },
+    OccurrenceAlreadyClaimed {
+        recurrence_id: RecurrenceId,
+        offset: u64,
     },
     OccurrenceAlreadyMaterialized {
         recurrence_id: RecurrenceId,
@@ -783,6 +812,24 @@ impl fmt::Display for RecurrenceStoreError {
                 formatter,
                 "recurrence {recurrence_id} occurrence {offset} expected revision {expected_revision}, but current revision is {current_revision}"
             ),
+            Self::OccurrenceNotDue {
+                recurrence_id,
+                offset,
+                due_at,
+                cutoff,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} occurrence {offset} is due at {} after cutoff {}",
+                due_at.unix_millis(),
+                cutoff.unix_millis()
+            ),
+            Self::OccurrenceAlreadyClaimed {
+                recurrence_id,
+                offset,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} occurrence {offset} is already claimed"
+            ),
             Self::OccurrenceAlreadyMaterialized {
                 recurrence_id,
                 offset,
@@ -850,6 +897,8 @@ impl Error for RecurrenceStoreError {
             | Self::OccurrenceAlreadyPersisted { .. }
             | Self::OccurrenceNotFound { .. }
             | Self::OccurrenceConcurrentModification { .. }
+            | Self::OccurrenceNotDue { .. }
+            | Self::OccurrenceAlreadyClaimed { .. }
             | Self::OccurrenceAlreadyMaterialized { .. }
             | Self::TaskAlreadyExists { .. }
             | Self::TaskCountMismatch { .. }
@@ -986,6 +1035,91 @@ impl RecurrenceStore {
             .map(|state| state.occurrence))
     }
 
+    /// Loads one exact durable occurrence claim without scanning unrelated state.
+    pub fn load_claimed_occurrence(
+        &self,
+        id: &RecurrenceId,
+        offset: u64,
+    ) -> Result<Option<ClaimedRecurrenceOccurrence>, RecurrenceStoreError> {
+        Ok(self.load_occurrence_state(id, offset)?.and_then(|state| {
+            state.claimed.then_some(ClaimedRecurrenceOccurrence {
+                occurrence: state.occurrence,
+                revision: state.revision,
+            })
+        }))
+    }
+
+    /// Durably reserves one exact persisted occurrence against a caller-owned cutoff.
+    pub fn claim_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        cutoff: ScheduleInstant,
+    ) -> Result<ClaimedRecurrenceOccurrence, RecurrenceStoreError> {
+        let Some(state) = self.load_occurrence_state(id, offset)? else {
+            return Err(RecurrenceStoreError::OccurrenceNotFound {
+                recurrence_id: id.clone(),
+                offset,
+            });
+        };
+        if state.revision != expected_occurrence_revision {
+            return Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                recurrence_id: id.clone(),
+                offset,
+                expected_revision: expected_occurrence_revision,
+                current_revision: state.revision,
+            });
+        }
+        if let Some(task_id) = state.task_id {
+            return Err(RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+                recurrence_id: id.clone(),
+                offset,
+                task_id,
+            });
+        }
+        if state.claimed {
+            return Err(RecurrenceStoreError::OccurrenceAlreadyClaimed {
+                recurrence_id: id.clone(),
+                offset,
+            });
+        }
+        if state.occurrence.instant() > cutoff {
+            return Err(RecurrenceStoreError::OccurrenceNotDue {
+                recurrence_id: id.clone(),
+                offset,
+                due_at: state.occurrence.instant(),
+                cutoff,
+            });
+        }
+
+        match self.event_log.append(
+            &recurrence_occurrence_stream(id, offset),
+            ExpectedVersion::Exact(expected_occurrence_revision),
+            &RecurrenceOccurrenceEvent::Claimed {},
+        ) {
+            Ok(_) => Ok(ClaimedRecurrenceOccurrence {
+                occurrence: state.occurrence,
+                revision: expected_occurrence_revision + 1,
+            }),
+            Err(EventLogError::WrongExpectedVersion { .. }) => {
+                match self.load_occurrence_state(id, offset)? {
+                    Some(current) => Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                        recurrence_id: id.clone(),
+                        offset,
+                        expected_revision: expected_occurrence_revision,
+                        current_revision: current.revision,
+                    }),
+                    None => Err(RecurrenceStoreError::OccurrenceNotFound {
+                        recurrence_id: id.clone(),
+                        offset,
+                    }),
+                }
+            }
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
+    }
+
     /// Loads one exact materialized occurrence binding without scanning unrelated state.
     pub fn load_materialized_occurrence(
         &self,
@@ -1076,6 +1210,12 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
                 offset,
                 task_id: bound_task_id,
+            });
+        }
+        if state.claimed {
+            return Err(RecurrenceStoreError::OccurrenceAlreadyClaimed {
+                recurrence_id: id.clone(),
+                offset,
             });
         }
         if state.revision != expected_occurrence_revision {
@@ -1771,13 +1911,19 @@ impl RecurrenceStore {
         events: &[RecurrenceOccurrenceEvent],
     ) -> Result<Option<RecurrenceOccurrenceState>, RecurrenceStoreError> {
         let event_count = events.len();
-        let (persisted, task_id, revision) = match events {
+        let (persisted, claimed, task_id, revision) = match events {
             [] => return Ok(None),
-            [persisted @ RecurrenceOccurrenceEvent::Persisted { .. }] => (persisted, None, 1),
+            [persisted @ RecurrenceOccurrenceEvent::Persisted { .. }] => {
+                (persisted, false, None, 1)
+            }
+            [
+                persisted @ RecurrenceOccurrenceEvent::Persisted { .. },
+                RecurrenceOccurrenceEvent::Claimed {},
+            ] => (persisted, true, None, 2),
             [
                 persisted @ RecurrenceOccurrenceEvent::Persisted { .. },
                 RecurrenceOccurrenceEvent::Materialized { task_id },
-            ] => (persisted, Some(task_id.clone()), 2),
+            ] => (persisted, false, Some(task_id.clone()), 2),
             _ => {
                 return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
                     recurrence_id: recurrence.id().clone(),
@@ -1790,6 +1936,7 @@ impl RecurrenceStore {
         Ok(Some(RecurrenceOccurrenceState {
             occurrence,
             revision,
+            claimed,
             task_id,
         }))
     }
@@ -2755,6 +2902,7 @@ enum RecurrenceOccurrenceEvent {
         goal: TaskGoal,
         unix_millis: u64,
     },
+    Claimed {},
     Materialized {
         task_id: TaskId,
     },
@@ -2764,6 +2912,7 @@ impl Event for RecurrenceOccurrenceEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::Persisted { .. } => RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE,
+            Self::Claimed {} => RECURRENCE_OCCURRENCE_CLAIMED_EVENT_TYPE,
             Self::Materialized { .. } => RECURRENCE_OCCURRENCE_MATERIALIZED_EVENT_TYPE,
         }
     }
@@ -2812,6 +2961,17 @@ impl Event for RecurrenceOccurrenceEvent {
                     goal,
                     unix_millis: payload.unix_millis,
                 })
+            }
+            RECURRENCE_OCCURRENCE_CLAIMED_EVENT_TYPE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {}
+                serde_json::from_slice::<Payload>(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(Self::Claimed {})
             }
             RECURRENCE_OCCURRENCE_MATERIALIZED_EVENT_TYPE => {
                 #[derive(serde::Deserialize)]
