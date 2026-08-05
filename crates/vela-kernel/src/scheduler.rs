@@ -500,6 +500,25 @@ impl RecurrenceOccurrencePage {
     }
 }
 
+/// One explicit latest-only catch-up projection over an authored recurrence suffix.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LatestDueOccurrenceSelection {
+    occurrence: Option<RecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl LatestDueOccurrenceSelection {
+    /// Returns the latest occurrence due from the caller-owned starting offset.
+    pub const fn occurrence(&self) -> Option<&RecurrenceOccurrence> {
+        self.occurrence.as_ref()
+    }
+
+    /// Returns the next authored coordinate to inspect, or finite completion.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 /// One inert read-only projection from a finite recurrence definition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecurrenceOccurrence {
@@ -1120,6 +1139,41 @@ impl RecurrenceStore {
             });
         };
         Self::project_due_occurrences_page(&recurrence, start_offset, page_size, cutoff)
+    }
+
+    /// Selects the latest due occurrence from one caller-owned authored offset.
+    pub fn latest_due_occurrence(
+        &self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        cutoff: ScheduleInstant,
+    ) -> Result<LatestDueOccurrenceSelection, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        let starting_occurrence = recurrence.occurrence_at(start_offset)?;
+        if starting_occurrence.instant() > cutoff {
+            return Ok(LatestDueOccurrenceSelection {
+                occurrence: None,
+                next_offset: Some(start_offset),
+            });
+        }
+
+        let elapsed = cutoff.unix_millis() - starting_occurrence.instant().unix_millis();
+        let latest_offset = start_offset
+            .saturating_add(elapsed / recurrence.interval().millis())
+            .min(recurrence.occurrence_count().get() - 1);
+        let occurrence = recurrence
+            .occurrence_at(latest_offset)
+            .expect("latest offset is bounded by the finite recurrence");
+        let next_offset =
+            (latest_offset < recurrence.occurrence_count().get() - 1).then_some(latest_offset + 1);
+        Ok(LatestDueOccurrenceSelection {
+            occurrence: Some(occurrence),
+            next_offset,
+        })
     }
 
     /// Atomically persists one bounded exact-recurrence page selected by a caller cutoff.

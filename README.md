@@ -567,6 +567,7 @@ The first milestone is the **evidence loop**:
 139. Page one exact recurrence's due occurrences through deterministic read-only CLI JSON without reading ambient time or granting catch-up or execution authority. ✅
 140. Atomically persist one exact recurrence's bounded due page without partial provenance or granting catch-up or execution authority. ✅
 141. Persist one exact recurrence's bounded due page through deterministic writable CLI JSON without reading ambient time or granting catch-up or execution authority. ✅
+142. Select the latest due occurrence from one exact finite recurrence through explicit constant-space catch-up policy without reading ambient time or granting lifecycle authority. ✅
 
 ## Project documents
 
