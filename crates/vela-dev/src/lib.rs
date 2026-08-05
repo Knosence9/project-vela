@@ -184,6 +184,14 @@ pub enum RecurrenceCommand {
         expected_occurrence_revision: u64,
         task_id: String,
     },
+    /// Atomically bind one claimed occurrence to a caller-owned inert task.
+    MaterializeClaimed {
+        database: PathBuf,
+        id: String,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        task_id: String,
+    },
     /// Resolve one materialized occurrence from an exact task identity.
     Task { database: PathBuf, task_id: String },
     /// Print every finite recurrence through a read-only storage boundary.
@@ -595,6 +603,22 @@ impl Cli {
                         task_id,
                     }),
             }) => materialize_recurrence_occurrence(
+                &database,
+                &id,
+                offset,
+                expected_occurrence_revision,
+                &task_id,
+            ),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::MaterializeClaimed {
+                        database,
+                        id,
+                        offset,
+                        expected_occurrence_revision,
+                        task_id,
+                    }),
+            }) => materialize_claimed_recurrence_occurrence(
                 &database,
                 &id,
                 offset,
@@ -1736,6 +1760,45 @@ fn materialize_recurrence_occurrence(
         Err(error) => {
             return extension_error("recurrence_occurrence_materialization_failed", error);
         }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn materialize_claimed_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    offset: u64,
+    expected_occurrence_revision: u64,
+    raw_task_id: &str,
+) -> ExitCode {
+    const FAILURE_CODE: &str = "recurrence_claimed_occurrence_materialization_failed";
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let task_id = match TaskId::new(raw_task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return extension_error("invalid_task_id", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error(FAILURE_CODE, error),
+    };
+    let materialized = match store.materialize_claimed_occurrence(
+        &id,
+        offset,
+        expected_occurrence_revision,
+        task_id,
+    ) {
+        Ok(materialized) => materialized,
+        Err(error) => return extension_error(FAILURE_CODE, error),
+    };
+    let output = match serde_json::to_string(&materialized_recurrence_occurrence_inspection(
+        &materialized,
+    )) {
+        Ok(output) => output,
+        Err(error) => return extension_error(FAILURE_CODE, error),
     };
     println!("{output}");
     ExitCode::SUCCESS
