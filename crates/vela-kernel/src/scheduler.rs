@@ -519,6 +519,25 @@ impl LatestDueOccurrenceSelection {
     }
 }
 
+/// One atomic latest-only catch-up selection bound to an inert task when due.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LatestDueMaterializationSelection {
+    occurrence: Option<MaterializedRecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl LatestDueMaterializationSelection {
+    /// Returns the materialized latest-due occurrence, if the cutoff selected one.
+    pub const fn occurrence(&self) -> Option<&MaterializedRecurrenceOccurrence> {
+        self.occurrence.as_ref()
+    }
+
+    /// Returns the next authored coordinate to inspect, or finite completion.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 /// One inert read-only projection from a finite recurrence definition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecurrenceOccurrence {
@@ -1229,6 +1248,110 @@ impl RecurrenceStore {
                     });
                 }
                 Err(RecurrenceStoreError::EventLog(error))
+            }
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
+    }
+
+    /// Atomically persists and materializes only the latest occurrence selected by a cutoff.
+    pub fn materialize_latest_due_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        expected_revision: u64,
+        start_offset: u64,
+        cutoff: ScheduleInstant,
+        task_id: TaskId,
+    ) -> Result<LatestDueMaterializationSelection, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        if recurrence.revision() != expected_revision {
+            return Err(RecurrenceStoreError::ConcurrentModification {
+                recurrence_id: id.clone(),
+                expected_revision,
+                current_revision: recurrence.revision(),
+            });
+        }
+        let selection = Self::project_latest_due_occurrence(&recurrence, start_offset, cutoff)?;
+        let LatestDueOccurrenceSelection {
+            occurrence,
+            next_offset,
+        } = selection;
+        let Some(occurrence) = occurrence else {
+            return Ok(LatestDueMaterializationSelection {
+                occurrence: None,
+                next_offset,
+            });
+        };
+        let offset = occurrence.offset();
+        if self
+            .load_occurrence_state_with_recurrence(&recurrence, offset)?
+            .is_some()
+        {
+            return Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                recurrence_id: id.clone(),
+                offset,
+            });
+        }
+
+        let persisted_event = RecurrenceOccurrenceEvent::Persisted {
+            recurrence_id: id.clone(),
+            recurrence_revision: occurrence.recurrence_revision(),
+            offset,
+            goal: occurrence.goal().clone(),
+            unix_millis: occurrence.instant().unix_millis(),
+        };
+        let materialized_event = RecurrenceOccurrenceEvent::Materialized {
+            task_id: task_id.clone(),
+        };
+        let task_event = TaskEvent::Started {
+            goal: occurrence.goal().clone(),
+        };
+        match self.event_log.append_pair_and_new_stream_if_unchanged(
+            (
+                &recurrence_occurrence_stream(id, offset),
+                &persisted_event,
+                &materialized_event,
+            ),
+            (&task_stream(&task_id), &task_event),
+            (
+                &recurrence_stream(id),
+                ExpectedVersion::Exact(expected_revision),
+            ),
+        ) {
+            Ok(()) => Ok(LatestDueMaterializationSelection {
+                occurrence: Some(MaterializedRecurrenceOccurrence {
+                    occurrence,
+                    revision: 2,
+                    task_id,
+                }),
+                next_offset,
+            }),
+            Err(EventLogError::WrongExpectedVersion { .. }) => {
+                let Some(current) = self.load(id)? else {
+                    return Err(RecurrenceStoreError::NotFound {
+                        recurrence_id: id.clone(),
+                    });
+                };
+                if current.revision() != expected_revision {
+                    return Err(RecurrenceStoreError::ConcurrentModification {
+                        recurrence_id: id.clone(),
+                        expected_revision,
+                        current_revision: current.revision(),
+                    });
+                }
+                if self
+                    .load_occurrence_state_with_recurrence(&current, offset)?
+                    .is_some()
+                {
+                    return Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                        recurrence_id: id.clone(),
+                        offset,
+                    });
+                }
+                Err(RecurrenceStoreError::TaskAlreadyExists { task_id })
             }
             Err(error) => Err(RecurrenceStoreError::EventLog(error)),
         }
