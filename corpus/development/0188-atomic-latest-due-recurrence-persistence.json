@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Persist the latest due recurrence occurrence atomically",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/917 by selecting and persisting one exact recurrence's latest due authored coordinate in one guarded operation.",
+    "acceptance_criteria": [
+      "Validate the observed immutable definition revision and reuse constant-space latest-due selection through the caller cutoff.",
+      "Atomically recheck prerequisites and selected stream absence before appending exactly one canonical occurrence event.",
+      "Write nothing for future horizons and fail closed on stale definitions, duplicates, selected corruption, storage errors, or competing writers."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior and concurrency coverage.",
+      "outcome": "failure",
+      "diagnostic": "Kernel integration tests failed because persist_latest_due_occurrence did not exist.",
+      "patch": "Added tests for durability, future write-free results, revision mismatch, maximum offsets, skipped-corruption isolation, duplicates, and racing writers before implementation."
+    },
+    {
+      "summary": "Implemented guarded selected-coordinate persistence.",
+      "outcome": "success",
+      "diagnostic": "Added revision validation, shared latest-due projection, duplicate detection, and transactional conflict handling so only one competing writer can commit.",
+      "patch": "Implemented persist_latest_due_occurrence and a private projection helper shared by read-only and writable paths; documented the contract in ADR-0062."
+    },
+    {
+      "summary": "Completed exact-head review without racing the rate limit.",
+      "outcome": "success",
+      "diagnostic": "The automatic CodeRabbit run was rate limited and treated as false-green evidence. After cooldown, a genuine review completed with no actionable comments, zero review threads, and the exact head passed the Rust quality gate.",
+      "patch": "Retained one atomic provenance boundary and reran focused recurrence tests, all recurrence-store tests, and the complete repository gate."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel atomically proves one caller-selected latest-due coordinate without persisting skipped work, a continuation cursor, or any materialization or execution grant.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0188-atomic-latest-due-recurrence-persistence.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 193 records: 193 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30973409702/job/92202386377", "status": "passed"},
+      {"command": "Pull request 918 exact head a5a607ecc41bb47868fee16215f1ce40747d3a63 squash merge 9d7b276e50bfe12b0ca17ecc5af187400b545fb1", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Selection and append must share one guarded transaction to remove the race between separate read and write calls.",
+    "Persisting one selected coordinate does not accept, waive, inspect, or persist skipped coordinates.",
+    "A continuation cursor remains transient caller guidance rather than durable lifecycle evidence.",
+    "Atomic provenance persistence grants no task identity, materialization, dispatch, retry, permission, or execution authority.",
+    "A rate-limited review status must not arm merge even when other checks are green."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/918"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

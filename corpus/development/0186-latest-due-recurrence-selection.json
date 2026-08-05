@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Select the latest due recurrence occurrence",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/913 by selecting one exact finite recurrence's latest authored occurrence through a caller-owned inclusive cutoff.",
+    "acceptance_criteria": [
+      "Use overflow-safe constant-space arithmetic and preserve exact identity, goal, instant, offset, and definition revision.",
+      "Return an unchanged cursor for a future starting coordinate and a null cursor only at finite completion.",
+      "Keep selection read-only and exclude ambient time, durable skip evidence, identity generation, materialization, and execution authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused recurrence-store tests failed because RecurrenceStore::latest_due_occurrence did not exist.",
+      "patch": "Added tests for exact and between-instant cutoffs, future horizons, finite completion, nonzero starts, u64 boundaries, missing inputs, and a huge backlog before production behavior."
+    },
+    {
+      "summary": "Implemented bounded latest-only selection.",
+      "outcome": "success",
+      "diagnostic": "Added a typed exact-recurrence projection whose arithmetic selects the latest due authored offset without enumerating or allocating the backlog.",
+      "patch": "Implemented latest_due_occurrence in crates/vela-kernel/src/scheduler.rs and documented the explicit latest-only catch-up contract in ADR-0060."
+    },
+    {
+      "summary": "Completed refactoring and exact-head review.",
+      "outcome": "success",
+      "diagnostic": "An initial CodeRabbit rate-limit result was rejected as false merge evidence. After cooldown, a genuine review completed with no actionable comments, zero review threads, and the exact head passed the Rust quality gate.",
+      "patch": "Kept the API as one exact-recurrence typed projection rather than introducing a generic catch-up policy or mutation framework."
+    }
+  ],
+  "outcome": {
+    "summary": "The kernel can project the latest authored due occurrence in constant space while the caller retains cutoff, cursor, catch-up, persistence, identity, and execution policy.",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0186-latest-due-recurrence-selection.json # result: valid development record", "status": "passed"},
+      {"command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 193 records: 193 valid, 0 invalid", "status": "passed"},
+      {"command": "GitHub Rust quality gate https://github.com/Knosence9/project-vela/actions/runs/30963118413/job/92171157362", "status": "passed"},
+      {"command": "Pull request 914 exact head b0b9f942e5a77f0c919a463a9462787d0a33ffcc squash merge 82e0f81681804fb3ffb965eb02a5b536b6e6b97e", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Latest-only backlog collapse must be explicit in the API rather than hidden inside general due paging.",
+    "Closed-form indexed recurrence arithmetic avoids work proportional to a potentially huge backlog.",
+    "A returned continuation cursor is caller guidance, not durable skip, acceptance, or lifecycle evidence.",
+    "Read-only selection grants no persistence, task lifecycle, dispatch, retry, permission, workflow, provider, tool, or execution authority.",
+    "A successful review status that reports rate limiting is not substantive review evidence."
+  ],
+  "provenance": {"repository_path": "crates/vela-kernel/src/scheduler.rs", "url": "https://github.com/Knosence9/project-vela/pull/914"},
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
