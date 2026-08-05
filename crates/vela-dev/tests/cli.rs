@@ -4279,7 +4279,16 @@ fn due_recurrence_page_materialization_validates_and_fails_closed() {
             "{{\"occurrences\":[{{\"recurrence_id\":\"exact\",\"goal\":\"goal\",\"offset\":0,\"unix_millis\":{},\"definition_revision\":1,\"occurrence_revision\":2,\"task_id\":\"max-0\"}},{{\"recurrence_id\":\"exact\",\"goal\":\"goal\",\"offset\":1,\"unix_millis\":{},\"definition_revision\":1,\"occurrence_revision\":2,\"task_id\":\"max-1\"}}],\"next_offset\":null}}\n",
             u64::MAX - 1,
             u64::MAX
-        ));
+        ))
+        .stderr(predicate::str::is_empty());
+    let store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    for (offset, task_id) in [(0, "max-0"), (1, "max-1")] {
+        let materialized = store
+            .load_materialized_occurrence(&id, offset)
+            .unwrap()
+            .expect("materialized due occurrence");
+        assert_eq!(materialized.task_id().as_str(), task_id);
+    }
 }
 
 #[test]
