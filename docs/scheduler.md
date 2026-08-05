@@ -404,6 +404,40 @@ claim, dispatch, workflow, provider/tool, permission, retry, or execution
 authority. See
 [ADR-0059](adr/0059-writable-atomic-due-recurrence-page-cli.md).
 
+## Writable atomic due recurrence task materialization CLI
+
+`vela-dev recurrence materialize-due DATABASE RECURRENCE_ID EXPECTED_REVISION
+START_OFFSET PAGE_SIZE CUTOFF_UNIX_MILLIS [TASK_IDS]...` validates the exact
+recurrence ID, positive at-most-1024 page size, and every supplied task identity
+before storage access; clap parses all numeric coordinates as non-negative
+`u64` values. It opens only the selected database through
+`RecurrenceStore::open` and delegates bounded due selection, ordered task-count
+and duplicate validation, exact revision and stream checks, and atomic page
+materialization to `RecurrenceStore::materialize_due_occurrences_page`.
+
+Success emits complete materialized bindings in authored-offset order. Every
+object preserves exact `recurrence_id`, `goal`, `offset`, `unix_millis`,
+`definition_revision`, resulting `occurrence_revision`, and `task_id`;
+`next_offset` preserves the kernel's resumable due-page semantics. An empty
+future-horizon page accepts zero task IDs, emits an empty array with its
+unchanged cursor, and writes nothing. Every non-empty selection requires exactly
+one ordered task ID per occurrence.
+
+Invalid IDs and page sizes emit `invalid_recurrence_id`,
+`invalid_occurrence_page_size`, or `invalid_task_id` without accessing storage.
+Missing or stale definitions, invalid starts, count mismatch, duplicate task
+IDs, selected provenance or corruption, task collisions, concurrency, open,
+replay, append, and serialization failures emit
+`due_recurrence_occurrence_materialization_failed`, return non-zero, and emit no
+stdout. Kernel mutation failures leave no selected prefix or orphan task.
+Serialization follows a successful atomic commit and cannot roll it back; the
+current fixed-field projection has no data-dependent serialization failure.
+
+The command reads no ambient clock, persists no cursor, discovers no unrelated
+recurrence, generates no identity, and grants no catch-up policy, claim, lease,
+dispatch, workflow, provider/tool, permission, retry, or execution authority.
+See [ADR-0067](adr/0067-writable-atomic-due-recurrence-task-materialization-cli.md).
+
 ## Writable exact recurrence occurrence provenance CLI
 
 `vela-dev recurrence persist DATABASE RECURRENCE_ID EXPECTED_REVISION OFFSET`

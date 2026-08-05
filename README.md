@@ -436,6 +436,22 @@ cursor; a later caller-owned cutoff can resume it. The command reads no ambient
 clock, persists no cursor, generates no identity, and cannot choose catch-up
 policy, materialize tasks, dispatch, or execute work.
 
+Atomically materialize one bounded due page as ordered caller-owned inert tasks:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence materialize-due path/to/events.sqlite3 recurrence-id 1 0 2 1754049600000 task-0 task-1
+```
+
+The command validates the recurrence ID, page bound, and every task ID before
+storage access, then delegates due selection, exact count and duplicate checks,
+and all-or-nothing occurrence/task writes to the kernel. Success emits complete
+task-bound occurrences in authored-offset order with the resumable `next_offset`.
+An empty future page accepts no task IDs and writes nothing. Count mismatch,
+duplicate IDs, stale definitions, selected provenance or corruption, task
+collisions, and storage failures emit no partial JSON and leave no selected
+prefix or orphan task. The command reads no clock, generates no identity,
+persists no cursor, and cannot dispatch, retry, or execute work.
+
 Inspect one exact persisted recurrence occurrence without granting write,
 inventory, catch-up, or execution authority:
 
