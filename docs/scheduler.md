@@ -542,6 +542,29 @@ coordinate, and grants no catch-up, selection, claim, lease, dispatch, retry,
 permission, provider/tool, workflow, or execution authority. See
 [ADR-0051](adr/0051-writable-exact-recurrence-occurrence-task-materialization-cli.md).
 
+## Writable exact claimed recurrence occurrence materialization CLI
+
+`vela-dev recurrence materialize-claimed DATABASE RECURRENCE_ID OFFSET
+EXPECTED_OCCURRENCE_REVISION TASK_ID` validates both exact caller-owned
+identities before storage access, then opens only the selected writable database
+and delegates to `RecurrenceStore::materialize_claimed_occurrence`. The supplied
+revision must identify the current exact claim; available persisted or released
+provenance remains the separate `recurrence materialize` authority.
+
+Success emits the complete compact materialized occurrence projection with exact
+recurrence, occurrence, revision, and task provenance. Invalid identities emit
+`invalid_recurrence_id` or `invalid_task_id` without creating storage. Missing,
+stale, available, released, materialized, task-colliding, contended, read-only,
+storage, replay, append, and serialization failures emit
+`recurrence_claimed_occurrence_materialization_failed`, return non-zero, and
+emit no stdout. Atomic rejection leaves the claim and task streams unchanged.
+
+The command takes no cutoff because the claim already recorded due authority. It
+reads no clock, generates no identity, scans no unrelated coordinate, and grants
+no inventory, claim-next, worker, lease, dispatch, retry, permission,
+provider/tool, workflow, or execution authority. See
+[ADR-0073](adr/0073-writable-exact-claimed-recurrence-occurrence-materialization-cli.md).
+
 ## Read-only exact persisted recurrence occurrence CLI lookup
 
 `vela-dev recurrence occurrence DATABASE RECURRENCE_ID OFFSET` validates the
