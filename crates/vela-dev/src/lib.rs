@@ -160,6 +160,14 @@ pub enum RecurrenceCommand {
         expected_revision: u64,
         offset: u64,
     },
+    /// Claim one exact persisted occurrence against a caller-owned cutoff.
+    Claim {
+        database: PathBuf,
+        id: String,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        cutoff_unix_millis: u64,
+    },
     /// Atomically bind one persisted occurrence to a caller-owned inert task.
     Materialize {
         database: PathBuf,
@@ -539,6 +547,22 @@ impl Cli {
             }) => persist_recurrence_occurrence(&database, &id, expected_revision, offset),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::Claim {
+                        database,
+                        id,
+                        offset,
+                        expected_occurrence_revision,
+                        cutoff_unix_millis,
+                    }),
+            }) => claim_recurrence_occurrence(
+                &database,
+                &id,
+                offset,
+                expected_occurrence_revision,
+                cutoff_unix_millis,
+            ),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::Materialize {
                         database,
                         id,
@@ -605,6 +629,16 @@ struct RecurrenceOccurrenceInspection<'a> {
     offset: u64,
     unix_millis: u64,
     definition_revision: u64,
+}
+
+#[derive(Serialize)]
+struct ClaimedRecurrenceOccurrenceInspection<'a> {
+    recurrence_id: &'a str,
+    goal: &'a str,
+    offset: u64,
+    unix_millis: u64,
+    definition_revision: u64,
+    occurrence_revision: u64,
 }
 
 #[derive(Serialize)]
@@ -1546,6 +1580,46 @@ fn persist_recurrence_occurrence(
         Err(error) => {
             return extension_error("recurrence_occurrence_persistence_failed", error);
         }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn claim_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    offset: u64,
+    expected_occurrence_revision: u64,
+    cutoff_unix_millis: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_occurrence_claim_failed", error),
+    };
+    let claimed = match store.claim_occurrence(
+        &id,
+        offset,
+        expected_occurrence_revision,
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+    ) {
+        Ok(claimed) => claimed,
+        Err(error) => return extension_error("recurrence_occurrence_claim_failed", error),
+    };
+    let occurrence = claimed.occurrence();
+    let output = match serde_json::to_string(&ClaimedRecurrenceOccurrenceInspection {
+        recurrence_id: occurrence.recurrence_id().as_str(),
+        goal: occurrence.goal().as_str(),
+        offset: occurrence.offset(),
+        unix_millis: occurrence.instant().unix_millis(),
+        definition_revision: occurrence.recurrence_revision(),
+        occurrence_revision: claimed.revision(),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_occurrence_claim_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS

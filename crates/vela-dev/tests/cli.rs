@@ -4,8 +4,9 @@ use std::fs;
 use tempfile::tempdir;
 use vela_kernel::{
     scheduler::{
-        OccurrenceCount, RecurrenceId, RecurrenceStore, ScheduleCancellation, ScheduleId,
-        ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStore,
+        OccurrenceCount, RecurrenceId, RecurrenceOccurrenceRelease, RecurrenceStore,
+        ScheduleCancellation, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
+        ScheduleStore,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -2544,6 +2545,178 @@ fn persists_exact_recurrence_occurrence_as_deterministic_json() {
         .unwrap()
         .expect("persisted occurrence");
     assert_eq!(occurrence.instant().unix_millis(), 20);
+}
+
+#[test]
+fn claims_exact_recurrence_occurrence_as_deterministic_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact\nid").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "claim",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+            "1",
+            "1",
+            "15",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"recurrence_id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"offset\":1,\"unix_millis\":15,\"definition_revision\":1,",
+            "\"occurrence_revision\":2}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = RecurrenceStore::open_read_only(&database).expect("read-only recurrence store");
+    let claimed = store
+        .load_claimed_occurrence(&id, 1)
+        .unwrap()
+        .expect("durable claimed occurrence");
+    assert_eq!(claimed.revision(), 2);
+}
+
+#[test]
+fn recurrence_occurrence_claim_validates_and_fails_closed() {
+    let directory = tempdir().expect("recurrence database directory");
+    let missing_database = directory.path().join("missing.sqlite3");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "claim",
+            missing_database.to_str().unwrap(),
+            "",
+            "0",
+            "1",
+            "10",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with("$: invalid_recurrence_id:"));
+    assert!(!missing_database.exists());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "claim",
+            missing_database.to_str().unwrap(),
+            "valid",
+            "0",
+            "1",
+            "10",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_claim_failed:",
+        ));
+
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    store
+        .materialize_occurrence(&id, 1, 1, TaskId::new("task").unwrap())
+        .unwrap();
+    drop(store);
+
+    let claim = |offset: &str, revision: &str, cutoff: &str| {
+        let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
+        command.args([
+            "recurrence",
+            "claim",
+            database.to_str().unwrap(),
+            id.as_str(),
+            offset,
+            revision,
+            cutoff,
+        ]);
+        command
+    };
+    for (offset, revision, cutoff) in [
+        ("2", "1", "100"),
+        ("0", "0", "100"),
+        ("0", "1", "9"),
+        ("1", "2", "100"),
+    ] {
+        claim(offset, revision, cutoff)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: recurrence_occurrence_claim_failed:",
+            ));
+    }
+
+    claim("0", "1", "10").assert().success();
+    claim("0", "2", "10")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_claim_failed:",
+        ));
+
+    let mut store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    store
+        .release_occurrence(
+            &id,
+            0,
+            2,
+            RecurrenceOccurrenceRelease::new("retry elsewhere").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    claim("0", "2", "10")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_claim_failed:",
+        ));
+    claim("0", "3", "10")
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with("\"occurrence_revision\":4}\n"));
+
+    let store = RecurrenceStore::open_read_only(&database).expect("read-only recurrence store");
+    let claimed = store
+        .load_claimed_occurrence(&id, 0)
+        .unwrap()
+        .expect("released occurrence reclaimed at its exact revision");
+    assert_eq!(claimed.revision(), 4);
 }
 
 #[test]
