@@ -463,6 +463,29 @@ no identity, and cannot create schedules or tasks, claim, cancel, dispatch,
 retry, grant permission, or execute work. See
 [ADR-0046](adr/0046-writable-exact-recurrence-occurrence-provenance-cli.md).
 
+## Writable exact recurrence occurrence claim CLI
+
+`vela-dev recurrence claim DATABASE RECURRENCE_ID OFFSET
+EXPECTED_OCCURRENCE_REVISION CUTOFF_UNIX_MILLIS` validates the exact recurrence
+ID before storage access; clap parses the coordinate, observed occurrence
+revision, and caller-owned inclusive cutoff as non-negative `u64` values. It
+opens only the caller-selected database through `RecurrenceStore::open` and
+delegates strict replay, exact concurrency and lifecycle checks, due validation,
+and append to `RecurrenceStore::claim_occurrence`.
+
+Success emits one compact object preserving exact `recurrence_id`, `goal`,
+`offset`, `unix_millis`, `definition_revision`, and resulting
+`occurrence_revision`. Invalid IDs emit `invalid_recurrence_id` before storage
+access. Missing provenance, stale or unavailable lifecycle state, future
+instants, corruption, contention, open, replay, append, and serialization
+failures emit `recurrence_occurrence_claim_failed`, return non-zero, and emit no
+stdout. Rejected claims do not alter occurrence lifecycle state.
+
+The command reads no ambient clock, scans no unrelated coordinate, generates no
+identity, and grants no materialization, release, worker, lease, dispatch,
+retry, permission, provider/tool, workflow, or execution authority. See
+[ADR-0070](adr/0070-writable-exact-recurrence-occurrence-claim-cli.md).
+
 ## Writable exact recurrence occurrence materialization CLI
 
 `vela-dev recurrence materialize DATABASE RECURRENCE_ID OFFSET

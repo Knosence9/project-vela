@@ -1,0 +1,57 @@
+# ADR-0070: Writable exact recurrence occurrence claim CLI
+
+- **Status:** accepted
+- **Date:** 2026-08-05
+- **Decision and execution issue:** [#935](https://github.com/Knosence9/project-vela/issues/935)
+- **Related:** ADR-0046, ADR-0051, ADR-0068, ADR-0069
+
+## Context
+
+ADR-0068 defines exact-revision durable reservation for one already-persisted due recurrence occurrence, and ADR-0069 provides explicit caller-owned recovery. Operators cannot invoke that reservation boundary through the development CLI without custom Rust code.
+
+The smallest responsible adapter preserves one exact caller-selected coordinate, one observed occurrence revision, and one inclusive caller-owned cutoff. It must not discover work, read ambient time, generate identity, or add dispatch or execution policy.
+
+## Decision
+
+Add:
+
+```text
+vela-dev recurrence claim DATABASE RECURRENCE_ID OFFSET EXPECTED_OCCURRENCE_REVISION CUTOFF_UNIX_MILLIS
+```
+
+Clap parses the offset, occurrence revision, and cutoff as non-negative `u64` values. The command validates `RECURRENCE_ID` through `RecurrenceId` before storage access, opens only the caller-selected database through `RecurrenceStore::open`, converts the explicit cutoff to `ScheduleInstant`, and delegates strict replay, exact revision and lifecycle validation, due validation, and append to `RecurrenceStore::claim_occurrence`.
+
+Success emits one compact deterministic JSON object containing exact `recurrence_id`, `goal`, `offset`, `unix_millis`, `definition_revision`, and resulting `occurrence_revision`. Serde JSON escaping preserves caller-authored identity and goal text.
+
+An invalid identity emits `invalid_recurrence_id` before storage access. Missing provenance, stale revision, future instant, claimed or materialized lifecycle, malformed durable history, contention, open, replay, append, and serialization failures emit `recurrence_occurrence_claim_failed`, return non-zero, and emit no stdout. Kernel exact-version append remains authoritative, so rejected claims do not alter occurrence lifecycle state.
+
+The command reads no ambient clock, scans no unrelated recurrence or coordinate, generates no identity, and grants no materialization, release, worker, lease, dispatch, retry, workflow, provider/tool, permission, or execution authority.
+
+## Alternatives considered
+
+### Select or persist the coordinate implicitly
+
+Rejected because projection and persistence are separate durable boundaries. Claiming requires one already-persisted canonical coordinate and its observed occurrence revision.
+
+### Use the current system time as the cutoff
+
+Rejected because due authority belongs to the caller and deterministic evidence must not depend on ambient time.
+
+### Add release in the same command slice
+
+Rejected because claim and recovery are distinct consequential transitions with different inputs and failure contracts. This adapter exposes only the existing claim boundary.
+
+## Consequences
+
+- Scripts can reserve one exact persisted due coordinate without custom Rust code.
+- Output carries the resulting revision needed for later exact recovery.
+- Invalid identity is rejected before storage access; a valid missing database follows the established writable-store behavior and fails because provenance is absent.
+- Callers retain coordinate selection, cutoff choice, recovery, materialization, retry, and execution authority.
+
+## Verification
+
+Strict RED→GREEN CLI integration tests cover deterministic escaped JSON, inclusive cutoff success, resulting revision, durable read-only reopen, validation before storage access, missing provenance, stale and released revisions, future cutoff, claimed and materialized state, and no lifecycle mutation on rejection. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider before adding release CLI exposure, claimed inventory, claim-next selection, generated task identity, worker identity, leases or expiry, ambient clocks, dispatch, retries, permissions, or execution.
