@@ -527,38 +527,45 @@ impl EventLog {
         second: (&StreamId, &E3),
         prerequisite: (&StreamId, ExpectedVersion),
     ) -> Result<(), EventLogError> {
-        let (first_stream, first_event, second_first_event) = first;
+        let (first_stream, first_event, first_stream_second_event) = first;
         let (second_stream, second_event) = second;
         let (prerequisite, prerequisite_expected) = prerequisite;
         if matches!(prerequisite_expected, ExpectedVersion::Exact(0)) {
             return Err(EventLogError::InvalidExpectedVersion(0));
         }
-        let events = [
+        let metadata = [
+            (first_event.event_type(), first_event.payload_version()),
             (
-                first_event.event_type(),
-                first_event.payload_version(),
-                serde_json::to_vec(first_event)?,
+                first_stream_second_event.event_type(),
+                first_stream_second_event.payload_version(),
             ),
-            (
-                second_first_event.event_type(),
-                second_first_event.payload_version(),
-                serde_json::to_vec(second_first_event)?,
-            ),
-            (
-                second_event.event_type(),
-                second_event.payload_version(),
-                serde_json::to_vec(second_event)?,
-            ),
+            (second_event.event_type(), second_event.payload_version()),
         ];
-        for (event_type, payload_version, _) in &events {
+        for (event_type, payload_version) in metadata {
             if event_type.is_empty() {
                 return Err(EventLogError::InvalidEventType);
             }
-            if *payload_version == 0 {
-                return Err(EventLogError::InvalidPayloadVersion(*payload_version));
+            if payload_version == 0 {
+                return Err(EventLogError::InvalidPayloadVersion(payload_version));
             }
         }
-
+        let events = [
+            (
+                metadata[0].0,
+                metadata[0].1,
+                serde_json::to_vec(first_event)?,
+            ),
+            (
+                metadata[1].0,
+                metadata[1].1,
+                serde_json::to_vec(first_stream_second_event)?,
+            ),
+            (
+                metadata[2].0,
+                metadata[2].1,
+                serde_json::to_vec(second_event)?,
+            ),
+        ];
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
