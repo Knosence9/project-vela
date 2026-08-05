@@ -402,6 +402,23 @@ malformed selected provenance fail closed without partial stdout. The command
 reads no clock, generates no identity, and cannot materialize, dispatch, retry,
 or execute work.
 
+Atomically materialize that explicit latest-due selection as one caller-owned
+inert task:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence materialize-latest-due path/to/events.sqlite3 recurrence-id 1 0 1754049600000 task-id
+```
+
+The command validates both identities before storage access, then delegates the
+constant-space selection and atomic persisted-to-materialized occurrence plus
+`task.started` write to the kernel. Success emits the complete task-bound
+occurrence and resumable `next_offset`; a future horizon emits a null occurrence,
+preserves the cursor, and writes nothing. Skipped coordinates remain absent.
+Stale definitions, selected duplicates or corruption, task collisions, and
+storage failures emit no partial stdout and leave no orphan task. The command
+reads no clock, generates no identity, and cannot dispatch, retry, or execute
+work.
+
 Atomically persist one exact recurrence's bounded due page through the same
 explicit cutoff and one observed definition revision:
 
@@ -604,6 +621,7 @@ The first milestone is the **evidence loop**:
 144. Atomically persist one exact latest-due recurrence selection without recording skipped work or granting lifecycle or execution authority. ✅
 145. Persist one exact latest-due recurrence selection through deterministic writable CLI JSON without recording skipped work or granting execution authority. ✅
 146. Atomically materialize one exact latest-due recurrence selection as one caller-identified inert task without partial provenance or granting execution authority. ✅
+147. Materialize one exact latest-due recurrence selection through deterministic writable CLI JSON without recording skipped work or granting execution authority. ✅
 
 ## Project documents
 
