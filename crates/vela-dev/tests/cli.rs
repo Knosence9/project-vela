@@ -2720,6 +2720,155 @@ fn recurrence_occurrence_claim_validates_and_fails_closed() {
 }
 
 #[test]
+fn releases_exact_recurrence_occurrence_as_deterministic_json_and_allows_reclaim() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact\nid").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    store
+        .claim_occurrence(&id, 1, 1, ScheduleInstant::from_unix_millis(15))
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "release",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+            "1",
+            "2",
+            "retry \"elsewhere\"\nnow",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"recurrence_id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"offset\":1,\"unix_millis\":15,\"definition_revision\":1,",
+            "\"occurrence_revision\":3,\"latest_release\":\"retry \\\"elsewhere\\\"\\nnow\"}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let mut store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    let released = store
+        .load_released_occurrence(&id, 1)
+        .unwrap()
+        .expect("durable released occurrence");
+    assert_eq!(released.revision(), 3);
+    assert_eq!(
+        released.latest_release().as_str(),
+        "retry \"elsewhere\"\nnow"
+    );
+    store
+        .claim_occurrence(&id, 1, 3, ScheduleInstant::from_unix_millis(15))
+        .expect("released occurrence can be reclaimed at exact revision");
+}
+
+#[test]
+fn recurrence_occurrence_release_validates_and_fails_closed() {
+    let directory = tempdir().expect("recurrence database directory");
+    let missing_database = directory.path().join("missing.sqlite3");
+
+    for (id, reason, category) in [
+        ("", "reason", "invalid_recurrence_id"),
+        ("valid", " \n\t", "invalid_recurrence_occurrence_release"),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "release",
+                missing_database.to_str().unwrap(),
+                id,
+                "0",
+                "2",
+                reason,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {category}:")));
+        assert!(!missing_database.exists());
+    }
+
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    store.persist_occurrence(&id, 1, 2).unwrap();
+    store
+        .claim_occurrence(&id, 2, 1, ScheduleInstant::from_unix_millis(20))
+        .unwrap();
+    store.persist_occurrence(&id, 1, 3).unwrap();
+    let task_id = TaskId::new("task").unwrap();
+    store
+        .materialize_occurrence(&id, 3, 1, task_id.clone())
+        .unwrap();
+    drop(store);
+
+    let release = |offset: &str, revision: &str| {
+        let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
+        command.args([
+            "recurrence",
+            "release",
+            database.to_str().unwrap(),
+            id.as_str(),
+            offset,
+            revision,
+            "recovery",
+        ]);
+        command
+    };
+    for (offset, revision) in [("0", "1"), ("1", "1"), ("2", "1"), ("3", "2")] {
+        release(offset, revision)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: recurrence_occurrence_release_failed:",
+            ));
+    }
+
+    let mut store = RecurrenceStore::open(&database).expect("reopened recurrence store");
+    assert!(store.load_occurrence(&id, 0).unwrap().is_none());
+    let claimed = store
+        .load_claimed_occurrence(&id, 2)
+        .unwrap()
+        .expect("claimed occurrence remains claimed");
+    assert_eq!(claimed.revision(), 2);
+    let materialized = store
+        .load_materialized_occurrence(&id, 3)
+        .unwrap()
+        .expect("materialized occurrence remains materialized");
+    assert_eq!(materialized.revision(), 2);
+    assert_eq!(materialized.task_id(), &task_id);
+    let available = store
+        .claim_occurrence(&id, 1, 1, ScheduleInstant::from_unix_millis(15))
+        .expect("available occurrence remains available at revision one");
+    assert_eq!(available.revision(), 2);
+}
+
+#[test]
 fn persists_due_recurrence_pages_atomically_as_deterministic_json() {
     let directory = tempdir().expect("recurrence database directory");
     let database = directory.path().join("events.sqlite3");
