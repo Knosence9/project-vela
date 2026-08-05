@@ -1153,6 +1153,92 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
+        Self::project_latest_due_occurrence(&recurrence, start_offset, cutoff)
+    }
+
+    /// Atomically persists only the latest occurrence selected through one caller cutoff.
+    pub fn persist_latest_due_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        expected_revision: u64,
+        start_offset: u64,
+        cutoff: ScheduleInstant,
+    ) -> Result<LatestDueOccurrenceSelection, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        if recurrence.revision() != expected_revision {
+            return Err(RecurrenceStoreError::ConcurrentModification {
+                recurrence_id: id.clone(),
+                expected_revision,
+                current_revision: recurrence.revision(),
+            });
+        }
+        let selection = Self::project_latest_due_occurrence(&recurrence, start_offset, cutoff)?;
+        let Some(occurrence) = selection.occurrence() else {
+            return Ok(selection);
+        };
+        let offset = occurrence.offset();
+        if self
+            .load_occurrence_state_with_recurrence(&recurrence, offset)?
+            .is_some()
+        {
+            return Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                recurrence_id: id.clone(),
+                offset,
+            });
+        }
+
+        let event = RecurrenceOccurrenceEvent::Persisted {
+            recurrence_id: id.clone(),
+            recurrence_revision: occurrence.recurrence_revision(),
+            offset,
+            goal: occurrence.goal().clone(),
+            unix_millis: occurrence.instant().unix_millis(),
+        };
+        match self.event_log.append_if_stream_unchanged(
+            &recurrence_occurrence_stream(id, offset),
+            ExpectedVersion::NoStream,
+            &recurrence_stream(id),
+            ExpectedVersion::Exact(expected_revision),
+            &event,
+        ) {
+            Ok(_) => Ok(selection),
+            Err(error @ EventLogError::WrongExpectedVersion { .. }) => {
+                let Some(current) = self.load(id)? else {
+                    return Err(RecurrenceStoreError::NotFound {
+                        recurrence_id: id.clone(),
+                    });
+                };
+                if current.revision() != expected_revision {
+                    return Err(RecurrenceStoreError::ConcurrentModification {
+                        recurrence_id: id.clone(),
+                        expected_revision,
+                        current_revision: current.revision(),
+                    });
+                }
+                if self
+                    .load_occurrence_state_with_recurrence(&current, offset)?
+                    .is_some()
+                {
+                    return Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                        recurrence_id: id.clone(),
+                        offset,
+                    });
+                }
+                Err(RecurrenceStoreError::EventLog(error))
+            }
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
+    }
+
+    fn project_latest_due_occurrence(
+        recurrence: &FixedIntervalRecurrence,
+        start_offset: u64,
+        cutoff: ScheduleInstant,
+    ) -> Result<LatestDueOccurrenceSelection, RecurrenceStoreError> {
         let starting_occurrence = recurrence.occurrence_at(start_offset)?;
         if starting_occurrence.instant() > cutoff {
             return Ok(LatestDueOccurrenceSelection {

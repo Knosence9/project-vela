@@ -386,6 +386,14 @@ The explicit cutoff remains caller authority. Selection reads no ambient clock,
 persists no cursor or skip evidence, discovers no unrelated definitions, and
 cannot generate identity, materialize, dispatch, retry, or execute work.
 
+Kernel callers can atomically persist only that explicit latest-due selection
+through `RecurrenceStore::persist_latest_due_occurrence`, binding the selected
+coordinate to one observed immutable definition revision. Skipped coordinates
+remain uninspected and unpersisted; the returned cursor is not durable skip,
+acceptance, or lifecycle evidence. A future horizon writes nothing, while
+duplicates and malformed selected provenance fail closed. This kernel boundary
+does not yet add a writable CLI adapter.
+
 Atomically persist one exact recurrence's bounded due page through the same
 explicit cutoff and one observed definition revision:
 
@@ -585,6 +593,7 @@ The first milestone is the **evidence loop**:
 141. Persist one exact recurrence's bounded due page through deterministic writable CLI JSON without reading ambient time or granting catch-up or execution authority. ✅
 142. Select the latest due occurrence from one exact finite recurrence through explicit constant-space catch-up policy without reading ambient time or granting lifecycle authority. ✅
 143. Expose exact latest-due recurrence selection through deterministic read-only CLI JSON without adding clock, persistence, discovery, or execution authority. ✅
+144. Atomically persist one exact latest-due recurrence selection without recording skipped work or granting lifecycle or execution authority. ✅
 
 ## Project documents
 
