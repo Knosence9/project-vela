@@ -603,6 +603,7 @@ The first milestone is the **evidence loop**:
 143. Expose exact latest-due recurrence selection through deterministic read-only CLI JSON without adding clock, persistence, discovery, or execution authority. ✅
 144. Atomically persist one exact latest-due recurrence selection without recording skipped work or granting lifecycle or execution authority. ✅
 145. Persist one exact latest-due recurrence selection through deterministic writable CLI JSON without recording skipped work or granting execution authority. ✅
+146. Atomically materialize one exact latest-due recurrence selection as one caller-identified inert task without partial provenance or granting execution authority. ✅
 
 ## Project documents
 

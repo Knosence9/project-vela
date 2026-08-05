@@ -1038,6 +1038,281 @@ fn latest_due_persistence_isolates_skipped_corruption_and_rejects_selected_corru
 }
 
 #[test]
+fn atomically_materializes_only_the_latest_due_occurrence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("materialize-latest-due").unwrap();
+    let goal = TaskGoal::new("Materialize only the explicit latest choice").unwrap();
+    let task_id = TaskId::new("latest-due-task").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(8).unwrap(),
+        )
+        .unwrap();
+
+    let selected = store
+        .materialize_latest_due_occurrence(
+            &id,
+            recurrence.revision(),
+            2,
+            instant(33),
+            task_id.clone(),
+        )
+        .unwrap();
+    let materialized = selected.occurrence().unwrap();
+    assert_eq!(materialized.occurrence().offset(), 4);
+    assert_eq!(materialized.occurrence().instant(), instant(30));
+    assert_eq!(materialized.revision(), 2);
+    assert_eq!(materialized.task_id(), &task_id);
+    assert_eq!(selected.next_offset(), Some(5));
+    drop(store);
+
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    for skipped in [0, 1, 2, 3] {
+        assert_eq!(reopened.load_occurrence(&id, skipped).unwrap(), None);
+    }
+    assert_eq!(
+        reopened
+            .load_materialized_occurrence(&id, 4)
+            .unwrap()
+            .as_ref(),
+        selected.occurrence()
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&task_id)
+            .unwrap()
+            .unwrap()
+            .goal(),
+        &goal
+    );
+}
+
+#[test]
+fn latest_due_materialization_preserves_write_free_future_and_finite_boundaries() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("materialize-latest-boundaries").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Preserve latest materialization boundaries").unwrap(),
+            instant(u64::MAX - 4),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let future_task = TaskId::new("future-latest-task").unwrap();
+
+    let future = store
+        .materialize_latest_due_occurrence(
+            &id,
+            recurrence.revision(),
+            1,
+            instant(u64::MAX - 3),
+            future_task.clone(),
+        )
+        .unwrap();
+    assert_eq!(future.occurrence(), None);
+    assert_eq!(future.next_offset(), Some(1));
+    assert_eq!(store.load_occurrence(&id, 1).unwrap(), None);
+    assert_eq!(
+        TaskStore::open(&path).unwrap().load(&future_task).unwrap(),
+        None
+    );
+
+    let final_task = TaskId::new("final-latest-task").unwrap();
+    let complete = store
+        .materialize_latest_due_occurrence(
+            &id,
+            recurrence.revision(),
+            1,
+            instant(u64::MAX),
+            final_task,
+        )
+        .unwrap();
+    assert_eq!(complete.occurrence().unwrap().occurrence().offset(), 2);
+    assert_eq!(
+        complete.occurrence().unwrap().occurrence().instant(),
+        instant(u64::MAX)
+    );
+    assert_eq!(complete.next_offset(), None);
+    assert_eq!(store.load_occurrence(&id, 1).unwrap(), None);
+}
+
+#[test]
+fn latest_due_materialization_failures_leave_occurrence_and_task_absent() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("materialize-latest-failures").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    assert!(matches!(
+        store
+            .materialize_latest_due_occurrence(
+                &id,
+                1,
+                0,
+                instant(1),
+                TaskId::new("missing-definition-task").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::NotFound { recurrence_id } if recurrence_id == id
+    ));
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject partial latest materialization").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let existing_task = TaskId::new("existing-latest-task").unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(existing_task.clone(), TaskGoal::new("Existing").unwrap())
+        .unwrap();
+
+    assert!(matches!(
+        store
+            .materialize_latest_due_occurrence(
+                &id,
+                recurrence.revision() + 1,
+                0,
+                instant(3),
+                TaskId::new("stale-definition-task").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::ConcurrentModification { .. }
+    ));
+    assert!(matches!(
+        store
+            .materialize_latest_due_occurrence(
+                &id,
+                recurrence.revision(),
+                3,
+                instant(3),
+                TaskId::new("out-of-range-task").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            requested_offset: 3,
+            ..
+        }
+    ));
+    assert!(matches!(
+        store
+            .materialize_latest_due_occurrence(
+                &id,
+                recurrence.revision(),
+                0,
+                instant(3),
+                existing_task.clone(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::TaskAlreadyExists { task_id } if task_id == existing_task
+    ));
+    assert_eq!(store.load_occurrence(&id, 2).unwrap(), None);
+
+    store
+        .persist_occurrence(&id, recurrence.revision(), 2)
+        .unwrap();
+    let duplicate_task = TaskId::new("duplicate-latest-task").unwrap();
+    assert!(matches!(
+        store
+            .materialize_latest_due_occurrence(
+                &id,
+                recurrence.revision(),
+                0,
+                instant(3),
+                duplicate_task.clone(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyPersisted { offset: 2, .. }
+    ));
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&duplicate_task)
+            .unwrap(),
+        None
+    );
+
+    let bound_task = TaskId::new("bound-latest-task").unwrap();
+    store.materialize_occurrence(&id, 2, 1, bound_task).unwrap();
+    let replacement_task = TaskId::new("replacement-latest-task").unwrap();
+    assert!(matches!(
+        store
+            .materialize_latest_due_occurrence(
+                &id,
+                recurrence.revision(),
+                0,
+                instant(3),
+                replacement_task.clone(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyPersisted { offset: 2, .. }
+    ));
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&replacement_task)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn latest_due_materialization_rejects_selected_corruption_without_creating_a_task() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("corrupt-latest-materialization").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject corrupt selected provenance").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 2).unwrap();
+    drop(store);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'00' WHERE event_type = 'recurrence.occurrence_persisted'",
+            [],
+        )
+        .unwrap();
+
+    let task_id = TaskId::new("corrupt-selected-task").unwrap();
+    let error = RecurrenceStore::open(&path)
+        .unwrap()
+        .materialize_latest_due_occurrence(&id, 1, 0, instant(3), task_id.clone())
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RecurrenceStoreError::Replay(ReplayError::MalformedPayload { .. })
+        ),
+        "unexpected error: {error:?}"
+    );
+    assert_eq!(
+        TaskStore::open(&path).unwrap().load(&task_id).unwrap(),
+        None
+    );
+}
+
+#[test]
 fn atomically_persists_one_bounded_due_occurrence_page() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -2162,6 +2437,73 @@ fn racing_latest_due_persistence_records_one_selected_coordinate() {
         reopened.load_occurrence(&id, 2).unwrap().unwrap().instant(),
         instant(3)
     );
+}
+
+#[test]
+fn racing_latest_due_materializations_commit_one_complete_binding() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-latest-materialization").unwrap();
+    RecurrenceStore::open(&path)
+        .unwrap()
+        .create(
+            id.clone(),
+            TaskGoal::new("Materialize one latest choice").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = ["latest-race-task-a", "latest-race-task-b"].map(|raw_task_id| {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            let mut store = RecurrenceStore::open(path).unwrap();
+            barrier.wait();
+            store.materialize_latest_due_occurrence(
+                &id,
+                1,
+                0,
+                instant(3),
+                TaskId::new(raw_task_id).unwrap(),
+            )
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+                    recurrence_id,
+                    offset: 2,
+                }) if recurrence_id == &id
+            ))
+            .count(),
+        1
+    );
+    let materialized = RecurrenceStore::open_read_only(&path)
+        .unwrap()
+        .load_materialized_occurrence(&id, 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(materialized.revision(), 2);
+    for raw_task_id in ["latest-race-task-a", "latest-race-task-b"] {
+        let task_id = TaskId::new(raw_task_id).unwrap();
+        assert_eq!(
+            TaskStore::open(&path)
+                .unwrap()
+                .load(&task_id)
+                .unwrap()
+                .is_some(),
+            materialized.task_id() == &task_id
+        );
+    }
 }
 
 #[test]
