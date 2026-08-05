@@ -3,14 +3,28 @@ use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
         OccurrenceCount, OccurrencePageSize, OccurrencePageSizeError, RecurrenceId,
-        RecurrenceOccurrenceLookupError, RecurrenceStore, RecurrenceStoreError, ScheduleInstant,
-        ScheduleInterval,
+        RecurrenceOccurrenceLookupError, RecurrenceOccurrenceRelease, RecurrenceStore,
+        RecurrenceStoreError, ScheduleInstant, ScheduleInterval,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
 
 fn instant(unix_millis: u64) -> ScheduleInstant {
     ScheduleInstant::from_unix_millis(unix_millis)
+}
+
+fn occurrence_event_count(path: &std::path::Path, id: &RecurrenceId, offset: u64) -> i64 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = ?1",
+            [format!(
+                "recurrence-occurrence:{}:{id}:{offset}",
+                id.as_str().len()
+            )],
+            |row| row.get(0),
+        )
+        .unwrap()
 }
 
 #[test]
@@ -2136,6 +2150,337 @@ fn claimed_occurrence_replay_rejects_malformed_and_impossible_evidence() {
             .load_claimed_occurrence(&id, 0)
             .unwrap_err(),
         RecurrenceStoreError::InvalidOccurrenceHistory { event_count: 2, .. }
+    ));
+}
+
+#[test]
+fn releases_one_exact_claimed_occurrence_and_reopens_recovery_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new(" exact:release/☄ ").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Recover exact recurring work").unwrap(),
+            instant(5),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    let persisted = store.persist_occurrence(&id, 1, 1).unwrap();
+    let claimed = store.claim_occurrence(&id, 1, 1, instant(12)).unwrap();
+    let reason = RecurrenceOccurrenceRelease::new(" worker lost: 東京 ").unwrap();
+    drop(store);
+    let mut read_only = RecurrenceStore::open_read_only(&path).unwrap();
+    assert!(matches!(
+        read_only
+            .release_occurrence(&id, 1, 2, reason.clone())
+            .unwrap_err(),
+        RecurrenceStoreError::EventLog(_)
+    ));
+    assert_eq!(
+        read_only.load_claimed_occurrence(&id, 1).unwrap(),
+        Some(claimed)
+    );
+    drop(read_only);
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let released = store.release_occurrence(&id, 1, 2, reason.clone()).unwrap();
+
+    assert_eq!(released.occurrence(), &persisted);
+    assert_eq!(released.revision(), 3);
+    assert_eq!(released.latest_release(), &reason);
+    assert_eq!(store.load_claimed_occurrence(&id, 1).unwrap(), None);
+    assert_eq!(store.load_occurrence(&id, 1).unwrap(), Some(persisted));
+    drop(store);
+    assert_eq!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_released_occurrence(&id, 1)
+            .unwrap(),
+        Some(released.clone())
+    );
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store.claim_occurrence(&id, 1, 3, instant(12)).unwrap();
+    let latest_reason = RecurrenceOccurrenceRelease::new(" second recovery ").unwrap();
+    let released_again = store
+        .release_occurrence(&id, 1, 4, latest_reason.clone())
+        .unwrap();
+    assert_eq!(released_again.occurrence(), released.occurrence());
+    assert_eq!(released_again.revision(), 5);
+    assert_eq!(released_again.latest_release(), &latest_reason);
+    drop(store);
+    assert_eq!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_released_occurrence(&id, 1)
+            .unwrap(),
+        Some(released_again)
+    );
+}
+
+#[test]
+fn released_occurrences_can_be_reclaimed_or_materialized_at_the_exact_revision() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("release-transitions").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Resume recovered recurring work").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    for offset in 0..2 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+        store.claim_occurrence(&id, offset, 1, instant(2)).unwrap();
+        store
+            .release_occurrence(
+                &id,
+                offset,
+                2,
+                RecurrenceOccurrenceRelease::new(format!("recover {offset}")).unwrap(),
+            )
+            .unwrap();
+    }
+
+    let reclaimed = store.claim_occurrence(&id, 0, 3, instant(1)).unwrap();
+    assert_eq!(reclaimed.revision(), 4);
+    assert!(matches!(
+        store
+            .materialize_occurrence(&id, 0, 3, TaskId::new("stale-released-task").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            expected_revision: 3,
+            current_revision: 4,
+            ..
+        }
+    ));
+    let task_id = TaskId::new("released-task").unwrap();
+    let materialized = store
+        .materialize_occurrence(&id, 1, 3, task_id.clone())
+        .unwrap();
+    assert_eq!(materialized.revision(), 4);
+    assert_eq!(materialized.task_id(), &task_id);
+    assert_eq!(store.load_released_occurrence(&id, 0).unwrap(), None);
+    assert_eq!(store.load_released_occurrence(&id, 1).unwrap(), None);
+}
+
+#[test]
+fn exact_occurrence_release_validates_and_rejects_invalid_states_without_append() {
+    assert!(RecurrenceOccurrenceRelease::new(" \t").is_err());
+    assert_eq!(
+        RecurrenceOccurrenceRelease::new(" exact ")
+            .unwrap()
+            .as_str(),
+        " exact "
+    );
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("release-errors").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject invalid recovery").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    let reason = RecurrenceOccurrenceRelease::new("recover").unwrap();
+    assert!(matches!(
+        store
+            .release_occurrence(&id, 0, 1, reason.clone())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotFound { offset: 0, .. }
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 0);
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    assert!(matches!(
+        store
+            .release_occurrence(&id, 0, 0, reason.clone())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            expected_revision: 0,
+            current_revision: 1,
+            ..
+        }
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 1);
+    assert!(matches!(
+        store
+            .release_occurrence(&id, 0, 1, reason.clone())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotClaimed { offset: 0, .. }
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 1);
+    store.claim_occurrence(&id, 0, 1, instant(1)).unwrap();
+    assert!(matches!(
+        store
+            .release_occurrence(&id, 0, 1, reason.clone())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            expected_revision: 1,
+            current_revision: 2,
+            ..
+        }
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 2);
+    store.release_occurrence(&id, 0, 2, reason.clone()).unwrap();
+    assert!(matches!(
+        store
+            .release_occurrence(&id, 0, 3, reason.clone())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotClaimed { offset: 0, .. }
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 3);
+
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    let task_id = TaskId::new("terminal-release-task").unwrap();
+    store
+        .materialize_occurrence(&id, 1, 1, task_id.clone())
+        .unwrap();
+    assert!(matches!(
+        store.release_occurrence(&id, 1, 2, reason).unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+            offset: 1,
+            task_id: bound,
+            ..
+        } if bound == task_id
+    ));
+    assert_eq!(occurrence_event_count(&path, &id, 1), 2);
+}
+
+#[test]
+fn racing_exact_occurrence_releases_commit_once() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-release").unwrap();
+    let mut setup = RecurrenceStore::open(&path).unwrap();
+    setup
+        .create(
+            id.clone(),
+            TaskGoal::new("Recover once").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    setup.persist_occurrence(&id, 1, 0).unwrap();
+    setup.claim_occurrence(&id, 0, 1, instant(1)).unwrap();
+    drop(setup);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = (0..2)
+        .map(|worker| {
+            let path = path.clone();
+            let id = id.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut store = RecurrenceStore::open(path).unwrap();
+                barrier.wait();
+                store.release_occurrence(
+                    &id,
+                    0,
+                    2,
+                    RecurrenceOccurrenceRelease::new(format!("worker {worker}")).unwrap(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                    expected_revision: 2,
+                    current_revision: 3,
+                    ..
+                })
+            ))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn released_occurrence_replay_rejects_malformed_and_impossible_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("corrupt-release").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject corrupt recovery evidence").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    store.claim_occurrence(&id, 0, 1, instant(1)).unwrap();
+    store
+        .release_occurrence(
+            &id,
+            0,
+            2,
+            RecurrenceOccurrenceRelease::new("recover").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B22726561736F6E223A2220227D'
+             WHERE event_type = 'recurrence.occurrence_released'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_released_occurrence(&id, 0)
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B22726561736F6E223A227265636F766572227D', payload_version = 2
+             WHERE event_type = 'recurrence.occurrence_released'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_released_occurrence(&id, 0)
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B22726561736F6E223A227265636F766572227D',
+             event_type = 'recurrence.occurrence_released', payload_version = 1
+             WHERE stream_version IN (2, 3)",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_released_occurrence(&id, 0)
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidOccurrenceHistory { event_count: 3, .. }
     ));
 }
 
