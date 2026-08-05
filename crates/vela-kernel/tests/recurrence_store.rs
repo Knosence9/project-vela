@@ -1313,6 +1313,331 @@ fn latest_due_materialization_rejects_selected_corruption_without_creating_a_tas
 }
 
 #[test]
+fn atomically_materializes_one_bounded_due_occurrence_page() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("materialize-due-page").unwrap();
+    let goal = TaskGoal::new("Materialize bounded due work").unwrap();
+    let task_ids = [
+        TaskId::new("due-page-task-0").unwrap(),
+        TaskId::new("due-page-task-1").unwrap(),
+    ];
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(5),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+
+    let page = store
+        .materialize_due_occurrences_page(
+            &id,
+            recurrence.revision(),
+            0,
+            OccurrencePageSize::new(2).unwrap(),
+            instant(19),
+            task_ids.to_vec(),
+        )
+        .unwrap();
+    assert_eq!(
+        page.occurrences()
+            .iter()
+            .map(|binding| (
+                binding.occurrence().offset(),
+                binding.occurrence().instant(),
+                binding.revision(),
+                binding.task_id().clone(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, instant(5), 2, task_ids[0].clone()),
+            (1, instant(12), 2, task_ids[1].clone()),
+        ]
+    );
+    assert_eq!(page.next_offset(), Some(2));
+    drop(store);
+
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    assert_eq!(
+        reopened
+            .materialized_occurrences_page(&id, 0, OccurrencePageSize::new(2).unwrap())
+            .unwrap(),
+        page
+    );
+    for (offset, task_id) in task_ids.iter().enumerate() {
+        assert_eq!(
+            reopened
+                .find_materialized_by_task_id(task_id)
+                .unwrap()
+                .unwrap()
+                .occurrence()
+                .offset(),
+            offset as u64
+        );
+        assert_eq!(
+            TaskStore::open(&path)
+                .unwrap()
+                .load(task_id)
+                .unwrap()
+                .unwrap()
+                .goal(),
+            &goal
+        );
+    }
+}
+
+#[test]
+fn due_page_materialization_rejects_task_shape_without_writing() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("materialize-due-page-shape").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject malformed task assignment").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let duplicate = TaskId::new("duplicate-page-task").unwrap();
+
+    assert!(matches!(
+        store
+            .materialize_due_occurrences_page(
+                &id,
+                recurrence.revision(),
+                0,
+                OccurrencePageSize::new(2).unwrap(),
+                instant(2),
+                vec![duplicate.clone()],
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::TaskCountMismatch {
+            occurrence_count: 2,
+            task_count: 1,
+        }
+    ));
+    assert!(matches!(
+        store
+            .materialize_due_occurrences_page(
+                &id,
+                recurrence.revision(),
+                0,
+                OccurrencePageSize::new(2).unwrap(),
+                instant(2),
+                vec![duplicate.clone(), duplicate.clone()],
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::DuplicateTaskId { task_id } if task_id == duplicate
+    ));
+    assert_eq!(store.load_occurrence(&id, 0).unwrap(), None);
+    assert_eq!(store.load_occurrence(&id, 1).unwrap(), None);
+    assert_eq!(
+        TaskStore::open(&path).unwrap().load(&duplicate).unwrap(),
+        None
+    );
+
+    let future = store
+        .materialize_due_occurrences_page(
+            &id,
+            recurrence.revision(),
+            2,
+            OccurrencePageSize::new(1).unwrap(),
+            instant(2),
+            Vec::new(),
+        )
+        .unwrap();
+    assert!(future.occurrences().is_empty());
+    assert_eq!(future.next_offset(), Some(2));
+}
+
+#[test]
+fn due_page_materialization_rejects_any_selected_or_task_collision_atomically() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("materialize-due-page-collision").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject every partial page").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    store
+        .persist_occurrence(&id, recurrence.revision(), 1)
+        .unwrap();
+    let selected_tasks = (0..3)
+        .map(|offset| TaskId::new(format!("selected-collision-task-{offset}")).unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(matches!(
+        store
+            .materialize_due_occurrences_page(
+                &id,
+                recurrence.revision(),
+                0,
+                OccurrencePageSize::new(3).unwrap(),
+                instant(3),
+                selected_tasks.clone(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyPersisted { offset: 1, .. }
+    ));
+    assert_eq!(store.load_occurrence(&id, 0).unwrap(), None);
+    assert_eq!(store.load_occurrence(&id, 2).unwrap(), None);
+    for task_id in &selected_tasks {
+        assert_eq!(TaskStore::open(&path).unwrap().load(task_id).unwrap(), None);
+    }
+
+    let task_collision_id = RecurrenceId::new("materialize-task-collision").unwrap();
+    let task_collision = TaskId::new("existing-page-task").unwrap();
+    let collision_recurrence = store
+        .create(
+            task_collision_id.clone(),
+            TaskGoal::new("Reject an existing task").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    TaskStore::open(&path)
+        .unwrap()
+        .start(
+            task_collision.clone(),
+            TaskGoal::new("Existing task").unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .materialize_due_occurrences_page(
+                &task_collision_id,
+                collision_recurrence.revision(),
+                0,
+                OccurrencePageSize::new(2).unwrap(),
+                instant(2),
+                vec![
+                    TaskId::new("new-page-task").unwrap(),
+                    task_collision.clone(),
+                ],
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::TaskAlreadyExists { task_id } if task_id == task_collision
+    ));
+    assert_eq!(store.load_occurrence(&task_collision_id, 0).unwrap(), None);
+    assert_eq!(store.load_occurrence(&task_collision_id, 1).unwrap(), None);
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&TaskId::new("new-page-task").unwrap())
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn racing_due_page_materialization_commits_one_complete_page() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-due-page-materialization").unwrap();
+    RecurrenceStore::open(&path)
+        .unwrap()
+        .create(
+            id.clone(),
+            TaskGoal::new("Materialize one complete racing page").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = (0..2)
+        .map(|actor| {
+            let path = path.clone();
+            let id = id.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let task_ids = (0..3)
+                    .map(|offset| {
+                        TaskId::new(format!("racing-page-task-{actor}-{offset}")).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let mut store = RecurrenceStore::open(path).unwrap();
+                barrier.wait();
+                (
+                    actor,
+                    task_ids.clone(),
+                    store.materialize_due_occurrences_page(
+                        &id,
+                        1,
+                        0,
+                        OccurrencePageSize::new(3).unwrap(),
+                        instant(3),
+                        task_ids,
+                    ),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results
+            .iter()
+            .filter(|(_, _, result)| result.is_ok())
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|(_, _, result)| matches!(
+                result,
+                Err(RecurrenceStoreError::OccurrenceAlreadyPersisted { .. })
+            ))
+            .count(),
+        1
+    );
+
+    let reopened = RecurrenceStore::open_read_only(&path).unwrap();
+    let winner = results
+        .iter()
+        .find(|(_, _, result)| result.is_ok())
+        .unwrap()
+        .0;
+    for (actor, task_ids, _) in results {
+        for task_id in task_ids {
+            assert_eq!(
+                TaskStore::open(&path)
+                    .unwrap()
+                    .load(&task_id)
+                    .unwrap()
+                    .is_some(),
+                actor == winner
+            );
+        }
+    }
+    assert_eq!(
+        reopened
+            .materialized_occurrences_page(&id, 0, OccurrencePageSize::new(3).unwrap())
+            .unwrap()
+            .occurrences()
+            .len(),
+        3
+    );
+}
+
+#[test]
 fn atomically_persists_one_bounded_due_occurrence_page() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");

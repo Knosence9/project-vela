@@ -527,45 +527,29 @@ impl EventLog {
         second: (&StreamId, &E3),
         prerequisite: (&StreamId, ExpectedVersion),
     ) -> Result<(), EventLogError> {
-        let (first_stream, first_event, first_stream_second_event) = first;
-        let (second_stream, second_event) = second;
+        self.append_pairs_and_new_streams_if_unchanged(&[first], &[second], prerequisite)
+    }
+
+    /// Atomically appends two ordered events to each absent primary stream and one event
+    /// to each absent secondary stream while a prerequisite remains unchanged.
+    pub(crate) fn append_pairs_and_new_streams_if_unchanged<E1: Event, E2: Event, E3: Event>(
+        &mut self,
+        pairs: &[(&StreamId, &E1, &E2)],
+        singles: &[(&StreamId, &E3)],
+        prerequisite: (&StreamId, ExpectedVersion),
+    ) -> Result<(), EventLogError> {
         let (prerequisite, prerequisite_expected) = prerequisite;
         if matches!(prerequisite_expected, ExpectedVersion::Exact(0)) {
             return Err(EventLogError::InvalidExpectedVersion(0));
         }
-        let metadata = [
-            (first_event.event_type(), first_event.payload_version()),
-            (
-                first_stream_second_event.event_type(),
-                first_stream_second_event.payload_version(),
-            ),
-            (second_event.event_type(), second_event.payload_version()),
-        ];
-        for (event_type, payload_version) in metadata {
-            if event_type.is_empty() {
-                return Err(EventLogError::InvalidEventType);
-            }
-            if payload_version == 0 {
-                return Err(EventLogError::InvalidPayloadVersion(payload_version));
-            }
+        let mut pair_events = Vec::with_capacity(pairs.len());
+        for (_, first, second) in pairs {
+            pair_events.push((encode_event(*first)?, encode_event(*second)?));
         }
-        let events = [
-            (
-                metadata[0].0,
-                metadata[0].1,
-                serde_json::to_vec(first_event)?,
-            ),
-            (
-                metadata[1].0,
-                metadata[1].1,
-                serde_json::to_vec(first_stream_second_event)?,
-            ),
-            (
-                metadata[2].0,
-                metadata[2].1,
-                serde_json::to_vec(second_event)?,
-            ),
-        ];
+        let mut single_events = Vec::with_capacity(singles.len());
+        for (_, event) in singles {
+            single_events.push(encode_event(*event)?);
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -576,7 +560,11 @@ impl EventLog {
                 current: prerequisite_current,
             });
         }
-        for stream in [first_stream, second_stream] {
+        for stream in pairs
+            .iter()
+            .map(|(stream, _, _)| *stream)
+            .chain(singles.iter().map(|(stream, _)| *stream))
+        {
             let current = current_stream_version(&transaction, stream)?;
             if current.is_some() {
                 return Err(EventLogError::WrongExpectedVersion {
@@ -586,23 +574,12 @@ impl EventLog {
             }
         }
 
-        for (stream, stream_version, (event_type, payload_version, payload)) in [
-            (first_stream, 1_i64, &events[0]),
-            (first_stream, 2_i64, &events[1]),
-            (second_stream, 1_i64, &events[2]),
-        ] {
-            transaction.execute(
-                "INSERT INTO events
-                 (stream_id, stream_version, event_type, payload_version, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    stream.as_str(),
-                    stream_version,
-                    event_type,
-                    payload_version,
-                    payload
-                ],
-            )?;
+        for ((stream, _, _), (first, second)) in pairs.iter().zip(pair_events) {
+            insert_encoded_event(&transaction, stream, 1, first)?;
+            insert_encoded_event(&transaction, stream, 2, second)?;
+        }
+        for ((stream, _), event) in singles.iter().zip(single_events) {
+            insert_encoded_event(&transaction, stream, 1, event)?;
         }
         transaction.commit()?;
         Ok(())
@@ -931,6 +908,42 @@ fn validate_event_schema(connection: &Connection) -> Result<(), EventLogError> {
             reason: "events table columns do not match the required schema".to_owned(),
         });
     }
+    Ok(())
+}
+
+type EncodedEvent = (&'static str, u32, Vec<u8>);
+
+fn encode_event<E: Event>(event: &E) -> Result<EncodedEvent, EventLogError> {
+    let event_type = event.event_type();
+    if event_type.is_empty() {
+        return Err(EventLogError::InvalidEventType);
+    }
+    let payload_version = event.payload_version();
+    if payload_version == 0 {
+        return Err(EventLogError::InvalidPayloadVersion(payload_version));
+    }
+    Ok((event_type, payload_version, serde_json::to_vec(event)?))
+}
+
+fn insert_encoded_event(
+    connection: &Connection,
+    stream: &StreamId,
+    stream_version: i64,
+    event: EncodedEvent,
+) -> Result<(), EventLogError> {
+    let (event_type, payload_version, payload) = event;
+    connection.execute(
+        "INSERT INTO events
+         (stream_id, stream_version, event_type, payload_version, payload)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            stream.as_str(),
+            stream_version,
+            event_type,
+            payload_version,
+            payload
+        ],
+    )?;
     Ok(())
 }
 
