@@ -90,6 +90,13 @@ pub enum RecurrenceCommand {
         page_size: u64,
         cutoff_unix_millis: u64,
     },
+    /// Select the latest due occurrence through one caller-owned inclusive cutoff.
+    LatestDue {
+        database: PathBuf,
+        id: String,
+        start_offset: u64,
+        cutoff_unix_millis: u64,
+    },
     /// Atomically persist one bounded page through a caller-owned inclusive cutoff.
     PersistDue {
         database: PathBuf,
@@ -384,6 +391,20 @@ impl Cli {
             ),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::LatestDue {
+                        database,
+                        id,
+                        start_offset,
+                        cutoff_unix_millis,
+                    }),
+            }) => select_latest_due_recurrence_occurrence(
+                &database,
+                &id,
+                start_offset,
+                cutoff_unix_millis,
+            ),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::PersistDue {
                         database,
                         id,
@@ -481,6 +502,12 @@ struct RecurrenceInspection<'a> {
 #[derive(Serialize)]
 struct RecurrenceOccurrencePageInspection<'a> {
     occurrences: Vec<RecurrenceOccurrenceInspection<'a>>,
+    next_offset: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct LatestDueOccurrenceInspection<'a> {
+    occurrence: Option<RecurrenceOccurrenceInspection<'a>>,
     next_offset: Option<u64>,
 }
 
@@ -1118,6 +1145,51 @@ fn serialize_recurrence_occurrence_page(
             .collect(),
         next_offset: page.next_offset(),
     })
+}
+
+fn select_latest_due_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    start_offset: u64,
+    cutoff_unix_millis: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error("latest_due_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    let selection = match store.latest_due_occurrence(
+        &id,
+        start_offset,
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+    ) {
+        Ok(selection) => selection,
+        Err(error @ RecurrenceStoreError::NotFound { .. }) => {
+            return extension_error("recurrence_not_found", error);
+        }
+        Err(error @ RecurrenceStoreError::OccurrenceOutOfRange { .. }) => {
+            return extension_error("recurrence_occurrence_out_of_range", error);
+        }
+        Err(error) => {
+            return extension_error("latest_due_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    let output = match serde_json::to_string(&LatestDueOccurrenceInspection {
+        occurrence: selection.occurrence().map(recurrence_occurrence_inspection),
+        next_offset: selection.next_offset(),
+    }) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error("latest_due_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn page_materialized_recurrence_occurrences(
