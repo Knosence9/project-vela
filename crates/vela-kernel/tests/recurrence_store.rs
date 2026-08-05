@@ -1978,6 +1978,14 @@ fn exact_occurrence_claim_rejects_missing_future_stale_and_terminal_state_withou
             ..
         }
     ));
+    assert!(matches!(
+        store.claim_occurrence(&id, 1, 0, instant(19)).unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            expected_revision: 0,
+            current_revision: 1,
+            ..
+        }
+    ));
     let claimed = store.claim_occurrence(&id, 1, 1, instant(20)).unwrap();
     assert!(matches!(
         store
