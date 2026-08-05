@@ -13,6 +13,20 @@ fn instant(unix_millis: u64) -> ScheduleInstant {
     ScheduleInstant::from_unix_millis(unix_millis)
 }
 
+fn occurrence_event_count(path: &std::path::Path, id: &RecurrenceId, offset: u64) -> i64 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = ?1",
+            [format!(
+                "recurrence-occurrence:{}:{id}:{offset}",
+                id.as_str().len()
+            )],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
 #[test]
 fn creates_and_reopens_an_exact_finite_fixed_interval_recurrence() {
     let directory = tempdir().unwrap();
@@ -2284,6 +2298,7 @@ fn exact_occurrence_release_validates_and_rejects_invalid_states_without_append(
             .unwrap_err(),
         RecurrenceStoreError::OccurrenceNotFound { offset: 0, .. }
     ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 0);
     store.persist_occurrence(&id, 1, 0).unwrap();
     assert!(matches!(
         store
@@ -2295,12 +2310,14 @@ fn exact_occurrence_release_validates_and_rejects_invalid_states_without_append(
             ..
         }
     ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 1);
     assert!(matches!(
         store
             .release_occurrence(&id, 0, 1, reason.clone())
             .unwrap_err(),
         RecurrenceStoreError::OccurrenceNotClaimed { offset: 0, .. }
     ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 1);
     store.claim_occurrence(&id, 0, 1, instant(1)).unwrap();
     assert!(matches!(
         store
@@ -2312,6 +2329,7 @@ fn exact_occurrence_release_validates_and_rejects_invalid_states_without_append(
             ..
         }
     ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 2);
     store.release_occurrence(&id, 0, 2, reason.clone()).unwrap();
     assert!(matches!(
         store
@@ -2319,6 +2337,7 @@ fn exact_occurrence_release_validates_and_rejects_invalid_states_without_append(
             .unwrap_err(),
         RecurrenceStoreError::OccurrenceNotClaimed { offset: 0, .. }
     ));
+    assert_eq!(occurrence_event_count(&path, &id, 0), 3);
 
     store.persist_occurrence(&id, 1, 1).unwrap();
     let task_id = TaskId::new("terminal-release-task").unwrap();
@@ -2333,6 +2352,7 @@ fn exact_occurrence_release_validates_and_rejects_invalid_states_without_append(
             ..
         } if bound == task_id
     ));
+    assert_eq!(occurrence_event_count(&path, &id, 1), 2);
 }
 
 #[test]
