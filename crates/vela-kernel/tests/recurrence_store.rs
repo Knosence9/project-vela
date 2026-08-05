@@ -1905,6 +1905,233 @@ fn persists_and_reopens_exact_recurrence_occurrence_provenance() {
 }
 
 #[test]
+fn claims_one_exact_due_persisted_occurrence_and_reopens_it() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new(" exact:claim/☄ ").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reserve exact recurring work").unwrap(),
+            instant(5),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let persisted = store
+        .persist_occurrence(&id, recurrence.revision(), 2)
+        .unwrap();
+
+    let claimed = store.claim_occurrence(&id, 2, 1, instant(19)).unwrap();
+
+    assert_eq!(claimed.occurrence(), &persisted);
+    assert_eq!(claimed.revision(), 2);
+    assert_eq!(store.load_occurrence(&id, 2).unwrap(), Some(persisted));
+    assert_eq!(store.load_materialized_occurrence(&id, 2).unwrap(), None);
+    drop(store);
+    assert_eq!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_claimed_occurrence(&id, 2)
+            .unwrap(),
+        Some(claimed)
+    );
+}
+
+#[test]
+fn exact_occurrence_claim_rejects_missing_future_stale_and_terminal_state_without_append() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("claim-errors").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject invalid claims").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(10).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.claim_occurrence(&id, 0, 1, instant(10)).unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotFound { offset: 0, .. }
+    ));
+    store
+        .persist_occurrence(&id, recurrence.revision(), 1)
+        .unwrap();
+    assert!(matches!(
+        store.claim_occurrence(&id, 1, 1, instant(19)).unwrap_err(),
+        RecurrenceStoreError::OccurrenceNotDue {
+            offset: 1,
+            due_at,
+            cutoff,
+            ..
+        } if due_at == instant(20) && cutoff == instant(19)
+    ));
+    assert!(matches!(
+        store.claim_occurrence(&id, 1, 0, instant(20)).unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            expected_revision: 0,
+            current_revision: 1,
+            ..
+        }
+    ));
+    let claimed = store.claim_occurrence(&id, 1, 1, instant(20)).unwrap();
+    assert!(matches!(
+        store
+            .claim_occurrence(&id, 1, claimed.revision(), instant(u64::MAX))
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyClaimed { offset: 1, .. }
+    ));
+    assert!(matches!(
+        store
+            .materialize_occurrence(
+                &id,
+                1,
+                claimed.revision(),
+                TaskId::new("claimed-task").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyClaimed { offset: 1, .. }
+    ));
+
+    store
+        .persist_occurrence(&id, recurrence.revision(), 2)
+        .unwrap();
+    let task_id = TaskId::new("materialized-before-claim").unwrap();
+    store
+        .materialize_occurrence(&id, 2, 1, task_id.clone())
+        .unwrap();
+    assert!(matches!(
+        store.claim_occurrence(&id, 2, 2, instant(30)).unwrap_err(),
+        RecurrenceStoreError::OccurrenceAlreadyMaterialized {
+            offset: 2,
+            task_id: bound,
+            ..
+        } if bound == task_id
+    ));
+}
+
+#[test]
+fn racing_exact_occurrence_claims_commit_once() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-claim").unwrap();
+    let mut setup = RecurrenceStore::open(&path).unwrap();
+    setup
+        .create(
+            id.clone(),
+            TaskGoal::new("Reserve once").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    setup.persist_occurrence(&id, 1, 0).unwrap();
+    drop(setup);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            let id = id.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut store = RecurrenceStore::open(path).unwrap();
+                barrier.wait();
+                store.claim_occurrence(&id, 0, 1, instant(1))
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(RecurrenceStoreError::OccurrenceConcurrentModification {
+                    expected_revision: 1,
+                    current_revision: 2,
+                    ..
+                })
+            ))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn claimed_occurrence_replay_rejects_malformed_and_impossible_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("corrupt-claim").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject corrupt claim evidence").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    store.claim_occurrence(&id, 0, 1, instant(1)).unwrap();
+    drop(store);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B22756E6578706563746564223A747275657D'
+             WHERE event_type = 'recurrence.occurrence_claimed'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_claimed_occurrence(&id, 0)
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::MalformedPayload { .. })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload = X'7B7D', payload_version = 2
+             WHERE event_type = 'recurrence.occurrence_claimed'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_claimed_occurrence(&id, 0)
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'recurrence.occurrence_claimed', payload = X'7B7D', payload_version = 1
+             WHERE event_type IN ('recurrence.occurrence_persisted', 'recurrence.occurrence_claimed')",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_claimed_occurrence(&id, 0)
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidOccurrenceHistory { event_count: 2, .. }
+    ));
+}
+
+#[test]
 fn atomically_materializes_one_persisted_occurrence_as_an_inert_task() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");

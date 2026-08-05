@@ -1,0 +1,57 @@
+# ADR-0068: Exact persisted recurrence occurrence claiming
+
+- **Status:** accepted
+- **Date:** 2026-08-05
+- **Decision and execution issue:** [#931](https://github.com/Knosence9/project-vela/issues/931)
+- **Related:** ADR-0034, ADR-0045, ADR-0050
+
+## Context
+
+ADR-0045 gives one exact finite recurrence occurrence canonical durable provenance, and ADR-0050 can atomically bind persisted-only provenance directly to an inert task. A caller that needs a recoverable reservation boundary before deciding how to materialize cannot durably distinguish selected work from unselected persisted provenance. ADR-0034 already establishes revision-bound durable claiming for one-shot schedules, but recurrence occurrence streams have a separate lifecycle and exact `(recurrence ID, offset)` identity.
+
+The smallest responsible next boundary reserves only one already-persisted coordinate. Release, reclaim, claimed inventory, task materialization from a claim, workers, leases, and dispatch require separate failure and recovery contracts.
+
+## Decision
+
+`RecurrenceStore::claim_occurrence(id, offset, expected_occurrence_revision, cutoff)` strictly replays one exact canonical occurrence stream. The coordinate must exist in persisted-only state at the exact caller-observed occurrence revision, and its authoritative deterministic instant must be at or before the inclusive caller-owned cutoff. Revision validation precedes lifecycle and due-cutoff validation.
+
+Success appends one empty version-1 `recurrence.occurrence_claimed` event with `ExpectedVersion::Exact(expected_occurrence_revision)` and returns `ClaimedRecurrenceOccurrence`, preserving the complete exact occurrence and resulting revision 2. `load_claimed_occurrence` strictly replays that same exact stream and exposes the durable reservation after reopen without scanning unrelated definitions or coordinates.
+
+Replay accepts only `persisted`, `persisted -> claimed`, and the existing `persisted -> materialized` history. Unknown fields, malformed payloads, unsupported event types or versions, claim-before-persistence, duplicate claims, materialization-after-claim, and every other ordering fail closed. Existing `load_occurrence` and persisted paging remain provenance views and include valid claimed coordinates. Materialized lookup, paging, and task reverse lookup exclude claimed coordinates.
+
+Missing provenance, stale revisions, future instants, already-claimed state, already-materialized state, malformed evidence, read-only storage, and contention append nothing. Two callers claiming revision 1 can commit exactly one event; the loser receives typed occurrence concurrent-modification evidence identifying persisted revision 2.
+
+Existing direct `materialize_occurrence` remains a persisted-only transition and rejects claimed state. A claim is durable reservation evidence only: it is not worker identity, a lease, proof of liveness, a permission grant, dispatch, or execution.
+
+## Alternatives considered
+
+### Add claim and release together
+
+Rejected because release requires caller-owned recovery evidence, reclaim ordering, and a decision about later claimed materialization. Keeping this slice exact and one-way makes its new durable history and failure semantics independently reviewable.
+
+### Claim projected but unpersisted coordinates
+
+Rejected because projection is not durable scheduler provenance. The claim must extend one canonical persisted occurrence stream rather than silently combining selection and provenance creation.
+
+### Permit direct materialization from claimed state
+
+Rejected for this slice because it would add a second transition and task-stream atomicity while recovery and release semantics remain undecided. Existing persisted-only materialization remains unchanged and explicit.
+
+### Infer due state from ambient time
+
+Rejected because the kernel must retain deterministic caller-owned time authority. The inclusive cutoff is explicit, testable input.
+
+## Consequences
+
+- Callers can durably reserve one exact persisted due coordinate before choosing recovery or consumption policy.
+- Exact revisions prevent stale observers and racing claimants from acquiring the same reservation.
+- Claimed provenance remains inspectable through existing provenance views but cannot be mistaken for a task binding.
+- A claim is intentionally not yet releasable or materializable; those are separate bounded lifecycle decisions.
+
+## Verification
+
+Strict RED→GREEN integration tests cover inclusive exact claiming, complete provenance, revision 2, read-only reopen lookup, missing and future coordinates, stale revisions, claimed and materialized terminal rejection, direct-materialization rejection, two-writer contention, exact UTF-8/separator identity, and fail-closed malformed payload, unsupported version, and impossible history evidence. Existing recurrence tests and the complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider before adding release or reclaim, claimed-to-task materialization, claimed inventory or CLI exposure, claim-next selection, durable cursors, worker identity, lease expiry, ambient clocks, dispatch, retries, permissions, or execution.
