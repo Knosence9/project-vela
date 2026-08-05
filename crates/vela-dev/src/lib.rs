@@ -14,9 +14,9 @@ use vela_kernel::scheduler::{
     FixedIntervalRecurrence, MaterializedRecurrenceOccurrence,
     MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize, RecurrenceId,
     RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
-    RecurrenceStore, RecurrenceStoreError, ScheduleCancellation, ScheduleHistoryEvent, ScheduleId,
-    ScheduleInstant, ScheduleInterval, ScheduleRelease, ScheduleStatus, ScheduleStore,
-    ScheduledTask,
+    RecurrenceOccurrenceRelease, RecurrenceStore, RecurrenceStoreError, ScheduleCancellation,
+    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
+    ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -167,6 +167,14 @@ pub enum RecurrenceCommand {
         offset: u64,
         expected_occurrence_revision: u64,
         cutoff_unix_millis: u64,
+    },
+    /// Release one exact claimed occurrence revision with recovery evidence.
+    Release {
+        database: PathBuf,
+        id: String,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        reason: String,
     },
     /// Atomically bind one persisted occurrence to a caller-owned inert task.
     Materialize {
@@ -563,6 +571,22 @@ impl Cli {
             ),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::Release {
+                        database,
+                        id,
+                        offset,
+                        expected_occurrence_revision,
+                        reason,
+                    }),
+            }) => release_recurrence_occurrence(
+                &database,
+                &id,
+                offset,
+                expected_occurrence_revision,
+                &reason,
+            ),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::Materialize {
                         database,
                         id,
@@ -639,6 +663,17 @@ struct ClaimedRecurrenceOccurrenceInspection<'a> {
     unix_millis: u64,
     definition_revision: u64,
     occurrence_revision: u64,
+}
+
+#[derive(Serialize)]
+struct ReleasedRecurrenceOccurrenceInspection<'a> {
+    recurrence_id: &'a str,
+    goal: &'a str,
+    offset: u64,
+    unix_millis: u64,
+    definition_revision: u64,
+    occurrence_revision: u64,
+    latest_release: &'a str,
 }
 
 #[derive(Serialize)]
@@ -1620,6 +1655,47 @@ fn claim_recurrence_occurrence(
     }) {
         Ok(output) => output,
         Err(error) => return extension_error("recurrence_occurrence_claim_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn release_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    offset: u64,
+    expected_occurrence_revision: u64,
+    raw_reason: &str,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let reason = match RecurrenceOccurrenceRelease::new(raw_reason) {
+        Ok(reason) => reason,
+        Err(error) => return extension_error("invalid_recurrence_occurrence_release", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_occurrence_release_failed", error),
+    };
+    let released = match store.release_occurrence(&id, offset, expected_occurrence_revision, reason)
+    {
+        Ok(released) => released,
+        Err(error) => return extension_error("recurrence_occurrence_release_failed", error),
+    };
+    let occurrence = released.occurrence();
+    let output = match serde_json::to_string(&ReleasedRecurrenceOccurrenceInspection {
+        recurrence_id: occurrence.recurrence_id().as_str(),
+        goal: occurrence.goal().as_str(),
+        offset: occurrence.offset(),
+        unix_millis: occurrence.instant().unix_millis(),
+        definition_revision: occurrence.recurrence_revision(),
+        occurrence_revision: released.revision(),
+        latest_release: released.latest_release().as_str(),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_occurrence_release_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS

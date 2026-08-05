@@ -486,6 +486,36 @@ identity, and grants no materialization, release, worker, lease, dispatch,
 retry, permission, provider/tool, workflow, or execution authority. See
 [ADR-0070](adr/0070-writable-exact-recurrence-occurrence-claim-cli.md).
 
+## Writable exact recurrence occurrence release CLI
+
+`vela-dev recurrence release DATABASE RECURRENCE_ID OFFSET
+EXPECTED_OCCURRENCE_REVISION REASON` validates the exact recurrence ID and one
+non-blank caller-authored recovery reason before storage access; clap parses the
+coordinate and observed occurrence revision as non-negative `u64` values. It
+opens only the caller-selected database through `RecurrenceStore::open` and
+delegates strict replay, revision-before-lifecycle validation, contention, and
+append to `RecurrenceStore::release_occurrence`.
+
+Success emits one compact object preserving exact `recurrence_id`, `goal`,
+`offset`, `unix_millis`, `definition_revision`, resulting
+`occurrence_revision`, and `latest_release`. Invalid IDs and reasons emit
+`invalid_recurrence_id` and `invalid_recurrence_occurrence_release` before
+storage access. Missing, stale, available, materialized, corrupt, contended,
+read-only, open, replay, append, and serialization failures emit
+`recurrence_occurrence_release_failed`, return non-zero, and emit no stdout.
+Validation, storage, and transition rejection append no release evidence.
+Response serialization follows a successful durable append; its fixed
+string-and-integer projection is infallible with the selected serializer, but a
+future serialization failure would report the already-durable release rather
+than roll it back.
+
+The reason records explicit recovery evidence only. The command scans no
+unrelated coordinate, reads no ambient clock, infers no worker death, expires no
+lease, and grants no worker identity, dispatch, retry, permission,
+provider/tool, workflow, or execution authority. Released provenance can be
+reclaimed or directly materialized only through a later exact-revision command.
+See [ADR-0071](adr/0071-writable-exact-recurrence-occurrence-release-cli.md).
+
 ## Writable exact recurrence occurrence materialization CLI
 
 `vela-dev recurrence materialize DATABASE RECURRENCE_ID OFFSET

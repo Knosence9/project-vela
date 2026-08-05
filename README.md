@@ -641,6 +641,7 @@ The first milestone is the **evidence loop**:
 148. Durably claim one exact persisted due recurrence occurrence through revision-bound caller-owned time without granting release, dispatch, or execution authority. ✅
 149. Explicitly release one exact claimed recurrence occurrence with caller-authored recovery evidence, restoring exact-revision reclaim or materialization eligibility without inferring worker failure. ✅
 150. Claim one exact persisted due recurrence occurrence through deterministic writable CLI JSON without reading ambient time or granting dispatch or execution authority. ✅
+151. Release one exact claimed recurrence occurrence through deterministic writable CLI JSON with exact recovery evidence and no inferred worker failure or execution authority. ✅
 
 ## Project documents
 
