@@ -639,6 +639,7 @@ The first milestone is the **evidence loop**:
 146. Atomically materialize one exact latest-due recurrence selection as one caller-identified inert task without partial provenance or granting execution authority. ✅
 147. Materialize one exact latest-due recurrence selection through deterministic writable CLI JSON without recording skipped work or granting execution authority. ✅
 148. Durably claim one exact persisted due recurrence occurrence through revision-bound caller-owned time without granting release, dispatch, or execution authority. ✅
+149. Explicitly release one exact claimed recurrence occurrence with caller-authored recovery evidence, restoring exact-revision reclaim or materialization eligibility without inferring worker failure. ✅
 
 ## Project documents
 
