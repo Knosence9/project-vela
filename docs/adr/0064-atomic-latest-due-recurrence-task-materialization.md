@@ -54,4 +54,4 @@ RED→GREEN integration tests cover between-instant selection, canonical persist
 
 ## Revisit when
 
-Reconsider before adding a CLI adapter, recovery of persisted-only latest selections, durable catch-up cursors or skip evidence, idempotent materialization, mutable recurrence definitions, global due discovery, ambient clocks, generated identities, claims or leases, dispatch, retries, or execution.
+Reconsider before adding recovery of persisted-only latest selections, durable catch-up cursors or skip evidence, idempotent materialization, mutable recurrence definitions, global due discovery, ambient clocks, generated identities, claims or leases, dispatch, retries, or execution. The thin CLI adapter is specified separately by ADR-0065.

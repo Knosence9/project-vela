@@ -1,6 +1,6 @@
 # Durable task schedules and finite recurrence definitions
 
-The `vela-kernel` crate provides inert scheduler boundaries: callers can persist one-shot task intent, query which one-shot intents are due, persist finite fixed-interval recurrence definitions through the kernel or CLI, inspect those definitions, project exact recurrence occurrences individually, through bounded pages, or through one caller-owned due cutoff, explicitly select the latest due occurrence as a read-only catch-up policy, persist exact occurrence provenance individually, as one atomic bounded due page, or as one atomically selected latest-due coordinate, atomically materialize that latest-due selection as a caller-identified inert task, inspect persisted provenance, page sparse persisted provenance and materialized task bindings through bounded authored-offset windows, atomically bind one exact persisted occurrence to a caller-owned inert task through the kernel or CLI, and resolve that exact provenance from the bound task identity. These boundaries record, inspect, select, or materialize intent only; they do not read a clock, dispatch work, or execute it.
+The `vela-kernel` crate provides inert scheduler boundaries: callers can persist one-shot task intent, query which one-shot intents are due, persist finite fixed-interval recurrence definitions through the kernel or CLI, inspect those definitions, project exact recurrence occurrences individually, through bounded pages, or through one caller-owned due cutoff, explicitly select the latest due occurrence as a read-only catch-up policy, persist exact occurrence provenance individually, as one atomic bounded due page, or as one atomically selected latest-due coordinate, atomically materialize that latest-due selection as a caller-identified inert task through the kernel or CLI, inspect persisted provenance, page sparse persisted provenance and materialized task bindings through bounded authored-offset windows, atomically bind one exact persisted occurrence to a caller-owned inert task through the kernel or CLI, and resolve that exact provenance from the bound task identity. These boundaries record, inspect, select, or materialize intent only; they do not read a clock, dispatch work, or execute it.
 
 ## Observable contract
 
@@ -342,6 +342,35 @@ evidence, discovers no unrelated recurrence, generates no identity, and grants
 no materialization, task lifecycle, claim, dispatch, workflow, provider/tool,
 permission, retry, or execution authority. See
 [ADR-0063](adr/0063-writable-atomic-latest-due-recurrence-cli.md).
+
+## Writable atomic latest-due recurrence task materialization CLI
+
+`vela-dev recurrence materialize-latest-due DATABASE RECURRENCE_ID
+EXPECTED_REVISION START_OFFSET CUTOFF_UNIX_MILLIS TASK_ID` validates both exact
+identities before storage access; clap parses the observed definition revision,
+authored start, and inclusive caller-owned cutoff as non-negative `u64` values.
+It opens only the selected database through `RecurrenceStore::open` and delegates
+constant-space selection, revision validation, selected occurrence and task
+uniqueness, and atomic materialization to
+`RecurrenceStore::materialize_latest_due_occurrence`.
+
+Success emits compact JSON with `occurrence` containing the complete materialized
+binding or `null`, and `next_offset` containing the following authored coordinate,
+the unchanged future cursor, or `null` at finite completion. A future horizon
+writes nothing. Skipped coordinates remain uninspected and unpersisted.
+
+Invalid identities emit `invalid_recurrence_id` or `invalid_task_id` before
+storage access. Missing or stale definitions, invalid starts, existing or
+malformed selected provenance, task collisions, concurrency, open, replay,
+append, and serialization failures emit
+`latest_due_recurrence_occurrence_materialization_failed`, return non-zero, and
+emit no stdout. Every failure leaves no partial occurrence history or orphan task.
+
+The command reads no ambient clock, persists no cursor or skipped-coordinate
+evidence, discovers no unrelated recurrence, generates no identity, and grants
+no claim, lease, dispatch, workflow, provider/tool, permission, retry, or
+execution authority. See
+[ADR-0065](adr/0065-writable-atomic-latest-due-recurrence-task-materialization-cli.md).
 
 ## Writable atomic due recurrence occurrence CLI paging
 

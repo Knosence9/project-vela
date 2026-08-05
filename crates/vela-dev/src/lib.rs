@@ -105,6 +105,15 @@ pub enum RecurrenceCommand {
         start_offset: u64,
         cutoff_unix_millis: u64,
     },
+    /// Atomically bind the latest due occurrence to a caller-owned inert task.
+    MaterializeLatestDue {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        start_offset: u64,
+        cutoff_unix_millis: u64,
+        task_id: String,
+    },
     /// Atomically persist one bounded page through a caller-owned inclusive cutoff.
     PersistDue {
         database: PathBuf,
@@ -429,6 +438,24 @@ impl Cli {
             ),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::MaterializeLatestDue {
+                        database,
+                        id,
+                        expected_revision,
+                        start_offset,
+                        cutoff_unix_millis,
+                        task_id,
+                    }),
+            }) => materialize_latest_due_recurrence_occurrence(
+                &database,
+                &id,
+                expected_revision,
+                start_offset,
+                cutoff_unix_millis,
+                &task_id,
+            ),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::PersistDue {
                         database,
                         id,
@@ -532,6 +559,12 @@ struct RecurrenceOccurrencePageInspection<'a> {
 #[derive(Serialize)]
 struct LatestDueOccurrenceInspection<'a> {
     occurrence: Option<RecurrenceOccurrenceInspection<'a>>,
+    next_offset: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct LatestDueMaterializationInspection<'a> {
+    occurrence: Option<MaterializedRecurrenceOccurrenceInspection<'a>>,
     next_offset: Option<u64>,
 }
 
@@ -1258,6 +1291,64 @@ fn serialize_latest_due_occurrence_selection(
         occurrence: selection.occurrence().map(recurrence_occurrence_inspection),
         next_offset: selection.next_offset(),
     })
+}
+
+fn materialize_latest_due_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    start_offset: u64,
+    cutoff_unix_millis: u64,
+    raw_task_id: &str,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let task_id = match TaskId::new(raw_task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return extension_error("invalid_task_id", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error(
+                "latest_due_recurrence_occurrence_materialization_failed",
+                error,
+            );
+        }
+    };
+    let selection = match store.materialize_latest_due_occurrence(
+        &id,
+        expected_revision,
+        start_offset,
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+        task_id,
+    ) {
+        Ok(selection) => selection,
+        Err(error) => {
+            return extension_error(
+                "latest_due_recurrence_occurrence_materialization_failed",
+                error,
+            );
+        }
+    };
+    let output = match serde_json::to_string(&LatestDueMaterializationInspection {
+        occurrence: selection
+            .occurrence()
+            .map(materialized_recurrence_occurrence_inspection),
+        next_offset: selection.next_offset(),
+    }) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error(
+                "latest_due_recurrence_occurrence_materialization_failed",
+                error,
+            );
+        }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn page_materialized_recurrence_occurrences(
