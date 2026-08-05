@@ -754,6 +754,113 @@ fn due_occurrence_pages_preserve_exact_boundaries_and_typed_lookup_failures() {
 }
 
 #[test]
+fn selects_the_latest_due_occurrence_from_an_explicit_start_without_enumerating_backlog() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("latest-due").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Collapse an explicit backlog").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(8).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let exact = store.latest_due_occurrence(&id, 2, instant(30)).unwrap();
+    let occurrence = exact.occurrence().unwrap();
+    assert_eq!(occurrence.recurrence_id(), &id);
+    assert_eq!(occurrence.goal().as_str(), "Collapse an explicit backlog");
+    assert_eq!(occurrence.offset(), 4);
+    assert_eq!(occurrence.instant(), instant(30));
+    assert_eq!(occurrence.recurrence_revision(), 1);
+    assert_eq!(exact.next_offset(), Some(5));
+
+    let between = store.latest_due_occurrence(&id, 2, instant(33)).unwrap();
+    assert_eq!(between.occurrence().unwrap().offset(), 4);
+    assert_eq!(between.next_offset(), Some(5));
+}
+
+#[test]
+fn latest_due_selection_preserves_future_resume_and_finite_boundary_semantics() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("latest-due-boundaries").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Preserve latest-only boundaries").unwrap(),
+            instant(u64::MAX - 4),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let future = store
+        .latest_due_occurrence(&id, 1, instant(u64::MAX - 3))
+        .unwrap();
+    assert_eq!(future.occurrence(), None);
+    assert_eq!(future.next_offset(), Some(1));
+
+    let complete = store
+        .latest_due_occurrence(&id, 1, instant(u64::MAX))
+        .unwrap();
+    assert_eq!(complete.occurrence().unwrap().offset(), 2);
+    assert_eq!(complete.occurrence().unwrap().instant(), instant(u64::MAX));
+    assert_eq!(complete.next_offset(), None);
+}
+
+#[test]
+fn latest_due_selection_handles_huge_backlogs_and_typed_lookup_failures() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("huge-latest-due").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    assert!(matches!(
+        store
+            .latest_due_occurrence(&id, 0, instant(0))
+            .unwrap_err(),
+        RecurrenceStoreError::NotFound { recurrence_id } if recurrence_id == id
+    ));
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Select in constant space").unwrap(),
+            instant(0),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(u64::MAX).unwrap(),
+        )
+        .unwrap();
+
+    let selected = store
+        .latest_due_occurrence(&id, 7, instant(u64::MAX))
+        .unwrap();
+    assert_eq!(selected.occurrence().unwrap().offset(), u64::MAX - 1);
+    assert_eq!(
+        selected.occurrence().unwrap().instant(),
+        instant(u64::MAX - 1)
+    );
+    assert_eq!(selected.next_offset(), None);
+    assert!(matches!(
+        store
+            .latest_due_occurrence(&id, u64::MAX, instant(u64::MAX))
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            recurrence_id,
+            requested_offset,
+            ..
+        } if recurrence_id == id && requested_offset == u64::MAX
+    ));
+}
+
+#[test]
 fn atomically_persists_one_bounded_due_occurrence_page() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
