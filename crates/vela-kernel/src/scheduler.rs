@@ -620,6 +620,25 @@ impl ClaimedRecurrenceOccurrence {
     }
 }
 
+/// One bounded, inert page of exact currently claimed recurrence occurrences.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimedRecurrenceOccurrencePage {
+    occurrences: Vec<ClaimedRecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl ClaimedRecurrenceOccurrencePage {
+    /// Returns the current claims in increasing authored offset order.
+    pub fn occurrences(&self) -> &[ClaimedRecurrenceOccurrence] {
+        &self.occurrences
+    }
+
+    /// Returns the first authored offset not inspected, if one remains.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 /// One exact released recurrence occurrence with its latest recovery evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReleasedRecurrenceOccurrence {
@@ -2101,6 +2120,39 @@ impl RecurrenceStore {
             }
         }
         Ok(MaterializedRecurrenceOccurrencePage {
+            occurrences,
+            next_offset: authored_page.next_offset(),
+        })
+    }
+
+    /// Inspects one bounded authored offset window and returns its current claims.
+    pub fn claimed_occurrences_page(
+        &self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+    ) -> Result<ClaimedRecurrenceOccurrencePage, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
+        let mut occurrences = Vec::with_capacity(authored_page.occurrences().len());
+        for authored in authored_page.occurrences() {
+            let Some(state) =
+                self.load_occurrence_state_with_recurrence(&recurrence, authored.offset())?
+            else {
+                continue;
+            };
+            if state.claimed {
+                occurrences.push(ClaimedRecurrenceOccurrence {
+                    occurrence: state.occurrence,
+                    revision: state.revision,
+                });
+            }
+        }
+        Ok(ClaimedRecurrenceOccurrencePage {
             occurrences,
             next_offset: authored_page.next_offset(),
         })
