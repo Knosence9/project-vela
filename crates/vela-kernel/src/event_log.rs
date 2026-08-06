@@ -306,6 +306,10 @@ pub struct EventLog {
 }
 
 impl EventLog {
+    pub(crate) fn stream_version(&self, stream: &StreamId) -> Result<Option<u64>, EventLogError> {
+        current_stream_version(&self.connection, stream)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, EventLogError> {
         let connection = Connection::open(path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
@@ -437,8 +441,28 @@ impl EventLog {
         second_expected: ExpectedVersion,
         second_event: &E2,
     ) -> Result<(u64, u64), EventLogError> {
+        self.append_pair_if_streams_unchanged(
+            (first_stream, first_expected, first_event),
+            (second_stream, second_expected, second_event),
+            &[],
+        )
+    }
+
+    /// Atomically appends one event to each of two distinct streams while every
+    /// prerequisite stream remains at its caller-observed version.
+    pub(crate) fn append_pair_if_streams_unchanged<E1: Event, E2: Event>(
+        &mut self,
+        first: (&StreamId, ExpectedVersion, &E1),
+        second: (&StreamId, ExpectedVersion, &E2),
+        prerequisites: &[(&StreamId, ExpectedVersion)],
+    ) -> Result<(u64, u64), EventLogError> {
+        let (first_stream, first_expected, first_event) = first;
+        let (second_stream, second_expected, second_event) = second;
         if matches!(first_expected, ExpectedVersion::Exact(0))
             || matches!(second_expected, ExpectedVersion::Exact(0))
+            || prerequisites
+                .iter()
+                .any(|(_, expected)| matches!(expected, ExpectedVersion::Exact(0)))
         {
             return Err(EventLogError::InvalidExpectedVersion(0));
         }
@@ -473,6 +497,15 @@ impl EventLog {
                 expected: second_expected,
                 current: second_current,
             });
+        }
+        for (prerequisite, prerequisite_expected) in prerequisites {
+            let current = current_stream_version(&transaction, prerequisite)?;
+            if !expected_version_matches(*prerequisite_expected, current) {
+                return Err(EventLogError::WrongExpectedVersion {
+                    expected: *prerequisite_expected,
+                    current,
+                });
+            }
         }
         let (first_version, first_stored_version) = next_stream_version(first_current)?;
         let (second_version, second_stored_version) = next_stream_version(second_current)?;

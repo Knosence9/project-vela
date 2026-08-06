@@ -645,6 +645,13 @@ impl AvailableRecurrenceOccurrencePage {
     }
 }
 
+struct AvailableRecurrenceOccurrenceWindow {
+    recurrence: FixedIntervalRecurrence,
+    stream_versions: Vec<(StreamId, ExpectedVersion)>,
+    selected: Option<AvailableRecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
 /// One exact persisted recurrence occurrence durably reserved by a caller.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClaimedRecurrenceOccurrence {
@@ -750,6 +757,25 @@ impl MaterializedRecurrenceOccurrence {
     }
 }
 
+/// One bounded selection that may atomically bind the next available due occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterializeNextRecurrenceOccurrenceSelection {
+    occurrence: Option<MaterializedRecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl MaterializeNextRecurrenceOccurrenceSelection {
+    /// Returns the materialized occurrence when the selected window contained eligible work.
+    pub const fn occurrence(&self) -> Option<&MaterializedRecurrenceOccurrence> {
+        self.occurrence.as_ref()
+    }
+
+    /// Returns the next authored coordinate to inspect, or finite completion.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 /// One bounded, inert page of exact materialized recurrence occurrences.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterializedRecurrenceOccurrencePage {
@@ -848,6 +874,10 @@ pub enum RecurrenceStoreError {
         current_revision: u64,
     },
     ClaimNextContentionRetriesExhausted {
+        recurrence_id: RecurrenceId,
+        attempts: usize,
+    },
+    MaterializeNextContentionRetriesExhausted {
         recurrence_id: RecurrenceId,
         attempts: usize,
     },
@@ -974,6 +1004,13 @@ impl fmt::Display for RecurrenceStoreError {
                 formatter,
                 "recurrence {recurrence_id} claim-next contention exhausted after {attempts} attempts"
             ),
+            Self::MaterializeNextContentionRetriesExhausted {
+                recurrence_id,
+                attempts,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} materialize-next contention exhausted after {attempts} attempts"
+            ),
             Self::OccurrenceNotDue {
                 recurrence_id,
                 offset,
@@ -1067,6 +1104,7 @@ impl Error for RecurrenceStoreError {
             | Self::OccurrenceNotFound { .. }
             | Self::OccurrenceConcurrentModification { .. }
             | Self::ClaimNextContentionRetriesExhausted { .. }
+            | Self::MaterializeNextContentionRetriesExhausted { .. }
             | Self::OccurrenceNotDue { .. }
             | Self::OccurrenceAlreadyClaimed { .. }
             | Self::OccurrenceNotClaimed { .. }
@@ -2238,6 +2276,48 @@ impl RecurrenceStore {
         })
     }
 
+    fn select_available_occurrence_window(
+        &self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+    ) -> Result<AvailableRecurrenceOccurrenceWindow, RecurrenceStoreError> {
+        let recurrence = self
+            .load(id)?
+            .ok_or_else(|| RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            })?;
+        let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
+        let mut stream_versions = Vec::with_capacity(authored_page.occurrences().len());
+        let mut selected = None;
+        for authored in authored_page.occurrences() {
+            let state =
+                self.load_occurrence_state_with_recurrence(&recurrence, authored.offset())?;
+            stream_versions.push((
+                recurrence_occurrence_stream(id, authored.offset()),
+                state.as_ref().map_or(ExpectedVersion::NoStream, |state| {
+                    ExpectedVersion::Exact(state.revision)
+                }),
+            ));
+            if let (None, Some(state)) = (
+                &selected,
+                state.filter(|state| !state.claimed && state.task_id.is_none()),
+            ) {
+                selected = Some(AvailableRecurrenceOccurrence {
+                    occurrence: state.occurrence,
+                    revision: state.revision,
+                    latest_release: state.latest_release,
+                });
+            }
+        }
+        Ok(AvailableRecurrenceOccurrenceWindow {
+            recurrence,
+            stream_versions,
+            selected,
+            next_offset: authored_page.next_offset(),
+        })
+    }
+
     /// Claims the earliest available due coordinate in one bounded authored window.
     ///
     /// A competing lifecycle transition restarts selection over the same caller-owned
@@ -2269,40 +2349,18 @@ impl RecurrenceStore {
     ) -> Result<ClaimNextRecurrenceOccurrenceSelection, RecurrenceStoreError> {
         let mut attempts = 0;
         loop {
-            let recurrence = self
-                .load(id)?
-                .ok_or_else(|| RecurrenceStoreError::NotFound {
-                    recurrence_id: id.clone(),
-                })?;
-            let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
-            let mut window_versions = Vec::with_capacity(authored_page.occurrences().len());
-            let mut selected = None;
-            for authored in authored_page.occurrences() {
-                let state =
-                    self.load_occurrence_state_with_recurrence(&recurrence, authored.offset())?;
-                window_versions.push((
-                    recurrence_occurrence_stream(id, authored.offset()),
-                    state.as_ref().map_or(ExpectedVersion::NoStream, |state| {
-                        ExpectedVersion::Exact(state.revision)
-                    }),
-                ));
-                if let (None, Some(state)) = (
-                    &selected,
-                    state.filter(|state| !state.claimed && state.task_id.is_none()),
-                ) {
-                    selected = Some(AvailableRecurrenceOccurrence {
-                        occurrence: state.occurrence,
-                        revision: state.revision,
-                        latest_release: state.latest_release,
-                    });
-                }
-            }
+            let AvailableRecurrenceOccurrenceWindow {
+                recurrence,
+                stream_versions: window_versions,
+                selected,
+                next_offset: window_next_offset,
+            } = self.select_available_occurrence_window(id, start_offset, page_size)?;
 
             let Some(available) = selected else {
                 return Ok(ClaimNextRecurrenceOccurrenceSelection {
                     occurrence: None,
                     latest_release: None,
-                    next_offset: authored_page.next_offset(),
+                    next_offset: window_next_offset,
                 });
             };
             if available.occurrence().instant() > cutoff {
@@ -2355,6 +2413,128 @@ impl RecurrenceStore {
                             recurrence_id: id.clone(),
                             attempts,
                         });
+                    }
+                }
+                Err(error) => return Err(RecurrenceStoreError::EventLog(error)),
+            }
+        }
+    }
+
+    /// Atomically materializes the earliest available due coordinate in one bounded window.
+    ///
+    /// A competing lifecycle transition restarts selection over the same caller-owned
+    /// window, with contention failing after four conflicted append attempts. Future
+    /// available work preserves its authored offset as the resumable cursor.
+    pub fn materialize_next_available_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+        task_id: TaskId,
+    ) -> Result<MaterializeNextRecurrenceOccurrenceSelection, RecurrenceStoreError> {
+        self.materialize_next_available_occurrence_before_append(
+            id,
+            start_offset,
+            page_size,
+            cutoff,
+            task_id,
+            &mut || {},
+        )
+    }
+
+    fn materialize_next_available_occurrence_before_append(
+        &mut self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+        task_id: TaskId,
+        before_append: &mut impl FnMut(),
+    ) -> Result<MaterializeNextRecurrenceOccurrenceSelection, RecurrenceStoreError> {
+        let task_stream = task_stream(&task_id);
+        let mut attempts = 0;
+        loop {
+            let AvailableRecurrenceOccurrenceWindow {
+                recurrence,
+                stream_versions: window_versions,
+                selected,
+                next_offset: window_next_offset,
+            } = self.select_available_occurrence_window(id, start_offset, page_size)?;
+
+            let Some(available) = selected else {
+                return Ok(MaterializeNextRecurrenceOccurrenceSelection {
+                    occurrence: None,
+                    next_offset: window_next_offset,
+                });
+            };
+            if available.occurrence().instant() > cutoff {
+                return Ok(MaterializeNextRecurrenceOccurrenceSelection {
+                    occurrence: None,
+                    next_offset: Some(available.occurrence().offset()),
+                });
+            }
+
+            let offset = available.occurrence().offset();
+            let expected_revision = available.revision();
+            let next_offset =
+                (offset + 1 < recurrence.occurrence_count().get()).then_some(offset + 1);
+            let target_stream = recurrence_occurrence_stream(id, offset);
+            let recurrence_stream = recurrence_stream(id);
+            let mut prerequisites = Vec::with_capacity(window_versions.len());
+            prerequisites.push((
+                &recurrence_stream,
+                ExpectedVersion::Exact(recurrence.revision()),
+            ));
+            prerequisites.extend(
+                window_versions
+                    .iter()
+                    .filter(|(stream, _)| stream != &target_stream)
+                    .map(|(stream, expected)| (stream, *expected)),
+            );
+            let materialized_event = RecurrenceOccurrenceEvent::Materialized {
+                task_id: task_id.clone(),
+            };
+            let task_event = TaskEvent::Started {
+                goal: available.occurrence().goal().clone(),
+            };
+            before_append();
+            match self.event_log.append_pair_if_streams_unchanged(
+                (
+                    &target_stream,
+                    ExpectedVersion::Exact(expected_revision),
+                    &materialized_event,
+                ),
+                (&task_stream, ExpectedVersion::NoStream, &task_event),
+                &prerequisites,
+            ) {
+                Ok(_) => {
+                    return Ok(MaterializeNextRecurrenceOccurrenceSelection {
+                        occurrence: Some(MaterializedRecurrenceOccurrence {
+                            occurrence: available.occurrence,
+                            revision: expected_revision + 1,
+                            task_id,
+                        }),
+                        next_offset,
+                    });
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => {
+                    if self
+                        .event_log
+                        .stream_version(&task_stream)
+                        .map_err(RecurrenceStoreError::EventLog)?
+                        .is_some()
+                    {
+                        return Err(RecurrenceStoreError::TaskAlreadyExists { task_id });
+                    }
+                    attempts += 1;
+                    if attempts >= CLAIM_NEXT_MAX_ATTEMPTS {
+                        return Err(
+                            RecurrenceStoreError::MaterializeNextContentionRetriesExhausted {
+                                recurrence_id: id.clone(),
+                                attempts,
+                            },
+                        );
                     }
                 }
                 Err(error) => return Err(RecurrenceStoreError::EventLog(error)),
@@ -2694,6 +2874,71 @@ mod recurrence_projection_tests {
                 .unwrap()
                 .revision,
             1 + (CLAIM_NEXT_MAX_ATTEMPTS as u64 * 2)
+        );
+    }
+
+    #[test]
+    fn continuous_window_conflicts_bound_materialize_next_retries() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let id = RecurrenceId::new("bounded-materialize-next-race").unwrap();
+        let task_id = TaskId::new("bounded-materialize-next-task").unwrap();
+        let mut store = RecurrenceStore::open(&path).unwrap();
+        store
+            .create(
+                id.clone(),
+                TaskGoal::new("Bound materialize-next contention").unwrap(),
+                ScheduleInstant::from_unix_millis(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+        store.persist_occurrence(&id, 1, 0).unwrap();
+        let mut racing_store = RecurrenceStore::open(&path).unwrap();
+        let mut conflicts = 0_u64;
+
+        let result = store.materialize_next_available_occurrence_before_append(
+            &id,
+            0,
+            OccurrencePageSize::new(1).unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+            task_id.clone(),
+            &mut || {
+                let expected_revision = 1 + conflicts * 2;
+                racing_store
+                    .claim_occurrence(
+                        &id,
+                        0,
+                        expected_revision,
+                        ScheduleInstant::from_unix_millis(1),
+                    )
+                    .unwrap();
+                racing_store
+                    .release_occurrence(
+                        &id,
+                        0,
+                        expected_revision + 1,
+                        RecurrenceOccurrenceRelease::new("force materialize-next retry").unwrap(),
+                    )
+                    .unwrap();
+                conflicts += 1;
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(RecurrenceStoreError::MaterializeNextContentionRetriesExhausted {
+                recurrence_id,
+                attempts: CLAIM_NEXT_MAX_ATTEMPTS,
+            }) if recurrence_id == id
+        ));
+        assert_eq!(conflicts as usize, CLAIM_NEXT_MAX_ATTEMPTS);
+        assert!(
+            EventLog::open_read_only(&path)
+                .unwrap()
+                .replay::<TaskEvent>(&task_stream(&task_id))
+                .unwrap()
+                .is_empty()
         );
     }
 }
