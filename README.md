@@ -354,6 +354,21 @@ future, advancing, or finite-completion cursor. Failures emit no partial stdout.
 The command reads no clock, persists no cursor, scans no unrelated recurrence,
 and grants no worker, lease, dispatch, materialization, or execution authority.
 
+Atomically bind the earliest available due coordinate in one exact bounded
+recurrence window to a caller-owned inert task:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence materialize-next path/to/events.sqlite3 recurrence-id 0 128 1754049600000 task-id
+```
+
+The command validates recurrence identity, page size, and task identity before
+opening writable storage, then delegates bounded selection, race protection,
+and the atomic occurrence/task transition to the kernel. Success emits the
+complete materialized binding and resumable `next_offset`, or a null occurrence
+for future, consumed, and finite windows. Failures emit no stdout and cannot
+leave an orphan task. The command reads no clock, persists no cursor, generates
+no identity, scans no unrelated recurrence, and cannot dispatch or execute work.
+
 Page complete materialized task bindings for one exact recurrence through a
 bounded read-only authored-offset window:
 
