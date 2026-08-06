@@ -2888,28 +2888,20 @@ impl RecurrenceStore {
                     occurrence_count,
                 },
                 RecurrenceEvent::Cancelled { reason },
-            ] => {
-                let invalid_history = || RecurrenceStoreError::InvalidHistory { event_count };
-                let anchor = ScheduleInstant::from_unix_millis(*anchor_unix_millis);
-                let interval = ScheduleInterval::from_millis(*interval_millis)
-                    .map_err(|_| invalid_history())?;
-                let occurrence_count =
-                    OccurrenceCount::new(*occurrence_count).map_err(|_| invalid_history())?;
-                let final_occurrence = anchor
-                    .checked_advance_by(interval, occurrence_count.final_offset())
-                    .map_err(|_| invalid_history())?;
-                Ok(Some(FixedIntervalRecurrence {
-                    id,
-                    goal: goal.clone(),
-                    anchor,
-                    interval,
-                    occurrence_count,
-                    final_occurrence,
-                    definition_revision: 1,
-                    revision: 2,
-                    cancellation: Some(reason.clone()),
-                }))
-            }
+            ] => Self::project_created_recurrence(
+                id,
+                goal,
+                *anchor_unix_millis,
+                *interval_millis,
+                *occurrence_count,
+                event_count,
+            )
+            .map(|mut recurrence| {
+                recurrence.revision = 2;
+                recurrence.cancellation = Some(reason.clone());
+                recurrence
+            })
+            .map(Some),
             [
                 RecurrenceEvent::Created {
                     goal,
@@ -2917,30 +2909,47 @@ impl RecurrenceStore {
                     interval_millis,
                     occurrence_count,
                 },
-            ] => {
-                let invalid_history = || RecurrenceStoreError::InvalidHistory { event_count };
-                let anchor = ScheduleInstant::from_unix_millis(*anchor_unix_millis);
-                let interval = ScheduleInterval::from_millis(*interval_millis)
-                    .map_err(|_| invalid_history())?;
-                let occurrence_count =
-                    OccurrenceCount::new(*occurrence_count).map_err(|_| invalid_history())?;
-                let final_occurrence = anchor
-                    .checked_advance_by(interval, occurrence_count.final_offset())
-                    .map_err(|_| invalid_history())?;
-                Ok(Some(FixedIntervalRecurrence {
-                    id,
-                    goal: goal.clone(),
-                    anchor,
-                    interval,
-                    occurrence_count,
-                    final_occurrence,
-                    definition_revision: 1,
-                    revision: 1,
-                    cancellation: None,
-                }))
-            }
+            ] => Self::project_created_recurrence(
+                id,
+                goal,
+                *anchor_unix_millis,
+                *interval_millis,
+                *occurrence_count,
+                event_count,
+            )
+            .map(Some),
             _ => Err(RecurrenceStoreError::InvalidHistory { event_count }),
         }
+    }
+
+    fn project_created_recurrence(
+        id: RecurrenceId,
+        goal: &TaskGoal,
+        anchor_unix_millis: u64,
+        interval_millis: u64,
+        occurrence_count: u64,
+        event_count: usize,
+    ) -> Result<FixedIntervalRecurrence, RecurrenceStoreError> {
+        let invalid_history = || RecurrenceStoreError::InvalidHistory { event_count };
+        let anchor = ScheduleInstant::from_unix_millis(anchor_unix_millis);
+        let interval =
+            ScheduleInterval::from_millis(interval_millis).map_err(|_| invalid_history())?;
+        let occurrence_count =
+            OccurrenceCount::new(occurrence_count).map_err(|_| invalid_history())?;
+        let final_occurrence = anchor
+            .checked_advance_by(interval, occurrence_count.final_offset())
+            .map_err(|_| invalid_history())?;
+        Ok(FixedIntervalRecurrence {
+            id,
+            goal: goal.clone(),
+            anchor,
+            interval,
+            occurrence_count,
+            final_occurrence,
+            definition_revision: 1,
+            revision: 1,
+            cancellation: None,
+        })
     }
 }
 

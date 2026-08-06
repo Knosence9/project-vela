@@ -383,19 +383,23 @@ fn cancellation_blocks_new_mutations_but_preserves_claim_recovery_and_history() 
             TaskGoal::new("Cancel future recurrence work").unwrap(),
             instant(10),
             ScheduleInterval::from_millis(2).unwrap(),
-            OccurrenceCount::new(3).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
         )
         .unwrap();
     store.persist_occurrence(&id, 1, 0).unwrap();
     store.claim_occurrence(&id, 0, 1, instant(10)).unwrap();
     store.persist_occurrence(&id, 1, 1).unwrap();
     store.persist_occurrence(&id, 1, 2).unwrap();
+    store.persist_occurrence(&id, 1, 3).unwrap();
+    store.claim_occurrence(&id, 3, 1, instant(16)).unwrap();
     drop(store);
     insert_recurrence_cancellation(&path, &id, 2, "stop future work");
 
     let mut store = RecurrenceStore::open(&path).unwrap();
     let recurrence = store.load(&id).unwrap().unwrap();
     assert_eq!(recurrence.revision(), 2);
+    let claimed_before_cancellation = store.load_claimed_occurrence(&id, 0).unwrap().unwrap();
+    assert_eq!(claimed_before_cancellation.revision(), 2);
     assert!(matches!(
         store
             .persist_occurrence(&id, recurrence.revision(), 2)
@@ -450,10 +454,56 @@ fn cancellation_blocks_new_mutations_but_preserves_claim_recovery_and_history() 
         RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
     ));
 
+    let claimed_task_id = TaskId::new("claimed-task").unwrap();
+    let materialized = store
+        .materialize_claimed_occurrence(
+            &id,
+            0,
+            claimed_before_cancellation.revision(),
+            claimed_task_id.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        materialized.occurrence(),
+        claimed_before_cancellation.occurrence()
+    );
+    assert_eq!(materialized.revision(), 3);
+    assert_eq!(materialized.task_id(), &claimed_task_id);
+    assert!(matches!(
+        store
+            .materialize_claimed_occurrence(
+                &id,
+                0,
+                claimed_before_cancellation.revision(),
+                TaskId::new("stale-claimed-task").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            recurrence_id,
+            offset: 0,
+            expected_revision: 2,
+            current_revision: 3,
+        } if recurrence_id == id
+    ));
+    assert!(store.load_claimed_occurrence(&id, 0).unwrap().is_none());
+    assert_eq!(
+        store.load_materialized_occurrence(&id, 0).unwrap(),
+        Some(materialized.clone())
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&claimed_task_id)
+            .unwrap()
+            .unwrap()
+            .goal(),
+        claimed_before_cancellation.occurrence().goal()
+    );
+
     let released = store
         .release_occurrence(
             &id,
-            0,
+            3,
             2,
             RecurrenceOccurrenceRelease::new("caller recovery").unwrap(),
         )
@@ -462,7 +512,7 @@ fn cancellation_blocks_new_mutations_but_preserves_claim_recovery_and_history() 
     assert_eq!(released.latest_release().as_str(), "caller recovery");
     assert!(matches!(
         store
-            .claim_occurrence(&id, 0, released.revision(), instant(10))
+            .claim_occurrence(&id, 3, released.revision(), instant(16))
             .unwrap_err(),
         RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
     ));
@@ -470,25 +520,12 @@ fn cancellation_blocks_new_mutations_but_preserves_claim_recovery_and_history() 
         store
             .materialize_occurrence(
                 &id,
-                0,
+                3,
                 released.revision(),
                 TaskId::new("blocked-released").unwrap(),
             )
             .unwrap_err(),
         RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
-    ));
-
-    let materialized = store
-        .materialize_claimed_occurrence(&id, 0, 2, TaskId::new("claimed-task").unwrap())
-        .unwrap_err();
-    assert!(matches!(
-        materialized,
-        RecurrenceStoreError::OccurrenceConcurrentModification {
-            recurrence_id,
-            offset: 0,
-            expected_revision: 2,
-            current_revision: 3,
-        } if recurrence_id == id
     ));
     let materialized = store
         .materialize_occurrence(&id, 2, 1, TaskId::new("still-blocked").unwrap())
@@ -498,10 +535,11 @@ fn cancellation_blocks_new_mutations_but_preserves_claim_recovery_and_history() 
         RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
     ));
 
-    let released = store.load_released_occurrence(&id, 0).unwrap().unwrap();
+    let released = store.load_released_occurrence(&id, 3).unwrap().unwrap();
+    assert_eq!(released.occurrence().offset(), 3);
     assert_eq!(released.latest_release().as_str(), "caller recovery");
     let persisted = store
-        .persisted_occurrences_page(&id, 0, OccurrencePageSize::new(3).unwrap())
+        .persisted_occurrences_page(&id, 0, OccurrencePageSize::new(4).unwrap())
         .unwrap();
     assert_eq!(
         persisted
@@ -509,10 +547,10 @@ fn cancellation_blocks_new_mutations_but_preserves_claim_recovery_and_history() 
             .iter()
             .map(|occurrence| occurrence.offset())
             .collect::<Vec<_>>(),
-        vec![0, 1, 2]
+        vec![0, 1, 2, 3]
     );
     let available = store
-        .available_occurrences_page(&id, 0, OccurrencePageSize::new(3).unwrap())
+        .available_occurrences_page(&id, 0, OccurrencePageSize::new(4).unwrap())
         .unwrap();
     assert!(available.occurrences().is_empty());
 }
