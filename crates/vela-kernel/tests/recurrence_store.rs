@@ -3233,6 +3233,191 @@ fn persisted_occurrence_pages_fail_closed_only_for_the_selected_window() {
 }
 
 #[test]
+fn pages_sparse_available_occurrences_by_current_lifecycle_and_authored_window() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("sparse-available-page").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Inspect sparse available provenance").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(7).unwrap(),
+        )
+        .unwrap();
+    for offset in [0, 1, 2, 3, 5, 6] {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    for offset in [1, 2, 3, 5] {
+        store.claim_occurrence(&id, offset, 1, instant(22)).unwrap();
+    }
+    store
+        .release_occurrence(
+            &id,
+            2,
+            2,
+            RecurrenceOccurrenceRelease::new("first return").unwrap(),
+        )
+        .unwrap();
+    store.claim_occurrence(&id, 2, 3, instant(22)).unwrap();
+    store
+        .release_occurrence(
+            &id,
+            2,
+            4,
+            RecurrenceOccurrenceRelease::new("latest return").unwrap(),
+        )
+        .unwrap();
+    store
+        .release_occurrence(
+            &id,
+            3,
+            2,
+            RecurrenceOccurrenceRelease::new("materialize three").unwrap(),
+        )
+        .unwrap();
+    store
+        .materialize_occurrence(&id, 3, 3, TaskId::new("task-three").unwrap())
+        .unwrap();
+    store
+        .materialize_claimed_occurrence(&id, 5, 2, TaskId::new("task-five").unwrap())
+        .unwrap();
+    drop(store);
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let first = store
+        .available_occurrences_page(&id, 0, OccurrencePageSize::new(3).unwrap())
+        .unwrap();
+    assert_eq!(
+        first
+            .occurrences()
+            .iter()
+            .map(|available| (
+                available.occurrence().offset(),
+                available.revision(),
+                available.latest_release().map(|reason| reason.as_str()),
+            ))
+            .collect::<Vec<_>>(),
+        vec![(0, 1, None), (2, 5, Some("latest return"))]
+    );
+    assert_eq!(first.next_offset(), Some(3));
+
+    let gap = store
+        .available_occurrences_page(&id, 3, OccurrencePageSize::new(2).unwrap())
+        .unwrap();
+    assert!(gap.occurrences().is_empty());
+    assert_eq!(gap.next_offset(), Some(5));
+
+    let final_page = store
+        .available_occurrences_page(&id, 5, OccurrencePageSize::new(1024).unwrap())
+        .unwrap();
+    assert_eq!(
+        final_page
+            .occurrences()
+            .iter()
+            .map(|available| (available.occurrence().offset(), available.revision()))
+            .collect::<Vec<_>>(),
+        vec![(6, 1)]
+    );
+    assert_eq!(final_page.next_offset(), None);
+}
+
+#[test]
+fn available_occurrence_pages_reject_missing_and_out_of_range_starts() {
+    let directory = tempdir().unwrap();
+    let mut store = RecurrenceStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let missing = RecurrenceId::new("missing-available-page").unwrap();
+    assert!(matches!(
+        store
+            .available_occurrences_page(
+                &missing,
+                0,
+                OccurrencePageSize::new(1).unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::NotFound { recurrence_id } if recurrence_id == missing
+    ));
+
+    let id = RecurrenceId::new("bounded-available-page").unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject invalid available starts").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .available_occurrences_page(&id, 2, OccurrencePageSize::new(1).unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            recurrence_id,
+            requested_offset: 2,
+            ..
+        } if recurrence_id == id
+    ));
+}
+
+#[test]
+fn available_occurrence_pages_fail_closed_only_for_the_selected_window() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("available-page-corruption").unwrap();
+    let unrelated_id = RecurrenceId::new("unrelated-available-page-corruption").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for recurrence_id in [&id, &unrelated_id] {
+        store
+            .create(
+                recurrence_id.clone(),
+                TaskGoal::new(format!("Validate {recurrence_id}")).unwrap(),
+                instant(10),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(4).unwrap(),
+            )
+            .unwrap();
+    }
+    for offset in 0..4 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    store.persist_occurrence(&unrelated_id, 1, 0).unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    for (recurrence_id, offset) in [(&id, 3_u64), (&unrelated_id, 0_u64)] {
+        assert_eq!(
+            connection
+                .execute(
+                    "UPDATE events SET payload_version = 2
+                     WHERE event_type = 'recurrence.occurrence_persisted'
+                       AND json_extract(CAST(payload AS TEXT), '$.recurrence_id') = ?1
+                       AND json_extract(CAST(payload AS TEXT), '$.offset') = ?2",
+                    rusqlite::params![recurrence_id.as_str(), offset],
+                )
+                .unwrap(),
+            1
+        );
+    }
+    drop(connection);
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let isolated = store
+        .available_occurrences_page(&id, 0, OccurrencePageSize::new(3).unwrap())
+        .unwrap();
+    assert_eq!(isolated.occurrences().len(), 3);
+    assert_eq!(isolated.next_offset(), Some(3));
+    assert!(matches!(
+        store
+            .available_occurrences_page(&id, 3, OccurrencePageSize::new(1).unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+}
+
+#[test]
 fn pages_sparse_claimed_occurrences_by_current_lifecycle_and_authored_window() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
