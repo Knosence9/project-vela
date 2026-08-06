@@ -11,12 +11,13 @@ use record::DevelopmentRecord;
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
-    ClaimedRecurrenceOccurrence, ClaimedRecurrenceOccurrencePage, FixedIntervalRecurrence,
-    MaterializedRecurrenceOccurrence, MaterializedRecurrenceOccurrencePage, OccurrenceCount,
-    OccurrencePageSize, RecurrenceId, RecurrenceOccurrence, RecurrenceOccurrenceLookupError,
-    RecurrenceOccurrencePage, RecurrenceOccurrenceRelease, RecurrenceStore, RecurrenceStoreError,
-    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval,
-    ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
+    AvailableRecurrenceOccurrence, AvailableRecurrenceOccurrencePage, ClaimedRecurrenceOccurrence,
+    ClaimedRecurrenceOccurrencePage, FixedIntervalRecurrence, MaterializedRecurrenceOccurrence,
+    MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize, RecurrenceId,
+    RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
+    RecurrenceOccurrenceRelease, RecurrenceStore, RecurrenceStoreError, ScheduleCancellation,
+    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
+    ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -142,6 +143,13 @@ pub enum RecurrenceCommand {
     },
     /// Page current claims for one recurrence through a read-only boundary.
     Claimed {
+        database: PathBuf,
+        id: String,
+        start_offset: u64,
+        page_size: u64,
+    },
+    /// Page currently available occurrences for one recurrence through a read-only boundary.
+    Available {
         database: PathBuf,
         id: String,
         start_offset: u64,
@@ -553,6 +561,15 @@ impl Cli {
             }) => page_claimed_recurrence_occurrences(&database, &id, start_offset, page_size),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::Available {
+                        database,
+                        id,
+                        start_offset,
+                        page_size,
+                    }),
+            }) => page_available_recurrence_occurrences(&database, &id, start_offset, page_size),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::Materialized {
                         database,
                         id,
@@ -708,6 +725,23 @@ struct ClaimedRecurrenceOccurrenceInspection<'a> {
 #[derive(Serialize)]
 struct ClaimedRecurrenceOccurrencePageInspection<'a> {
     occurrences: Vec<ClaimedRecurrenceOccurrenceInspection<'a>>,
+    next_offset: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct AvailableRecurrenceOccurrenceInspection<'a> {
+    recurrence_id: &'a str,
+    goal: &'a str,
+    offset: u64,
+    unix_millis: u64,
+    definition_revision: u64,
+    occurrence_revision: u64,
+    latest_release: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct AvailableRecurrenceOccurrencePageInspection<'a> {
+    occurrences: Vec<AvailableRecurrenceOccurrenceInspection<'a>>,
     next_offset: Option<u64>,
 }
 
@@ -1455,6 +1489,76 @@ fn claimed_recurrence_occurrence_inspection(
         unix_millis: occurrence.instant().unix_millis(),
         definition_revision: occurrence.recurrence_revision(),
         occurrence_revision: claimed.revision(),
+    }
+}
+
+fn page_available_recurrence_occurrences(
+    database: &Path,
+    raw_id: &str,
+    start_offset: u64,
+    raw_page_size: u64,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let page_size = match OccurrencePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_occurrence_page_size", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => {
+            return extension_error("available_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    let page = match store.available_occurrences_page(&id, start_offset, page_size) {
+        Ok(page) => page,
+        Err(error @ RecurrenceStoreError::NotFound { .. }) => {
+            return extension_error("recurrence_not_found", error);
+        }
+        Err(error @ RecurrenceStoreError::OccurrenceOutOfRange { .. }) => {
+            return extension_error("recurrence_occurrence_out_of_range", error);
+        }
+        Err(error) => {
+            return extension_error("available_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    let output = match serialize_available_recurrence_occurrence_page(&page) {
+        Ok(output) => output,
+        Err(error) => {
+            return extension_error("available_recurrence_occurrence_lookup_failed", error);
+        }
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn serialize_available_recurrence_occurrence_page(
+    page: &AvailableRecurrenceOccurrencePage,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&AvailableRecurrenceOccurrencePageInspection {
+        occurrences: page
+            .occurrences()
+            .iter()
+            .map(available_recurrence_occurrence_inspection)
+            .collect(),
+        next_offset: page.next_offset(),
+    })
+}
+
+fn available_recurrence_occurrence_inspection(
+    available: &AvailableRecurrenceOccurrence,
+) -> AvailableRecurrenceOccurrenceInspection<'_> {
+    let occurrence = available.occurrence();
+    AvailableRecurrenceOccurrenceInspection {
+        recurrence_id: occurrence.recurrence_id().as_str(),
+        goal: occurrence.goal().as_str(),
+        offset: occurrence.offset(),
+        unix_millis: occurrence.instant().unix_millis(),
+        definition_revision: occurrence.recurrence_revision(),
+        occurrence_revision: available.revision(),
+        latest_release: available.latest_release().map(|release| release.as_str()),
     }
 }
 

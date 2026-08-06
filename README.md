@@ -647,6 +647,7 @@ The first milestone is the **evidence loop**:
 154. Page current claimed recurrence occurrences through bounded exact-recurrence authored-offset windows without granting global discovery or worker authority. ✅
 155. Page current claimed recurrence occurrences through bounded deterministic CLI JSON without granting global discovery, lifecycle, or execution authority. ✅
 156. Page current available recurrence occurrences with exact revisions and latest recovery evidence through bounded authored-offset windows without granting mutation or worker authority. ✅
+157. Page current available recurrence occurrences through bounded deterministic CLI JSON without granting global discovery, lifecycle, or execution authority. ✅
 
 ## Project documents
 
