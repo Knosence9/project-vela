@@ -25,6 +25,7 @@ const RECURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const RECURRENCE_OCCURRENCE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const RECURRENCE_STREAM_PREFIX: &str = "recurrence:";
 const RECURRENCE_OCCURRENCE_STREAM_PREFIX: &str = "recurrence-occurrence:";
+const CLAIM_NEXT_MAX_ATTEMPTS: usize = 4;
 
 /// An opaque, non-blank identity for one durable schedule intent.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -846,6 +847,10 @@ pub enum RecurrenceStoreError {
         expected_revision: u64,
         current_revision: u64,
     },
+    ClaimNextContentionRetriesExhausted {
+        recurrence_id: RecurrenceId,
+        attempts: usize,
+    },
     OccurrenceNotDue {
         recurrence_id: RecurrenceId,
         offset: u64,
@@ -962,6 +967,13 @@ impl fmt::Display for RecurrenceStoreError {
                 formatter,
                 "recurrence {recurrence_id} occurrence {offset} expected revision {expected_revision}, but current revision is {current_revision}"
             ),
+            Self::ClaimNextContentionRetriesExhausted {
+                recurrence_id,
+                attempts,
+            } => write!(
+                formatter,
+                "recurrence {recurrence_id} claim-next contention exhausted after {attempts} attempts"
+            ),
             Self::OccurrenceNotDue {
                 recurrence_id,
                 offset,
@@ -1054,6 +1066,7 @@ impl Error for RecurrenceStoreError {
             | Self::OccurrenceAlreadyPersisted { .. }
             | Self::OccurrenceNotFound { .. }
             | Self::OccurrenceConcurrentModification { .. }
+            | Self::ClaimNextContentionRetriesExhausted { .. }
             | Self::OccurrenceNotDue { .. }
             | Self::OccurrenceAlreadyClaimed { .. }
             | Self::OccurrenceNotClaimed { .. }
@@ -2228,7 +2241,8 @@ impl RecurrenceStore {
     /// Claims the earliest available due coordinate in one bounded authored window.
     ///
     /// A competing lifecycle transition restarts selection over the same caller-owned
-    /// window. Future available work preserves its authored offset as the resumable cursor.
+    /// window, with contention failing after four conflicted append attempts. Future
+    /// available work preserves its authored offset as the resumable cursor.
     pub fn claim_next_available_occurrence(
         &mut self,
         id: &RecurrenceId,
@@ -2236,6 +2250,24 @@ impl RecurrenceStore {
         page_size: OccurrencePageSize,
         cutoff: ScheduleInstant,
     ) -> Result<ClaimNextRecurrenceOccurrenceSelection, RecurrenceStoreError> {
+        self.claim_next_available_occurrence_before_append(
+            id,
+            start_offset,
+            page_size,
+            cutoff,
+            &mut || {},
+        )
+    }
+
+    fn claim_next_available_occurrence_before_append(
+        &mut self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+        before_append: &mut impl FnMut(),
+    ) -> Result<ClaimNextRecurrenceOccurrenceSelection, RecurrenceStoreError> {
+        let mut attempts = 0;
         loop {
             let recurrence = self
                 .load(id)?
@@ -2298,6 +2330,7 @@ impl RecurrenceStore {
                     .filter(|(stream, _)| stream != &target_stream)
                     .map(|(stream, expected)| (stream, *expected)),
             );
+            before_append();
             match self.event_log.append_if_streams_unchanged(
                 &target_stream,
                 ExpectedVersion::Exact(expected_revision),
@@ -2315,7 +2348,15 @@ impl RecurrenceStore {
                         next_offset,
                     });
                 }
-                Err(EventLogError::WrongExpectedVersion { .. }) => {}
+                Err(EventLogError::WrongExpectedVersion { .. }) => {
+                    attempts += 1;
+                    if attempts >= CLAIM_NEXT_MAX_ATTEMPTS {
+                        return Err(RecurrenceStoreError::ClaimNextContentionRetriesExhausted {
+                            recurrence_id: id.clone(),
+                            attempts,
+                        });
+                    }
+                }
                 Err(error) => return Err(RecurrenceStoreError::EventLog(error)),
             }
         }
@@ -2590,6 +2631,70 @@ mod recurrence_projection_tests {
                 Err(RecurrenceStoreError::InvalidHistory { event_count: 1 })
             ));
         }
+    }
+
+    #[test]
+    fn continuous_window_conflicts_bound_claim_next_retries() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let id = RecurrenceId::new("bounded-claim-next-race").unwrap();
+        let mut store = RecurrenceStore::open(&path).unwrap();
+        store
+            .create(
+                id.clone(),
+                TaskGoal::new("Bound claim-next contention").unwrap(),
+                ScheduleInstant::from_unix_millis(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+        store.persist_occurrence(&id, 1, 0).unwrap();
+        let mut racing_store = RecurrenceStore::open(&path).unwrap();
+        let mut conflicts = 0_u64;
+
+        let result = store.claim_next_available_occurrence_before_append(
+            &id,
+            0,
+            OccurrencePageSize::new(1).unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+            &mut || {
+                let expected_revision = 1 + conflicts * 2;
+                racing_store
+                    .claim_occurrence(
+                        &id,
+                        0,
+                        expected_revision,
+                        ScheduleInstant::from_unix_millis(1),
+                    )
+                    .unwrap();
+                racing_store
+                    .release_occurrence(
+                        &id,
+                        0,
+                        expected_revision + 1,
+                        RecurrenceOccurrenceRelease::new("force claim-next retry").unwrap(),
+                    )
+                    .unwrap();
+                conflicts += 1;
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(RecurrenceStoreError::ClaimNextContentionRetriesExhausted {
+                recurrence_id,
+                attempts: CLAIM_NEXT_MAX_ATTEMPTS,
+            }) if recurrence_id == id
+        ));
+        assert_eq!(conflicts as usize, CLAIM_NEXT_MAX_ATTEMPTS);
+        assert_eq!(
+            store
+                .load_occurrence_state(&id, 0)
+                .unwrap()
+                .unwrap()
+                .revision,
+            1 + (CLAIM_NEXT_MAX_ATTEMPTS as u64 * 2)
+        );
     }
 }
 

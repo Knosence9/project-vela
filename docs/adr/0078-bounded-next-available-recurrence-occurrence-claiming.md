@@ -19,7 +19,7 @@ The earliest available coordinate at or before the inclusive caller-owned cutoff
 
 If the first available coordinate is future, the result contains no claim and preserves that coordinate as `next_offset`, allowing a later cutoff to resume without rescanning earlier gaps. If the complete window has no available coordinate, the result contains no claim and advances to the first uninspected authored offset or finite completion. The cursor is caller-owned projection state and is not persisted.
 
-A wrong expected occurrence version means a competing lifecycle transition became durable after selection; the operation restarts the same bounded selection. Every restart therefore follows persisted progress. Other replay, lifecycle, storage, and read-only failures return unchanged. Strict replay covers the entire selected window before mutation, so selected-window corruption fails closed; unrelated recurrences and out-of-window coordinates cannot block selection.
+A wrong expected occurrence version means a competing lifecycle transition became durable after selection; the operation restarts the same bounded selection. Every restart therefore follows persisted progress, but the fourth conflicted append attempt returns typed contention exhaustion instead of retrying indefinitely. Other replay, lifecycle, storage, and read-only failures return unchanged. Strict replay covers the entire selected window before mutation, so selected-window corruption fails closed; unrelated recurrences and out-of-window coordinates cannot block selection.
 
 The operation reads no ambient clock, performs no cross-recurrence inventory, generates no identity, and grants no worker identity, lease, dispatch, workflow, provider/tool, permission, retry-of-work, or execution authority.
 
@@ -51,7 +51,7 @@ Rejected because no bounded cross-recurrence ordering or cursor contract exists.
 
 ## Verification
 
-RED→GREEN integration tests prove sparse earliest selection, released-revision reuse, future cursor preservation, empty and finite window progress, typed missing and bounds failures, read-only rejection, selected-window corruption isolation, unrelated-corruption isolation, and concurrent callers reserving distinct coordinates. The complete repository quality gate must remain green.
+RED→GREEN tests prove sparse earliest selection, released-revision reuse, future cursor preservation, empty and finite window progress, typed missing and bounds failures, read-only rejection, selected-window corruption isolation, unrelated-corruption isolation, concurrent callers reserving distinct coordinates, and deterministic exhaustion after four continuous conflicts. The complete repository quality gate must remain green.
 
 ## Revisit when
 

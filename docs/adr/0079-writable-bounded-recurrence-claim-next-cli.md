@@ -17,7 +17,7 @@ The adapter validates the exact recurrence identity and positive, at-most-1024 p
 
 Success emits one compact JSON object with `occurrence` and `next_offset`. A claimed result preserves exact recurrence ID, goal, authored offset, instant, definition revision, resulting occurrence revision, and nullable latest release provenance. No eligible coordinate emits `"occurrence":null`; its nullable kernel-owned cursor distinguishes future resumption, window progress, and finite completion.
 
-Invalid identity and page size use `invalid_recurrence_id` and `invalid_occurrence_page_size`. Missing definitions and out-of-range starts use `recurrence_not_found` and `recurrence_occurrence_out_of_range`. Open, strict replay, provenance, contention exhaustion, append, read-only, and serialization failures use `recurrence_occurrence_claim_next_failed`. Every failure returns non-zero and emits no stdout.
+Invalid identity and page size use `invalid_recurrence_id` and `invalid_occurrence_page_size`. Missing definitions and out-of-range starts use `recurrence_not_found` and `recurrence_occurrence_out_of_range`. The kernel restarts selection after a conflicted append but fails closed after four such attempts. Open, strict replay, provenance, contention exhaustion, append, read-only, and serialization failures use `recurrence_occurrence_claim_next_failed`. Every failure returns non-zero and emits no stdout.
 
 The adapter reads no ambient clock, persists no cursor, scans no unrelated recurrence, generates no identity, and grants no worker, lease, expiry, dispatch, retry-of-work, permission, provider/tool, workflow, materialization, or execution authority.
 

@@ -701,9 +701,10 @@ Invalid IDs and page sizes emit `invalid_recurrence_id` and
 `invalid_occurrence_page_size` before storage access. Missing definitions emit
 `recurrence_not_found`; invalid starts emit
 `recurrence_occurrence_out_of_range`. Open, strict replay, selected-window
-corruption, provenance, contention exhaustion, append, read-only, and
-serialization failures emit `recurrence_occurrence_claim_next_failed`. Every
-failure is non-zero with empty stdout.
+corruption, provenance, contention exhaustion after four conflicted append
+attempts, append, read-only, and serialization failures emit
+`recurrence_occurrence_claim_next_failed`. Every failure is non-zero with empty
+stdout.
 
 The command reads no clock, persists no cursor, scans no unrelated recurrence,
 and grants no generated identity, worker identity, lease, expiry, dispatch,
