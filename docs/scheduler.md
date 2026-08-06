@@ -680,6 +680,38 @@ lease, dispatch, workflow, provider/tool, permission, retry, or execution
 authority. See
 [ADR-0077](adr/0077-read-only-available-recurrence-occurrence-cli-paging.md).
 
+## Writable bounded recurrence claim-next CLI
+
+`vela-dev recurrence claim-next DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE
+CUTOFF_UNIX_MILLIS` validates the exact recurrence ID and positive,
+at-most-1024 page size before storage access. It opens only the selected
+database through writable `RecurrenceStore::open`, converts the explicit cutoff
+to an inclusive caller-owned `ScheduleInstant`, and delegates selection, strict
+complete-window replay, optimistic race handling, and claiming to
+`RecurrenceStore::claim_next_available_occurrence`.
+
+Success emits compact JSON with `occurrence` and `next_offset`. A claimed object
+preserves exact `recurrence_id`, `goal`, `offset`, `unix_millis`,
+`definition_revision`, resulting `occurrence_revision`, and nullable
+`latest_release`. A null occurrence retains the kernel's resumable cursor: the
+first future coordinate, the first coordinate after an all-gap or consumed
+window, or `null` at the finite end.
+
+Invalid IDs and page sizes emit `invalid_recurrence_id` and
+`invalid_occurrence_page_size` before storage access. Missing definitions emit
+`recurrence_not_found`; invalid starts emit
+`recurrence_occurrence_out_of_range`. Open, strict replay, selected-window
+corruption, provenance, contention exhaustion after four conflicted append
+attempts, append, read-only, and serialization failures emit
+`recurrence_occurrence_claim_next_failed`. Every failure is non-zero with empty
+stdout.
+
+The command reads no clock, persists no cursor, scans no unrelated recurrence,
+and grants no generated identity, worker identity, lease, expiry, dispatch,
+retry-of-work, workflow, provider/tool, permission, materialization, or execution
+authority. See
+[ADR-0079](adr/0079-writable-bounded-recurrence-claim-next-cli.md).
+
 ## Read-only materialized recurrence occurrence CLI paging
 
 `vela-dev recurrence materialized DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`

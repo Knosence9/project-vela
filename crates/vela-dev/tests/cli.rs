@@ -6523,3 +6523,247 @@ fn recurrence_creation_rejects_overflow_and_preserves_duplicates() {
     assert_eq!(original.interval().millis(), 2);
     assert_eq!(original.occurrence_count().get(), 2);
 }
+
+#[test]
+fn claims_next_available_recurrence_occurrence_as_deterministic_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("next\nid").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("preserve \"next\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(6).unwrap(),
+        )
+        .unwrap();
+    for offset in 1..6 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    store
+        .claim_occurrence(&id, 1, 1, ScheduleInstant::from_unix_millis(15))
+        .unwrap();
+    store
+        .claim_occurrence(&id, 2, 1, ScheduleInstant::from_unix_millis(20))
+        .unwrap();
+    store
+        .release_occurrence(
+            &id,
+            2,
+            2,
+            RecurrenceOccurrenceRelease::new("retry\ncarefully").unwrap(),
+        )
+        .unwrap();
+    store
+        .materialize_occurrence(&id, 3, 1, TaskId::new("occupied").unwrap())
+        .unwrap();
+    drop(store);
+
+    let claim_next = |start: &str, size: &str, cutoff: &str| {
+        let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
+        command.args([
+            "recurrence",
+            "claim-next",
+            database.to_str().unwrap(),
+            id.as_str(),
+            start,
+            size,
+            cutoff,
+        ]);
+        command
+    };
+
+    claim_next("0", "5", "20")
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"occurrence\":{\"recurrence_id\":\"next\\nid\",",
+            "\"goal\":\"preserve \\\"next\\\" goal\",\"offset\":2,",
+            "\"unix_millis\":20,\"definition_revision\":1,",
+            "\"occurrence_revision\":4,\"latest_release\":\"retry\\ncarefully\"},",
+            "\"next_offset\":3}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+    claim_next("0", "5", "25")
+        .assert()
+        .success()
+        .stdout("{\"occurrence\":null,\"next_offset\":4}\n")
+        .stderr(predicate::str::is_empty());
+    claim_next("4", "2", "30")
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(concat!(
+            "\"offset\":4,\"unix_millis\":30,\"definition_revision\":1,",
+            "\"occurrence_revision\":2,\"latest_release\":null},\"next_offset\":5}\n"
+        )))
+        .stderr(predicate::str::is_empty());
+    claim_next("0", "5", "100")
+        .assert()
+        .success()
+        .stdout("{\"occurrence\":null,\"next_offset\":5}\n");
+    claim_next("5", "1", "100")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"offset\":5"));
+    claim_next("0", "6", "100")
+        .assert()
+        .success()
+        .stdout("{\"occurrence\":null,\"next_offset\":null}\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn recurrence_claim_next_validates_before_storage_access_and_categorizes_failures() {
+    let directory = tempdir().expect("recurrence database directory");
+    for (name, id, page_size, expected_error) in [
+        ("invalid-id.sqlite3", "", "1", "invalid_recurrence_id"),
+        (
+            "zero-size.sqlite3",
+            "valid",
+            "0",
+            "invalid_occurrence_page_size",
+        ),
+        (
+            "oversized.sqlite3",
+            "valid",
+            "1025",
+            "invalid_occurrence_page_size",
+        ),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "claim-next",
+                database.to_str().unwrap(),
+                id,
+                "0",
+                page_size,
+                "10",
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+        assert!(!database.exists());
+    }
+
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            RecurrenceId::new("exact").unwrap(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    for (id, start, expected_error) in [
+        ("absent", "0", "recurrence_not_found"),
+        ("exact", "2", "recurrence_occurrence_out_of_range"),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "claim-next",
+                database.to_str().unwrap(),
+                id,
+                start,
+                "1",
+                "10",
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+    }
+}
+
+#[test]
+fn recurrence_claim_next_fails_closed_on_selected_corruption_and_read_only_storage() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    drop(store);
+
+    let claim = || {
+        let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
+        command.args([
+            "recurrence",
+            "claim-next",
+            database.to_str().unwrap(),
+            id.as_str(),
+            "0",
+            "2",
+            "20",
+        ]);
+        command
+    };
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload_version = 2 WHERE event_type = 'recurrence.occurrence_persisted'",
+            [],
+        )
+        .unwrap();
+    claim()
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_claim_next_failed:",
+        ));
+
+    let read_only_database = directory.path().join("read-only.sqlite3");
+    let read_only_id = RecurrenceId::new("read-only").unwrap();
+    let mut store = RecurrenceStore::open(&read_only_database).unwrap();
+    store
+        .create(
+            read_only_id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&read_only_id, 1, 0).unwrap();
+    drop(store);
+    let mut permissions = fs::metadata(&read_only_database).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&read_only_database, permissions).unwrap();
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "claim-next",
+            read_only_database.to_str().unwrap(),
+            read_only_id.as_str(),
+            "0",
+            "1",
+            "10",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_claim_next_failed:",
+        ));
+}

@@ -155,6 +155,14 @@ pub enum RecurrenceCommand {
         start_offset: u64,
         page_size: u64,
     },
+    /// Claim the earliest available due occurrence in one caller-selected window.
+    ClaimNext {
+        database: PathBuf,
+        id: String,
+        start_offset: u64,
+        page_size: u64,
+        cutoff_unix_millis: u64,
+    },
     /// Page materialized task bindings for one recurrence through a read-only boundary.
     Materialized {
         database: PathBuf,
@@ -570,6 +578,22 @@ impl Cli {
             }) => page_available_recurrence_occurrences(&database, &id, start_offset, page_size),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::ClaimNext {
+                        database,
+                        id,
+                        start_offset,
+                        page_size,
+                        cutoff_unix_millis,
+                    }),
+            }) => claim_next_recurrence_occurrence(
+                &database,
+                &id,
+                start_offset,
+                page_size,
+                cutoff_unix_millis,
+            ),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::Materialized {
                         database,
                         id,
@@ -726,6 +750,23 @@ struct ClaimedRecurrenceOccurrenceInspection<'a> {
 struct ClaimedRecurrenceOccurrencePageInspection<'a> {
     occurrences: Vec<ClaimedRecurrenceOccurrenceInspection<'a>>,
     next_offset: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct ClaimNextRecurrenceOccurrenceInspection<'a> {
+    occurrence: Option<ClaimedRecurrenceOccurrenceWithReleaseInspection<'a>>,
+    next_offset: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct ClaimedRecurrenceOccurrenceWithReleaseInspection<'a> {
+    recurrence_id: &'a str,
+    goal: &'a str,
+    offset: u64,
+    unix_millis: u64,
+    definition_revision: u64,
+    occurrence_revision: u64,
+    latest_release: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -1560,6 +1601,66 @@ fn available_recurrence_occurrence_inspection(
         occurrence_revision: available.revision(),
         latest_release: available.latest_release().map(|release| release.as_str()),
     }
+}
+
+fn claim_next_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    start_offset: u64,
+    raw_page_size: u64,
+    cutoff_unix_millis: u64,
+) -> ExitCode {
+    const FAILURE_CODE: &str = "recurrence_occurrence_claim_next_failed";
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let page_size = match OccurrencePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_occurrence_page_size", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error(FAILURE_CODE, error),
+    };
+    let selection = match store.claim_next_available_occurrence(
+        &id,
+        start_offset,
+        page_size,
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+    ) {
+        Ok(selection) => selection,
+        Err(error @ RecurrenceStoreError::NotFound { .. }) => {
+            return extension_error("recurrence_not_found", error);
+        }
+        Err(error @ RecurrenceStoreError::OccurrenceOutOfRange { .. }) => {
+            return extension_error("recurrence_occurrence_out_of_range", error);
+        }
+        Err(error) => return extension_error(FAILURE_CODE, error),
+    };
+    let occurrence = selection.occurrence().map(|claimed| {
+        let occurrence = claimed.occurrence();
+        ClaimedRecurrenceOccurrenceWithReleaseInspection {
+            recurrence_id: occurrence.recurrence_id().as_str(),
+            goal: occurrence.goal().as_str(),
+            offset: occurrence.offset(),
+            unix_millis: occurrence.instant().unix_millis(),
+            definition_revision: occurrence.recurrence_revision(),
+            occurrence_revision: claimed.revision(),
+            latest_release: selection
+                .latest_release()
+                .map(RecurrenceOccurrenceRelease::as_str),
+        }
+    });
+    let output = match serde_json::to_string(&ClaimNextRecurrenceOccurrenceInspection {
+        occurrence,
+        next_offset: selection.next_offset(),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error(FAILURE_CODE, error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn serialize_recurrence_occurrence_page(

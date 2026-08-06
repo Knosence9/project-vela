@@ -339,6 +339,21 @@ storage remains missing, and malformed or ambiguous selected bindings fail
 closed without partial output. Recurrence task lookup cannot read time, mutate,
 enumerate unrelated coordinates, dispatch, or execute work.
 
+Claim the earliest available due coordinate in one exact bounded recurrence
+window:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence claim-next path/to/events.sqlite3 recurrence-id 0 128 1754049600000
+```
+
+The command validates identity and page size before opening writable storage,
+then delegates complete-window selection, race protection, and claiming to the
+kernel. Success emits the claimed occurrence with exact revision and latest
+release provenance plus a resumable `next_offset`, or a null occurrence with a
+future, advancing, or finite-completion cursor. Failures emit no partial stdout.
+The command reads no clock, persists no cursor, scans no unrelated recurrence,
+and grants no worker, lease, dispatch, materialization, or execution authority.
+
 Page complete materialized task bindings for one exact recurrence through a
 bounded read-only authored-offset window:
 
