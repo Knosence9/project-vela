@@ -303,6 +303,67 @@ fn guarded_append_requires_both_stream_versions_to_remain_unchanged() {
 }
 
 #[test]
+fn multi_guarded_append_requires_every_stream_version_to_remain_unchanged() {
+    let directory = tempdir().unwrap();
+    let mut log = EventLog::open(directory.path().join("events.sqlite3")).unwrap();
+    let target = StreamId::new("occurrence:later").unwrap();
+    let earlier = StreamId::new("occurrence:earlier").unwrap();
+    let recurrence = StreamId::new("recurrence:42").unwrap();
+    for (stream, owner) in [
+        (&target, "later"),
+        (&earlier, "earlier"),
+        (&recurrence, "recurrence"),
+    ] {
+        log.append(
+            stream,
+            ExpectedVersion::NoStream,
+            &AccountEvent::Opened {
+                owner: owner.into(),
+            },
+        )
+        .unwrap();
+    }
+    log.append(
+        &earlier,
+        ExpectedVersion::Exact(1),
+        &AccountEvent::Credited { cents: 1 },
+    )
+    .unwrap();
+
+    let error = log
+        .append_if_streams_unchanged(
+            &target,
+            ExpectedVersion::Exact(1),
+            &[
+                (&earlier, ExpectedVersion::Exact(1)),
+                (&recurrence, ExpectedVersion::Exact(1)),
+            ],
+            &AccountEvent::Credited { cents: 2 },
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        EventLogError::WrongExpectedVersion {
+            expected: ExpectedVersion::Exact(1),
+            current: Some(2),
+        }
+    ));
+    assert_eq!(log.replay::<AccountEvent>(&target).unwrap().len(), 1);
+    log.append_if_streams_unchanged(
+        &target,
+        ExpectedVersion::Exact(1),
+        &[
+            (&earlier, ExpectedVersion::Exact(2)),
+            (&recurrence, ExpectedVersion::Exact(1)),
+        ],
+        &AccountEvent::Credited { cents: 2 },
+    )
+    .unwrap();
+    assert_eq!(log.replay::<AccountEvent>(&target).unwrap().len(), 2);
+}
+
+#[test]
 fn rejects_zero_payload_version_without_writing() {
     let directory = tempdir().unwrap();
     let mut log = EventLog::open(directory.path().join("events.sqlite3")).unwrap();

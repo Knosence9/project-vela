@@ -661,6 +661,25 @@ impl ClaimedRecurrenceOccurrence {
     }
 }
 
+/// One bounded selection that may durably reserve the next available due occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimNextRecurrenceOccurrenceSelection {
+    occurrence: Option<ClaimedRecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl ClaimNextRecurrenceOccurrenceSelection {
+    /// Returns the claimed occurrence when the selected window contained eligible work.
+    pub const fn occurrence(&self) -> Option<&ClaimedRecurrenceOccurrence> {
+        self.occurrence.as_ref()
+    }
+
+    /// Returns the next authored coordinate to inspect, or finite completion.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 /// One bounded, inert page of exact currently claimed recurrence occurrences.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClaimedRecurrenceOccurrencePage {
@@ -2198,6 +2217,98 @@ impl RecurrenceStore {
             occurrences,
             next_offset: authored_page.next_offset(),
         })
+    }
+
+    /// Claims the earliest available due coordinate in one bounded authored window.
+    ///
+    /// A competing lifecycle transition restarts selection over the same caller-owned
+    /// window. Future available work preserves its authored offset as the resumable cursor.
+    pub fn claim_next_available_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+    ) -> Result<ClaimNextRecurrenceOccurrenceSelection, RecurrenceStoreError> {
+        loop {
+            let recurrence = self
+                .load(id)?
+                .ok_or_else(|| RecurrenceStoreError::NotFound {
+                    recurrence_id: id.clone(),
+                })?;
+            let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
+            let mut window_versions = Vec::with_capacity(authored_page.occurrences().len());
+            let mut selected = None;
+            for authored in authored_page.occurrences() {
+                let state =
+                    self.load_occurrence_state_with_recurrence(&recurrence, authored.offset())?;
+                window_versions.push((
+                    recurrence_occurrence_stream(id, authored.offset()),
+                    state.as_ref().map_or(ExpectedVersion::NoStream, |state| {
+                        ExpectedVersion::Exact(state.revision)
+                    }),
+                ));
+                if let (None, Some(state)) = (
+                    &selected,
+                    state.filter(|state| !state.claimed && state.task_id.is_none()),
+                ) {
+                    selected = Some(AvailableRecurrenceOccurrence {
+                        occurrence: state.occurrence,
+                        revision: state.revision,
+                        latest_release: state.latest_release,
+                    });
+                }
+            }
+
+            let Some(available) = selected else {
+                return Ok(ClaimNextRecurrenceOccurrenceSelection {
+                    occurrence: None,
+                    next_offset: authored_page.next_offset(),
+                });
+            };
+            if available.occurrence().instant() > cutoff {
+                return Ok(ClaimNextRecurrenceOccurrenceSelection {
+                    occurrence: None,
+                    next_offset: Some(available.occurrence().offset()),
+                });
+            }
+
+            let offset = available.occurrence().offset();
+            let expected_revision = available.revision();
+            let next_offset =
+                (offset + 1 < recurrence.occurrence_count().get()).then_some(offset + 1);
+            let target_stream = recurrence_occurrence_stream(id, offset);
+            let recurrence_stream = recurrence_stream(id);
+            let mut prerequisites = Vec::with_capacity(window_versions.len());
+            prerequisites.push((
+                &recurrence_stream,
+                ExpectedVersion::Exact(recurrence.revision()),
+            ));
+            prerequisites.extend(
+                window_versions
+                    .iter()
+                    .filter(|(stream, _)| stream != &target_stream)
+                    .map(|(stream, expected)| (stream, *expected)),
+            );
+            match self.event_log.append_if_streams_unchanged(
+                &target_stream,
+                ExpectedVersion::Exact(expected_revision),
+                &prerequisites,
+                &RecurrenceOccurrenceEvent::Claimed {},
+            ) {
+                Ok(_) => {
+                    return Ok(ClaimNextRecurrenceOccurrenceSelection {
+                        occurrence: Some(ClaimedRecurrenceOccurrence {
+                            occurrence: available.occurrence,
+                            revision: expected_revision + 1,
+                        }),
+                        next_offset,
+                    });
+                }
+                Err(EventLogError::WrongExpectedVersion { .. }) => {}
+                Err(error) => return Err(RecurrenceStoreError::EventLog(error)),
+            }
+        }
     }
 
     /// Inspects one bounded authored offset window and returns its current claims.
