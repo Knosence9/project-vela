@@ -269,6 +269,25 @@ still exposes the immutable authored definition, while lowercase `status`,
 state from
 [ADR-0082](adr/0082-recurrence-cancellation-with-definition-revision-separation.md).
 
+## Read-only exact recurrence history CLI
+
+`vela-dev recurrence history DATABASE RECURRENCE_ID` validates the exact ID
+before storage access, opens only the caller-selected existing database through
+`RecurrenceStore::open_read_only`, and delegates complete selected-stream replay
+to `RecurrenceStore::history`. Success emits one compact object with the exact
+JSON-escaped `id` and revision-ordered typed `history`. Creation entries preserve
+the exact goal, anchor Unix milliseconds, interval milliseconds, and finite
+occurrence count; cancellation entries preserve the exact caller-authored reason.
+An absent recurrence emits `history: null`.
+
+Invalid IDs emit `invalid_recurrence_id` before storage access. Missing storage,
+schema, selected replay, projection, and serialization failures emit
+`recurrence_history_failed`; failures are non-zero with no partial stdout and
+cannot create missing storage. The command reads no ambient clock, mutates no
+state, scans no unrelated recurrence streams, and grants no undo, resume,
+occurrence lifecycle, worker, dispatch, permission, retry, or execution authority.
+See [ADR-0084](adr/0084-read-only-exact-finite-recurrence-history.md).
+
 ## Read-only exact recurrence occurrence CLI paging
 
 `vela-dev recurrence occurrences DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`
