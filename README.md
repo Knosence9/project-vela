@@ -325,6 +325,21 @@ emits `task_id` plus either the complete deterministic schedule object or
 closed without partial output. Task lookup cannot mutate lifecycle state,
 dispatch, or execute work.
 
+Cancel one exact finite recurrence aggregate revision with caller-authored
+withdrawal evidence:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence cancel path/to/events.sqlite3 recurrence-id 1 "operator request"
+```
+
+The command validates the exact identity and non-blank reason before writable
+storage access, then emits the complete recurrence projection with immutable
+definition revision, incremented aggregate revision, `cancelled` status, and
+exact escaped cancellation evidence. Missing, stale, already-cancelled, corrupt,
+or storage failures emit no stdout and append nothing. Cancellation withdraws
+future eligibility without erasing authored or historical occurrence evidence,
+interrupting existing claims, reading time, dispatching, or executing work.
+
 Resolve the exact materialized recurrence occurrence bound to one caller-owned
 task identity:
 
@@ -686,6 +701,8 @@ The first milestone is the **evidence loop**:
 155. Page current claimed recurrence occurrences through bounded deterministic CLI JSON without granting global discovery, lifecycle, or execution authority. ✅
 156. Page current available recurrence occurrences with exact revisions and latest recovery evidence through bounded authored-offset windows without granting mutation or worker authority. ✅
 157. Page current available recurrence occurrences through bounded deterministic CLI JSON without granting global discovery, lifecycle, or execution authority. ✅
+158. Durably cancel one finite recurrence aggregate revision while preserving immutable authored and historical occurrence evidence. ✅
+159. Cancel one exact finite recurrence revision through deterministic writable CLI JSON without granting interruption, dispatch, or execution authority. ✅
 
 ## Project documents
 

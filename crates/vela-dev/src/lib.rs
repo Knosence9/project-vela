@@ -13,11 +13,11 @@ use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection}
 use vela_kernel::scheduler::{
     AvailableRecurrenceOccurrence, AvailableRecurrenceOccurrencePage, ClaimedRecurrenceOccurrence,
     ClaimedRecurrenceOccurrencePage, FixedIntervalRecurrence, MaterializedRecurrenceOccurrence,
-    MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize, RecurrenceId,
-    RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
-    RecurrenceOccurrenceRelease, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
-    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval,
-    ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
+    MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize,
+    RecurrenceCancellation, RecurrenceId, RecurrenceOccurrence, RecurrenceOccurrenceLookupError,
+    RecurrenceOccurrencePage, RecurrenceOccurrenceRelease, RecurrenceStatus, RecurrenceStore,
+    RecurrenceStoreError, ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant,
+    ScheduleInterval, ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -73,6 +73,13 @@ pub enum RecurrenceCommand {
         anchor_unix_millis: u64,
         interval_millis: u64,
         occurrence_count: u64,
+    },
+    /// Cancel one exact recurrence aggregate revision.
+    Cancel {
+        database: PathBuf,
+        id: String,
+        expected_revision: u64,
+        reason: String,
     },
     /// Print one finite recurrence selected by exact ID through a read-only boundary.
     Get { database: PathBuf, id: String },
@@ -444,6 +451,15 @@ impl Cli {
                 interval_millis,
                 occurrence_count,
             ),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::Cancel {
+                        database,
+                        id,
+                        expected_revision,
+                        reason,
+                    }),
+            }) => cancel_recurrence(&database, &id, expected_revision, &reason),
             Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Get { database, id }),
             }) => get_recurrence(&database, &id),
@@ -1264,6 +1280,36 @@ fn create_recurrence(
     let output = match serde_json::to_string(&recurrence_inspection(&recurrence)) {
         Ok(output) => output,
         Err(error) => return extension_error("recurrence_creation_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn cancel_recurrence(
+    database: &Path,
+    raw_id: &str,
+    expected_revision: u64,
+    raw_reason: &str,
+) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let cancellation = match RecurrenceCancellation::new(raw_reason) {
+        Ok(cancellation) => cancellation,
+        Err(error) => return extension_error("invalid_recurrence_cancellation", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_cancellation_failed", error),
+    };
+    let recurrence = match store.cancel(&id, expected_revision, cancellation) {
+        Ok(recurrence) => recurrence,
+        Err(error) => return extension_error("recurrence_cancellation_failed", error),
+    };
+    let output = match serde_json::to_string(&recurrence_inspection(&recurrence)) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_cancellation_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS

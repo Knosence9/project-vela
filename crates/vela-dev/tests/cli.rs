@@ -6483,6 +6483,193 @@ fn creates_one_finite_recurrence_as_deterministic_complete_json() {
 }
 
 #[test]
+fn cancels_one_finite_recurrence_at_the_exact_revision() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact\nid").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("preserve \"exact\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "cancel",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+            "1",
+            "operator\t\"request\"",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",",
+            "\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,\"status\":\"cancelled\",",
+            "\"final_occurrence_unix_millis\":20,\"definition_revision\":1,",
+            "\"aggregate_revision\":2,\"cancellation\":\"operator\\t\\\"request\\\"\"}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let store = RecurrenceStore::open_read_only(&database).expect("read-only recurrence store");
+    let recurrence = store.load(&id).unwrap().expect("cancelled recurrence");
+    assert_eq!(recurrence.definition_revision(), 1);
+    assert_eq!(recurrence.revision(), 2);
+    assert_eq!(
+        recurrence.cancellation().unwrap().as_str(),
+        "operator\t\"request\""
+    );
+}
+
+#[test]
+fn recurrence_cancellation_rejects_missing_stale_and_cancelled_intent_without_append() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("recurrence").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    for (selected_id, revision) in [(id.as_str(), "0"), ("missing", "1")] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "cancel",
+                database.to_str().expect("UTF-8 database path"),
+                selected_id,
+                revision,
+                "operator request",
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: recurrence_cancellation_failed:",
+            ));
+    }
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "cancel",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+            "1",
+            "operator request",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "cancel",
+            database.to_str().expect("UTF-8 database path"),
+            id.as_str(),
+            "2",
+            "second request",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_cancellation_failed:",
+        ));
+
+    let store = RecurrenceStore::open_read_only(&database).expect("read-only recurrence store");
+    let recurrence = store.load(&id).unwrap().expect("cancelled recurrence");
+    assert_eq!(recurrence.revision(), 2);
+    assert_eq!(
+        recurrence.cancellation().unwrap().as_str(),
+        "operator request"
+    );
+}
+
+#[test]
+fn recurrence_cancellation_validates_before_storage_and_reports_storage_failures() {
+    let directory = tempdir().expect("recurrence database directory");
+
+    let invalid_revision = directory.path().join("invalid-revision.sqlite3");
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "cancel",
+            invalid_revision.to_str().expect("UTF-8 database path"),
+            "id",
+            "not-a-revision",
+            "reason",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid value 'not-a-revision'"));
+    assert!(!invalid_revision.exists());
+
+    for (name, id, reason, expected_error) in [
+        ("invalid-id.sqlite3", " ", "reason", "invalid_recurrence_id"),
+        (
+            "invalid-reason.sqlite3",
+            "id",
+            "\t",
+            "invalid_recurrence_cancellation",
+        ),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "cancel",
+                database.to_str().expect("UTF-8 database path"),
+                id,
+                "1",
+                reason,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+        assert!(!database.exists());
+    }
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "cancel",
+            directory.path().to_str().expect("UTF-8 database path"),
+            "id",
+            "1",
+            "reason",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_cancellation_failed:",
+        ));
+}
+
+#[test]
 fn recurrence_creation_validates_before_opening_storage() {
     let directory = tempdir().expect("recurrence database directory");
 
