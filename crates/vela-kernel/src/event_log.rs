@@ -368,6 +368,65 @@ impl EventLog {
         )
     }
 
+    /// Appends only while the target and every prerequisite stream remain unchanged.
+    pub fn append_if_streams_unchanged<E: Event>(
+        &mut self,
+        stream: &StreamId,
+        expected: ExpectedVersion,
+        prerequisites: &[(&StreamId, ExpectedVersion)],
+        event: &E,
+    ) -> Result<u64, EventLogError> {
+        if matches!(expected, ExpectedVersion::Exact(0))
+            || prerequisites
+                .iter()
+                .any(|(_, expected)| matches!(expected, ExpectedVersion::Exact(0)))
+        {
+            return Err(EventLogError::InvalidExpectedVersion(0));
+        }
+        let event_type = event.event_type();
+        if event_type.is_empty() {
+            return Err(EventLogError::InvalidEventType);
+        }
+        let payload_version = event.payload_version();
+        if payload_version == 0 {
+            return Err(EventLogError::InvalidPayloadVersion(payload_version));
+        }
+        let payload = serde_json::to_vec(event)?;
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = current_stream_version(&transaction, stream)?;
+        if !expected_version_matches(expected, current) {
+            return Err(EventLogError::WrongExpectedVersion { expected, current });
+        }
+        for (prerequisite, prerequisite_expected) in prerequisites {
+            let current = current_stream_version(&transaction, prerequisite)?;
+            if !expected_version_matches(*prerequisite_expected, current) {
+                return Err(EventLogError::WrongExpectedVersion {
+                    expected: *prerequisite_expected,
+                    current,
+                });
+            }
+        }
+
+        let (version, stored_version) = next_stream_version(current)?;
+        transaction.execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                stream.as_str(),
+                stored_version,
+                event_type,
+                payload_version,
+                payload
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(version)
+    }
+
     /// Atomically appends one event to each of two distinct streams.
     pub(crate) fn append_pair<E1: Event, E2: Event>(
         &mut self,
