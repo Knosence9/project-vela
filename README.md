@@ -365,7 +365,8 @@ The command validates recurrence identity, page size, and task identity before
 opening writable storage, then delegates bounded selection, race protection,
 and the atomic occurrence/task transition to the kernel. Success emits the
 complete materialized binding and resumable `next_offset`, or a null occurrence
-for future, consumed, and finite windows. Failures emit no stdout and cannot
+that advances `next_offset` across an all-gap or consumed window and retains it
+for future and finite windows. Failures emit no stdout and cannot
 leave an orphan task. The command reads no clock, persists no cursor, generates
 no identity, scans no unrelated recurrence, and cannot dispatch or execute work.
 

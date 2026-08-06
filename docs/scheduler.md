@@ -726,11 +726,12 @@ the atomic occurrence/task write to
 Success emits compact JSON with `occurrence` and `next_offset`. A materialized
 object preserves exact `recurrence_id`, `goal`, `offset`, `unix_millis`,
 `definition_revision`, resulting `occurrence_revision`, and `task_id`. A null
-occurrence retains the kernel cursor for a future horizon, consumed window, or
-finite completion.
+occurrence advances the kernel cursor across an all-gap or consumed window and
+retains it for a future horizon or finite completion.
 
-Invalid IDs and page sizes fail before storage access. Missing definitions and
-invalid starts retain their typed diagnostics. Open, replay, selected
+`invalid_recurrence_id`, `invalid_occurrence_page_size`, and `invalid_task_id`
+fail before storage access. Missing definitions and invalid starts retain their
+typed diagnostics. Open, replay, selected
 corruption, task collision, contention exhaustion, append, read-only, and
 serialization failures emit `recurrence_occurrence_materialize_next_failed`
 with non-zero status and empty stdout. Failures leave no partial occurrence/task
