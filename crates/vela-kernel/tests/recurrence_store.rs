@@ -3418,6 +3418,296 @@ fn available_occurrence_pages_fail_closed_only_for_the_selected_window() {
 }
 
 #[test]
+fn claims_next_available_due_occurrence_with_bounded_resumable_selection() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("claim-next-available").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Claim bounded recurrence work").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(7).unwrap(),
+        )
+        .unwrap();
+    for offset in [0, 1, 2, 4, 5, 6] {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    store.claim_occurrence(&id, 0, 1, instant(10)).unwrap();
+    store.claim_occurrence(&id, 1, 1, instant(12)).unwrap();
+    store
+        .release_occurrence(
+            &id,
+            1,
+            2,
+            RecurrenceOccurrenceRelease::new("retry one").unwrap(),
+        )
+        .unwrap();
+    store
+        .materialize_occurrence(&id, 2, 1, TaskId::new("task-two").unwrap())
+        .unwrap();
+
+    let selected = store
+        .claim_next_available_occurrence(&id, 0, OccurrencePageSize::new(5).unwrap(), instant(18))
+        .unwrap();
+    let claimed = selected.occurrence().unwrap();
+    assert_eq!(claimed.occurrence().offset(), 1);
+    assert_eq!(claimed.revision(), 4);
+    assert_eq!(selected.next_offset(), Some(2));
+
+    let next = store
+        .claim_next_available_occurrence(
+            &id,
+            selected.next_offset().unwrap(),
+            OccurrencePageSize::new(3).unwrap(),
+            instant(18),
+        )
+        .unwrap();
+    assert_eq!(next.occurrence().unwrap().occurrence().offset(), 4);
+    assert_eq!(next.next_offset(), Some(5));
+
+    let future = store
+        .claim_next_available_occurrence(
+            &id,
+            next.next_offset().unwrap(),
+            OccurrencePageSize::new(2).unwrap(),
+            instant(19),
+        )
+        .unwrap();
+    assert_eq!(future.occurrence(), None);
+    assert_eq!(future.next_offset(), Some(5));
+
+    let final_claim = store
+        .claim_next_available_occurrence(
+            &id,
+            future.next_offset().unwrap(),
+            OccurrencePageSize::new(2).unwrap(),
+            instant(22),
+        )
+        .unwrap();
+    assert_eq!(final_claim.occurrence().unwrap().occurrence().offset(), 5);
+    assert_eq!(final_claim.next_offset(), Some(6));
+}
+
+#[test]
+fn claim_next_available_advances_all_gap_windows_and_rejects_invalid_starts() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("claim-next-gaps").unwrap();
+    let missing = RecurrenceId::new("missing-claim-next").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Advance bounded gaps").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+
+    let gap = store
+        .claim_next_available_occurrence(
+            &id,
+            0,
+            OccurrencePageSize::new(2).unwrap(),
+            instant(u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(gap.occurrence(), None);
+    assert_eq!(gap.next_offset(), Some(2));
+
+    let final_gap = store
+        .claim_next_available_occurrence(
+            &id,
+            2,
+            OccurrencePageSize::new(2).unwrap(),
+            instant(u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(final_gap.occurrence(), None);
+    assert_eq!(final_gap.next_offset(), None);
+
+    assert!(matches!(
+        store
+            .claim_next_available_occurrence(
+                &missing,
+                0,
+                OccurrencePageSize::new(1).unwrap(),
+                instant(1),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::NotFound { recurrence_id } if recurrence_id == missing
+    ));
+    assert!(matches!(
+        store
+            .claim_next_available_occurrence(
+                &id,
+                3,
+                OccurrencePageSize::new(1).unwrap(),
+                instant(3),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            requested_offset: 3,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn concurrent_claim_next_callers_reserve_distinct_available_coordinates() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("concurrent-claim-next").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Claim concurrently").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    for offset in 0..2 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    drop(store);
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            let id = id.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut store = RecurrenceStore::open(path).unwrap();
+                barrier.wait();
+                store
+                    .claim_next_available_occurrence(
+                        &id,
+                        0,
+                        OccurrencePageSize::new(2).unwrap(),
+                        instant(2),
+                    )
+                    .unwrap()
+                    .occurrence()
+                    .unwrap()
+                    .occurrence()
+                    .offset()
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut offsets = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    offsets.sort_unstable();
+    assert_eq!(offsets, vec![0, 1]);
+}
+
+#[test]
+fn claim_next_available_isolates_corruption_and_fails_closed_when_selected() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("claim-next-corruption").unwrap();
+    let unrelated_id = RecurrenceId::new("unrelated-claim-next-corruption").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for recurrence_id in [&id, &unrelated_id] {
+        store
+            .create(
+                recurrence_id.clone(),
+                TaskGoal::new(format!("Validate {recurrence_id}")).unwrap(),
+                instant(10),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(4).unwrap(),
+            )
+            .unwrap();
+    }
+    for offset in 0..4 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    store.persist_occurrence(&unrelated_id, 1, 0).unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    for (recurrence_id, offset) in [(&id, 3_u64), (&unrelated_id, 0_u64)] {
+        assert_eq!(
+            connection
+                .execute(
+                    "UPDATE events SET payload_version = 2
+                     WHERE event_type = 'recurrence.occurrence_persisted'
+                       AND json_extract(CAST(payload AS TEXT), '$.recurrence_id') = ?1
+                       AND json_extract(CAST(payload AS TEXT), '$.offset') = ?2",
+                    rusqlite::params![recurrence_id.as_str(), offset],
+                )
+                .unwrap(),
+            1
+        );
+    }
+    drop(connection);
+
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let isolated = store
+        .claim_next_available_occurrence(&id, 0, OccurrencePageSize::new(3).unwrap(), instant(12))
+        .unwrap();
+    assert_eq!(isolated.occurrence().unwrap().occurrence().offset(), 0);
+    assert!(matches!(
+        store
+            .claim_next_available_occurrence(
+                &id,
+                3,
+                OccurrencePageSize::new(1).unwrap(),
+                instant(13),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+}
+
+#[test]
+fn read_only_store_cannot_claim_next_available_occurrence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("read-only-claim-next").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject read-only claiming").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    drop(store);
+
+    let mut read_only = RecurrenceStore::open_read_only(&path).unwrap();
+    assert!(matches!(
+        read_only
+            .claim_next_available_occurrence(
+                &id,
+                0,
+                OccurrencePageSize::new(1).unwrap(),
+                instant(1),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::EventLog(_)
+    ));
+    assert!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .load_claimed_occurrence(&id, 0)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn pages_sparse_claimed_occurrences_by_current_lifecycle_and_authored_window() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");

@@ -661,6 +661,25 @@ impl ClaimedRecurrenceOccurrence {
     }
 }
 
+/// One bounded selection that may durably reserve the next available due occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimNextRecurrenceOccurrenceSelection {
+    occurrence: Option<ClaimedRecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl ClaimNextRecurrenceOccurrenceSelection {
+    /// Returns the claimed occurrence when the selected window contained eligible work.
+    pub const fn occurrence(&self) -> Option<&ClaimedRecurrenceOccurrence> {
+        self.occurrence.as_ref()
+    }
+
+    /// Returns the next authored coordinate to inspect, or finite completion.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 /// One bounded, inert page of exact currently claimed recurrence occurrences.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClaimedRecurrenceOccurrencePage {
@@ -2198,6 +2217,54 @@ impl RecurrenceStore {
             occurrences,
             next_offset: authored_page.next_offset(),
         })
+    }
+
+    /// Claims the earliest available due coordinate in one bounded authored window.
+    ///
+    /// A competing lifecycle transition restarts selection over the same caller-owned
+    /// window. Future available work preserves its authored offset as the resumable cursor.
+    pub fn claim_next_available_occurrence(
+        &mut self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+        cutoff: ScheduleInstant,
+    ) -> Result<ClaimNextRecurrenceOccurrenceSelection, RecurrenceStoreError> {
+        loop {
+            let page = self.available_occurrences_page(id, start_offset, page_size)?;
+            let Some(available) = page.occurrences().first() else {
+                return Ok(ClaimNextRecurrenceOccurrenceSelection {
+                    occurrence: None,
+                    next_offset: page.next_offset(),
+                });
+            };
+            if available.occurrence().instant() > cutoff {
+                return Ok(ClaimNextRecurrenceOccurrenceSelection {
+                    occurrence: None,
+                    next_offset: Some(available.occurrence().offset()),
+                });
+            }
+
+            let offset = available.occurrence().offset();
+            let expected_revision = available.revision();
+            let recurrence = self
+                .load(id)?
+                .ok_or_else(|| RecurrenceStoreError::NotFound {
+                    recurrence_id: id.clone(),
+                })?;
+            let next_offset =
+                (offset + 1 < recurrence.occurrence_count().get()).then_some(offset + 1);
+            match self.claim_occurrence(id, offset, expected_revision, cutoff) {
+                Ok(claimed) => {
+                    return Ok(ClaimNextRecurrenceOccurrenceSelection {
+                        occurrence: Some(claimed),
+                        next_offset,
+                    });
+                }
+                Err(RecurrenceStoreError::OccurrenceConcurrentModification { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Inspects one bounded authored offset window and returns its current claims.

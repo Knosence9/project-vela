@@ -1,0 +1,58 @@
+# ADR-0078: Bounded next-available recurrence occurrence claiming
+
+- **Status:** accepted
+- **Date:** 2026-08-06
+- **Decision and execution issue:** [#951](https://github.com/Knosence9/project-vela/issues/951)
+- **Related:** ADR-0048, ADR-0068, ADR-0069, ADR-0076, ADR-0077
+
+## Context
+
+ADR-0076 and ADR-0077 expose bounded exact-recurrence availability with the current revisions required by exact claiming. A caller can page that evidence and then claim one coordinate, but selection and mutation remain separate calls. Competing callers can consume the selected revision between those calls and force every client to recreate lifecycle-aware retry behavior.
+
+The one-shot scheduler already establishes that a claim-next boundary may retry only after a persisted competing transition. Recurrence selection additionally needs an explicit authored-offset window so sparse provenance remains allocation-bounded and cannot become global discovery.
+
+## Decision
+
+Add `RecurrenceStore::claim_next_available_occurrence(id, start_offset, page_size, cutoff)`. The operation strictly loads one exact recurrence and inspects at most `OccurrencePageSize` authored coordinates using the accepted available-page lifecycle projection. Missing, currently claimed, and materialized coordinates are skipped. Persisted-only and explicitly released coordinates are eligible at their exact current revisions.
+
+The earliest available coordinate at or before the inclusive caller-owned cutoff is claimed. Success returns `ClaimNextRecurrenceOccurrenceSelection` containing complete `ClaimedRecurrenceOccurrence` evidence and the following authored offset, or finite completion when the claim consumed the definition's final coordinate.
+
+If the first available coordinate is future, the result contains no claim and preserves that coordinate as `next_offset`, allowing a later cutoff to resume without rescanning earlier gaps. If the complete window has no available coordinate, the result contains no claim and advances to the first uninspected authored offset or finite completion. The cursor is caller-owned projection state and is not persisted.
+
+A wrong expected occurrence version means a competing lifecycle transition became durable after selection; the operation restarts the same bounded selection. Every restart therefore follows persisted progress. Other replay, lifecycle, storage, and read-only failures return unchanged. Strict replay covers the entire selected window before mutation, so selected-window corruption fails closed; unrelated recurrences and out-of-window coordinates cannot block selection.
+
+The operation reads no ambient clock, performs no cross-recurrence inventory, generates no identity, and grants no worker identity, lease, dispatch, workflow, provider/tool, permission, retry-of-work, or execution authority.
+
+## Alternatives considered
+
+### Require callers to compose available paging and exact claiming
+
+Rejected because each caller would need to reproduce optimistic retry and could accidentally change ordering, bounds, future-horizon cursors, or corruption handling.
+
+### Scan every persisted coordinate until a claim succeeds
+
+Rejected because sparse recurrence provenance can be arbitrarily large. The caller-selected page size and authored start are required allocation and work bounds.
+
+### Claim the earliest coordinate regardless of its due instant
+
+Rejected because availability is lifecycle state, not temporal authority. The inclusive caller-owned cutoff remains explicit and the kernel does not read a clock.
+
+### Select across all recurrence definitions
+
+Rejected because no bounded cross-recurrence ordering or cursor contract exists. Global discovery also expands corruption and authority scope.
+
+## Consequences
+
+- Callers can reserve one deterministic due coordinate without implementing lifecycle-race retries.
+- Released coordinates remain eligible at their exact latest revision; current claims and materializations are skipped.
+- Empty windows and future horizons have distinct resumable cursor semantics.
+- Contention can move selection to a later available coordinate, but cannot escape the original exact recurrence or authored window.
+- Cross-recurrence claim-next, durable cursors, workers, leases, dispatch, retries, and execution remain deferred.
+
+## Verification
+
+RED→GREEN integration tests prove sparse earliest selection, released-revision reuse, future cursor preservation, empty and finite window progress, typed missing and bounds failures, read-only rejection, selected-window corruption isolation, unrelated-corruption isolation, and concurrent callers reserving distinct coordinates. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider before adding a CLI adapter, cross-recurrence selection, durable cursors, generated task identity, worker ownership, leases or expiry, ambient clocks, dispatch, retries, permissions, or execution.
