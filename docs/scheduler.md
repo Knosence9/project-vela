@@ -1,6 +1,6 @@
 # Durable task schedules and finite recurrence definitions
 
-The `vela-kernel` crate provides inert scheduler boundaries: callers can persist one-shot task intent, query which one-shot intents are due, persist finite fixed-interval recurrence definitions through the kernel or CLI, inspect those definitions, project exact recurrence occurrences individually, through bounded pages, or through one caller-owned due cutoff, explicitly select the latest due occurrence as a read-only catch-up policy, persist exact occurrence provenance individually, as one atomic bounded due page, or as one atomically selected latest-due coordinate, durably claim and explicitly release one exact persisted due coordinate, atomically materialize either that latest-due selection, one bounded due page, or the next available coordinate in one bounded recurrence window as a caller-identified inert task, inspect persisted provenance, page sparse persisted provenance, current availability, current claims, and materialized task bindings through bounded authored-offset windows, atomically bind one exact available occurrence to a caller-owned inert task through the kernel or CLI, and resolve that exact provenance from the bound task identity. These boundaries record, inspect, select, claim, release, or materialize intent only; they do not read a clock, dispatch work, or execute it.
+The `vela-kernel` crate provides inert scheduler boundaries: callers can persist one-shot task intent, query which one-shot intents are due, persist and cancel finite fixed-interval recurrence definitions through the kernel or CLI, inspect those definitions, project exact recurrence occurrences individually, through bounded pages, or through one caller-owned due cutoff, explicitly select the latest due occurrence as a read-only catch-up policy, persist exact occurrence provenance individually, as one atomic bounded due page, or as one atomically selected latest-due coordinate, durably claim and explicitly release one exact persisted due coordinate, atomically materialize either that latest-due selection, one bounded due page, or the next available coordinate in one bounded recurrence window as a caller-identified inert task, inspect persisted provenance, page sparse persisted provenance, current availability, current claims, and materialized task bindings through bounded authored-offset windows, atomically bind one exact available occurrence to a caller-owned inert task through the kernel or CLI, and resolve that exact provenance from the bound task identity. These boundaries record, cancel, inspect, select, claim, release, or materialize intent only; they do not read a clock, dispatch work, or execute it.
 
 ## Observable contract
 
@@ -216,6 +216,29 @@ The command reads no ambient time, generates no identities, persists no
 occurrence lifecycle, and cannot choose catch-up policy, materialize, claim,
 cancel, dispatch, retry, grant permission, or execute work. See
 [ADR-0042](adr/0042-writable-finite-recurrence-cli-creation.md).
+
+## Writable recurrence cancellation CLI
+
+`vela-dev recurrence cancel DATABASE RECURRENCE_ID EXPECTED_REVISION REASON`
+validates the exact caller-owned recurrence ID and one non-blank cancellation
+reason before storage access; clap parses the caller-observed aggregate revision
+as a non-negative `u64`. It opens only the selected writable recurrence store and
+delegates exact optimistic concurrency, lifecycle validation, and append to
+`RecurrenceStore::cancel`.
+
+Success emits the complete compact recurrence object with immutable
+`definition_revision`, incremented `aggregate_revision`, lowercase `cancelled`
+status, and exact cancellation evidence. Invalid inputs emit
+`invalid_recurrence_id` or `invalid_recurrence_cancellation` before storage
+access. Missing, stale, already-cancelled, corrupt, open, replay, append, and
+serialization failures emit `recurrence_cancellation_failed`, return non-zero,
+and emit no stdout. Rejected operations append no cancellation evidence.
+
+The command prospectively withdraws future recurrence eligibility without
+erasing authored definitions or historical occurrence evidence. It does not
+interrupt existing claims, read a clock, generate identity, dispatch, retry,
+grant permission, or execute work. See
+[ADR-0083](adr/0083-writable-finite-recurrence-cancellation-cli.md).
 
 ## Read-only exact recurrence CLI lookup
 
