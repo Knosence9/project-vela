@@ -617,6 +617,36 @@ inventory, and cannot choose catch-up policy, generate identity, materialize,
 claim, cancel, dispatch, retry, grant permission, or execute work. See
 [ADR-0049](adr/0049-read-only-persisted-recurrence-occurrence-cli-paging.md).
 
+## Read-only claimed recurrence occurrence CLI paging
+
+`vela-dev recurrence claimed DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`
+validates the exact recurrence ID and positive, at-most-1024 page size before
+storage access. It opens only the selected existing database through
+`RecurrenceStore::open_read_only` and delegates the bounded authored-offset
+window to `RecurrenceStore::claimed_occurrences_page`.
+
+Success emits complete current claims in ascending offset order. Each object
+preserves exact `recurrence_id`, `goal`, `offset`, `unix_millis`,
+`definition_revision`, and `occurrence_revision`. Missing, persisted-only,
+released, and materialized coordinates are omitted; `next_offset` still
+advances by every inspected authored coordinate and is `null` at the finite
+end.
+
+Invalid IDs and page sizes emit `invalid_recurrence_id` and
+`invalid_occurrence_page_size` before storage access. Missing definitions emit
+`recurrence_not_found`; invalid starts emit
+`recurrence_occurrence_out_of_range`. Open, strict selected-window replay,
+provenance, paging, and serialization failures emit
+`claimed_recurrence_occurrence_lookup_failed` with non-zero status and no
+stdout. Missing storage remains missing, and unrelated or out-of-window
+corruption cannot block the selected page.
+
+The command reads no clock, mutates nothing, persists no cursor, and grants no
+global inventory, claim-next selection, generated identity, worker identity,
+lease, dispatch, workflow, provider/tool, permission, retry, or execution
+authority. See
+[ADR-0075](adr/0075-read-only-claimed-recurrence-occurrence-cli-paging.md).
+
 ## Read-only materialized recurrence occurrence CLI paging
 
 `vela-dev recurrence materialized DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`
