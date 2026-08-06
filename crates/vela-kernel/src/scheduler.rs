@@ -665,6 +665,7 @@ impl ClaimedRecurrenceOccurrence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClaimNextRecurrenceOccurrenceSelection {
     occurrence: Option<ClaimedRecurrenceOccurrence>,
+    latest_release: Option<RecurrenceOccurrenceRelease>,
     next_offset: Option<u64>,
 }
 
@@ -672,6 +673,11 @@ impl ClaimNextRecurrenceOccurrenceSelection {
     /// Returns the claimed occurrence when the selected window contained eligible work.
     pub const fn occurrence(&self) -> Option<&ClaimedRecurrenceOccurrence> {
         self.occurrence.as_ref()
+    }
+
+    /// Returns the selected coordinate's latest release evidence, when it was reclaimed.
+    pub const fn latest_release(&self) -> Option<&RecurrenceOccurrenceRelease> {
+        self.latest_release.as_ref()
     }
 
     /// Returns the next authored coordinate to inspect, or finite completion.
@@ -2263,12 +2269,14 @@ impl RecurrenceStore {
             let Some(available) = selected else {
                 return Ok(ClaimNextRecurrenceOccurrenceSelection {
                     occurrence: None,
+                    latest_release: None,
                     next_offset: authored_page.next_offset(),
                 });
             };
             if available.occurrence().instant() > cutoff {
                 return Ok(ClaimNextRecurrenceOccurrenceSelection {
                     occurrence: None,
+                    latest_release: None,
                     next_offset: Some(available.occurrence().offset()),
                 });
             }
@@ -2297,11 +2305,13 @@ impl RecurrenceStore {
                 &RecurrenceOccurrenceEvent::Claimed {},
             ) {
                 Ok(_) => {
+                    let latest_release = available.latest_release;
                     return Ok(ClaimNextRecurrenceOccurrenceSelection {
                         occurrence: Some(ClaimedRecurrenceOccurrence {
                             occurrence: available.occurrence,
                             revision: expected_revision + 1,
                         }),
+                        latest_release,
                         next_offset,
                     });
                 }
