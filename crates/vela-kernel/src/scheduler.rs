@@ -603,6 +603,47 @@ impl RecurrenceOccurrence {
     }
 }
 
+/// One exact persisted recurrence occurrence currently available for claiming or materialization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AvailableRecurrenceOccurrence {
+    occurrence: RecurrenceOccurrence,
+    revision: u64,
+    latest_release: Option<RecurrenceOccurrenceRelease>,
+}
+
+impl AvailableRecurrenceOccurrence {
+    pub fn occurrence(&self) -> &RecurrenceOccurrence {
+        &self.occurrence
+    }
+
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn latest_release(&self) -> Option<&RecurrenceOccurrenceRelease> {
+        self.latest_release.as_ref()
+    }
+}
+
+/// One bounded, inert page of exact currently available recurrence occurrences.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AvailableRecurrenceOccurrencePage {
+    occurrences: Vec<AvailableRecurrenceOccurrence>,
+    next_offset: Option<u64>,
+}
+
+impl AvailableRecurrenceOccurrencePage {
+    /// Returns the current available coordinates in increasing authored offset order.
+    pub fn occurrences(&self) -> &[AvailableRecurrenceOccurrence] {
+        &self.occurrences
+    }
+
+    /// Returns the first authored offset not inspected, if one remains.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 /// One exact persisted recurrence occurrence durably reserved by a caller.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClaimedRecurrenceOccurrence {
@@ -2120,6 +2161,40 @@ impl RecurrenceStore {
             }
         }
         Ok(MaterializedRecurrenceOccurrencePage {
+            occurrences,
+            next_offset: authored_page.next_offset(),
+        })
+    }
+
+    /// Inspects one bounded authored offset window and returns its available coordinates.
+    pub fn available_occurrences_page(
+        &self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+    ) -> Result<AvailableRecurrenceOccurrencePage, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
+        let mut occurrences = Vec::with_capacity(authored_page.occurrences().len());
+        for authored in authored_page.occurrences() {
+            let Some(state) =
+                self.load_occurrence_state_with_recurrence(&recurrence, authored.offset())?
+            else {
+                continue;
+            };
+            if !state.claimed && state.task_id.is_none() {
+                occurrences.push(AvailableRecurrenceOccurrence {
+                    occurrence: state.occurrence,
+                    revision: state.revision,
+                    latest_release: state.latest_release,
+                });
+            }
+        }
+        Ok(AvailableRecurrenceOccurrencePage {
             occurrences,
             next_offset: authored_page.next_offset(),
         })
