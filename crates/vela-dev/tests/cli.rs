@@ -4,9 +4,9 @@ use std::fs;
 use tempfile::tempdir;
 use vela_kernel::{
     scheduler::{
-        OccurrenceCount, RecurrenceId, RecurrenceOccurrenceRelease, RecurrenceStore,
-        ScheduleCancellation, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
-        ScheduleStore,
+        OccurrenceCount, OccurrencePageSize, RecurrenceId, RecurrenceOccurrenceRelease,
+        RecurrenceStore, ScheduleCancellation, ScheduleId, ScheduleInstant, ScheduleInterval,
+        ScheduleRelease, ScheduleStore,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -6766,4 +6766,279 @@ fn recurrence_claim_next_fails_closed_on_selected_corruption_and_read_only_stora
         .stderr(predicate::str::starts_with(
             "$: recurrence_occurrence_claim_next_failed:",
         ));
+}
+
+#[test]
+fn materializes_next_available_recurrence_occurrence_as_deterministic_json() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("next\nid").unwrap();
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("preserve \"next\" goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(6).unwrap(),
+        )
+        .unwrap();
+    for offset in 1..6 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+    }
+    store
+        .claim_occurrence(&id, 1, 1, ScheduleInstant::from_unix_millis(15))
+        .unwrap();
+    store
+        .claim_occurrence(&id, 2, 1, ScheduleInstant::from_unix_millis(20))
+        .unwrap();
+    store
+        .release_occurrence(
+            &id,
+            2,
+            2,
+            RecurrenceOccurrenceRelease::new("retry carefully").unwrap(),
+        )
+        .unwrap();
+    store
+        .materialize_occurrence(&id, 3, 1, TaskId::new("occupied").unwrap())
+        .unwrap();
+    drop(store);
+
+    let materialize_next = |start: &str, size: &str, cutoff: &str, task_id: &str| {
+        let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
+        command.args([
+            "recurrence",
+            "materialize-next",
+            database.to_str().unwrap(),
+            id.as_str(),
+            start,
+            size,
+            cutoff,
+            task_id,
+        ]);
+        command
+    };
+
+    materialize_next("0", "5", "20", "task\n2")
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"occurrence\":{\"recurrence_id\":\"next\\nid\",",
+            "\"goal\":\"preserve \\\"next\\\" goal\",\"offset\":2,",
+            "\"unix_millis\":20,\"definition_revision\":1,",
+            "\"occurrence_revision\":4,\"task_id\":\"task\\n2\"},",
+            "\"next_offset\":3}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+    materialize_next("0", "5", "25", "future-task")
+        .assert()
+        .success()
+        .stdout("{\"occurrence\":null,\"next_offset\":4}\n");
+    materialize_next("4", "2", "30", "task-4")
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(concat!(
+            "\"offset\":4,\"unix_millis\":30,\"definition_revision\":1,",
+            "\"occurrence_revision\":2,\"task_id\":\"task-4\"},",
+            "\"next_offset\":5}\n"
+        )));
+    materialize_next("0", "5", "100", "gap-task")
+        .assert()
+        .success()
+        .stdout("{\"occurrence\":null,\"next_offset\":5}\n");
+    materialize_next("5", "1", "100", "task-5")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"offset\":5"));
+    materialize_next("0", "6", "100", "complete-task")
+        .assert()
+        .success()
+        .stdout("{\"occurrence\":null,\"next_offset\":null}\n");
+}
+
+#[test]
+fn recurrence_materialize_next_validates_and_preserves_failure_atomicity() {
+    let directory = tempdir().expect("recurrence database directory");
+    for (name, id, page_size, task_id, expected_error) in [
+        (
+            "invalid-id.sqlite3",
+            "",
+            "1",
+            "task",
+            "invalid_recurrence_id",
+        ),
+        (
+            "zero-size.sqlite3",
+            "valid",
+            "0",
+            "task",
+            "invalid_occurrence_page_size",
+        ),
+        (
+            "oversized.sqlite3",
+            "valid",
+            "1025",
+            "task",
+            "invalid_occurrence_page_size",
+        ),
+        ("invalid-task.sqlite3", "valid", "1", "", "invalid_task_id"),
+    ] {
+        let database = directory.path().join(name);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "materialize-next",
+                database.to_str().unwrap(),
+                id,
+                "0",
+                page_size,
+                "10",
+                task_id,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+        assert!(!database.exists());
+    }
+
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact").unwrap();
+    let mut store = RecurrenceStore::open(&database).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    store
+        .materialize_occurrence(&id, 0, 1, TaskId::new("occupied").unwrap())
+        .unwrap();
+    drop(store);
+
+    for (raw_id, start, expected_error) in [
+        ("absent", "0", "recurrence_not_found"),
+        ("exact", "2", "recurrence_occurrence_out_of_range"),
+    ] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "materialize-next",
+                database.to_str().unwrap(),
+                raw_id,
+                start,
+                "1",
+                "20",
+                "new-task",
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(format!("$: {expected_error}:")));
+    }
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "materialize-next",
+            database.to_str().unwrap(),
+            id.as_str(),
+            "0",
+            "2",
+            "20",
+            "occupied",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_materialize_next_failed:",
+        ));
+    let store = RecurrenceStore::open_read_only(&database).unwrap();
+    let available = store
+        .available_occurrences_page(&id, 1, OccurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(available.occurrences()[0].occurrence().offset(), 1);
+}
+
+#[test]
+fn recurrence_materialize_next_fails_closed_on_corruption_and_read_only_storage() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("exact").unwrap();
+    let mut store = RecurrenceStore::open(&database).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    drop(store);
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload_version = 2 WHERE event_type = 'recurrence.occurrence_persisted'",
+            [],
+        )
+        .unwrap();
+    let assert_failure = |database: &std::path::Path, id: &RecurrenceId, task_id: &str| {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "recurrence",
+                "materialize-next",
+                database.to_str().unwrap(),
+                id.as_str(),
+                "0",
+                "1",
+                "10",
+                task_id,
+            ])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: recurrence_occurrence_materialize_next_failed:",
+            ));
+    };
+    assert_failure(&database, &id, "corrupt-task");
+    assert!(
+        TaskStore::open(&database)
+            .unwrap()
+            .load(&TaskId::new("corrupt-task").unwrap())
+            .unwrap()
+            .is_none()
+    );
+
+    let read_only_database = directory.path().join("read-only.sqlite3");
+    let read_only_id = RecurrenceId::new("read-only").unwrap();
+    let mut store = RecurrenceStore::open(&read_only_database).unwrap();
+    store
+        .create(
+            read_only_id.clone(),
+            TaskGoal::new("goal").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&read_only_id, 1, 0).unwrap();
+    drop(store);
+    let mut permissions = fs::metadata(&read_only_database).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&read_only_database, permissions).unwrap();
+    assert_failure(&read_only_database, &read_only_id, "read-only-task");
 }

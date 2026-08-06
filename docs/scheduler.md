@@ -713,6 +713,35 @@ retry-of-work, workflow, provider/tool, permission, materialization, or executio
 authority. See
 [ADR-0079](adr/0079-writable-bounded-recurrence-claim-next-cli.md).
 
+## Writable bounded recurrence materialize-next CLI
+
+`vela-dev recurrence materialize-next DATABASE RECURRENCE_ID START_OFFSET
+PAGE_SIZE CUTOFF_UNIX_MILLIS TASK_ID` validates the exact recurrence ID,
+positive at-most-1024 page size, and caller-owned task ID before storage access.
+It opens only the selected database through writable `RecurrenceStore::open` and
+delegates bounded selection, strict complete-window replay, race handling, and
+the atomic occurrence/task write to
+`RecurrenceStore::materialize_next_available_occurrence`.
+
+Success emits compact JSON with `occurrence` and `next_offset`. A materialized
+object preserves exact `recurrence_id`, `goal`, `offset`, `unix_millis`,
+`definition_revision`, resulting `occurrence_revision`, and `task_id`. A null
+occurrence advances the kernel cursor across an all-gap or consumed window and
+retains it for a future horizon or finite completion.
+
+`invalid_recurrence_id`, `invalid_occurrence_page_size`, and `invalid_task_id`
+fail before storage access. Missing definitions and invalid starts retain their
+typed diagnostics. Open, replay, selected
+corruption, task collision, contention exhaustion, append, read-only, and
+serialization failures emit `recurrence_occurrence_materialize_next_failed`
+with non-zero status and empty stdout. Failures leave no partial occurrence/task
+transition.
+
+The command reads no clock, persists no cursor, scans no unrelated recurrence,
+generates no identity, and grants no worker, lease, dispatch, retry, permission,
+provider/tool, workflow, or execution authority. See
+[ADR-0081](adr/0081-writable-bounded-recurrence-materialize-next-cli.md).
+
 ## Read-only materialized recurrence occurrence CLI paging
 
 `vela-dev recurrence materialized DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`

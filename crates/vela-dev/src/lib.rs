@@ -163,6 +163,15 @@ pub enum RecurrenceCommand {
         page_size: u64,
         cutoff_unix_millis: u64,
     },
+    /// Atomically bind the earliest available due occurrence in one selected window.
+    MaterializeNext {
+        database: PathBuf,
+        id: String,
+        start_offset: u64,
+        page_size: u64,
+        cutoff_unix_millis: u64,
+        task_id: String,
+    },
     /// Page materialized task bindings for one recurrence through a read-only boundary.
     Materialized {
         database: PathBuf,
@@ -594,6 +603,24 @@ impl Cli {
             ),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::MaterializeNext {
+                        database,
+                        id,
+                        start_offset,
+                        page_size,
+                        cutoff_unix_millis,
+                        task_id,
+                    }),
+            }) => materialize_next_recurrence_occurrence(
+                &database,
+                &id,
+                start_offset,
+                page_size,
+                cutoff_unix_millis,
+                &task_id,
+            ),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::Materialized {
                         database,
                         id,
@@ -755,6 +782,12 @@ struct ClaimedRecurrenceOccurrencePageInspection<'a> {
 #[derive(Serialize)]
 struct ClaimNextRecurrenceOccurrenceInspection<'a> {
     occurrence: Option<ClaimedRecurrenceOccurrenceWithReleaseInspection<'a>>,
+    next_offset: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct MaterializeNextRecurrenceOccurrenceInspection<'a> {
+    occurrence: Option<MaterializedRecurrenceOccurrenceInspection<'a>>,
     next_offset: Option<u64>,
 }
 
@@ -1654,6 +1687,60 @@ fn claim_next_recurrence_occurrence(
     });
     let output = match serde_json::to_string(&ClaimNextRecurrenceOccurrenceInspection {
         occurrence,
+        next_offset: selection.next_offset(),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error(FAILURE_CODE, error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn materialize_next_recurrence_occurrence(
+    database: &Path,
+    raw_id: &str,
+    start_offset: u64,
+    raw_page_size: u64,
+    cutoff_unix_millis: u64,
+    raw_task_id: &str,
+) -> ExitCode {
+    const FAILURE_CODE: &str = "recurrence_occurrence_materialize_next_failed";
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let page_size = match OccurrencePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_occurrence_page_size", error),
+    };
+    let task_id = match TaskId::new(raw_task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return extension_error("invalid_task_id", error),
+    };
+    let mut store = match RecurrenceStore::open(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error(FAILURE_CODE, error),
+    };
+    let selection = match store.materialize_next_available_occurrence(
+        &id,
+        start_offset,
+        page_size,
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+        task_id,
+    ) {
+        Ok(selection) => selection,
+        Err(error @ RecurrenceStoreError::NotFound { .. }) => {
+            return extension_error("recurrence_not_found", error);
+        }
+        Err(error @ RecurrenceStoreError::OccurrenceOutOfRange { .. }) => {
+            return extension_error("recurrence_occurrence_out_of_range", error);
+        }
+        Err(error) => return extension_error(FAILURE_CODE, error),
+    };
+    let output = match serde_json::to_string(&MaterializeNextRecurrenceOccurrenceInspection {
+        occurrence: selection
+            .occurrence()
+            .map(materialized_recurrence_occurrence_inspection),
         next_offset: selection.next_offset(),
     }) {
         Ok(output) => output,
