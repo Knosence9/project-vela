@@ -3,8 +3,9 @@ use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
         OccurrenceCount, OccurrencePageSize, OccurrencePageSizeError, RecurrenceCancellation,
-        RecurrenceId, RecurrenceOccurrenceLookupError, RecurrenceOccurrenceRelease,
-        RecurrenceStatus, RecurrenceStore, RecurrenceStoreError, ScheduleInstant, ScheduleInterval,
+        RecurrenceHistoryEvent, RecurrenceId, RecurrenceOccurrenceLookupError,
+        RecurrenceOccurrenceRelease, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
+        ScheduleInstant, ScheduleInterval,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -90,6 +91,150 @@ fn creates_and_reopens_an_exact_finite_fixed_interval_recurrence() {
         RecurrenceStore::open(&path).unwrap().load(&id).unwrap(),
         Some(recurrence)
     );
+}
+
+#[test]
+fn recurrence_history_preserves_exact_authored_and_cancellation_evidence() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("history").unwrap();
+    let missing = RecurrenceId::new("missing-history").unwrap();
+    let goal = TaskGoal::new("Preserve exact recurrence history").unwrap();
+    let interval = ScheduleInterval::from_millis(7).unwrap();
+    let count = OccurrenceCount::new(3).unwrap();
+    let reason = RecurrenceCancellation::new(" exact withdrawal ").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(id.clone(), goal.clone(), instant(5), interval, count)
+        .unwrap();
+    store.cancel(&id, 1, reason.clone()).unwrap();
+    drop(store);
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let history = store.history(&id).unwrap().unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| (entry.revision(), entry.event().clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                1,
+                RecurrenceHistoryEvent::Created {
+                    goal,
+                    anchor: instant(5),
+                    interval,
+                    occurrence_count: count,
+                },
+            ),
+            (2, RecurrenceHistoryEvent::Cancelled { reason }),
+        ]
+    );
+    assert_eq!(store.history(&missing).unwrap(), None);
+}
+
+#[test]
+fn recurrence_history_fails_closed_for_selected_invalid_lifecycle_only() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("invalid-history").unwrap();
+    let unrelated = RecurrenceId::new("unrelated-invalid-history").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Reject partial history").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    store
+        .create(
+            unrelated.clone(),
+            TaskGoal::new("Remain isolated").unwrap(),
+            instant(2),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    insert_recurrence_cancellation(&path, &unrelated, 2, "first cancellation");
+    insert_recurrence_cancellation(&path, &unrelated, 3, "duplicate cancellation");
+
+    assert_eq!(store.history(&id).unwrap().unwrap().len(), 1);
+    assert!(matches!(
+        store.history(&unrelated).unwrap_err(),
+        RecurrenceStoreError::InvalidHistory { event_count: 3 }
+    ));
+}
+
+#[test]
+fn recurrence_history_rejects_selected_decode_failure_without_scanning_unrelated_streams() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let selected = RecurrenceId::new("selected-history").unwrap();
+    let unrelated = RecurrenceId::new("unrelated-history").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for id in [&selected, &unrelated] {
+        store
+            .create(
+                id.clone(),
+                TaskGoal::new(format!("history for {id}")).unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+    }
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'recurrence.unknown'
+             WHERE stream_id = ?1 AND stream_version = 1",
+            [format!("recurrence:{unrelated}")],
+        )
+        .unwrap();
+
+    assert_eq!(store.history(&selected).unwrap().unwrap().len(), 1);
+
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'recurrence.unknown'
+             WHERE stream_id = ?1 AND stream_version = 1",
+            [format!("recurrence:{selected}")],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.history(&selected).unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET event_type = 'recurrence.fixed_interval_created', payload_version = 99
+             WHERE stream_id = ?1 AND stream_version = 1",
+            [format!("recurrence:{selected}")],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.history(&selected).unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+
+    connection
+        .execute(
+            "UPDATE events SET payload_version = 1, payload = X'7B7D'
+             WHERE stream_id = ?1 AND stream_version = 1",
+            [format!("recurrence:{selected}")],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.history(&selected).unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::MalformedPayload {
+            stream_version: 1,
+            ..
+        })
+    ));
 }
 
 #[test]

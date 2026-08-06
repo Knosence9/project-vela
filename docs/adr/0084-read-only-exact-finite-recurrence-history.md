@@ -1,0 +1,51 @@
+# ADR-0084: Read-only exact finite recurrence history
+
+- **Status:** accepted
+- **Date:** 2026-08-06
+- **Decision and execution issue:** [#963](https://github.com/Knosence9/project-vela/issues/963)
+- **Related:** ADR-0037, ADR-0040, ADR-0082, ADR-0083
+
+## Context
+
+ADR-0082 added the first mutable event to a finite recurrence aggregate. Exact lookup truthfully projects the current active or cancelled state, but callers cannot inspect the validated persisted transitions and their revisions without reading raw event-log rows. Durable replay and auditable lifecycle evidence require a typed exact-history boundary before considering undo, resume, cross-recurrence workflows, workers, or dispatch.
+
+## Decision
+
+Add `RecurrenceStore::history(&RecurrenceId)`. It replays only the selected recurrence aggregate stream and returns `None` when that stream is absent. Existing strict recurrence projection validates the complete decoded history before any entry is returned.
+
+A present valid stream yields revision-bearing `RecurrenceHistoryEntry` values in persisted order. Its non-exhaustive typed `RecurrenceHistoryEvent` preserves:
+
+- `Created`: exact validated goal, anchor, fixed interval, and finite occurrence count
+- `Cancelled`: exact validated caller-authored cancellation reason
+
+The method works through writable or read-only recurrence stores. It reads no ambient clock, mutates no state, scans no unrelated streams, and grants no undo or resume, occurrence lifecycle, cross-recurrence discovery, worker, lease, dispatch, permission, retry, or execution authority.
+
+## Alternatives considered
+
+### Return raw event-log envelopes
+
+Rejected because callers would need to duplicate payload-version, validation, and lifecycle rules and could accidentally consume partial or impossible history.
+
+### Derive synthetic history from current state
+
+Rejected because current projection is not the durable event sequence contract and would obscure exact persisted revisions.
+
+### Add CLI history in the same slice
+
+Rejected because the smallest responsible boundary is the reusable kernel projection. A CLI adapter can be added independently without changing durable schema.
+
+## Consequences
+
+- Exact authored and cancellation evidence is auditable with persisted revisions.
+- Missing streams remain distinct from present histories.
+- Selected malformed payloads, unsupported events or versions, and impossible lifecycle ordering fail closed before a partial prefix is returned.
+- Corruption in unrelated streams cannot block one exact history query.
+- No durable event or database schema changes are required.
+
+## Verification
+
+RED→GREEN tests prove exact active/cancelled values and revisions after read-only reopen, missing-stream behavior, complete invalid-lifecycle rejection, selected decode failure, and isolation from unrelated corruption. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider before adding a recurrence history CLI, occurrence-stream history, cross-recurrence history discovery, undo or resume semantics, destructive deletion, claim interruption, clocks, workers, leases, dispatch, permissions, retries, or execution.
