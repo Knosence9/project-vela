@@ -468,6 +468,39 @@ pub enum RecurrenceStatus {
     Cancelled,
 }
 
+/// One validated persisted transition in an exact recurrence's lifecycle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RecurrenceHistoryEvent {
+    Created {
+        goal: TaskGoal,
+        anchor: ScheduleInstant,
+        interval: ScheduleInterval,
+        occurrence_count: OccurrenceCount,
+    },
+    Cancelled {
+        reason: RecurrenceCancellation,
+    },
+}
+
+/// One revision-bearing entry from a validated durable recurrence history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceHistoryEntry {
+    revision: u64,
+    event: RecurrenceHistoryEvent,
+}
+
+impl RecurrenceHistoryEntry {
+    /// The one-based event-stream revision occupied by this lifecycle event.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn event(&self) -> &RecurrenceHistoryEvent {
+        &self.event
+    }
+}
+
 impl FixedIntervalRecurrence {
     pub fn id(&self) -> &RecurrenceId {
         &self.id
@@ -1255,6 +1288,32 @@ impl RecurrenceStore {
             .replay::<RecurrenceEvent>(&recurrence_stream(id))
             .map_err(RecurrenceStoreError::Replay)?;
         Self::project(id.clone(), events)
+    }
+
+    /// Returns complete validated lifecycle evidence in exact revision order.
+    pub fn history(
+        &self,
+        id: &RecurrenceId,
+    ) -> Result<Option<Vec<RecurrenceHistoryEntry>>, RecurrenceStoreError> {
+        let events = self
+            .event_log
+            .replay::<RecurrenceEvent>(&recurrence_stream(id))
+            .map_err(RecurrenceStoreError::Replay)?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+        Self::project(id.clone(), events.clone())?;
+
+        Ok(Some(
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| RecurrenceHistoryEntry {
+                    revision: index as u64 + 1,
+                    event: RecurrenceHistoryEvent::from(event),
+                })
+                .collect(),
+        ))
     }
 
     /// Withdraws future recurrence eligibility without erasing authored definition state.
@@ -4279,6 +4338,27 @@ enum RecurrenceEvent {
     Cancelled {
         reason: RecurrenceCancellation,
     },
+}
+
+impl From<RecurrenceEvent> for RecurrenceHistoryEvent {
+    fn from(event: RecurrenceEvent) -> Self {
+        match event {
+            RecurrenceEvent::Created {
+                goal,
+                anchor_unix_millis,
+                interval_millis,
+                occurrence_count,
+            } => Self::Created {
+                goal,
+                anchor: ScheduleInstant::from_unix_millis(anchor_unix_millis),
+                interval: ScheduleInterval::from_millis(interval_millis)
+                    .expect("decoded recurrence intervals are valid"),
+                occurrence_count: OccurrenceCount::new(occurrence_count)
+                    .expect("decoded recurrence occurrence counts are valid"),
+            },
+            RecurrenceEvent::Cancelled { reason } => Self::Cancelled { reason },
+        }
+    }
 }
 
 impl Event for RecurrenceEvent {
