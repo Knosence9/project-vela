@@ -339,6 +339,11 @@ storage remains missing, and malformed or ambiguous selected bindings fail
 closed without partial output. Recurrence task lookup cannot read time, mutate,
 enumerate unrelated coordinates, dispatch, or execute work.
 
+Recurrence definition lookup and inventory remain available after cancellation.
+Their JSON now separates immutable `definition_revision` from mutable
+`aggregate_revision` and includes nullable `cancellation`, so authored
+projection stays inspectable even when new eligible work is blocked.
+
 Claim the earliest available due coordinate in one exact bounded recurrence
 window:
 
@@ -418,7 +423,7 @@ persists no cursor or skip evidence, discovers no unrelated definitions, and
 cannot generate identity, materialize, dispatch, retry, or execute work.
 
 Atomically persist only that explicit latest-due selection against one observed
-immutable definition revision:
+recurrence aggregate revision:
 
 ```bash
 nix develop --command cargo run --locked -p vela-dev -- recurrence persist-latest-due path/to/events.sqlite3 recurrence-id 1 0 1754049600000
@@ -428,8 +433,9 @@ The command delegates constant-space latest-only selection and the atomic write
 to the kernel. It emits the same complete occurrence and `next_offset` shape as
 read-only selection. Skipped coordinates remain uninspected and unpersisted;
 the returned cursor is not durable skip, acceptance, or lifecycle evidence. A
-future horizon writes nothing, while stale definitions, duplicates, and
-malformed selected provenance fail closed without partial stdout. The command
+future horizon writes nothing, while stale recurrences, duplicates, and
+cancelled recurrences or malformed selected provenance fail closed without
+partial stdout. The command
 reads no clock, generates no identity, and cannot materialize, dispatch, retry,
 or execute work.
 
@@ -451,7 +457,7 @@ reads no clock, generates no identity, and cannot dispatch, retry, or execute
 work.
 
 Atomically persist one exact recurrence's bounded due page through the same
-explicit cutoff and one observed definition revision:
+explicit cutoff and one observed aggregate revision:
 
 ```bash
 nix develop --command cargo run --locked -p vela-dev -- recurrence persist-due path/to/events.sqlite3 recurrence-id 1 0 128 1754049600000
@@ -460,12 +466,12 @@ nix develop --command cargo run --locked -p vela-dev -- recurrence persist-due p
 The command validates identity and page bounds before opening writable storage,
 then delegates inclusive selection, cursor semantics, duplicate protection, and
 all-or-nothing persistence to the kernel. Success emits the same complete JSON
-page shape as read-only due paging. Missing or stale definitions, invalid starts,
-duplicates, selected corruption, and storage failures emit no partial JSON and
-persist no selected prefix. An empty future-horizon page keeps its unchanged
-cursor; a later caller-owned cutoff can resume it. The command reads no ambient
-clock, persists no cursor, generates no identity, and cannot choose catch-up
-policy, materialize tasks, dispatch, or execute work.
+page shape as read-only due paging. Missing or stale recurrences, invalid
+starts, duplicates, cancellation, selected corruption, and storage failures
+emit no partial JSON and persist no selected prefix. An empty future-horizon
+page keeps its unchanged cursor; a later caller-owned cutoff can resume it. The
+command reads no ambient clock, persists no cursor, generates no identity, and
+cannot choose catch-up policy, materialize tasks, dispatch, or execute work.
 
 Atomically materialize one bounded due page as ordered caller-owned inert tasks:
 
@@ -478,9 +484,10 @@ storage access, then delegates due selection, exact count and duplicate checks,
 and all-or-nothing occurrence/task writes to the kernel. Success emits complete
 task-bound occurrences in authored-offset order with the resumable `next_offset`.
 An empty future page accepts no task IDs and writes nothing. Count mismatch,
-duplicate IDs, stale definitions, selected provenance or corruption, task
-collisions, and storage failures emit no partial JSON and leave no selected
-prefix or orphan task. The command reads no clock, generates no identity,
+duplicate IDs, stale recurrences, cancellation, selected provenance or
+corruption, task collisions, and storage failures emit no partial JSON and
+leave no selected prefix or orphan task. The command reads no clock, generates
+no identity,
 persists no cursor, and cannot dispatch, retry, or execute work.
 
 Inspect one exact persisted recurrence occurrence without granting write,

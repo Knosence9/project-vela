@@ -40,6 +40,27 @@ const ECHO_COMPONENT: &str = r#"
   (export "invoke" (func $invoke)))
 "#;
 
+fn insert_recurrence_cancellation(
+    database: &std::path::Path,
+    recurrence_id: &str,
+    stream_version: u64,
+    reason: &str,
+) {
+    rusqlite::Connection::open(database)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES (?1, ?2, 'recurrence.cancelled', 1, ?3)",
+            rusqlite::params![
+                format!("recurrence:{recurrence_id}"),
+                stream_version,
+                format!(r#"{{"reason":{reason:?}}}"#).into_bytes(),
+            ],
+        )
+        .unwrap();
+}
+
 #[test]
 fn help_identifies_vela_developer_tooling() {
     let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
@@ -2427,8 +2448,9 @@ fn gets_one_finite_recurrence_as_deterministic_complete_json() {
         .success()
         .stdout(concat!(
             "{\"id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",",
-            "\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,",
-            "\"final_occurrence_unix_millis\":20,\"revision\":1}\n"
+            "\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,\"status\":\"active\",",
+            "\"final_occurrence_unix_millis\":20,\"definition_revision\":1,",
+            "\"aggregate_revision\":1,\"cancellation\":null}\n"
         ))
         .stderr(predicate::str::is_empty());
 }
@@ -6252,6 +6274,62 @@ fn recurrence_lookup_fails_closed_on_corrupt_exact_stream() {
 }
 
 #[test]
+fn recurrence_lookup_and_inventory_report_cancellation_and_distinct_revisions() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    store
+        .create(
+            RecurrenceId::new("cancelled").unwrap(),
+            TaskGoal::new("preserve cancellation truth").unwrap(),
+            ScheduleInstant::from_unix_millis(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    insert_recurrence_cancellation(&database, "cancelled", 2, "operator request");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "get",
+            database.to_str().expect("UTF-8 database path"),
+            "cancelled",
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"id\":\"cancelled\",\"goal\":\"preserve cancellation truth\",",
+            "\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":2,",
+            "\"status\":\"cancelled\",",
+            "\"final_occurrence_unix_millis\":15,\"definition_revision\":1,",
+            "\"aggregate_revision\":2,\"cancellation\":\"operator request\"}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "inspect",
+            database.to_str().expect("UTF-8 database path"),
+        ])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"recurrences\":[",
+            "{\"id\":\"cancelled\",\"goal\":\"preserve cancellation truth\",",
+            "\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":2,\"status\":\"cancelled\",",
+            "\"final_occurrence_unix_millis\":15,\"definition_revision\":1,",
+            "\"aggregate_revision\":2,\"cancellation\":\"operator request\"}",
+            "]}\n"
+        ))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
 fn inspects_finite_recurrences_as_deterministic_complete_json() {
     let directory = tempdir().expect("recurrence database directory");
     let database = directory.path().join("events.sqlite3");
@@ -6287,8 +6365,8 @@ fn inspects_finite_recurrences_as_deterministic_complete_json() {
         .success()
         .stdout(concat!(
             "{\"recurrences\":[",
-            "{\"id\":\"a\\nfirst\",\"goal\":\"preserve \\\"exact\\\" goal\",\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,\"final_occurrence_unix_millis\":20,\"revision\":1},",
-            "{\"id\":\"z-last\",\"goal\":\"later\",\"anchor_unix_millis\":40,\"interval_millis\":2,\"occurrence_count\":1,\"final_occurrence_unix_millis\":40,\"revision\":1}",
+            "{\"id\":\"a\\nfirst\",\"goal\":\"preserve \\\"exact\\\" goal\",\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,\"status\":\"active\",\"final_occurrence_unix_millis\":20,\"definition_revision\":1,\"aggregate_revision\":1,\"cancellation\":null},",
+            "{\"id\":\"z-last\",\"goal\":\"later\",\"anchor_unix_millis\":40,\"interval_millis\":2,\"occurrence_count\":1,\"status\":\"active\",\"final_occurrence_unix_millis\":40,\"definition_revision\":1,\"aggregate_revision\":1,\"cancellation\":null}",
             "]}\n"
         ))
         .stderr(predicate::str::is_empty());
@@ -6388,8 +6466,9 @@ fn creates_one_finite_recurrence_as_deterministic_complete_json() {
         .success()
         .stdout(concat!(
             "{\"id\":\"exact\\nid\",\"goal\":\"preserve \\\"exact\\\" goal\",",
-            "\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,",
-            "\"final_occurrence_unix_millis\":20,\"revision\":1}\n"
+            "\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":3,\"status\":\"active\",",
+            "\"final_occurrence_unix_millis\":20,\"definition_revision\":1,",
+            "\"aggregate_revision\":1,\"cancellation\":null}\n"
         ))
         .stderr(predicate::str::is_empty());
 

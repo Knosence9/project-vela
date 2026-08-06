@@ -15,9 +15,9 @@ use vela_kernel::scheduler::{
     ClaimedRecurrenceOccurrencePage, FixedIntervalRecurrence, MaterializedRecurrenceOccurrence,
     MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize, RecurrenceId,
     RecurrenceOccurrence, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
-    RecurrenceOccurrenceRelease, RecurrenceStore, RecurrenceStoreError, ScheduleCancellation,
-    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
-    ScheduleStatus, ScheduleStore, ScheduledTask,
+    RecurrenceOccurrenceRelease, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
+    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval,
+    ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -732,8 +732,11 @@ struct RecurrenceInspection<'a> {
     anchor_unix_millis: u64,
     interval_millis: u64,
     occurrence_count: u64,
+    status: &'static str,
     final_occurrence_unix_millis: u64,
-    revision: u64,
+    definition_revision: u64,
+    aggregate_revision: u64,
+    cancellation: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -2282,8 +2285,14 @@ fn recurrence_inspection(recurrence: &FixedIntervalRecurrence) -> RecurrenceInsp
         anchor_unix_millis: recurrence.anchor().unix_millis(),
         interval_millis: recurrence.interval().millis(),
         occurrence_count: recurrence.occurrence_count().get(),
+        status: match recurrence.status() {
+            RecurrenceStatus::Active => "active",
+            RecurrenceStatus::Cancelled => "cancelled",
+        },
         final_occurrence_unix_millis: recurrence.final_occurrence().unix_millis(),
-        revision: recurrence.revision(),
+        definition_revision: recurrence.definition_revision(),
+        aggregate_revision: recurrence.revision(),
+        cancellation: recurrence.cancellation().map(|reason| reason.as_str()),
     }
 }
 

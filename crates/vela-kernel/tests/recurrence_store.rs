@@ -2,9 +2,9 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
-        OccurrenceCount, OccurrencePageSize, OccurrencePageSizeError, RecurrenceId,
-        RecurrenceOccurrenceLookupError, RecurrenceOccurrenceRelease, RecurrenceStore,
-        RecurrenceStoreError, ScheduleInstant, ScheduleInterval,
+        OccurrenceCount, OccurrencePageSize, OccurrencePageSizeError, RecurrenceCancellation,
+        RecurrenceId, RecurrenceOccurrenceLookupError, RecurrenceOccurrenceRelease,
+        RecurrenceStatus, RecurrenceStore, RecurrenceStoreError, ScheduleInstant, ScheduleInterval,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -25,6 +25,38 @@ fn occurrence_event_count(path: &std::path::Path, id: &RecurrenceId, offset: u64
             |row| row.get(0),
         )
         .unwrap()
+}
+
+fn recurrence_event_count(path: &std::path::Path, id: &RecurrenceId) -> i64 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE stream_id = ?1",
+            [format!("recurrence:{id}")],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn insert_recurrence_cancellation(
+    path: &std::path::Path,
+    id: &RecurrenceId,
+    stream_version: u64,
+    reason: &str,
+) {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES (?1, ?2, 'recurrence.cancelled', 1, ?3)",
+            rusqlite::params![
+                format!("recurrence:{id}"),
+                stream_version,
+                format!(r#"{{"reason":{reason:?}}}"#).into_bytes(),
+            ],
+        )
+        .unwrap();
 }
 
 #[test]
@@ -58,6 +90,469 @@ fn creates_and_reopens_an_exact_finite_fixed_interval_recurrence() {
         RecurrenceStore::open(&path).unwrap().load(&id).unwrap(),
         Some(recurrence)
     );
+}
+
+#[test]
+fn cancellation_preserves_definition_revision_and_blocks_due_eligibility() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("cancelled-definition").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Preserve immutable authored recurrence").unwrap(),
+            instant(5),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    insert_recurrence_cancellation(&path, &id, 2, "operator request");
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let recurrence = store.load(&id).unwrap().unwrap();
+    assert_eq!(recurrence.definition_revision(), 1);
+    assert_eq!(recurrence.revision(), 2);
+    assert_eq!(recurrence.status(), RecurrenceStatus::Cancelled);
+    assert_eq!(
+        recurrence.cancellation().unwrap().as_str(),
+        "operator request"
+    );
+    assert_eq!(
+        recurrence.occurrence_at(0).unwrap().recurrence_revision(),
+        1
+    );
+
+    let due = store
+        .due_occurrences_page(&id, 0, OccurrencePageSize::new(2).unwrap(), instant(19))
+        .unwrap();
+    assert!(due.occurrences().is_empty());
+    assert_eq!(due.next_offset(), Some(0));
+
+    let latest = store.latest_due_occurrence(&id, 0, instant(19)).unwrap();
+    assert!(latest.occurrence().is_none());
+    assert_eq!(latest.next_offset(), Some(0));
+
+    assert!(matches!(
+        store
+            .due_occurrences_page(&id, 3, OccurrencePageSize::new(1).unwrap(), instant(19))
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            recurrence_id,
+            requested_offset: 3,
+            occurrence_count,
+        } if recurrence_id == id && occurrence_count == OccurrenceCount::new(3).unwrap()
+    ));
+    assert!(matches!(
+        store.latest_due_occurrence(&id, 3, instant(19)).unwrap_err(),
+        RecurrenceStoreError::OccurrenceOutOfRange {
+            recurrence_id,
+            requested_offset: 3,
+            occurrence_count,
+        } if recurrence_id == id && occurrence_count == OccurrenceCount::new(3).unwrap()
+    ));
+}
+
+#[test]
+fn cancels_one_recurrence_with_exact_reason_revision_and_reopen_status() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("cancel-one").unwrap();
+    let goal = TaskGoal::new("Cancel exact future recurrence work").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let created = store
+        .create(
+            id.clone(),
+            goal.clone(),
+            instant(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(created.status(), RecurrenceStatus::Active);
+
+    let cancelled = store
+        .cancel(
+            &id,
+            created.revision(),
+            RecurrenceCancellation::new("operator request").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(cancelled.id(), &id);
+    assert_eq!(cancelled.goal(), &goal);
+    assert_eq!(cancelled.definition_revision(), 1);
+    assert_eq!(cancelled.revision(), 2);
+    assert_eq!(cancelled.status(), RecurrenceStatus::Cancelled);
+    assert_eq!(
+        cancelled.cancellation().unwrap().as_str(),
+        "operator request"
+    );
+    drop(store);
+
+    let reopened = RecurrenceStore::open_read_only(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.definition_revision(), 1);
+    assert_eq!(reopened.revision(), 2);
+    assert_eq!(reopened.status(), RecurrenceStatus::Cancelled);
+    assert_eq!(
+        reopened.cancellation().unwrap().as_str(),
+        "operator request"
+    );
+}
+
+#[test]
+fn recurrence_cancellation_validates_and_failed_cancels_append_nothing() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("cancel-failures").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let created = store
+        .create(
+            id.clone(),
+            TaskGoal::new("Protect append boundary").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        RecurrenceCancellation::new(" \t").unwrap_err().to_string(),
+        "recurrence cancellation reason must not be blank"
+    );
+    assert_eq!(recurrence_event_count(&path, &id), 1);
+
+    let missing = RecurrenceId::new("missing").unwrap();
+    assert!(matches!(
+        store
+            .cancel(
+                &missing,
+                1,
+                RecurrenceCancellation::new("operator request").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::NotFound { recurrence_id } if recurrence_id == missing
+    ));
+    assert_eq!(recurrence_event_count(&path, &id), 1);
+
+    assert!(matches!(
+        store
+            .cancel(
+                &id,
+                created.revision() + 1,
+                RecurrenceCancellation::new("stale view").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::ConcurrentModification {
+            recurrence_id,
+            expected_revision: 2,
+            current_revision: 1,
+        } if recurrence_id == id
+    ));
+    assert_eq!(recurrence_event_count(&path, &id), 1);
+
+    store
+        .cancel(
+            &id,
+            created.revision(),
+            RecurrenceCancellation::new("operator request").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(recurrence_event_count(&path, &id), 2);
+
+    assert!(matches!(
+        store
+            .cancel(
+                &id,
+                2,
+                RecurrenceCancellation::new("duplicate cancellation").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+    assert_eq!(recurrence_event_count(&path, &id), 2);
+}
+
+#[test]
+fn read_only_recurrence_cancel_fails_without_appending() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("cancel-read-only").unwrap();
+    let mut writable = RecurrenceStore::open(&path).unwrap();
+    let created = writable
+        .create(
+            id.clone(),
+            TaskGoal::new("Remain unchanged through read-only failure").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    drop(writable);
+
+    let before = recurrence_event_count(&path, &id);
+    let mut read_only = RecurrenceStore::open_read_only(&path).unwrap();
+    assert!(matches!(
+        read_only
+            .cancel(
+                &id,
+                created.revision(),
+                RecurrenceCancellation::new("blocked by read-only").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::EventLog(_)
+    ));
+    assert_eq!(recurrence_event_count(&path, &id), before);
+    let reopened = RecurrenceStore::open_read_only(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.status(), RecurrenceStatus::Active);
+    assert_eq!(reopened.cancellation(), None);
+}
+
+#[test]
+fn racing_recurrence_cancellations_append_one_event_and_preserve_exact_failure() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("racing-cancel").unwrap();
+    RecurrenceStore::open(&path)
+        .unwrap()
+        .create(
+            id.clone(),
+            TaskGoal::new("Cancel only once").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = ["first exact reason", "second exact reason"].map(|reason| {
+        let path = path.clone();
+        let id = id.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            let mut store = RecurrenceStore::open(path).unwrap();
+            barrier.wait();
+            store.cancel(&id, 1, RecurrenceCancellation::new(reason).unwrap())
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(RecurrenceStoreError::ConcurrentModification {
+                    recurrence_id,
+                    expected_revision: 1,
+                    current_revision: 2,
+                }) if recurrence_id == &id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(recurrence_event_count(&path, &id), 2);
+    let reopened = RecurrenceStore::open_read_only(&path)
+        .unwrap()
+        .load(&id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.status(), RecurrenceStatus::Cancelled);
+    assert!(matches!(
+        reopened.cancellation().map(|reason| reason.as_str()),
+        Some("first exact reason" | "second exact reason")
+    ));
+}
+
+#[test]
+fn cancellation_blocks_new_mutations_but_preserves_claim_recovery_and_history() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("cancelled-eligibility").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Cancel future recurrence work").unwrap(),
+            instant(10),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    store.persist_occurrence(&id, 1, 0).unwrap();
+    store.claim_occurrence(&id, 0, 1, instant(10)).unwrap();
+    store.persist_occurrence(&id, 1, 1).unwrap();
+    store.persist_occurrence(&id, 1, 2).unwrap();
+    store.persist_occurrence(&id, 1, 3).unwrap();
+    store.claim_occurrence(&id, 3, 1, instant(16)).unwrap();
+    drop(store);
+    insert_recurrence_cancellation(&path, &id, 2, "stop future work");
+
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let recurrence = store.load(&id).unwrap().unwrap();
+    assert_eq!(recurrence.revision(), 2);
+    let claimed_before_cancellation = store.load_claimed_occurrence(&id, 0).unwrap().unwrap();
+    assert_eq!(claimed_before_cancellation.revision(), 2);
+    assert!(matches!(
+        store
+            .persist_occurrence(&id, recurrence.revision(), 2)
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .persist_due_occurrences_page(
+                &id,
+                recurrence.revision(),
+                0,
+                OccurrencePageSize::new(2).unwrap(),
+                instant(14),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .claim_occurrence(&id, 1, 1, instant(12))
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .materialize_occurrence(&id, 1, 1, TaskId::new("blocked-available").unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .claim_next_available_occurrence(
+                &id,
+                0,
+                OccurrencePageSize::new(3).unwrap(),
+                instant(14),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .materialize_next_available_occurrence(
+                &id,
+                0,
+                OccurrencePageSize::new(3).unwrap(),
+                instant(14),
+                TaskId::new("blocked-next").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+
+    let claimed_task_id = TaskId::new("claimed-task").unwrap();
+    let materialized = store
+        .materialize_claimed_occurrence(
+            &id,
+            0,
+            claimed_before_cancellation.revision(),
+            claimed_task_id.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        materialized.occurrence(),
+        claimed_before_cancellation.occurrence()
+    );
+    assert_eq!(materialized.revision(), 3);
+    assert_eq!(materialized.task_id(), &claimed_task_id);
+    assert!(matches!(
+        store
+            .materialize_claimed_occurrence(
+                &id,
+                0,
+                claimed_before_cancellation.revision(),
+                TaskId::new("stale-claimed-task").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::OccurrenceConcurrentModification {
+            recurrence_id,
+            offset: 0,
+            expected_revision: 2,
+            current_revision: 3,
+        } if recurrence_id == id
+    ));
+    assert!(store.load_claimed_occurrence(&id, 0).unwrap().is_none());
+    assert_eq!(
+        store.load_materialized_occurrence(&id, 0).unwrap(),
+        Some(materialized.clone())
+    );
+    assert_eq!(
+        TaskStore::open(&path)
+            .unwrap()
+            .load(&claimed_task_id)
+            .unwrap()
+            .unwrap()
+            .goal(),
+        claimed_before_cancellation.occurrence().goal()
+    );
+
+    let released = store
+        .release_occurrence(
+            &id,
+            3,
+            2,
+            RecurrenceOccurrenceRelease::new("caller recovery").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(released.revision(), 3);
+    assert_eq!(released.latest_release().as_str(), "caller recovery");
+    assert!(matches!(
+        store
+            .claim_occurrence(&id, 3, released.revision(), instant(16))
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+    assert!(matches!(
+        store
+            .materialize_occurrence(
+                &id,
+                3,
+                released.revision(),
+                TaskId::new("blocked-released").unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+    let materialized = store
+        .materialize_occurrence(&id, 2, 1, TaskId::new("still-blocked").unwrap())
+        .unwrap_err();
+    assert!(matches!(
+        materialized,
+        RecurrenceStoreError::AlreadyCancelled { recurrence_id } if recurrence_id == id
+    ));
+
+    let released = store.load_released_occurrence(&id, 3).unwrap().unwrap();
+    assert_eq!(released.occurrence().offset(), 3);
+    assert_eq!(released.latest_release().as_str(), "caller recovery");
+    let persisted = store
+        .persisted_occurrences_page(&id, 0, OccurrencePageSize::new(4).unwrap())
+        .unwrap();
+    assert_eq!(
+        persisted
+            .occurrences()
+            .iter()
+            .map(|occurrence| occurrence.offset())
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+    let available = store
+        .available_occurrences_page(&id, 0, OccurrencePageSize::new(4).unwrap())
+        .unwrap();
+    assert!(available.occurrences().is_empty());
 }
 
 #[test]

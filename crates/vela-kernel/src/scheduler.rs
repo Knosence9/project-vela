@@ -17,6 +17,7 @@ const SCHEDULE_MATERIALIZED_EVENT_TYPE: &str = "schedule.materialized";
 const SCHEDULE_EVENT_PAYLOAD_VERSION: u32 = 1;
 const SCHEDULE_STREAM_PREFIX: &str = "schedule:";
 const RECURRENCE_CREATED_EVENT_TYPE: &str = "recurrence.fixed_interval_created";
+const RECURRENCE_CANCELLED_EVENT_TYPE: &str = "recurrence.cancelled";
 const RECURRENCE_OCCURRENCE_PERSISTED_EVENT_TYPE: &str = "recurrence.occurrence_persisted";
 const RECURRENCE_OCCURRENCE_CLAIMED_EVENT_TYPE: &str = "recurrence.occurrence_claimed";
 const RECURRENCE_OCCURRENCE_RELEASED_EVENT_TYPE: &str = "recurrence.occurrence_released";
@@ -93,6 +94,37 @@ impl fmt::Display for ScheduleCancellationError {
 }
 
 impl Error for ScheduleCancellationError {}
+
+/// A caller-supplied, non-blank reason for withdrawing future recurrence eligibility.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct RecurrenceCancellation(String);
+
+impl RecurrenceCancellation {
+    pub fn new(value: impl Into<String>) -> Result<Self, RecurrenceCancellationError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            Err(RecurrenceCancellationError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecurrenceCancellationError;
+
+impl fmt::Display for RecurrenceCancellationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("recurrence cancellation reason must not be blank")
+    }
+}
+
+impl Error for RecurrenceCancellationError {}
 
 /// A caller-supplied, non-blank reason for recovering a claimed schedule.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -425,7 +457,15 @@ pub struct FixedIntervalRecurrence {
     interval: ScheduleInterval,
     occurrence_count: OccurrenceCount,
     final_occurrence: ScheduleInstant,
+    definition_revision: u64,
     revision: u64,
+    cancellation: Option<RecurrenceCancellation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecurrenceStatus {
+    Active,
+    Cancelled,
 }
 
 impl FixedIntervalRecurrence {
@@ -453,8 +493,24 @@ impl FixedIntervalRecurrence {
         self.final_occurrence
     }
 
+    pub const fn definition_revision(&self) -> u64 {
+        self.definition_revision
+    }
+
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn cancellation(&self) -> Option<&RecurrenceCancellation> {
+        self.cancellation.as_ref()
+    }
+
+    pub fn status(&self) -> RecurrenceStatus {
+        if self.cancellation.is_some() {
+            RecurrenceStatus::Cancelled
+        } else {
+            RecurrenceStatus::Active
+        }
     }
 
     /// Projects one exact zero-based occurrence without reading storage or time.
@@ -478,7 +534,7 @@ impl FixedIntervalRecurrence {
             goal: self.goal.clone(),
             offset,
             instant,
-            recurrence_revision: self.revision,
+            recurrence_revision: self.definition_revision,
         })
     }
 
@@ -798,15 +854,17 @@ impl MaterializedRecurrenceOccurrencePage {
 #[derive(Clone, Debug)]
 struct RecurrenceOccurrenceState {
     occurrence: RecurrenceOccurrence,
+    recurrence_revision: u64,
     revision: u64,
     claimed: bool,
     latest_release: Option<RecurrenceOccurrenceRelease>,
     task_id: Option<TaskId>,
+    recurrence_cancelled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MaterializationConflictKind {
-    Available,
+    Available { recurrence_revision: u64 },
     Claimed,
 }
 
@@ -847,6 +905,9 @@ pub enum RecurrenceStoreError {
         recurrence_id: RecurrenceId,
     },
     NotFound {
+        recurrence_id: RecurrenceId,
+    },
+    AlreadyCancelled {
         recurrence_id: RecurrenceId,
     },
     ConcurrentModification {
@@ -956,6 +1017,9 @@ impl fmt::Display for RecurrenceStoreError {
             }
             Self::NotFound { recurrence_id } => {
                 write!(formatter, "recurrence {recurrence_id} was not found")
+            }
+            Self::AlreadyCancelled { recurrence_id } => {
+                write!(formatter, "recurrence {recurrence_id} is already cancelled")
             }
             Self::ConcurrentModification {
                 recurrence_id,
@@ -1098,6 +1162,7 @@ impl Error for RecurrenceStoreError {
             Self::OccurrenceOverflow { source, .. } => Some(source),
             Self::AlreadyExists { .. }
             | Self::NotFound { .. }
+            | Self::AlreadyCancelled { .. }
             | Self::ConcurrentModification { .. }
             | Self::OccurrenceOutOfRange { .. }
             | Self::OccurrenceAlreadyPersisted { .. }
@@ -1170,7 +1235,9 @@ impl RecurrenceStore {
                 interval,
                 occurrence_count,
                 final_occurrence,
+                definition_revision: 1,
                 revision: 1,
+                cancellation: None,
             }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
                 Err(RecurrenceStoreError::AlreadyExists { recurrence_id: id })
@@ -1190,6 +1257,49 @@ impl RecurrenceStore {
         Self::project(id.clone(), events)
     }
 
+    /// Withdraws future recurrence eligibility without erasing authored definition state.
+    pub fn cancel(
+        &mut self,
+        id: &RecurrenceId,
+        expected_revision: u64,
+        cancellation: RecurrenceCancellation,
+    ) -> Result<FixedIntervalRecurrence, RecurrenceStoreError> {
+        let Some(mut recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        validate_recurrence_revision(id, &recurrence, expected_revision)?;
+        if let Some(error) = cancelled_recurrence_error(id, &recurrence) {
+            return Err(error);
+        }
+
+        match self.event_log.append(
+            &recurrence_stream(id),
+            ExpectedVersion::Exact(expected_revision),
+            &RecurrenceEvent::Cancelled {
+                reason: cancellation.clone(),
+            },
+        ) {
+            Ok(_) => {
+                recurrence.revision += 1;
+                recurrence.cancellation = Some(cancellation);
+                Ok(recurrence)
+            }
+            Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
+                Some(current) => Err(RecurrenceStoreError::ConcurrentModification {
+                    recurrence_id: id.clone(),
+                    expected_revision,
+                    current_revision: current.revision(),
+                }),
+                None => Err(RecurrenceStoreError::NotFound {
+                    recurrence_id: id.clone(),
+                }),
+            },
+            Err(error) => Err(RecurrenceStoreError::EventLog(error)),
+        }
+    }
+
     /// Persists one exact authored occurrence without selecting or executing work.
     pub fn persist_occurrence(
         &mut self,
@@ -1197,17 +1307,24 @@ impl RecurrenceStore {
         expected_revision: u64,
         offset: u64,
     ) -> Result<RecurrenceOccurrence, RecurrenceStoreError> {
+        self.persist_occurrence_before_append(id, expected_revision, offset, &mut || {})
+    }
+
+    fn persist_occurrence_before_append(
+        &mut self,
+        id: &RecurrenceId,
+        expected_revision: u64,
+        offset: u64,
+        before_append: &mut impl FnMut(),
+    ) -> Result<RecurrenceOccurrence, RecurrenceStoreError> {
         let Some(recurrence) = self.load(id)? else {
             return Err(RecurrenceStoreError::NotFound {
                 recurrence_id: id.clone(),
             });
         };
-        if recurrence.revision() != expected_revision {
-            return Err(RecurrenceStoreError::ConcurrentModification {
-                recurrence_id: id.clone(),
-                expected_revision,
-                current_revision: recurrence.revision(),
-            });
+        validate_recurrence_revision(id, &recurrence, expected_revision)?;
+        if let Some(error) = cancelled_recurrence_error(id, &recurrence) {
+            return Err(error);
         }
         let occurrence = recurrence.occurrence_at(offset)?;
         let event = RecurrenceOccurrenceEvent::Persisted {
@@ -1217,18 +1334,33 @@ impl RecurrenceStore {
             goal: occurrence.goal().clone(),
             unix_millis: occurrence.instant().unix_millis(),
         };
-        match self.event_log.append(
-            &recurrence_occurrence_stream(id, offset),
+        let occurrence_stream = recurrence_occurrence_stream(id, offset);
+        let definition_stream = recurrence_stream(id);
+        before_append();
+        match self.event_log.append_if_stream_unchanged(
+            &occurrence_stream,
             ExpectedVersion::NoStream,
+            &definition_stream,
+            ExpectedVersion::Exact(expected_revision),
             &event,
         ) {
             Ok(_) => Ok(occurrence),
-            Err(EventLogError::WrongExpectedVersion { .. }) => {
-                Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
+            Err(EventLogError::WrongExpectedVersion { .. }) => match self.load(id)? {
+                None => Err(RecurrenceStoreError::NotFound {
+                    recurrence_id: id.clone(),
+                }),
+                Some(current) if current.revision() != expected_revision => {
+                    Err(RecurrenceStoreError::ConcurrentModification {
+                        recurrence_id: id.clone(),
+                        expected_revision,
+                        current_revision: current.revision(),
+                    })
+                }
+                Some(_) => Err(RecurrenceStoreError::OccurrenceAlreadyPersisted {
                     recurrence_id: id.clone(),
                     offset,
-                })
-            }
+                }),
+            },
             Err(error) => Err(RecurrenceStoreError::EventLog(error)),
         }
     }
@@ -1266,12 +1398,32 @@ impl RecurrenceStore {
         expected_occurrence_revision: u64,
         cutoff: ScheduleInstant,
     ) -> Result<ClaimedRecurrenceOccurrence, RecurrenceStoreError> {
+        self.claim_occurrence_before_append(
+            id,
+            offset,
+            expected_occurrence_revision,
+            cutoff,
+            &mut || {},
+        )
+    }
+
+    fn claim_occurrence_before_append(
+        &mut self,
+        id: &RecurrenceId,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        cutoff: ScheduleInstant,
+        before_append: &mut impl FnMut(),
+    ) -> Result<ClaimedRecurrenceOccurrence, RecurrenceStoreError> {
         let Some(state) = self.load_occurrence_state(id, offset)? else {
             return Err(RecurrenceStoreError::OccurrenceNotFound {
                 recurrence_id: id.clone(),
                 offset,
             });
         };
+        if let Some(error) = cancelled_occurrence_error(id, &state) {
+            return Err(error);
+        }
         if state.revision != expected_occurrence_revision {
             return Err(RecurrenceStoreError::OccurrenceConcurrentModification {
                 recurrence_id: id.clone(),
@@ -1302,9 +1454,14 @@ impl RecurrenceStore {
             });
         }
 
-        match self.event_log.append(
-            &recurrence_occurrence_stream(id, offset),
+        let occurrence_stream = recurrence_occurrence_stream(id, offset);
+        let definition_stream = recurrence_stream(id);
+        before_append();
+        match self.event_log.append_if_stream_unchanged(
+            &occurrence_stream,
             ExpectedVersion::Exact(expected_occurrence_revision),
+            &definition_stream,
+            ExpectedVersion::Exact(state.recurrence_revision),
             &RecurrenceOccurrenceEvent::Claimed {},
         ) {
             Ok(_) => Ok(ClaimedRecurrenceOccurrence {
@@ -1313,6 +1470,11 @@ impl RecurrenceStore {
             }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
                 match self.load_occurrence_state(id, offset)? {
+                    Some(current) if current.recurrence_cancelled => {
+                        Err(RecurrenceStoreError::AlreadyCancelled {
+                            recurrence_id: id.clone(),
+                        })
+                    }
                     Some(current) => Err(RecurrenceStoreError::OccurrenceConcurrentModification {
                         recurrence_id: id.clone(),
                         offset,
@@ -1539,12 +1701,32 @@ impl RecurrenceStore {
         expected_occurrence_revision: u64,
         task_id: TaskId,
     ) -> Result<MaterializedRecurrenceOccurrence, RecurrenceStoreError> {
+        self.materialize_occurrence_before_append(
+            id,
+            offset,
+            expected_occurrence_revision,
+            task_id,
+            &mut || {},
+        )
+    }
+
+    fn materialize_occurrence_before_append(
+        &mut self,
+        id: &RecurrenceId,
+        offset: u64,
+        expected_occurrence_revision: u64,
+        task_id: TaskId,
+        before_append: &mut impl FnMut(),
+    ) -> Result<MaterializedRecurrenceOccurrence, RecurrenceStoreError> {
         let Some(state) = self.load_occurrence_state(id, offset)? else {
             return Err(RecurrenceStoreError::OccurrenceNotFound {
                 recurrence_id: id.clone(),
                 offset,
             });
         };
+        if let Some(error) = cancelled_occurrence_error(id, &state) {
+            return Err(error);
+        }
         if state.revision != expected_occurrence_revision {
             return Err(RecurrenceStoreError::OccurrenceConcurrentModification {
                 recurrence_id: id.clone(),
@@ -1566,13 +1748,16 @@ impl RecurrenceStore {
                 offset,
             });
         }
+        before_append();
         self.append_occurrence_materialization(
             id,
             offset,
             expected_occurrence_revision,
             state.occurrence,
             task_id,
-            MaterializationConflictKind::Available,
+            MaterializationConflictKind::Available {
+                recurrence_revision: state.recurrence_revision,
+            },
         )
     }
 
@@ -1591,13 +1776,26 @@ impl RecurrenceStore {
         let task_event = TaskEvent::Started {
             goal: occurrence.goal().clone(),
         };
-        match self.event_log.append_pair(
-            &recurrence_occurrence_stream(id, offset),
-            ExpectedVersion::Exact(expected_occurrence_revision),
-            &materialized_event,
-            &task_stream(&task_id),
-            ExpectedVersion::NoStream,
-            &task_event,
+        let occurrence_stream = recurrence_occurrence_stream(id, offset);
+        let task_stream = task_stream(&task_id);
+        let definition_stream = recurrence_stream(id);
+        let prerequisite = match conflict_kind {
+            MaterializationConflictKind::Available {
+                recurrence_revision,
+            } => Some((
+                &definition_stream,
+                ExpectedVersion::Exact(recurrence_revision),
+            )),
+            MaterializationConflictKind::Claimed => None,
+        };
+        match self.event_log.append_pair_if_streams_unchanged(
+            (
+                &occurrence_stream,
+                ExpectedVersion::Exact(expected_occurrence_revision),
+                &materialized_event,
+            ),
+            (&task_stream, ExpectedVersion::NoStream, &task_event),
+            prerequisite.as_slice(),
         ) {
             Ok(_) => Ok(MaterializedRecurrenceOccurrence {
                 occurrence,
@@ -1610,6 +1808,16 @@ impl RecurrenceStore {
             }) => Err(RecurrenceStoreError::TaskAlreadyExists { task_id }),
             Err(EventLogError::WrongExpectedVersion { .. }) => {
                 match self.load_occurrence_state(id, offset)? {
+                    Some(current)
+                        if matches!(
+                            conflict_kind,
+                            MaterializationConflictKind::Available { .. }
+                        ) && current.recurrence_cancelled =>
+                    {
+                        Err(RecurrenceStoreError::AlreadyCancelled {
+                            recurrence_id: id.clone(),
+                        })
+                    }
                     Some(current) if conflict_kind == MaterializationConflictKind::Claimed => {
                         Err(RecurrenceStoreError::OccurrenceConcurrentModification {
                             recurrence_id: id.clone(),
@@ -1682,6 +1890,13 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
+        recurrence.occurrence_at(start_offset)?;
+        if recurrence.cancellation().is_some() {
+            return Ok(RecurrenceOccurrencePage {
+                occurrences: Vec::new(),
+                next_offset: Some(start_offset),
+            });
+        }
         Self::project_due_occurrences_page(&recurrence, start_offset, page_size, cutoff)
     }
 
@@ -1697,6 +1912,13 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
+        recurrence.occurrence_at(start_offset)?;
+        if recurrence.cancellation().is_some() {
+            return Ok(LatestDueOccurrenceSelection {
+                occurrence: None,
+                next_offset: Some(start_offset),
+            });
+        }
         Self::project_latest_due_occurrence(&recurrence, start_offset, cutoff)
     }
 
@@ -1713,12 +1935,9 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
-        if recurrence.revision() != expected_revision {
-            return Err(RecurrenceStoreError::ConcurrentModification {
-                recurrence_id: id.clone(),
-                expected_revision,
-                current_revision: recurrence.revision(),
-            });
+        validate_recurrence_revision(id, &recurrence, expected_revision)?;
+        if let Some(error) = cancelled_recurrence_error(id, &recurrence) {
+            return Err(error);
         }
         let selection = Self::project_latest_due_occurrence(&recurrence, start_offset, cutoff)?;
         let Some(occurrence) = selection.occurrence() else {
@@ -1792,12 +2011,9 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
-        if recurrence.revision() != expected_revision {
-            return Err(RecurrenceStoreError::ConcurrentModification {
-                recurrence_id: id.clone(),
-                expected_revision,
-                current_revision: recurrence.revision(),
-            });
+        validate_recurrence_revision(id, &recurrence, expected_revision)?;
+        if let Some(error) = cancelled_recurrence_error(id, &recurrence) {
+            return Err(error);
         }
         let selection = Self::project_latest_due_occurrence(&recurrence, start_offset, cutoff)?;
         let LatestDueOccurrenceSelection {
@@ -1897,12 +2113,9 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
-        if recurrence.revision() != expected_revision {
-            return Err(RecurrenceStoreError::ConcurrentModification {
-                recurrence_id: id.clone(),
-                expected_revision,
-                current_revision: recurrence.revision(),
-            });
+        validate_recurrence_revision(id, &recurrence, expected_revision)?;
+        if let Some(error) = cancelled_recurrence_error(id, &recurrence) {
+            return Err(error);
         }
         let page =
             Self::project_due_occurrences_page(&recurrence, start_offset, page_size, cutoff)?;
@@ -2096,12 +2309,9 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             });
         };
-        if recurrence.revision() != expected_revision {
-            return Err(RecurrenceStoreError::ConcurrentModification {
-                recurrence_id: id.clone(),
-                expected_revision,
-                current_revision: recurrence.revision(),
-            });
+        validate_recurrence_revision(id, &recurrence, expected_revision)?;
+        if let Some(error) = cancelled_recurrence_error(id, &recurrence) {
+            return Err(error);
         }
         let page =
             Self::project_due_occurrences_page(&recurrence, start_offset, page_size, cutoff)?;
@@ -2255,6 +2465,12 @@ impl RecurrenceStore {
             });
         };
         let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
+        if recurrence.cancellation().is_some() {
+            return Ok(AvailableRecurrenceOccurrencePage {
+                occurrences: Vec::new(),
+                next_offset: authored_page.next_offset(),
+            });
+        }
         let mut occurrences = Vec::with_capacity(authored_page.occurrences().len());
         for authored in authored_page.occurrences() {
             let Some(state) =
@@ -2288,6 +2504,14 @@ impl RecurrenceStore {
                 recurrence_id: id.clone(),
             })?;
         let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
+        if recurrence.cancellation().is_some() {
+            return Ok(AvailableRecurrenceOccurrenceWindow {
+                recurrence,
+                stream_versions: Vec::new(),
+                selected: None,
+                next_offset: authored_page.next_offset(),
+            });
+        }
         let mut stream_versions = Vec::with_capacity(authored_page.occurrences().len());
         let mut selected = None;
         for authored in authored_page.occurrences() {
@@ -2355,6 +2579,9 @@ impl RecurrenceStore {
                 selected,
                 next_offset: window_next_offset,
             } = self.select_available_occurrence_window(id, start_offset, page_size)?;
+            if let Some(error) = cancelled_recurrence_error(id, &recurrence) {
+                return Err(error);
+            }
 
             let Some(available) = selected else {
                 return Ok(ClaimNextRecurrenceOccurrenceSelection {
@@ -2461,6 +2688,9 @@ impl RecurrenceStore {
                 selected,
                 next_offset: window_next_offset,
             } = self.select_available_occurrence_window(id, start_offset, page_size)?;
+            if let Some(error) = cancelled_recurrence_error(id, &recurrence) {
+                return Err(error);
+            }
 
             let Some(available) = selected else {
                 return Ok(MaterializeNextRecurrenceOccurrenceSelection {
@@ -2651,10 +2881,12 @@ impl RecurrenceStore {
         let occurrence = Self::validate_occurrence(recurrence, offset, event_count, persisted)?;
         Ok(Some(RecurrenceOccurrenceState {
             occurrence,
+            recurrence_revision: recurrence.revision(),
             revision: event_count as u64,
             claimed,
             latest_release,
             task_id,
+            recurrence_cancelled: recurrence.cancellation().is_some(),
         }))
     }
 
@@ -2752,29 +2984,108 @@ impl RecurrenceStore {
                     interval_millis,
                     occurrence_count,
                 },
-            ] => {
-                let invalid_history = || RecurrenceStoreError::InvalidHistory { event_count };
-                let anchor = ScheduleInstant::from_unix_millis(*anchor_unix_millis);
-                let interval = ScheduleInterval::from_millis(*interval_millis)
-                    .map_err(|_| invalid_history())?;
-                let occurrence_count =
-                    OccurrenceCount::new(*occurrence_count).map_err(|_| invalid_history())?;
-                let final_occurrence = anchor
-                    .checked_advance_by(interval, occurrence_count.final_offset())
-                    .map_err(|_| invalid_history())?;
-                Ok(Some(FixedIntervalRecurrence {
-                    id,
-                    goal: goal.clone(),
-                    anchor,
-                    interval,
+                RecurrenceEvent::Cancelled { reason },
+            ] => Self::project_created_recurrence(
+                id,
+                goal,
+                *anchor_unix_millis,
+                *interval_millis,
+                *occurrence_count,
+                event_count,
+            )
+            .map(|mut recurrence| {
+                recurrence.revision = 2;
+                recurrence.cancellation = Some(reason.clone());
+                recurrence
+            })
+            .map(Some),
+            [
+                RecurrenceEvent::Created {
+                    goal,
+                    anchor_unix_millis,
+                    interval_millis,
                     occurrence_count,
-                    final_occurrence,
-                    revision: 1,
-                }))
-            }
+                },
+            ] => Self::project_created_recurrence(
+                id,
+                goal,
+                *anchor_unix_millis,
+                *interval_millis,
+                *occurrence_count,
+                event_count,
+            )
+            .map(Some),
             _ => Err(RecurrenceStoreError::InvalidHistory { event_count }),
         }
     }
+
+    fn project_created_recurrence(
+        id: RecurrenceId,
+        goal: &TaskGoal,
+        anchor_unix_millis: u64,
+        interval_millis: u64,
+        occurrence_count: u64,
+        event_count: usize,
+    ) -> Result<FixedIntervalRecurrence, RecurrenceStoreError> {
+        let invalid_history = || RecurrenceStoreError::InvalidHistory { event_count };
+        let anchor = ScheduleInstant::from_unix_millis(anchor_unix_millis);
+        let interval =
+            ScheduleInterval::from_millis(interval_millis).map_err(|_| invalid_history())?;
+        let occurrence_count =
+            OccurrenceCount::new(occurrence_count).map_err(|_| invalid_history())?;
+        let final_occurrence = anchor
+            .checked_advance_by(interval, occurrence_count.final_offset())
+            .map_err(|_| invalid_history())?;
+        Ok(FixedIntervalRecurrence {
+            id,
+            goal: goal.clone(),
+            anchor,
+            interval,
+            occurrence_count,
+            final_occurrence,
+            definition_revision: 1,
+            revision: 1,
+            cancellation: None,
+        })
+    }
+}
+
+fn validate_recurrence_revision(
+    id: &RecurrenceId,
+    recurrence: &FixedIntervalRecurrence,
+    expected_revision: u64,
+) -> Result<(), RecurrenceStoreError> {
+    if recurrence.revision() != expected_revision {
+        Err(RecurrenceStoreError::ConcurrentModification {
+            recurrence_id: id.clone(),
+            expected_revision,
+            current_revision: recurrence.revision(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn cancelled_recurrence_error(
+    id: &RecurrenceId,
+    recurrence: &FixedIntervalRecurrence,
+) -> Option<RecurrenceStoreError> {
+    recurrence
+        .cancellation()
+        .map(|_| RecurrenceStoreError::AlreadyCancelled {
+            recurrence_id: id.clone(),
+        })
+}
+
+fn cancelled_occurrence_error(
+    id: &RecurrenceId,
+    state: &RecurrenceOccurrenceState,
+) -> Option<RecurrenceStoreError> {
+    state
+        .recurrence_cancelled
+        .then_some(RecurrenceStoreError::AlreadyCancelled {
+            recurrence_id: id.clone(),
+        })
 }
 
 #[cfg(test)]
@@ -2810,6 +3121,95 @@ mod recurrence_projection_tests {
                 ),
                 Err(RecurrenceStoreError::InvalidHistory { event_count: 1 })
             ));
+        }
+    }
+
+    #[test]
+    fn cancellation_wins_exact_available_mutation_interleavings() {
+        for operation in ["persist", "claim", "materialize"] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("events.sqlite3");
+            let id = RecurrenceId::new(format!("cancel-race-{operation}")).unwrap();
+            let mut store = RecurrenceStore::open(&path).unwrap();
+            store
+                .create(
+                    id.clone(),
+                    TaskGoal::new("Cancellation is the durable boundary").unwrap(),
+                    ScheduleInstant::from_unix_millis(1),
+                    ScheduleInterval::from_millis(1).unwrap(),
+                    OccurrenceCount::new(1).unwrap(),
+                )
+                .unwrap();
+            if operation != "persist" {
+                store.persist_occurrence(&id, 1, 0).unwrap();
+            }
+            let mut cancelling_store = RecurrenceStore::open(&path).unwrap();
+            let cancellation_id = id.clone();
+            let mut cancel_before_append = || {
+                cancelling_store
+                    .cancel(
+                        &cancellation_id,
+                        1,
+                        RecurrenceCancellation::new("concurrent cancellation").unwrap(),
+                    )
+                    .unwrap();
+            };
+            let task_id = TaskId::new("must-not-exist").unwrap();
+
+            let error = match operation {
+                "persist" => store
+                    .persist_occurrence_before_append(&id, 1, 0, &mut cancel_before_append)
+                    .map(|_| ()),
+                "claim" => store
+                    .claim_occurrence_before_append(
+                        &id,
+                        0,
+                        1,
+                        ScheduleInstant::from_unix_millis(1),
+                        &mut cancel_before_append,
+                    )
+                    .map(|_| ()),
+                "materialize" => store
+                    .materialize_occurrence_before_append(
+                        &id,
+                        0,
+                        1,
+                        task_id.clone(),
+                        &mut cancel_before_append,
+                    )
+                    .map(|_| ()),
+                _ => unreachable!(),
+            }
+            .unwrap_err();
+
+            if operation == "persist" {
+                assert!(matches!(
+                    error,
+                    RecurrenceStoreError::ConcurrentModification {
+                        recurrence_id,
+                        expected_revision: 1,
+                        current_revision: 2,
+                    } if recurrence_id == id
+                ));
+                assert!(store.load_occurrence(&id, 0).unwrap().is_none());
+            } else {
+                assert!(matches!(
+                    error,
+                    RecurrenceStoreError::AlreadyCancelled { recurrence_id }
+                        if recurrence_id == id
+                ));
+                let state = store.load_occurrence_state(&id, 0).unwrap().unwrap();
+                assert_eq!(state.revision, 1);
+                assert!(!state.claimed);
+                assert_eq!(state.task_id, None);
+            }
+            assert!(
+                EventLog::open_read_only(&path)
+                    .unwrap()
+                    .replay::<TaskEvent>(&task_stream(&task_id))
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
 
@@ -3876,12 +4276,16 @@ enum RecurrenceEvent {
         interval_millis: u64,
         occurrence_count: u64,
     },
+    Cancelled {
+        reason: RecurrenceCancellation,
+    },
 }
 
 impl Event for RecurrenceEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::Created { .. } => RECURRENCE_CREATED_EVENT_TYPE,
+            Self::Cancelled { .. } => RECURRENCE_CANCELLED_EVENT_TYPE,
         }
     }
 
@@ -3890,55 +4294,83 @@ impl Event for RecurrenceEvent {
     }
 
     fn decode(event_type: &str, payload_version: u32, payload: &[u8]) -> Result<Self, DecodeError> {
-        if event_type != RECURRENCE_CREATED_EVENT_TYPE
-            || payload_version != RECURRENCE_EVENT_PAYLOAD_VERSION
-        {
+        if payload_version != RECURRENCE_EVENT_PAYLOAD_VERSION {
             return Err(DecodeError::UnsupportedEvent {
                 event_type: event_type.to_owned(),
                 payload_version,
             });
         }
 
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Payload {
-            goal: String,
-            anchor_unix_millis: u64,
-            interval_millis: u64,
-            occurrence_count: u64,
+        match event_type {
+            RECURRENCE_CREATED_EVENT_TYPE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    goal: String,
+                    anchor_unix_millis: u64,
+                    interval_millis: u64,
+                    occurrence_count: u64,
+                }
+
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let goal = TaskGoal::new(payload.goal).map_err(|error: TaskGoalError| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let interval =
+                    ScheduleInterval::from_millis(payload.interval_millis).map_err(|error| {
+                        DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        }
+                    })?;
+                let occurrence_count =
+                    OccurrenceCount::new(payload.occurrence_count).map_err(|error| {
+                        DecodeError::MalformedPayload {
+                            message: error.to_string(),
+                        }
+                    })?;
+                ScheduleInstant::from_unix_millis(payload.anchor_unix_millis)
+                    .checked_advance_by(interval, occurrence_count.final_offset())
+                    .map_err(|error| DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    })?;
+
+                Ok(Self::Created {
+                    goal,
+                    anchor_unix_millis: payload.anchor_unix_millis,
+                    interval_millis: payload.interval_millis,
+                    occurrence_count: payload.occurrence_count,
+                })
+            }
+            RECURRENCE_CANCELLED_EVENT_TYPE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Payload {
+                    reason: String,
+                }
+
+                let payload: Payload = serde_json::from_slice(payload).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                let reason = RecurrenceCancellation::new(payload.reason).map_err(|error| {
+                    DecodeError::MalformedPayload {
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(Self::Cancelled { reason })
+            }
+            _ => Err(DecodeError::UnsupportedEvent {
+                event_type: event_type.to_owned(),
+                payload_version,
+            }),
         }
-
-        let payload: Payload =
-            serde_json::from_slice(payload).map_err(|error| DecodeError::MalformedPayload {
-                message: error.to_string(),
-            })?;
-        let goal = TaskGoal::new(payload.goal).map_err(|error: TaskGoalError| {
-            DecodeError::MalformedPayload {
-                message: error.to_string(),
-            }
-        })?;
-        let interval = ScheduleInterval::from_millis(payload.interval_millis).map_err(|error| {
-            DecodeError::MalformedPayload {
-                message: error.to_string(),
-            }
-        })?;
-        let occurrence_count = OccurrenceCount::new(payload.occurrence_count).map_err(|error| {
-            DecodeError::MalformedPayload {
-                message: error.to_string(),
-            }
-        })?;
-        ScheduleInstant::from_unix_millis(payload.anchor_unix_millis)
-            .checked_advance_by(interval, occurrence_count.final_offset())
-            .map_err(|error| DecodeError::MalformedPayload {
-                message: error.to_string(),
-            })?;
-
-        Ok(Self::Created {
-            goal,
-            anchor_unix_millis: payload.anchor_unix_millis,
-            interval_millis: payload.interval_millis,
-            occurrence_count: payload.occurrence_count,
-        })
     }
 }
 
