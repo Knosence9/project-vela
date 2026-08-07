@@ -501,6 +501,34 @@ impl RecurrenceHistoryEntry {
     }
 }
 
+/// One validated persisted transition in an exact recurrence occurrence's lifecycle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RecurrenceOccurrenceHistoryEvent {
+    Persisted { occurrence: RecurrenceOccurrence },
+    Claimed,
+    Released { reason: RecurrenceOccurrenceRelease },
+    Materialized { task_id: TaskId },
+}
+
+/// One revision-bearing entry from a validated durable recurrence occurrence history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceOccurrenceHistoryEntry {
+    revision: u64,
+    event: RecurrenceOccurrenceHistoryEvent,
+}
+
+impl RecurrenceOccurrenceHistoryEntry {
+    /// The one-based event-stream revision occupied by this lifecycle event.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn event(&self) -> &RecurrenceOccurrenceHistoryEvent {
+        &self.event
+    }
+}
+
 impl FixedIntervalRecurrence {
     pub fn id(&self) -> &RecurrenceId {
         &self.id
@@ -1311,6 +1339,54 @@ impl RecurrenceStore {
                 .map(|(index, event)| RecurrenceHistoryEntry {
                     revision: index as u64 + 1,
                     event: RecurrenceHistoryEvent::from(event),
+                })
+                .collect(),
+        ))
+    }
+
+    /// Returns complete validated lifecycle evidence for one exact occurrence coordinate.
+    pub fn occurrence_history(
+        &self,
+        id: &RecurrenceId,
+        offset: u64,
+    ) -> Result<Option<Vec<RecurrenceOccurrenceHistoryEntry>>, RecurrenceStoreError> {
+        let events = self.replay_occurrence(id, offset)?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
+                recurrence_id: id.clone(),
+                offset,
+                event_count: events.len(),
+            });
+        };
+        let state = Self::project_occurrence_state(&recurrence, offset, &events)?
+            .expect("a non-empty valid occurrence history projects state");
+        let occurrence = state.occurrence;
+
+        Ok(Some(
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| RecurrenceOccurrenceHistoryEntry {
+                    revision: index as u64 + 1,
+                    event: match event {
+                        RecurrenceOccurrenceEvent::Persisted { .. } => {
+                            RecurrenceOccurrenceHistoryEvent::Persisted {
+                                occurrence: occurrence.clone(),
+                            }
+                        }
+                        RecurrenceOccurrenceEvent::Claimed {} => {
+                            RecurrenceOccurrenceHistoryEvent::Claimed
+                        }
+                        RecurrenceOccurrenceEvent::Released { reason } => {
+                            RecurrenceOccurrenceHistoryEvent::Released { reason }
+                        }
+                        RecurrenceOccurrenceEvent::Materialized { task_id } => {
+                            RecurrenceOccurrenceHistoryEvent::Materialized { task_id }
+                        }
+                    },
                 })
                 .collect(),
         ))

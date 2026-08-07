@@ -704,6 +704,7 @@ The first milestone is the **evidence loop**:
 158. Durably cancel one finite recurrence aggregate revision while preserving immutable authored and historical occurrence evidence. ✅
 159. Cancel one exact finite recurrence revision through deterministic writable CLI JSON without granting interruption, dispatch, or execution authority. ✅
 160. Inspect one exact finite recurrence's typed lifecycle history through deterministic read-only CLI JSON without granting lifecycle or execution authority. ✅
+161. Query one exact persisted recurrence occurrence's complete typed lifecycle history without granting discovery, lifecycle, or execution authority. ✅
 
 ## Project documents
 
