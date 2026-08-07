@@ -14,10 +14,11 @@ use vela_kernel::scheduler::{
     AvailableRecurrenceOccurrence, AvailableRecurrenceOccurrencePage, ClaimedRecurrenceOccurrence,
     ClaimedRecurrenceOccurrencePage, FixedIntervalRecurrence, MaterializedRecurrenceOccurrence,
     MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize,
-    RecurrenceCancellation, RecurrenceId, RecurrenceOccurrence, RecurrenceOccurrenceLookupError,
-    RecurrenceOccurrencePage, RecurrenceOccurrenceRelease, RecurrenceStatus, RecurrenceStore,
-    RecurrenceStoreError, ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant,
-    ScheduleInterval, ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
+    RecurrenceCancellation, RecurrenceHistoryEvent, RecurrenceId, RecurrenceOccurrence,
+    RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage, RecurrenceOccurrenceRelease,
+    RecurrenceStatus, RecurrenceStore, RecurrenceStoreError, ScheduleCancellation,
+    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
+    ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -83,6 +84,8 @@ pub enum RecurrenceCommand {
     },
     /// Print one finite recurrence selected by exact ID through a read-only boundary.
     Get { database: PathBuf, id: String },
+    /// Print one exact recurrence's validated lifecycle history.
+    History { database: PathBuf, id: String },
     /// Page exact occurrences for one finite recurrence through a read-only boundary.
     Occurrences {
         database: PathBuf,
@@ -464,6 +467,9 @@ impl Cli {
                 command: Some(RecurrenceCommand::Get { database, id }),
             }) => get_recurrence(&database, &id),
             Some(Command::Recurrence {
+                command: Some(RecurrenceCommand::History { database, id }),
+            }) => inspect_recurrence_history(&database, &id),
+            Some(Command::Recurrence {
                 command:
                     Some(RecurrenceCommand::Occurrences {
                         database,
@@ -753,6 +759,33 @@ struct RecurrenceInspection<'a> {
     definition_revision: u64,
     aggregate_revision: u64,
     cancellation: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct RecurrenceHistoryInspection<'a> {
+    id: &'a str,
+    history: Option<Vec<RecurrenceHistoryEntryInspection<'a>>>,
+}
+
+#[derive(Serialize)]
+struct RecurrenceHistoryEntryInspection<'a> {
+    revision: u64,
+    #[serde(flatten)]
+    event: RecurrenceHistoryEventInspection<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum RecurrenceHistoryEventInspection<'a> {
+    Created {
+        goal: &'a str,
+        anchor_unix_millis: u64,
+        interval_millis: u64,
+        occurrence_count: u64,
+    },
+    Cancelled {
+        reason: &'a str,
+    },
 }
 
 #[derive(Serialize)]
@@ -1327,6 +1360,67 @@ fn get_recurrence(database: &Path, raw_id: &str) -> ExitCode {
     let output = match serde_json::to_string(&recurrence_inspection(&recurrence)) {
         Ok(output) => output,
         Err(error) => return extension_error("recurrence_lookup_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn inspect_recurrence_history(database: &Path, raw_id: &str) -> ExitCode {
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_history_failed", error),
+    };
+    let history = match store.history(&id) {
+        Ok(history) => history,
+        Err(error) => return extension_error("recurrence_history_failed", error),
+    };
+    let history = match history.as_ref() {
+        None => None,
+        Some(entries) => {
+            let mut output = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let event = match entry.event() {
+                    RecurrenceHistoryEvent::Created {
+                        goal,
+                        anchor,
+                        interval,
+                        occurrence_count,
+                    } => RecurrenceHistoryEventInspection::Created {
+                        goal: goal.as_str(),
+                        anchor_unix_millis: anchor.unix_millis(),
+                        interval_millis: interval.millis(),
+                        occurrence_count: occurrence_count.get(),
+                    },
+                    RecurrenceHistoryEvent::Cancelled { reason } => {
+                        RecurrenceHistoryEventInspection::Cancelled {
+                            reason: reason.as_str(),
+                        }
+                    }
+                    _ => {
+                        return extension_error(
+                            "recurrence_history_failed",
+                            "unsupported recurrence history event",
+                        );
+                    }
+                };
+                output.push(RecurrenceHistoryEntryInspection {
+                    revision: entry.revision(),
+                    event,
+                });
+            }
+            Some(output)
+        }
+    };
+    let output = match serde_json::to_string(&RecurrenceHistoryInspection {
+        id: id.as_str(),
+        history,
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_history_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS
