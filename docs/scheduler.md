@@ -912,6 +912,26 @@ lifecycle state, choose catch-up policy, generate identities, materialize,
 dispatch, retry, grant permission, or execute work. See
 [ADR-0041](adr/0041-read-only-finite-recurrence-cli-inventory.md).
 
+## Read-only recurrence status CLI filtering
+
+`vela-dev recurrence status DATABASE STATUS` validates one exact lowercase
+`active` or `cancelled` status before storage access, opens only the selected
+existing database read-only, and delegates complete fail-closed discovery and
+filtering to `RecurrenceStore::list_by_status`. Success emits the same compact
+complete recurrence inventory objects as `recurrence inspect`, preserving exact
+ID order, JSON-escaped strings, definition and aggregate revisions, and nullable
+cancellation evidence. Empty and unmatched results emit
+`{"recurrences":[]}`.
+
+Invalid status input emits `invalid_recurrence_status` without accessing
+storage. Missing or incompatible storage, malformed histories, projection, and
+serialization failures emit one escaped `recurrence_status_inspection_failed`
+diagnostic and no partial stdout; missing storage is never created. Complete
+discovery remains fail closed even when corruption belongs to a nonmatching
+status. The command reads no clock, mutates no lifecycle, and cannot cancel,
+claim, materialize, dispatch, retry, grant permission, or execute work. See
+[ADR-0090](adr/0090-read-only-finite-recurrence-status-cli-filtering.md).
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database
