@@ -289,6 +289,28 @@ state, scans no unrelated recurrence streams, and grants no undo, resume,
 occurrence lifecycle, worker, dispatch, permission, retry, or execution authority.
 See [ADR-0084](adr/0084-read-only-exact-finite-recurrence-history.md).
 
+## Read-only exact recurrence occurrence history CLI
+
+`vela-dev recurrence occurrence-history DATABASE RECURRENCE_ID OFFSET` validates
+the exact recurrence ID before storage access, accepts one caller-owned
+zero-based `u64` offset, opens only the selected existing database through
+`RecurrenceStore::open_read_only`, and delegates complete selected-coordinate
+replay to `RecurrenceStore::occurrence_history`. Success emits one compact object
+with exact JSON-escaped `recurrence_id`, numeric `offset`, and revision-ordered
+typed `history`. Persistence entries preserve exact goal, Unix milliseconds, and
+immutable definition revision; claim entries have no additional payload; release
+entries preserve exact recovery reasons; materialization entries preserve exact
+task IDs. A missing coordinate emits `history: null`.
+
+Invalid IDs emit `invalid_recurrence_id` before storage access. Missing storage,
+schema, selected replay, projection, and serialization failures emit
+`recurrence_occurrence_history_failed`; failures are non-zero with no partial
+stdout and cannot create missing storage. The command reads no ambient clock,
+mutates no state, scans no unrelated occurrence coordinate, and grants no
+discovery, lifecycle, worker, lease, dispatch, permission, retry, or execution
+authority. See
+[ADR-0086](adr/0086-read-only-exact-recurrence-occurrence-history-cli.md).
+
 ## Read-only exact recurrence occurrence CLI paging
 
 `vela-dev recurrence occurrences DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`
