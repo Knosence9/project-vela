@@ -529,6 +529,42 @@ impl RecurrenceOccurrenceHistoryEntry {
     }
 }
 
+/// One exact authored coordinate and its complete validated durable lifecycle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceOccurrenceHistory {
+    offset: u64,
+    entries: Vec<RecurrenceOccurrenceHistoryEntry>,
+}
+
+impl RecurrenceOccurrenceHistory {
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub fn entries(&self) -> &[RecurrenceOccurrenceHistoryEntry] {
+        &self.entries
+    }
+}
+
+/// One bounded, inert page of complete recurrence occurrence histories.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceOccurrenceHistoryPage {
+    histories: Vec<RecurrenceOccurrenceHistory>,
+    next_offset: Option<u64>,
+}
+
+impl RecurrenceOccurrenceHistoryPage {
+    /// Returns present histories in increasing authored-offset order.
+    pub fn histories(&self) -> &[RecurrenceOccurrenceHistory] {
+        &self.histories
+    }
+
+    /// Returns the first uninspected authored offset when another window exists.
+    pub const fn next_offset(&self) -> Option<u64> {
+        self.next_offset
+    }
+}
+
 impl FixedIntervalRecurrence {
     pub fn id(&self) -> &RecurrenceId {
         &self.id
@@ -1361,35 +1397,75 @@ impl RecurrenceStore {
                 event_count: events.len(),
             });
         };
-        let state = Self::project_occurrence_state(&recurrence, offset, &events)?
+        Ok(Some(Self::project_occurrence_history(
+            &recurrence,
+            offset,
+            events,
+        )?))
+    }
+
+    /// Inspects one bounded authored-offset window and returns complete present histories.
+    pub fn occurrence_histories_page(
+        &self,
+        id: &RecurrenceId,
+        start_offset: u64,
+        page_size: OccurrencePageSize,
+    ) -> Result<RecurrenceOccurrenceHistoryPage, RecurrenceStoreError> {
+        let Some(recurrence) = self.load(id)? else {
+            return Err(RecurrenceStoreError::NotFound {
+                recurrence_id: id.clone(),
+            });
+        };
+        let authored_page = recurrence.occurrences_page(start_offset, page_size)?;
+        let mut histories = Vec::with_capacity(authored_page.occurrences().len());
+        for authored in authored_page.occurrences() {
+            let offset = authored.offset();
+            let events = self.replay_occurrence(id, offset)?;
+            if !events.is_empty() {
+                histories.push(RecurrenceOccurrenceHistory {
+                    offset,
+                    entries: Self::project_occurrence_history(&recurrence, offset, events)?,
+                });
+            }
+        }
+        Ok(RecurrenceOccurrenceHistoryPage {
+            histories,
+            next_offset: authored_page.next_offset(),
+        })
+    }
+
+    fn project_occurrence_history(
+        recurrence: &FixedIntervalRecurrence,
+        offset: u64,
+        events: Vec<RecurrenceOccurrenceEvent>,
+    ) -> Result<Vec<RecurrenceOccurrenceHistoryEntry>, RecurrenceStoreError> {
+        let state = Self::project_occurrence_state(recurrence, offset, &events)?
             .expect("a non-empty valid occurrence history projects state");
         let occurrence = state.occurrence;
 
-        Ok(Some(
-            events
-                .into_iter()
-                .enumerate()
-                .map(|(index, event)| RecurrenceOccurrenceHistoryEntry {
-                    revision: index as u64 + 1,
-                    event: match event {
-                        RecurrenceOccurrenceEvent::Persisted { .. } => {
-                            RecurrenceOccurrenceHistoryEvent::Persisted {
-                                occurrence: occurrence.clone(),
-                            }
+        Ok(events
+            .into_iter()
+            .enumerate()
+            .map(|(index, event)| RecurrenceOccurrenceHistoryEntry {
+                revision: index as u64 + 1,
+                event: match event {
+                    RecurrenceOccurrenceEvent::Persisted { .. } => {
+                        RecurrenceOccurrenceHistoryEvent::Persisted {
+                            occurrence: occurrence.clone(),
                         }
-                        RecurrenceOccurrenceEvent::Claimed {} => {
-                            RecurrenceOccurrenceHistoryEvent::Claimed
-                        }
-                        RecurrenceOccurrenceEvent::Released { reason } => {
-                            RecurrenceOccurrenceHistoryEvent::Released { reason }
-                        }
-                        RecurrenceOccurrenceEvent::Materialized { task_id } => {
-                            RecurrenceOccurrenceHistoryEvent::Materialized { task_id }
-                        }
-                    },
-                })
-                .collect(),
-        ))
+                    }
+                    RecurrenceOccurrenceEvent::Claimed {} => {
+                        RecurrenceOccurrenceHistoryEvent::Claimed
+                    }
+                    RecurrenceOccurrenceEvent::Released { reason } => {
+                        RecurrenceOccurrenceHistoryEvent::Released { reason }
+                    }
+                    RecurrenceOccurrenceEvent::Materialized { task_id } => {
+                        RecurrenceOccurrenceHistoryEvent::Materialized { task_id }
+                    }
+                },
+            })
+            .collect())
     }
 
     /// Withdraws future recurrence eligibility without erasing authored definition state.
