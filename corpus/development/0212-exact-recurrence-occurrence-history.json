@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect exact recurrence occurrence history",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/969 to expose complete typed lifecycle evidence for one exact persisted recurrence occurrence.",
+    "acceptance_criteria": [
+      "Return revision-bearing persistence, claim, release, and materialization events in stream order or None for an absent coordinate.",
+      "Validate present occurrence and aggregate evidence through canonical strict projection before returning history.",
+      "Fail closed on selected corruption while isolating unrelated streams and retaining read-only authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The initial contract test failed to compile because RecurrenceOccurrenceHistoryEvent and RecurrenceStore::occurrence_history did not exist.",
+      "patch": "Added focused integration coverage for complete lifecycle, absence, corruption, post-cancellation evidence, and read-only behavior."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented revision-bearing typed history over canonical occurrence projection and reused the projected occurrence instead of introducing a second lifecycle state machine.",
+      "patch": "Implemented issue 969 in crates/vela-kernel/src/scheduler.rs with focused tests and ADR-0085."
+    },
+    {
+      "summary": "Fixed the independent review regression.",
+      "outcome": "success",
+      "diagnostic": "Independent review found that an absent coordinate could incorrectly fail on malformed aggregate evidence.",
+      "patch": "Decided exact occurrence absence before authoritative definition replay while preserving strict validation for every present history."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "A rate-limited false green was excluded; after cooldown, genuine CodeRabbit review raised one trivial suggestion to add explicit orphaned-occurrence-stream coverage and no blocking findings.",
+      "patch": "Deferred the non-blocking coverage suggestion, preserved the verified head unchanged, and merged only after the substantive exact-head review and zero-thread checks passed."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 969 delivered exact occurrence history with strict selected-evidence validation, absence semantics, and bounded read-only authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 970 exact head", "status": "passed" },
+      { "command": "Pull request 970 squash merge a36a5e60f591261e4d19c137566d997f17d5ead9", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Exact absence should be decided from the selected occurrence stream before unrelated aggregate corruption can turn absence into failure.",
+    "Present lifecycle history must reuse canonical strict projection rather than drift into a permissive second replay path.",
+    "History inspection grants no mutation, migration, generation, discovery, clock, dispatch, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/970"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page recurrence occurrence histories",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/973 to page complete typed occurrence histories through bounded authored-offset windows.",
+    "acceptance_criteria": [
+      "Return present complete histories in ascending authored-offset order with a deterministic next_offset.",
+      "Omit sparse gaps while advancing the cursor by inspected authored coordinates.",
+      "Validate every selected present history before return and fail without a partial page on selected corruption."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The page tests failed because RecurrenceStore::occurrence_histories_page did not exist.",
+      "patch": "Added bounded sparse-page, cursor, validation, missing-recurrence, and selected-corruption coverage."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented recurrence-local authored-window paging and extracted one canonical complete-history projection path shared by exact and paged queries.",
+      "patch": "Implemented issue 973 in crates/vela-kernel/src/scheduler.rs with focused tests, ADR-0087, and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking implementation or API issues; an initial rate-limited CodeRabbit status was excluded, then genuine exact-head review completed with no actionable comments.",
+      "patch": "Preserved the unchanged verified head through cooldown and required zero unresolved threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 973 delivered bounded sparse paging over complete occurrence histories with deterministic cursors and fail-closed selected-window validation.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 974 exact head", "status": "passed" },
+      { "command": "Pull request 974 squash merge e24f233b46f453d15b1f66ad687e2165b37d5a2c", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Paging complete histories should reuse the exact-history projector so strict lifecycle semantics have one authority.",
+    "Sparse cursors advance by inspected authored coordinates, not by the number of returned histories.",
+    "The page grants no global discovery, mutation, persisted cursor, catch-up policy, dispatch, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/974"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}
