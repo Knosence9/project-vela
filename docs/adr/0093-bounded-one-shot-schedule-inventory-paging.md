@@ -1,0 +1,56 @@
+# ADR-0093: Bounded one-shot schedule inventory paging
+
+- **Status:** accepted
+- **Date:** 2026-08-07
+- **Decision and execution issue:** [#987](https://github.com/Knosence9/project-vela/issues/987)
+- **Related:** ADR-0040, ADR-0089, ADR-0091
+
+## Context
+
+The complete one-shot schedule inventory and its status and due filters validate every authoritative schedule history before returning deterministic projections. Their work and allocation grow with the complete inventory. Callers that need incremental inspection cannot impose a storage bound and must repeatedly replay earlier schedules.
+
+Authored schedule IDs already provide a stable exact ordering and the event log can select authoritative creation streams in that order. An exclusive exact-ID keyset cursor avoids positional drift and requires neither persisted cursor state nor a new identity.
+
+## Decision
+
+Add `SchedulePageSize`, accepting exactly `1..=1024`, and `SchedulePage`, containing complete schedules plus an optional `next_after` exact schedule ID. Add `ScheduleStore::list_page(after, page_size)`, where `after` is an optional caller-owned exclusive cursor. The cursor need not identify an existing schedule.
+
+The event log selects authoritative `schedule.created` streams whose internal stream IDs sort after the cursor, in ascending exact-ID order, with a limit of `page_size + 1`. It replays complete selected histories in the same statement and canonical schedule projection validates all selected streams, including the one-item lookahead, before any page is returned. At most `page_size` schedules are emitted. `next_after` is the last emitted exact ID only when the validated lookahead proves another schedule exists; otherwise it is absent. Empty stores and cursors beyond the end return an empty terminal page.
+
+Malformed selected stream IDs, payloads, event types, payload versions, version sequences, or lifecycle ordering fail closed without a partial page. Corruption before the exclusive cursor or after the one-item lookahead is outside the bounded query. Unrelated event families remain excluded.
+
+The cursor is caller-owned projection state. The operation works through read-only storage, reads no ambient clock, mutates nothing, persists no cursor, and grants no lifecycle, worker, lease, dispatch, retry, permission, or execution authority.
+
+## Alternatives considered
+
+### Slice `ScheduleStore::list` in memory
+
+Rejected because output would be bounded while storage work, replay, and allocation would still grow with the complete inventory.
+
+### Use a numeric offset
+
+Rejected because later pages would rescan an increasing prefix and concurrent insertion before an offset could create overlaps or omissions unrelated to an explicit authored coordinate.
+
+### Return the lookahead ID as the cursor
+
+Rejected because an exclusive cursor naming the unreturned lookahead would skip that schedule. The last returned ID composes directly with the next exclusive query.
+
+### Combine status or due filtering with paging
+
+Rejected because filling a result page may require scanning an unbounded number of nonmatching schedules. Responsible bounded filtered paging needs a separate index, explicit scan bound, or sparse-cursor contract.
+
+## Consequences
+
+- Kernel callers can inspect complete one-shot schedule projections with bounded stream selection, replay, and allocation.
+- Keyset continuation has no overlap and accepts caller-owned cursors that no longer or never existed.
+- Selected lookahead corruption blocks misleading continuation, while corruption outside the bounded window remains isolated.
+- Complete, status-filtered, and due inventory retain their global fail-closed contracts.
+- No schema, event, mutation, clock, or execution authority is added.
+
+## Verification
+
+Strict RED→GREEN tests prove page-size validation, exact-ID ordering, non-overlapping continuation, nonexistent and beyond-end cursors, empty and read-only behavior, unrelated-stream exclusion, selected-lookahead failure, and corruption isolation outside the bounded window. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider before adding a CLI adapter, status- or due-filtered pages, snapshot tokens across calls, destructive deletion, resume or undo semantics, clocks, workers, leases, dispatch, permissions, retries, or execution.

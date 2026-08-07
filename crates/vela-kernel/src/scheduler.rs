@@ -3678,6 +3678,56 @@ mod recurrence_projection_tests {
     }
 }
 
+/// A positive, allocation-bounded one-shot schedule inventory page size.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SchedulePageSize(u16);
+
+impl SchedulePageSize {
+    /// The largest accepted schedule inventory page size.
+    pub const MAX: u64 = 1024;
+
+    /// Validates a caller-owned page size before storage access or allocation.
+    pub const fn new(value: u64) -> Result<Self, SchedulePageSizeError> {
+        if value == 0 {
+            Err(SchedulePageSizeError::Zero)
+        } else if value > Self::MAX {
+            Err(SchedulePageSizeError::TooLarge {
+                requested: value,
+                maximum: Self::MAX,
+            })
+        } else {
+            Ok(Self(value as u16))
+        }
+    }
+
+    /// Returns the exact validated page size.
+    pub const fn get(self) -> u64 {
+        self.0 as u64
+    }
+}
+
+/// Why a caller-owned schedule inventory page size is invalid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SchedulePageSizeError {
+    Zero,
+    TooLarge { requested: u64, maximum: u64 },
+}
+
+impl fmt::Display for SchedulePageSizeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Zero => formatter.write_str("schedule page size must be positive"),
+            Self::TooLarge { requested, maximum } => write!(
+                formatter,
+                "schedule page size {requested} exceeds maximum {maximum}"
+            ),
+        }
+    }
+}
+
+impl Error for SchedulePageSizeError {}
+
 /// One inert durable intent to create a task no earlier than a caller-owned instant.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScheduledTask {
@@ -3689,6 +3739,25 @@ pub struct ScheduledTask {
     latest_release: Option<ScheduleRelease>,
     task_id: Option<TaskId>,
     revision: u64,
+}
+
+/// One bounded, inert page of complete one-shot schedules.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SchedulePage {
+    schedules: Vec<ScheduledTask>,
+    next_after: Option<ScheduleId>,
+}
+
+impl SchedulePage {
+    /// Returns complete schedules in increasing exact-ID order.
+    pub fn schedules(&self) -> &[ScheduledTask] {
+        &self.schedules
+    }
+
+    /// Returns the last emitted exact ID only when another schedule exists.
+    pub fn next_after(&self) -> Option<&ScheduleId> {
+        self.next_after.as_ref()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4308,11 +4377,50 @@ impl ScheduleStore {
         Ok(schedules)
     }
 
+    /// Returns one bounded exact-ID-ordered one-shot schedule inventory page.
+    pub fn list_page(
+        &self,
+        after: Option<&ScheduleId>,
+        page_size: SchedulePageSize,
+    ) -> Result<SchedulePage, ScheduleStoreError> {
+        let after_stream_id = after.map(schedule_stream);
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_page::<ScheduleEvent>(
+                SCHEDULE_CREATED_EVENT_TYPE,
+                after_stream_id.as_ref().map(StreamId::as_str),
+                page_size.get() as i64 + 1,
+            )
+            .map_err(ScheduleStoreError::Replay)?;
+        let mut schedules = Self::project_discovered(streams)?;
+        let has_more = schedules.len() > page_size.get() as usize;
+        if has_more {
+            schedules.pop();
+        }
+        let next_after = has_more.then(|| {
+            schedules
+                .last()
+                .expect("a positive page with lookahead has one returned schedule")
+                .id()
+                .clone()
+        });
+        Ok(SchedulePage {
+            schedules,
+            next_after,
+        })
+    }
+
     fn discover(&self) -> Result<Vec<ScheduledTask>, ScheduleStoreError> {
         let streams = self
             .event_log
             .replay_streams_with_event_type::<ScheduleEvent>(SCHEDULE_CREATED_EVENT_TYPE)
             .map_err(ScheduleStoreError::Replay)?;
+        Self::project_discovered(streams)
+    }
+
+    fn project_discovered(
+        streams: Vec<(String, Vec<ScheduleEvent>)>,
+    ) -> Result<Vec<ScheduledTask>, ScheduleStoreError> {
         let mut schedules = Vec::with_capacity(streams.len());
 
         for (stream_id, events) in streams {
