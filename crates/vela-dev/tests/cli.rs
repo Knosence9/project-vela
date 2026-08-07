@@ -6760,23 +6760,30 @@ fn recurrence_occurrence_history_validates_before_storage_and_isolates_corruptio
         1
     );
 
-    let inspect = |id: &RecurrenceId| {
+    let inspect = |id: &RecurrenceId, offset: &str| {
         let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");
         command.args([
             "recurrence",
             "occurrence-history",
             database.to_str().expect("UTF-8 database path"),
             id.as_str(),
-            "0",
+            offset,
         ]);
         command
     };
-    inspect(&selected_id)
+    inspect(&selected_id, "0")
         .assert()
         .success()
         .stdout(predicate::str::contains("\"type\":\"persisted\""))
         .stderr(predicate::str::is_empty());
-    inspect(&unrelated_id)
+    inspect(&selected_id, "1")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_occurrence_history_failed:",
+        ));
+    inspect(&unrelated_id, "0")
         .assert()
         .code(1)
         .stdout(predicate::str::is_empty())
