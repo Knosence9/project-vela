@@ -1272,6 +1272,118 @@ fn lists_complete_recurrence_definitions_in_exact_id_order() {
 }
 
 #[test]
+fn filters_complete_recurrence_definitions_by_exact_status_in_id_order() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let active_zeta = store
+        .create(
+            RecurrenceId::new("zeta").unwrap(),
+            TaskGoal::new("Active later").unwrap(),
+            instant(11),
+            ScheduleInterval::from_millis(7).unwrap(),
+            OccurrenceCount::new(3).unwrap(),
+        )
+        .unwrap();
+    let cancelled = store
+        .create(
+            RecurrenceId::new("middle").unwrap(),
+            TaskGoal::new("Cancelled").unwrap(),
+            instant(8),
+            ScheduleInterval::from_millis(5).unwrap(),
+            OccurrenceCount::new(2).unwrap(),
+        )
+        .unwrap();
+    let cancelled = store
+        .cancel(
+            cancelled.id(),
+            cancelled.revision(),
+            RecurrenceCancellation::new("operator request").unwrap(),
+        )
+        .unwrap();
+    let active_alpha = store
+        .create(
+            RecurrenceId::new("alpha").unwrap(),
+            TaskGoal::new("Active earlier").unwrap(),
+            instant(5),
+            ScheduleInterval::from_millis(2).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('unrelated', 1, 'other.created', 1, '{}')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let read_only = RecurrenceStore::open_read_only(&path).unwrap();
+    assert_eq!(
+        read_only.list_by_status(RecurrenceStatus::Active).unwrap(),
+        vec![active_alpha, active_zeta]
+    );
+    assert_eq!(
+        read_only
+            .list_by_status(RecurrenceStatus::Cancelled)
+            .unwrap(),
+        vec![cancelled]
+    );
+}
+
+#[test]
+fn recurrence_status_filter_is_empty_when_unmatched_and_fails_closed() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    assert!(
+        store
+            .list_by_status(RecurrenceStatus::Cancelled)
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .create(
+            RecurrenceId::new("active").unwrap(),
+            TaskGoal::new("Valid active definition").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(1).unwrap(),
+        )
+        .unwrap();
+    assert!(
+        store
+            .list_by_status(RecurrenceStatus::Cancelled)
+            .unwrap()
+            .is_empty()
+    );
+    drop(store);
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('recurrence:active', 2, 'recurrence.fixed_interval_created', 1, ?1)",
+            [br#"{"goal":"Second","anchor_unix_millis":2,"interval_millis":1,"occurrence_count":1}"#.as_slice()],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .list_by_status(RecurrenceStatus::Cancelled)
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidHistory { event_count: 2 }
+    ));
+}
+
+#[test]
 fn read_only_recurrence_inventory_is_empty_and_never_creates_storage() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
