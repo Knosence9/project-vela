@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Release exact recurrence occurrence claims",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/933 to persist explicit reason-bearing recovery from one exact claimed coordinate.",
+    "acceptance_criteria": [
+      "Release a claim at its exact observed revision and preserve a non-blank caller reason.",
+      "Support repeated claim-release cycles, reclaim, reopen, and later available-state materialization.",
+      "Reject stale, missing, available, and materialized states without appending."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The release API, value, lookup, state error, and lifecycle event were absent.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented recurrence.occurrence_released, strict repeated-cycle replay, exact released projection, reclaim, and available-state materialization eligibility.",
+      "patch": "Implemented the issue 933 contract in crates/vela-kernel/src/scheduler.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found scheduler documentation incorrectly implied direct materialization of a current recurrence claim; commit 974e0a7 corrected the contract and strengthened no-append coverage.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 933 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 934 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 934 squash merge 96b9a68672881d878cad3c5b768389e77ec92ae7",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Recovery must be explicit caller-authored evidence, not inferred worker death.",
+    "Current claims and released availability are distinct lifecycle states.",
+    "Release grants no selection, dispatch, retry, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/934"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

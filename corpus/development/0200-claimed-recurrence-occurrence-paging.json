@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page claimed recurrence occurrences",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/943 to project current claims within one bounded authored-offset window.",
+    "acceptance_criteria": [
+      "Return only current claims in authored order with exact provenance and revision.",
+      "Omit other lifecycle states without coupling cursor progress to result density.",
+      "Fail closed for selected-window corruption while isolating unrelated corruption."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused integration test failed with E0599 because claimed_occurrences_page did not exist.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented ClaimedRecurrenceOccurrencePage with bounded strict replay and lifecycle filtering plus sparse, cursor, reopen, and corruption tests.",
+      "patch": "Implemented the issue 943 contract in crates/vela-kernel/src/scheduler.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review suggested proving a later revision after release and reclaim; that coverage was incorporated before commit, and CodeRabbit generated no actionable comments.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 943 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 944 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 944 squash merge 7b66fab0bb6ae5b085c6fba70fee128a2be56b1f",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Cursor movement must depend on inspected authored coordinates, not returned item count.",
+    "Selected-window strict replay permits unrelated corruption isolation.",
+    "Read-only recurrence-local projection grants no mutation, clock, claim-next, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/944"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

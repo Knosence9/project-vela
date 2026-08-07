@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Claim the next available recurrence occurrence",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/951 to atomically reserve the earliest due available coordinate in one bounded authored window.",
+    "acceptance_criteria": [
+      "Select sparse persisted or released coordinates deterministically through an inclusive cutoff.",
+      "Preserve cursor progress for future, all-gap, and finite windows with typed failures.",
+      "Guarantee earliest-selection semantics under concurrency and selected-window corruption isolation."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The new recurrence-store integration coverage failed to compile before claim_next_available_occurrence existed.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented bounded cutoff-aware selection, guarded event append, resumable cursor, optimistic retry, and concurrency/corruption tests.",
+      "patch": "Implemented the issue 951 contract in crates/vela-kernel/src/scheduler.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found a major race because only the chosen stream was guarded; commit cbedf6a atomically guarded the recurrence and every selected-window stream and restarted selection after any version change.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 951 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 952 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 952 squash merge f8cf217932d8b34ebb7e4fc301a890e6a0730d97",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Earliest-available correctness requires guarding the complete selection snapshot.",
+    "Absent streams are part of the observed snapshot and need version guards.",
+    "The operation grants no global discovery, ambient clock, worker, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/952"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

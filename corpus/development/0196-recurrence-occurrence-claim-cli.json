@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Claim exact recurrence occurrences through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/935 to expose exact recurrence claim semantics as a deterministic writable CLI adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity before storage access and delegate revision, cutoff, and lifecycle semantics.",
+      "Emit complete escaped claim JSON and preserve durable reopen evidence.",
+      "Map rejected states to one stable stderr diagnostic with no stdout or append."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because recurrence claim did not exist.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented recurrence claim parsing, pre-storage validation, exact store delegation, deterministic JSON, diagnostics, tests, and ADR-0070.",
+      "patch": "Implemented the issue 935 contract in crates/vela-dev/src/lib.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review requested exact-revision reclaim coverage for released state, which was added before commit; substantive CodeRabbit review generated no actionable comments.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 935 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 936 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 936 squash merge db564da353ee77fd2865c0fd55696a9edfb69a9b",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "CLI adapters should not reimplement lifecycle state machines.",
+    "The caller supplies coordinate, observed revision, and inclusive cutoff.",
+    "The command adds no ambient clock, identity generation, materialization, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/936"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
