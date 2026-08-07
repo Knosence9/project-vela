@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page recurrence occurrence histories through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/975 to expose bounded complete occurrence-history pages as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Validate recurrence ID, authored start offset, and bounded page size before storage access.",
+      "Emit sparse complete histories and next_offset in deterministic authored-offset order.",
+      "Open only existing storage read-only and fail with no partial stdout on selected-window corruption."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected occurrence-histories because the recurrence subcommand did not exist.",
+      "patch": "Added focused CLI tests for deterministic sparse pages, cursors, validation, bounds, absence, storage failures, and corruption isolation."
+    },
+    {
+      "summary": "Implemented and refactored the bounded adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented read-only page delegation and deterministic JSON, then shared one typed history-entry serializer between exact and paged adapters.",
+      "patch": "Implemented issue 975 in crates/vela-dev/src/lib.rs with focused tests, README usage, ADR-0088, and scheduler documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking issues; a rate-limited CodeRabbit false green was excluded until genuine exact-head review completed with no actionable comments.",
+      "patch": "Preserved the verified head unchanged through cooldown and required zero unresolved threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 975 delivered deterministic bounded history-page JSON while preserving kernel validation and read-only authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 976 exact head", "status": "passed" },
+      { "command": "Pull request 976 squash merge 26e19e0c19abd350c6932aef1985e83c19d83e46", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Exact and paged CLI adapters should share event serialization while the kernel remains the lifecycle-validation authority.",
+    "No partial stdout is part of the trust contract when any selected history is malformed.",
+    "The adapter adds no write, global discovery, clock, persisted cursor, catch-up, lifecycle, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/976"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

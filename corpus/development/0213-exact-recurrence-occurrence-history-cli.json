@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect exact recurrence occurrence history through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/971 to expose exact occurrence history as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Validate recurrence identity before opening only existing storage read-only.",
+      "Emit revision-ordered persistence, claim, release, and materialization JSON or history null for an absent coordinate.",
+      "Fail with one stable diagnostic and no partial output for selected corruption while isolating evidence outside the selected coordinate."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The first CLI lifecycle test failed because occurrence-history was not a recognized recurrence subcommand.",
+      "patch": "Added focused CLI coverage for lifecycle JSON, absence, validation, storage failure, and corruption isolation."
+    },
+    {
+      "summary": "Implemented and refactored the bounded adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented read-only store delegation and deterministic typed JSON while keeping CLI serialization separate from kernel lifecycle validation.",
+      "patch": "Implemented issue 971 in crates/vela-dev/src/lib.rs with focused tests, ADR-0086, and synchronized scheduler documentation."
+    },
+    {
+      "summary": "Hardened corruption tests during review.",
+      "outcome": "success",
+      "diagnostic": "Review identified weak corruption fixtures and a selected-coordinate isolation gap that could permit a silent no-op setup.",
+      "patch": "Asserted each corruption update affected exactly one row and added selected, unrelated-recurrence, and same-recurrence out-of-coordinate coverage; resolved all review threads."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "Rate-limited false greens were excluded across follow-up heads; the final exact head received genuine CodeRabbit review after cooldown with no unresolved threads.",
+      "patch": "Kept auto-merge disabled until local verification, CI, substantive review, and exact-head thread resolution all agreed."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 971 delivered deterministic exact occurrence-history JSON with strict validation and no added lifecycle authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 972 exact head", "status": "passed" },
+      { "command": "Pull request 972 squash merge ec9f346c4c939c2b5066fe8f24f7014e6edba75f", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Corruption fixtures must assert that their storage mutation actually selected one row or a passing isolation test can be meaningless.",
+    "Substantive review found that the CLI isolation test never queried its corrupted selected coordinate; the helper was updated to accept the offset and the resolved test now asserts selected offset 1 fails with empty stdout.",
+    "The CLI should serialize canonical kernel evidence rather than duplicate lifecycle replay.",
+    "Exact history inspection adds no write, discovery, clock, worker, dispatch, permission, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/972"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

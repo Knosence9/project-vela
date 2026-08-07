@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter finite recurrences by lifecycle status",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/977 to query recurrence definitions by exact projected lifecycle status.",
+    "acceptance_criteria": [
+      "Return active or cancelled recurrence definitions in deterministic exact-ID order.",
+      "Reuse canonical recurrence discovery and strict projection so malformed candidate history fails closed.",
+      "Exclude unrelated streams, return an empty list for no matches, and preserve read-only authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Status-filter tests failed because RecurrenceStore::list_by_status did not exist.",
+      "patch": "Added focused active, cancelled, unmatched, ordering, unrelated-stream, read-only, and malformed-history coverage."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented exact projected-status filtering and refactored list and list_by_status to share one fail-closed canonical discovery path.",
+      "patch": "Implemented issue 977 in crates/vela-kernel/src/scheduler.rs with focused tests, ADR-0089, and scheduler documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking issues; two rate-limit responses were not treated as review evidence, and genuine CodeRabbit run 42fd55c8 completed on the exact head with no actionable comments and zero unresolved threads.",
+      "patch": "Kept auto-merge disabled until the successful Rust gate, substantive exact-head review, and thread check all passed."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 977 delivered deterministic fail-closed recurrence status filtering without adding mutation or execution authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 978 exact head 46b2031e25544b78bf6019ba89a2c4256372a369", "status": "passed" },
+      { "command": "Pull request 978 squash merge 41cd6bf9f78dcfb42820aa3af07e6825c8e4b321", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Filtered inventory should reuse canonical discovery so status selection cannot weaken replay validation.",
+    "Exact projected status and deterministic ID ordering are sufficient; no separate persisted index is required for this bounded slice.",
+    "Status filtering grants no mutation, transition, clock, worker, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/978"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}
