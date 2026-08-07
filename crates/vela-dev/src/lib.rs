@@ -252,6 +252,8 @@ pub enum RecurrenceCommand {
     Task { database: PathBuf, task_id: String },
     /// Print every finite recurrence through a read-only storage boundary.
     Inspect { database: PathBuf },
+    /// Print finite recurrences with one exact lifecycle status.
+    Status { database: PathBuf, status: String },
 }
 
 /// Durable schedule workflows.
@@ -768,6 +770,9 @@ impl Cli {
             Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Inspect { database }),
             }) => inspect_recurrences(&database),
+            Some(Command::Recurrence {
+                command: Some(RecurrenceCommand::Status { database, status }),
+            }) => inspect_recurrences_by_status(&database, &status),
             _ => ExitCode::SUCCESS,
         }
     }
@@ -2590,12 +2595,38 @@ fn inspect_recurrences(database: &Path) -> ExitCode {
         Ok(recurrences) => recurrences,
         Err(error) => return extension_error("recurrence_inspection_failed", error),
     };
+    write_recurrence_inventory(&recurrences, "recurrence_inspection_failed")
+}
+
+fn inspect_recurrences_by_status(database: &Path, raw_status: &str) -> ExitCode {
+    let status = match raw_status {
+        "active" => RecurrenceStatus::Active,
+        "cancelled" => RecurrenceStatus::Cancelled,
+        _ => {
+            return extension_error("invalid_recurrence_status", "expected active or cancelled");
+        }
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_status_inspection_failed", error),
+    };
+    let recurrences = match store.list_by_status(status) {
+        Ok(recurrences) => recurrences,
+        Err(error) => return extension_error("recurrence_status_inspection_failed", error),
+    };
+    write_recurrence_inventory(&recurrences, "recurrence_status_inspection_failed")
+}
+
+fn write_recurrence_inventory(
+    recurrences: &[FixedIntervalRecurrence],
+    error_code: &str,
+) -> ExitCode {
     let inventory = RecurrenceInventory {
         recurrences: recurrences.iter().map(recurrence_inspection).collect(),
     };
     let output = match serde_json::to_string(&inventory) {
         Ok(output) => output,
-        Err(error) => return extension_error("recurrence_inspection_failed", error),
+        Err(error) => return extension_error(error_code, error),
     };
     println!("{output}");
     ExitCode::SUCCESS
