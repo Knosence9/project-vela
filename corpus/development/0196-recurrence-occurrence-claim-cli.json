@@ -49,6 +49,7 @@
   },
   "lessons": [
     "CLI adapters should not reimplement lifecycle state machines.",
+    "Independent review identified missing exact-revision reclaim coverage for released state; the focused regression was added before commit.",
     "The caller supplies coordinate, observed revision, and inclusive cutoff.",
     "The command adds no ambient clock, identity generation, materialization, or execution authority."
   ],

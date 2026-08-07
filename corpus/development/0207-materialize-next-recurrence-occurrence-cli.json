@@ -49,6 +49,7 @@
   },
   "lessons": [
     "All-gap cursor advancement is part of the public contract.",
+    "CodeRabbit found incomplete validation-error documentation; commit 079b06d corrected it together with the missing all-gap cursor contract.",
     "Adapters should preserve kernel-owned ordering and atomicity.",
     "A rate-limited green status is not substantive review evidence."
   ],

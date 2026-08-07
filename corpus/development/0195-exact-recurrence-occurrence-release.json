@@ -49,6 +49,7 @@
   },
   "lessons": [
     "Recovery must be explicit caller-authored evidence, not inferred worker death.",
+    "CodeRabbit found that the documentation implied direct materialization of a current claim; commit 974e0a7 corrected the contract and strengthened no-append coverage.",
     "Current claims and released availability are distinct lifecycle states.",
     "Release grants no selection, dispatch, retry, permission, or execution authority."
   ],

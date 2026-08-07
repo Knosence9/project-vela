@@ -49,6 +49,7 @@
   },
   "lessons": [
     "Named conflict evidence is clearer than boolean control flags.",
+    "CodeRabbit requested a named conflict type and explicit no-append assertions; commit e588db8 applied both findings.",
     "A prior claim carries due authority, so claimed consumption needs no new cutoff.",
     "Atomic inert task creation grants no worker, dispatch, provider, permission, or execution authority."
   ],

@@ -49,6 +49,7 @@
   },
   "lessons": [
     "Earliest-available correctness requires guarding the complete selection snapshot.",
+    "CodeRabbit found that guarding only the chosen stream allowed a selection race; commit cbedf6a guarded the recurrence and every selected-window stream and restarted selection after version changes.",
     "Absent streams are part of the observed snapshot and need version guards.",
     "The operation grants no global discovery, ambient clock, worker, permission, or execution authority."
   ],

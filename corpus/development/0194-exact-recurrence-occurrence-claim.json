@@ -49,6 +49,7 @@
   },
   "lessons": [
     "Validation precedence is observable behavior and needs an explicit regression.",
+    "CodeRabbit identified missing revision-before-cutoff precedence coverage; commit 5da22fe added the stale-revision plus future-cutoff regression.",
     "A claim is reservation evidence, not a lease or execution grant.",
     "Caller-owned coordinate, revision, and cutoff keep clock and selection policy outside the store."
   ],

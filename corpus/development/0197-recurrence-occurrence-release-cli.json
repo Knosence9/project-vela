@@ -49,6 +49,7 @@
   },
   "lessons": [
     "Tests must model the lifecycle state named by the assertion.",
+    "CodeRabbit found that rejection fixtures modeled neither the claimed stale revision nor preserved materialized state; commit 65cedf7 corrected the fixtures and asserted revision and task binding preservation.",
     "Durable append success remains authoritative even if response delivery later fails.",
     "Release infers no liveness and grants no lease, dispatch, permission, or execution authority."
   ],

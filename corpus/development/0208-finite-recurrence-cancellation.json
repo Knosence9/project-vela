@@ -49,6 +49,7 @@
   },
   "lessons": [
     "Lifecycle preflight is insufficient unless append atomically checks the observed aggregate revision.",
+    "CodeRabbit requested positive post-cancellation claim-consumption coverage and deduplicated creation projection; both were fixed, then independent review found the append race that commit 003a42d closed with aggregate-revision guards.",
     "Cancellation withdraws prospective eligibility without erasing evidence or revoking existing claims.",
     "Cancellation grants no task cancellation, identity, dispatch, permission, or execution authority."
   ],

@@ -49,6 +49,7 @@
   },
   "lessons": [
     "Cursor movement must depend on inspected authored coordinates, not returned item count.",
+    "Independent review identified missing proof of a later revision after release and reclaim; that regression was incorporated before commit.",
     "Selected-window strict replay permits unrelated corruption isolation.",
     "Read-only recurrence-local projection grants no mutation, clock, claim-next, or execution authority."
   ],
