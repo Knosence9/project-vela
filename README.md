@@ -521,6 +521,22 @@ Missing storage is never created. Exact lookup does not project unpersisted
 coordinates, scan occurrence inventory, read time, choose catch-up policy,
 materialize, dispatch, or execute work.
 
+Page one exact recurrence's complete sparse occurrence lifecycle histories without
+granting global discovery or lifecycle authority:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence occurrence-histories path/to/events.sqlite3 recurrence-id 0 100
+```
+
+The command validates the exact recurrence ID and bounded page size before opening
+existing storage read-only. It emits present coordinates in authored-offset order
+with complete revision-bearing persistence, claim, release, and materialization
+evidence. Gaps are omitted while `next_offset` advances by inspected coordinates,
+including across empty pages, and becomes `null` at finite completion. Missing
+storage is never created; selected-window corruption fails closed without partial
+JSON. Paging persists no cursor, reads no time, scans no unrelated or out-of-window
+coordinate, and cannot mutate, dispatch, retry, or execute work.
+
 Page one exact recurrence's sparse persisted occurrence provenance without
 granting global discovery or lifecycle authority:
 
@@ -707,6 +723,7 @@ The first milestone is the **evidence loop**:
 161. Query one exact persisted recurrence occurrence's complete typed lifecycle history without granting discovery, lifecycle, or execution authority. ✅
 162. Inspect one exact recurrence occurrence's typed lifecycle history through deterministic read-only CLI JSON without granting discovery, lifecycle, or execution authority. ✅
 163. Page complete recurrence occurrence histories through bounded authored-offset windows without granting global discovery, lifecycle, or execution authority. ✅
+164. Page complete recurrence occurrence histories through bounded deterministic CLI JSON without granting global discovery, lifecycle, or execution authority. ✅
 
 ## Project documents
 
