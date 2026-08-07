@@ -47,6 +47,7 @@
   "lessons": [
     "Exact absence should be decided from the selected occurrence stream before unrelated aggregate corruption can turn absence into failure.",
     "Present lifecycle history must reuse canonical strict projection rather than drift into a permissive second replay path.",
+    "Substantive review suggested explicit orphaned-occurrence-stream coverage; the verified implementation already fails closed when occurrence evidence lacks its definition, so the non-blocking test-only suggestion was deferred.",
     "History inspection grants no mutation, migration, generation, discovery, clock, dispatch, retry, or execution authority."
   ],
   "provenance": {
