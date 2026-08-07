@@ -264,6 +264,21 @@ without creating storage or printing partial JSON. Inventory inspection cannot
 read time, choose a due cutoff, mutate lifecycle state, dispatch, or execute
 work.
 
+Page durable one-shot schedules without replaying the complete inventory:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule page path/to/events.sqlite3 100 optional-exclusive-after-id
+```
+
+The positive page size is capped at 1024. The optional exact schedule ID is an
+exclusive caller-owned cursor and need not exist. Success emits the same complete
+schedule objects plus `next_after`, which names the last emitted ID only when a
+validated lookahead proves another page exists. Input validation happens before
+read-only storage access; malformed selected evidence fails without partial JSON,
+while corruption outside the bounded selected window is isolated. The command
+does not persist the cursor, filter by lifecycle or due time, mutate, dispatch,
+or execute work.
+
 Inspect one exact schedule's current validated projection:
 
 ```bash

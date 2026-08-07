@@ -19,7 +19,7 @@ use vela_kernel::scheduler::{
     RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage, RecurrenceOccurrenceRelease,
     RecurrencePageSize, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
     ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval,
-    ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
+    SchedulePageSize, ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -313,6 +313,12 @@ pub enum ScheduleCommand {
     },
     /// Print every durable schedule through a read-only storage boundary.
     Inspect { database: PathBuf },
+    /// Page durable schedules through a bounded read-only storage boundary.
+    Page {
+        database: PathBuf,
+        page_size: u64,
+        after: Option<String>,
+    },
     /// Print one exact durable schedule through a read-only storage boundary.
     Get { database: PathBuf, id: String },
     /// Print durable schedules with one exact lifecycle status.
@@ -439,6 +445,14 @@ impl Cli {
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Inspect { database }),
             }) => inspect_schedules(&database, None),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::Page {
+                        database,
+                        page_size,
+                        after,
+                    }),
+            }) => page_schedules(&database, page_size, after.as_deref()),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Get { database, id }),
             }) => inspect_schedule(&database, &id),
@@ -1004,6 +1018,12 @@ struct ScheduleInventory<'a> {
 }
 
 #[derive(Serialize)]
+struct ScheduleInventoryPage<'a> {
+    schedules: Vec<ScheduleInspection<'a>>,
+    next_after: Option<&'a str>,
+}
+
+#[derive(Serialize)]
 struct ScheduleInspection<'a> {
     id: &'a str,
     goal: &'a str,
@@ -1363,6 +1383,35 @@ fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCo
         Err(error) => return extension_error("schedule_inspection_failed", error),
     };
     write_schedule_inventory(&schedules, "schedule_inspection_failed")
+}
+
+fn page_schedules(database: &Path, raw_page_size: u64, raw_after: Option<&str>) -> ExitCode {
+    let page_size = match SchedulePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_schedule_page_size", error),
+    };
+    let after = match raw_after.map(ScheduleId::new).transpose() {
+        Ok(after) => after,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_page_inspection_failed", error),
+    };
+    let page = match store.list_page(after.as_ref(), page_size) {
+        Ok(page) => page,
+        Err(error) => return extension_error("schedule_page_inspection_failed", error),
+    };
+    let inventory = ScheduleInventoryPage {
+        schedules: page.schedules().iter().map(schedule_inspection).collect(),
+        next_after: page.next_after().map(ScheduleId::as_str),
+    };
+    let output = match serde_json::to_string(&inventory) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_page_inspection_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 fn create_recurrence(
