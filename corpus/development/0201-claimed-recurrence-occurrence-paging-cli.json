@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page claimed recurrence occurrences through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/945 to expose bounded current-claim paging through a read-only deterministic adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity and page size before opening existing storage read-only.",
+      "Delegate lifecycle filtering and cursor semantics and emit exact claim JSON.",
+      "Preserve stable diagnostics, no stdout on failure, and corruption isolation."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because claimed was not a recognized recurrence subcommand.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented read-only validation and delegation, shared claimed projection serialization, diagnostics, tests, and ADR-0075.",
+      "patch": "Implemented the issue 945 contract in crates/vela-dev/src/lib.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blockers and CodeRabbit posted no actionable inline findings; a heuristic docstring percentage did not identify a behavioral defect.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 945 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 946 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 946 squash merge 909a1bb4a0ed65aa0db6518974124a8df3299cf2",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Adapters should share output projection without duplicating kernel lifecycle policy.",
+    "Validation before storage prevents accidental database creation.",
+    "Inspection grants no mutation, clock, global discovery, workers, permissions, or execution."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/946"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

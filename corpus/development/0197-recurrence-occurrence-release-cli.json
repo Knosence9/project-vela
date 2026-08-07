@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Release recurrence occurrence claims through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/937 to expose explicit exact-revision recurrence recovery with a caller-authored reason.",
+    "acceptance_criteria": [
+      "Validate recurrence ID and non-blank reason before writable storage access.",
+      "Emit deterministic released provenance and support durable reopen and reclaim.",
+      "Reject malformed, stale, available, materialized, and read-only cases without partial output or append."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because recurrence release did not exist.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented recurrence release validation, kernel delegation, deterministic output, failure mapping, reopen/reclaim tests, and ADR-0071.",
+      "patch": "Implemented the issue 937 contract in crates/vela-dev/src/lib.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found rejection fixtures did not actually model stale revision and failed to prove materialized state preservation; commit 65cedf7 corrected in-range fixtures and asserted revisions and task binding remained unchanged.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 937 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 938 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 938 squash merge a5397773fa06f04abc374571e3b5afb5d0e5d903",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Tests must model the lifecycle state named by the assertion.",
+    "CodeRabbit found that rejection fixtures modeled neither the claimed stale revision nor preserved materialized state; commit 65cedf7 corrected the fixtures and asserted revision and task binding preservation.",
+    "Durable append success remains authoritative even if response delivery later fails.",
+    "Release infers no liveness and grants no lease, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/938"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

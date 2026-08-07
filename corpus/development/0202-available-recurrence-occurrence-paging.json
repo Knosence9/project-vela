@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page available recurrence occurrences",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/947 to project persisted-only and released coordinates with exact current revisions.",
+    "acceptance_criteria": [
+      "Return exact provenance and nullable latest release evidence for available coordinates.",
+      "Omit claimed, materialized, and missing coordinates while preserving authored cursor progress.",
+      "Keep typed bounds/missing errors and selected-window corruption isolation."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "New integration tests failed with E0599 because available_occurrences_page did not exist.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented available occurrence/page projections, bounded strict replay filtering, exact revisions and release evidence, and lifecycle/corruption tests.",
+      "patch": "Implemented the issue 947 contract in crates/vela-kernel/src/scheduler.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit posted no actionable inline findings; targeted recurrence tests and the complete workspace gate passed.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 947 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 948 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 948 squash merge b095c22118ac0b905f8a3eaba0aa83430b2ed031",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Availability is current replayed lifecycle state, not mere persistence provenance.",
+    "Exact current revision closes the optimistic-write evidence gap.",
+    "This read model grants no claim, clock, lease, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/948"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Cancel finite recurrence intent through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/961 to expose exact-revision recurrence cancellation as a deterministic writable adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity and non-blank cancellation reason before storage access.",
+      "Delegate optimistic concurrency and lifecycle append to RecurrenceStore::cancel.",
+      "Emit cancellation-aware JSON and stable no-stdout failures without rejected appends."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Focused CLI tests failed because cancel was not a recognized recurrence subcommand.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented recurrence cancel parsing, validation, writable delegation, deterministic output, categorized diagnostics, tests, ADR-0083, and docs.",
+      "patch": "Implemented the issue 961 contract in crates/vela-dev/src/lib.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent read-only review and genuine exact-head CodeRabbit review reported no actionable comments; a rate-limit status was not accepted as sufficient evidence.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 961 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 962 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 962 squash merge e73c22cce83b0f0ec5d3f3cd5960eeca60479656",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Writable CLI authority should remain narrowly delegated to the kernel boundary.",
+    "Cancellation preserves history and does not interrupt already-claimed work.",
+    "The command adds no clock, identity generation, dispatch, retry, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/962"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize the next available recurrence occurrence",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/955 to atomically bind the earliest eligible coordinate in one bounded recurrence window to a caller task.",
+    "acceptance_criteria": [
+      "Reuse availability selection, exact materialization, snapshot guards, and bounded contention semantics.",
+      "Return resumable cursor outcomes for sparse, future, all-gap, and finite windows.",
+      "Reject task collisions, corruption, races, and read-only storage without partial state."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Recurrence integration tests failed because materialize_next_available_occurrence did not exist.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented guarded paired recurrence/task append, bounded selection, exact task collision atomicity, four-attempt contention, shared availability projection, and ADR-0080.",
+      "patch": "Implemented the issue 955 contract in crates/vela-kernel/src/scheduler.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent pre-commit review and genuine CodeRabbit review reported no actionable findings.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 955 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 956 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 956 squash merge b6e866ef81d84df15e9567e475ea38a2cd68d5ee",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Reuse lifecycle projections and atomic exact materialization instead of reconstructing policy.",
+    "The caller owns task identity, cutoff, and cursor input.",
+    "Selection within one recurrence grants no clock, worker, dispatch, permission, provider, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/956"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

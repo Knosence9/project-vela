@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page available recurrence occurrences through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/949 to expose available occurrence evidence through a read-only deterministic adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence identity and page size before read-only storage access.",
+      "Emit authored-order available occurrences, exact revisions, release evidence, and kernel cursor.",
+      "Return stable diagnostics and no stdout for bounds, storage, replay, or corruption failures."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because available was not a recognized recurrence subcommand.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented read-only delegation, explicit available serialization, validation, typed diagnostics, integration tests, ADR-0077, and docs.",
+      "patch": "Implemented the issue 949 contract in crates/vela-dev/src/lib.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent pre-commit review found no blockers and CodeRabbit generated no actionable comments.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 949 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 950 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 950 squash merge 3e9ccb5fde0a2d4565f4cd43538291728e7df134",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Output projection may be explicit while cursor and lifecycle semantics remain kernel-owned.",
+    "Read-only evidence exposure must not create a durable cursor or ambient clock.",
+    "The adapter grants no claim-next, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/950"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

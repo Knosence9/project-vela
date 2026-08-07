@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize the next available recurrence occurrence through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/957 to expose bounded atomic next-available materialization as a thin writable adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence ID, task ID, and page size before storage access.",
+      "Delegate ordering, cursor, replay, contention, and atomic task binding to the kernel.",
+      "Document and emit deterministic null/all-gap and success outcomes with stable diagnostics."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because recurrence materialize-next was not recognized.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented the command, validation, writable delegation, shared materialized JSON, task collision behavior, tests, and ADR-0081.",
+      "patch": "Implemented the issue 957 contract in crates/vela-dev/src/lib.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found missing all-gap cursor documentation and incomplete validation-error documentation; commit 079b06d fixed both, both threads resolved, and rate-limited statuses were excluded until genuine exact-head review.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 957 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 958 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 958 squash merge c9a197ccb46831bd3732fcac78cf6fcfa733e283",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "All-gap cursor advancement is part of the public contract.",
+    "CodeRabbit found incomplete validation-error documentation; commit 079b06d corrected it together with the missing all-gap cursor contract.",
+    "Adapters should preserve kernel-owned ordering and atomicity.",
+    "A rate-limited green status is not substantive review evidence."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/958"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

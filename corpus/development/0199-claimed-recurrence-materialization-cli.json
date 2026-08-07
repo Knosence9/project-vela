@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Materialize claimed recurrence occurrences through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/941 to expose claimed-only atomic materialization as a distinct writable command.",
+    "acceptance_criteria": [
+      "Validate recurrence and task identities before storage access.",
+      "Delegate exact revision, lifecycle, replay, and atomicity to the kernel and emit complete JSON.",
+      "Keep available-state materialize distinct and reject every failure without partial durable state."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "CLI integration tests failed because materialize-claimed was unrecognized.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented materialize-claimed dispatch, pre-storage validation, exact delegation, shared materialized JSON, stable diagnostics, tests, and ADR-0073.",
+      "patch": "Implemented the issue 941 contract in crates/vela-dev/src/lib.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent pre-commit review and substantive CodeRabbit review reported no actionable findings; initial rate-limit output was not accepted as review evidence.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 941 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 942 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 942 squash merge a20502f0fa01f23d7f8b0ac895114de81cffef2b",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Separate commands make claimed and available lifecycle authority explicit.",
+    "The caller owns both identities and the exact observed revision.",
+    "The adapter adds no selection, clock, worker, dispatch, permission, or execution policy."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/942"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

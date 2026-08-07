@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Claim exact persisted recurrence occurrences",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/931 to add exact-revision durable reservation for one persisted recurrence coordinate.",
+    "acceptance_criteria": [
+      "Claim one due coordinate at an inclusive caller cutoff and persist exact revision-bearing evidence.",
+      "Reject missing, stale, future, unavailable, and materialized coordinates without appending.",
+      "Preserve strict replay, race safety, historical inventory boundaries, and caller-owned authority."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "RED coverage established the absent claim API and lifecycle contract; the pull request did not retain the exact initial compiler output.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented recurrence.occurrence_claimed, exact lookup, revision-before-lifecycle and cutoff validation, strict replay, and one-winner concurrency semantics.",
+      "patch": "Implemented the issue 931 contract in crates/vela-kernel/src/scheduler.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit found that tests did not pin revision-before-cutoff precedence; commit 5da22fe added the stale-revision plus future-cutoff regression, and final review found no further issues.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 931 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 932 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 932 squash merge 7ec2930df66e02f5037e9ae775a7dfd674c6899d",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Validation precedence is observable behavior and needs an explicit regression.",
+    "CodeRabbit identified missing revision-before-cutoff precedence coverage; commit 5da22fe added the stale-revision plus future-cutoff regression.",
+    "A claim is reservation evidence, not a lease or execution grant.",
+    "Caller-owned coordinate, revision, and cutoff keep clock and selection policy outside the store."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/932"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

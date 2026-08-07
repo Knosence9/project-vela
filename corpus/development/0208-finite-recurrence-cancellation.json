@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Cancel finite recurrence intent durably",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/959 to withdraw future recurrence eligibility with exact-revision, reason-bearing evidence.",
+    "acceptance_criteria": [
+      "Separate immutable definition revision from mutable aggregate revision and replay cancellation strictly.",
+      "Block new persistence, claim, and materialization while preserving history and pre-cancellation claim recovery.",
+      "Reject stale, repeated, racing, or malformed cancellation without partial append."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Direct cancellation lifecycle, replay, race, eligibility, recovery, and CLI projection tests were added before implementation; the pull request did not retain a more specific failing output.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented recurrence.cancelled, exact-revision cancel, active/cancelled projection, strict replay, active prerequisites, historical views, and pre-cancellation claim recovery.",
+      "patch": "Implemented the issue 959 contract in crates/vela-kernel/src/scheduler.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit requested positive post-cancellation claim consumption and deduplicated creation projection; both were fixed. Independent review then found a preflight-to-append race, and commit 003a42d guarded affected writes with the observed aggregate revision.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 959 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 960 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 960 squash merge d3a8134e476502c7cfdda61312420b23e139965c",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Lifecycle preflight is insufficient unless append atomically checks the observed aggregate revision.",
+    "CodeRabbit requested positive post-cancellation claim-consumption coverage and deduplicated creation projection; both were fixed, then independent review found the append race that commit 003a42d closed with aggregate-revision guards.",
+    "Cancellation withdraws prospective eligibility without erasing evidence or revoking existing claims.",
+    "Cancellation grants no task cancellation, identity, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/960"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

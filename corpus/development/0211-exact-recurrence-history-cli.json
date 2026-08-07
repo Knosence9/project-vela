@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Inspect exact recurrence history through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/965 to expose canonical recurrence history as a deterministic read-only CLI adapter.",
+    "acceptance_criteria": [
+      "Validate recurrence ID before opening only existing storage read-only.",
+      "Emit revision-ordered created and cancelled JSON or history null for a missing recurrence.",
+      "Fail with one stable diagnostic, no partial stdout, and no database creation."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The focused recurrence_history CLI test failed because history was unrecognized.",
+      "patch": "Added focused integration coverage for the issue contract before completing the production boundary."
+    },
+    {
+      "summary": "Implemented and refactored the bounded slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented recurrence history validation, read-only store delegation, typed JSON conversion, missing-null behavior, diagnostics, tests, and docs.",
+      "patch": "Implemented the issue 965 contract in crates/vela-dev/src/lib.rs with focused tests and synchronized architecture and behavior documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit run 0dac769e found no issues. The first Rust gate executed zero steps and was treated as unavailable, not passed; the PR remained unmerged until fresh run 31152683693 succeeded on unchanged head 6706a7c.",
+      "patch": "Applied blocking findings where present, reran verification, required substantive review, and preserved zero unresolved review threads before merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 965 delivered the documented recurrence boundary with strict evidence, bounded authority, and verified merge provenance.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for pull request 966 exact head",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 966 squash merge 9552cb299f87059ce059c1d6dec2eddfa6bd1340",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Infrastructure unavailability is not success and does not justify weakening an exact-head gate.",
+    "Missing history is a typed null result while malformed selected history fails closed.",
+    "The adapter adds no mutation, discovery, clock, worker, dispatch, permission, retry, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/966"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
