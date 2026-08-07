@@ -312,6 +312,29 @@ discovery, lifecycle, worker, lease, dispatch, permission, retry, or execution
 authority. See
 [ADR-0086](adr/0086-read-only-exact-recurrence-occurrence-history-cli.md).
 
+## Read-only bounded recurrence occurrence history CLI paging
+
+`vela-dev recurrence occurrence-histories DATABASE RECURRENCE_ID START_OFFSET
+PAGE_SIZE` validates the exact recurrence ID and positive, at-most-1024 page size
+before storage access, opens only the selected existing database read-only, and
+delegates the selected authored window to
+`RecurrenceStore::occurrence_histories_page`.
+
+Success emits `histories` in increasing offset order with complete
+revision-ordered persistence, claim, release, and materialization evidence.
+Missing coordinates are omitted; valid all-gap pages remain empty while
+`next_offset` advances to the first uninspected authored coordinate or becomes
+`null` at finite completion. Exact goals, instants, definition revisions,
+release reasons, task IDs, and JSON escaping are preserved.
+
+Invalid IDs and sizes fail before storage access. Missing storage or definitions,
+out-of-range starts, selected-window corruption, and serialization failures emit
+`recurrence_occurrence_histories_failed` with no partial stdout. The command
+creates no storage, persists no cursor, inspects no unrelated or out-of-window
+coordinate, reads no clock, mutates no lifecycle state, and grants no worker,
+lease, dispatch, permission, retry, or execution authority. See
+[ADR-0088](adr/0088-read-only-bounded-recurrence-occurrence-history-cli-paging.md).
+
 ## Read-only exact recurrence occurrence CLI paging
 
 `vela-dev recurrence occurrences DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE`
