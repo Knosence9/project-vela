@@ -974,6 +974,31 @@ Open, WAL, schema, replay, and projection failures emit one escaped
 a missing path does not create a database. The command accepts no lifecycle
 mutation, cutoff, dispatch, or execution options.
 
+## Read-only bounded schedule CLI inventory paging
+
+`vela-dev schedule page DATABASE PAGE_SIZE [AFTER]` validates a positive,
+at-most-1024 inventory page size and optional exact non-blank schedule ID before
+storage access. The optional ID is a caller-owned exclusive keyset cursor and
+need not identify an existing schedule. The command opens only the selected
+existing database read-only and delegates bounded discovery and replay to
+`ScheduleStore::list_page`.
+
+Success emits `{"schedules":[...],"next_after":...}` with the existing complete
+schedule objects in exact-ID order. `next_after` contains the last emitted exact
+ID only when a validated lookahead proves another schedule exists; terminal,
+empty, and beyond-end pages emit `null`. Exact strings and lifecycle evidence
+remain JSON escaped.
+
+Invalid inputs emit `invalid_schedule_page_size` or `invalid_schedule_id` before
+storage access. Missing or incompatible storage, selected-window corruption,
+projection, and serialization failures emit `schedule_page_inspection_failed`
+with no partial stdout; missing storage is never created. Corruption before the
+cursor or after the selected lookahead cannot block the page. The command reads
+no clock, mutates nothing, persists no cursor, and grants no status- or
+due-filtered discovery, lifecycle, worker, lease, dispatch, retry, permission,
+or execution authority. See
+[ADR-0094](adr/0094-read-only-bounded-one-shot-schedule-inventory-cli-paging.md).
+
 `vela-dev schedule get DATABASE SCHEDULE_ID` validates the exact schedule ID
 before opening the caller-selected database read-only, then emits one compact
 JSON document containing `id` and `schedule`. An existing schedule uses the same
