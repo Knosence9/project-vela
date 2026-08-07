@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page one-shot schedule inventory through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/989 to expose bounded schedule inventory pages as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Validate page size and optional exact schedule-ID cursor before storage access.",
+      "Emit complete schedules and nullable next_after in deterministic exact-ID order.",
+      "Delegate selection and lookahead validation to read-only kernel storage and emit no partial stdout on failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected schedule page because the paging subcommand did not exist.",
+      "patch": "Added focused CLI tests for ordering, continuation, terminal output, escaping, pre-storage validation, missing storage, and corruption isolation."
+    },
+    {
+      "summary": "Implemented and refactored the bounded adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented page-size and cursor validation, read-only list_page delegation, and compact continuation JSON using the complete schedule representation.",
+      "patch": "Implemented issue 989 in crates/vela-dev/src/lib.rs with focused tests, ADR-0094, README usage, and scheduler documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking issues; a rate-limited false green was excluded until genuine CodeRabbit run e1d12cf2 completed on exact head 03483e9 with no actionable comments and zero unresolved threads.",
+      "patch": "Rechecked the shared review budget after cooldown, deliberately resumed review once, and armed merge only after exact-head CI and thread checks passed."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 989 delivered bounded schedule inventory JSON while preserving kernel paging and read-only authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 990 exact head 03483e9f8e1448ed8d4bcaf6603ee8f2e136de5c", "status": "passed" },
+      { "command": "Pull request 990 squash merge fcf6daef8bd5c310267d75e8fc2e0ec0de22b5ca", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "CLI cursor validation must occur before storage access, while continuation truth remains kernel-owned.",
+    "Rate-limited CodeRabbit success is not review evidence; exact-head substantive review must complete before merge.",
+    "The adapter adds no clock, persisted cursor, status or due filtering, lifecycle, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/990"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

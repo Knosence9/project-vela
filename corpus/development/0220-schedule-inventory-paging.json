@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page one-shot schedule inventory",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/987 with bounded exact-ID keyset paging over authoritative one-shot schedule streams.",
+    "acceptance_criteria": [
+      "Validate a positive at-most-1024 page size and return complete schedules in exact-ID order.",
+      "Use an optional exclusive exact-ID cursor and expose continuation only after validating one lookahead stream.",
+      "Fail closed on selected evidence while isolating corruption before the cursor or beyond lookahead."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Paging tests failed because SchedulePageSize, SchedulePage, and ScheduleStore::list_page did not exist.",
+      "patch": "Added focused tests for size bounds, ordering, continuation, nonexistent cursors, empty and read-only behavior, unrelated streams, and corruption windows."
+    },
+    {
+      "summary": "Implemented and refactored the bounded kernel slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented bounded authoritative-stream keyset selection with one validated lookahead and canonical complete schedule replay.",
+      "patch": "Implemented issue 987 in crates/vela-kernel/src/scheduler.rs with focused store tests, ADR-0093, and scheduler documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking issues; a rate-limited false green was excluded until genuine CodeRabbit run dca27617 completed on the exact head with no actionable comments and zero unresolved threads.",
+      "patch": "Preserved the exact verified head through cooldown before enabling squash merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 987 delivered bounded one-shot schedule inventory paging without changing durable event schemas or lifecycle authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 988 exact head 309fee817aadb233ccd50ce63df85af5fd92478b", "status": "passed" },
+      { "command": "Pull request 988 squash merge 89cea337189635ad5fe936602de46b96d68b4f0a", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Existing exact schedule IDs are sufficient for stable keyset continuation without persisted cursor state.",
+    "Selected lookahead corruption must block misleading continuation while out-of-window corruption remains isolated.",
+    "Status or due paging requires a separate bounded sparse-selection contract; this slice adds no mutation, dispatch, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/988"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page finite recurrence inventory",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/983 with bounded exact-ID keyset paging over authoritative recurrence streams.",
+    "acceptance_criteria": [
+      "Validate a positive at-most-1024 page size and return complete recurrences in exact-ID order.",
+      "Use an optional exclusive exact-ID cursor and expose continuation only after validating one lookahead stream.",
+      "Bound selection and replay to page size plus one while isolating corruption outside the selected window."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Paging tests failed because RecurrencePageSize, RecurrencePage, and RecurrenceStore::list_page did not exist.",
+      "patch": "Added focused tests for bounds, ordering, continuation, nonexistent cursors, empty pages, read-only reopen, unrelated streams, and corruption windows."
+    },
+    {
+      "summary": "Implemented and refactored the bounded kernel slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented one ordered keyset query with a validated lookahead and canonical full-history projection for every selected stream.",
+      "patch": "Implemented issue 983 in event_log.rs and scheduler.rs with focused store tests, ADR-0091, and scheduler documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking issues; a rate-limited false green was excluded until genuine CodeRabbit run 27d12662 completed on the exact head with no actionable comments and zero unresolved threads.",
+      "patch": "Preserved the exact verified head through cooldown before enabling squash merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 983 delivered allocation-bounded recurrence inventory paging with fail-closed selected-window replay.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 984 exact head e4b1b6c97ea84d008986ba58a59944e3b1eeaa87", "status": "passed" },
+      { "command": "Pull request 984 squash merge bb3b5ccb3267de3a70920a99575ab34e469653f2", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Exact-ID keyset paging provides stable continuation without persisted cursor state or positional drift.",
+    "The lookahead must be replayed and validated before it can prove continuation safely.",
+    "Status-filtered paging needs a separate sparse-scan or index contract; this boundary adds no mutation or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/984"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}
