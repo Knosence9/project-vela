@@ -15,10 +15,10 @@ use vela_kernel::scheduler::{
     ClaimedRecurrenceOccurrencePage, FixedIntervalRecurrence, MaterializedRecurrenceOccurrence,
     MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize,
     RecurrenceCancellation, RecurrenceHistoryEvent, RecurrenceId, RecurrenceOccurrence,
-    RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage, RecurrenceOccurrenceRelease,
-    RecurrenceStatus, RecurrenceStore, RecurrenceStoreError, ScheduleCancellation,
-    ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval, ScheduleRelease,
-    ScheduleStatus, ScheduleStore, ScheduledTask,
+    RecurrenceOccurrenceHistoryEvent, RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage,
+    RecurrenceOccurrenceRelease, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
+    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval,
+    ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -86,6 +86,12 @@ pub enum RecurrenceCommand {
     Get { database: PathBuf, id: String },
     /// Print one exact recurrence's validated lifecycle history.
     History { database: PathBuf, id: String },
+    /// Print one exact persisted recurrence occurrence's validated lifecycle history.
+    OccurrenceHistory {
+        database: PathBuf,
+        id: String,
+        offset: u64,
+    },
     /// Page exact occurrences for one finite recurrence through a read-only boundary.
     Occurrences {
         database: PathBuf,
@@ -471,6 +477,14 @@ impl Cli {
             }) => inspect_recurrence_history(&database, &id),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::OccurrenceHistory {
+                        database,
+                        id,
+                        offset,
+                    }),
+            }) => inspect_recurrence_occurrence_history(&database, &id, offset),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::Occurrences {
                         database,
                         id,
@@ -785,6 +799,37 @@ enum RecurrenceHistoryEventInspection<'a> {
     },
     Cancelled {
         reason: &'a str,
+    },
+}
+
+#[derive(Serialize)]
+struct RecurrenceOccurrenceHistoryInspection<'a> {
+    recurrence_id: &'a str,
+    offset: u64,
+    history: Option<Vec<RecurrenceOccurrenceHistoryEntryInspection<'a>>>,
+}
+
+#[derive(Serialize)]
+struct RecurrenceOccurrenceHistoryEntryInspection<'a> {
+    revision: u64,
+    #[serde(flatten)]
+    event: RecurrenceOccurrenceHistoryEventInspection<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum RecurrenceOccurrenceHistoryEventInspection<'a> {
+    Persisted {
+        goal: &'a str,
+        unix_millis: u64,
+        definition_revision: u64,
+    },
+    Claimed,
+    Released {
+        reason: &'a str,
+    },
+    Materialized {
+        task_id: &'a str,
     },
 }
 
@@ -1421,6 +1466,73 @@ fn inspect_recurrence_history(database: &Path, raw_id: &str) -> ExitCode {
     }) {
         Ok(output) => output,
         Err(error) => return extension_error("recurrence_history_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn inspect_recurrence_occurrence_history(database: &Path, raw_id: &str, offset: u64) -> ExitCode {
+    const ERROR: &str = "recurrence_occurrence_history_failed";
+    let id = match RecurrenceId::new(raw_id) {
+        Ok(id) => id,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error(ERROR, error),
+    };
+    let history = match store.occurrence_history(&id, offset) {
+        Ok(history) => history,
+        Err(error) => return extension_error(ERROR, error),
+    };
+    let history = match history.as_ref() {
+        None => None,
+        Some(entries) => {
+            let mut output = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let event = match entry.event() {
+                    RecurrenceOccurrenceHistoryEvent::Persisted { occurrence } => {
+                        RecurrenceOccurrenceHistoryEventInspection::Persisted {
+                            goal: occurrence.goal().as_str(),
+                            unix_millis: occurrence.instant().unix_millis(),
+                            definition_revision: occurrence.recurrence_revision(),
+                        }
+                    }
+                    RecurrenceOccurrenceHistoryEvent::Claimed => {
+                        RecurrenceOccurrenceHistoryEventInspection::Claimed
+                    }
+                    RecurrenceOccurrenceHistoryEvent::Released { reason } => {
+                        RecurrenceOccurrenceHistoryEventInspection::Released {
+                            reason: reason.as_str(),
+                        }
+                    }
+                    RecurrenceOccurrenceHistoryEvent::Materialized { task_id } => {
+                        RecurrenceOccurrenceHistoryEventInspection::Materialized {
+                            task_id: task_id.as_str(),
+                        }
+                    }
+                    _ => {
+                        return extension_error(
+                            ERROR,
+                            "unsupported recurrence occurrence history event",
+                        );
+                    }
+                };
+                output.push(RecurrenceOccurrenceHistoryEntryInspection {
+                    revision: entry.revision(),
+                    event,
+                });
+            }
+            Some(output)
+        }
+    };
+    let output = match serde_json::to_string(&RecurrenceOccurrenceHistoryInspection {
+        recurrence_id: id.as_str(),
+        offset,
+        history,
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error(ERROR, error),
     };
     println!("{output}");
     ExitCode::SUCCESS
