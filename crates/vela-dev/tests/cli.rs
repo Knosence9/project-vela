@@ -6736,23 +6736,29 @@ fn recurrence_occurrence_history_validates_before_storage_and_isolates_corruptio
     store.persist_occurrence(&selected_id, 1, 1).unwrap();
     drop(store);
     let connection = rusqlite::Connection::open(&database).unwrap();
-    connection
-        .execute(
-            "UPDATE events SET payload = X'7B7D'
-             WHERE event_type = 'recurrence.occurrence_persisted'
-               AND CAST(payload AS TEXT) LIKE '%unrelated%'",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "UPDATE events SET payload = X'7B7D'
-             WHERE event_type = 'recurrence.occurrence_persisted'
-               AND CAST(payload AS TEXT) LIKE '%selected%'
-               AND CAST(payload AS TEXT) LIKE '%\"offset\":1%'",
-            [],
-        )
-        .unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE events SET payload = X'7B7D'
+                 WHERE event_type = 'recurrence.occurrence_persisted'
+                   AND CAST(payload AS TEXT) LIKE '%unrelated%'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE events SET payload = X'7B7D'
+                 WHERE event_type = 'recurrence.occurrence_persisted'
+                   AND CAST(payload AS TEXT) LIKE '%selected%'
+                   AND CAST(payload AS TEXT) LIKE '%\"offset\":1%'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
 
     let inspect = |id: &RecurrenceId| {
         let mut command = Command::cargo_bin("vela-dev").expect("vela-dev binary");

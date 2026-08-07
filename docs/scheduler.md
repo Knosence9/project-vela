@@ -296,11 +296,11 @@ the exact recurrence ID before storage access, accepts one caller-owned
 zero-based `u64` offset, opens only the selected existing database through
 `RecurrenceStore::open_read_only`, and delegates complete selected-coordinate
 replay to `RecurrenceStore::occurrence_history`. Success emits one compact object
-with exact JSON-escaped `recurrence_id`, `offset`, and revision-ordered typed
-`history`. Persistence entries preserve exact goal, Unix milliseconds, and
-immutable definition revision; release entries preserve exact recovery reasons;
-materialization entries preserve exact task IDs. A missing coordinate emits
-`history: null`.
+with exact JSON-escaped `recurrence_id`, numeric `offset`, and revision-ordered
+typed `history`. Persistence entries preserve exact goal, Unix milliseconds, and
+immutable definition revision; claim entries have no additional payload; release
+entries preserve exact recovery reasons; materialization entries preserve exact
+task IDs. A missing coordinate emits `history: null`.
 
 Invalid IDs emit `invalid_recurrence_id` before storage access. Missing storage,
 schema, selected replay, projection, and serialization failures emit
