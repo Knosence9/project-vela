@@ -448,6 +448,56 @@ impl fmt::Display for OccurrencePageSizeError {
 
 impl Error for OccurrencePageSizeError {}
 
+/// A positive, allocation-bounded recurrence inventory page size.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecurrencePageSize(u16);
+
+impl RecurrencePageSize {
+    /// The largest accepted recurrence inventory page size.
+    pub const MAX: u64 = 1024;
+
+    /// Validates a caller-owned page size before storage access or allocation.
+    pub const fn new(value: u64) -> Result<Self, RecurrencePageSizeError> {
+        if value == 0 {
+            Err(RecurrencePageSizeError::Zero)
+        } else if value > Self::MAX {
+            Err(RecurrencePageSizeError::TooLarge {
+                requested: value,
+                maximum: Self::MAX,
+            })
+        } else {
+            Ok(Self(value as u16))
+        }
+    }
+
+    /// Returns the exact validated page size.
+    pub const fn get(self) -> u64 {
+        self.0 as u64
+    }
+}
+
+/// Why a caller-owned recurrence inventory page size is invalid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RecurrencePageSizeError {
+    Zero,
+    TooLarge { requested: u64, maximum: u64 },
+}
+
+impl fmt::Display for RecurrencePageSizeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Zero => formatter.write_str("recurrence page size must be positive"),
+            Self::TooLarge { requested, maximum } => write!(
+                formatter,
+                "recurrence page size {requested} exceeds maximum {maximum}"
+            ),
+        }
+    }
+}
+
+impl Error for RecurrencePageSizeError {}
+
 /// One immutable, inert, finite fixed-interval recurrence definition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FixedIntervalRecurrence {
@@ -460,6 +510,25 @@ pub struct FixedIntervalRecurrence {
     definition_revision: u64,
     revision: u64,
     cancellation: Option<RecurrenceCancellation>,
+}
+
+/// One bounded, inert page of complete recurrence definitions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrencePage {
+    recurrences: Vec<FixedIntervalRecurrence>,
+    next_after: Option<RecurrenceId>,
+}
+
+impl RecurrencePage {
+    /// Returns complete definitions in increasing exact-ID order.
+    pub fn recurrences(&self) -> &[FixedIntervalRecurrence] {
+        &self.recurrences
+    }
+
+    /// Returns the last emitted exact ID only when another definition exists.
+    pub fn next_after(&self) -> Option<&RecurrenceId> {
+        self.next_after.as_ref()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3161,6 +3230,39 @@ impl RecurrenceStore {
         Ok(recurrences)
     }
 
+    /// Returns one bounded exact-ID-ordered recurrence inventory page.
+    pub fn list_page(
+        &self,
+        after: Option<&RecurrenceId>,
+        page_size: RecurrencePageSize,
+    ) -> Result<RecurrencePage, RecurrenceStoreError> {
+        let after_stream_id = after.map(recurrence_stream);
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_page::<RecurrenceEvent>(
+                RECURRENCE_CREATED_EVENT_TYPE,
+                after_stream_id.as_ref().map(StreamId::as_str),
+                page_size.get() as i64 + 1,
+            )
+            .map_err(RecurrenceStoreError::Replay)?;
+        let mut recurrences = Self::project_discovered(streams)?;
+        let has_more = recurrences.len() > page_size.get() as usize;
+        if has_more {
+            recurrences.pop();
+        }
+        let next_after = has_more.then(|| {
+            recurrences
+                .last()
+                .expect("a positive page with lookahead has one returned recurrence")
+                .id()
+                .clone()
+        });
+        Ok(RecurrencePage {
+            recurrences,
+            next_after,
+        })
+    }
+
     /// Returns recurrences with the exact persisted status, ordered by exact recurrence ID.
     pub fn list_by_status(
         &self,
@@ -3177,6 +3279,12 @@ impl RecurrenceStore {
             .event_log
             .replay_streams_with_event_type::<RecurrenceEvent>(RECURRENCE_CREATED_EVENT_TYPE)
             .map_err(RecurrenceStoreError::Replay)?;
+        Self::project_discovered(streams)
+    }
+
+    fn project_discovered(
+        streams: Vec<(String, Vec<RecurrenceEvent>)>,
+    ) -> Result<Vec<FixedIntervalRecurrence>, RecurrenceStoreError> {
         let mut recurrences = Vec::with_capacity(streams.len());
 
         for (stream_id, events) in streams {

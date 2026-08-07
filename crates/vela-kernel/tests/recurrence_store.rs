@@ -4,8 +4,9 @@ use vela_kernel::{
     scheduler::{
         OccurrenceCount, OccurrencePageSize, OccurrencePageSizeError, RecurrenceCancellation,
         RecurrenceHistoryEvent, RecurrenceId, RecurrenceOccurrenceHistoryEvent,
-        RecurrenceOccurrenceLookupError, RecurrenceOccurrenceRelease, RecurrenceStatus,
-        RecurrenceStore, RecurrenceStoreError, ScheduleInstant, ScheduleInterval,
+        RecurrenceOccurrenceLookupError, RecurrenceOccurrenceRelease, RecurrencePageSize,
+        RecurrencePageSizeError, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
+        ScheduleInstant, ScheduleInterval,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -1272,6 +1273,151 @@ fn lists_complete_recurrence_definitions_in_exact_id_order() {
 }
 
 #[test]
+fn recurrence_page_sizes_are_positive_and_bounded() {
+    assert_eq!(
+        RecurrencePageSize::new(0).unwrap_err(),
+        RecurrencePageSizeError::Zero
+    );
+    assert_eq!(RecurrencePageSize::new(1).unwrap().get(), 1);
+    assert_eq!(
+        RecurrencePageSize::new(RecurrencePageSize::MAX)
+            .unwrap()
+            .get(),
+        RecurrencePageSize::MAX
+    );
+    assert_eq!(
+        RecurrencePageSize::new(RecurrencePageSize::MAX + 1).unwrap_err(),
+        RecurrencePageSizeError::TooLarge {
+            requested: RecurrencePageSize::MAX + 1,
+            maximum: RecurrencePageSize::MAX,
+        }
+    );
+}
+
+#[test]
+fn pages_complete_recurrences_by_exclusive_exact_id_cursor() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    let mut authored = Vec::new();
+    for id in ["zeta", "alpha", "middle"] {
+        let recurrence = store
+            .create(
+                RecurrenceId::new(id).unwrap(),
+                TaskGoal::new(format!("Goal for {id}")).unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+        authored.push(if id == "middle" {
+            store
+                .cancel(
+                    recurrence.id(),
+                    recurrence.revision(),
+                    RecurrenceCancellation::new("paged cancellation").unwrap(),
+                )
+                .unwrap()
+        } else {
+            recurrence
+        });
+    }
+    drop(store);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('unrelated', 1, 'other.created', 1, '{}')",
+            [],
+        )
+        .unwrap();
+
+    authored.sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let first = store
+        .list_page(None, RecurrencePageSize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(first.recurrences(), &authored[..2]);
+    assert_eq!(first.next_after(), Some(authored[1].id()));
+
+    let second = store
+        .list_page(first.next_after(), RecurrencePageSize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(second.recurrences(), &authored[2..]);
+    assert_eq!(second.next_after(), None);
+
+    let between = RecurrenceId::new("bravo").unwrap();
+    let from_nonexistent = store
+        .list_page(Some(&between), RecurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(from_nonexistent.recurrences(), &authored[1..2]);
+    assert_eq!(from_nonexistent.next_after(), Some(authored[1].id()));
+
+    let beyond = RecurrenceId::new("zzzz").unwrap();
+    let terminal = store
+        .list_page(Some(&beyond), RecurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert!(terminal.recurrences().is_empty());
+    assert_eq!(terminal.next_after(), None);
+}
+
+#[test]
+fn recurrence_pages_fail_closed_only_for_the_bounded_selected_window() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for id in ["alpha", "bravo", "charlie"] {
+        store
+            .create(
+                RecurrenceId::new(id).unwrap(),
+                TaskGoal::new(format!("Goal for {id}")).unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+    }
+    drop(store);
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let first = store
+        .list_page(None, RecurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(first.recurrences()[0].id().as_str(), "alpha");
+    assert_eq!(first.next_after().unwrap().as_str(), "alpha");
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('recurrence:alpha', 2, 'recurrence.fixed_interval_created', 1, ?1)",
+            [br#"{"goal":"Duplicate","anchor_unix_millis":2,"interval_millis":1,"occurrence_count":1}"#.as_slice()],
+        )
+        .unwrap();
+    let after_corrupt_prefix = store
+        .list_page(first.next_after(), RecurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(after_corrupt_prefix.recurrences()[0].id().as_str(), "bravo");
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('recurrence:charlie', 2, 'recurrence.fixed_interval_created', 1, ?1)",
+            [br#"{"goal":"Duplicate","anchor_unix_millis":2,"interval_millis":1,"occurrence_count":1}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .list_page(first.next_after(), RecurrencePageSize::new(1).unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidHistory { event_count: 2 }
+    ));
+}
+
+#[test]
 fn filters_complete_recurrence_definitions_by_exact_status_in_id_order() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -1397,6 +1543,11 @@ fn read_only_recurrence_inventory_is_empty_and_never_creates_storage() {
     RecurrenceStore::open(&path).unwrap();
     let mut read_only = RecurrenceStore::open_read_only(&path).unwrap();
     assert!(read_only.list().unwrap().is_empty());
+    let empty_page = read_only
+        .list_page(None, RecurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert!(empty_page.recurrences().is_empty());
+    assert_eq!(empty_page.next_after(), None);
     assert!(matches!(
         read_only.create(
             RecurrenceId::new("blocked").unwrap(),

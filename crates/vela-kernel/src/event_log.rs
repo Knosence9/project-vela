@@ -864,7 +864,17 @@ impl EventLog {
         &self,
         event_type: &str,
     ) -> Result<Vec<(String, Vec<E>)>, ReplayError> {
-        self.replay_streams_with_marker::<E>(event_type, None)
+        self.replay_streams_with_marker::<E>(event_type, None, None, None)
+    }
+
+    pub(crate) fn replay_streams_with_event_type_page<E: Event>(
+        &self,
+        event_type: &str,
+        after_stream_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<(String, Vec<E>)>, ReplayError> {
+        debug_assert!(limit > 0);
+        self.replay_streams_with_marker::<E>(event_type, None, after_stream_id, Some(limit))
     }
 
     pub(crate) fn replay_streams_with_event_type_and_json_text<E: Event>(
@@ -873,34 +883,48 @@ impl EventLog {
         json_path: &str,
         value: &str,
     ) -> Result<Vec<(String, Vec<E>)>, ReplayError> {
-        self.replay_streams_with_marker::<E>(event_type, Some((json_path, value)))
+        self.replay_streams_with_marker::<E>(event_type, Some((json_path, value)), None, None)
     }
 
     fn replay_streams_with_marker<E: Event>(
         &self,
         event_type: &str,
         json_text_match: Option<(&str, &str)>,
+        after_stream_id: Option<&str>,
+        limit: Option<i64>,
     ) -> Result<Vec<(String, Vec<E>)>, ReplayError> {
         let (json_path, value) = json_text_match.unzip();
         let mut statement = self
             .connection
             .prepare(
-                "SELECT event.stream_id, event.stream_version, event.event_type,
-                        event.payload_version, event.payload
-                 FROM events AS event
-                 WHERE EXISTS (
-                     SELECT 1 FROM events AS marker
-                     WHERE marker.stream_id = event.stream_id AND marker.event_type = ?1
+                "WITH selected_streams AS (
+                     SELECT DISTINCT marker.stream_id
+                     FROM events AS marker
+                     WHERE marker.event_type = ?1
                        AND CASE WHEN ?2 IS NULL THEN 1
                                 WHEN json_valid(marker.payload)
                                 THEN json_extract(marker.payload, ?2) = ?3
                                 ELSE 0 END
+                       AND (?4 IS NULL OR marker.stream_id > ?4)
+                     ORDER BY marker.stream_id ASC
+                     LIMIT COALESCE(?5, -1)
                  )
+                 SELECT event.stream_id, event.stream_version, event.event_type,
+                        event.payload_version, event.payload
+                 FROM events AS event
+                 INNER JOIN selected_streams AS selected
+                    ON selected.stream_id = event.stream_id
                  ORDER BY event.stream_id ASC, event.stream_version ASC",
             )
             .map_err(storage_replay_error)?;
         let mut rows = statement
-            .query(params![event_type, json_path, value])
+            .query(params![
+                event_type,
+                json_path,
+                value,
+                after_stream_id,
+                limit
+            ])
             .map_err(storage_replay_error)?;
         let mut streams: Vec<(String, Vec<E>)> = Vec::new();
 
