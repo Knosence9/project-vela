@@ -5,7 +5,8 @@ use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
         ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval,
-        ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduleStoreError,
+        SchedulePageSize, SchedulePageSizeError, ScheduleRelease, ScheduleStatus, ScheduleStore,
+        ScheduleStoreError,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -916,6 +917,154 @@ fn lists_every_schedule_in_exact_id_order_after_reopening() {
 }
 
 #[test]
+fn schedule_page_sizes_are_positive_and_bounded() {
+    assert_eq!(
+        SchedulePageSize::new(0).unwrap_err(),
+        SchedulePageSizeError::Zero
+    );
+    assert_eq!(SchedulePageSize::new(1).unwrap().get(), 1);
+    assert_eq!(
+        SchedulePageSize::new(SchedulePageSize::MAX).unwrap().get(),
+        SchedulePageSize::MAX
+    );
+    assert_eq!(
+        SchedulePageSize::new(SchedulePageSize::MAX + 1).unwrap_err(),
+        SchedulePageSizeError::TooLarge {
+            requested: SchedulePageSize::MAX + 1,
+            maximum: SchedulePageSize::MAX,
+        }
+    );
+}
+
+#[test]
+fn pages_complete_schedules_by_exclusive_exact_id_cursor() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&path).unwrap();
+    let mut authored = Vec::new();
+    for id in ["zeta", "alpha", "middle"] {
+        let schedule = store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(format!("Goal for {id}")).unwrap(),
+                instant(10),
+            )
+            .unwrap();
+        authored.push(if id == "middle" {
+            store
+                .cancel(
+                    schedule.id(),
+                    schedule.revision(),
+                    ScheduleCancellation::new("paged cancellation").unwrap(),
+                )
+                .unwrap()
+        } else {
+            schedule
+        });
+    }
+    drop(store);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('unrelated', 1, 'other.created', 1, '{}')",
+            [],
+        )
+        .unwrap();
+
+    authored.sort_by(|left, right| left.id().as_str().cmp(right.id().as_str()));
+    let store = ScheduleStore::open_read_only(&path).unwrap();
+    let first = store
+        .list_page(None, SchedulePageSize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(first.schedules(), &authored[..2]);
+    assert_eq!(first.next_after(), Some(authored[1].id()));
+
+    let second = store
+        .list_page(first.next_after(), SchedulePageSize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(second.schedules(), &authored[2..]);
+    assert_eq!(second.next_after(), None);
+
+    let between = ScheduleId::new("bravo").unwrap();
+    let from_nonexistent = store
+        .list_page(Some(&between), SchedulePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(from_nonexistent.schedules(), &authored[1..2]);
+    assert_eq!(from_nonexistent.next_after(), Some(authored[1].id()));
+
+    let beyond = ScheduleId::new("zzzz").unwrap();
+    let terminal = store
+        .list_page(Some(&beyond), SchedulePageSize::new(1).unwrap())
+        .unwrap();
+    assert!(terminal.schedules().is_empty());
+    assert_eq!(terminal.next_after(), None);
+}
+
+#[test]
+fn schedule_pages_fail_closed_only_for_the_bounded_selected_window() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&path).unwrap();
+    for id in ["alpha", "bravo", "charlie", "delta"] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(format!("Goal for {id}")).unwrap(),
+                instant(10),
+            )
+            .unwrap();
+    }
+    drop(store);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:delta', 2, 'schedule.created', 1, ?1)",
+            [br#"{"goal":"Duplicate","due_at_unix_millis":2}"#.as_slice()],
+        )
+        .unwrap();
+    let store = ScheduleStore::open_read_only(&path).unwrap();
+    let first = store
+        .list_page(None, SchedulePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(first.schedules()[0].id().as_str(), "alpha");
+    assert_eq!(first.next_after().unwrap().as_str(), "alpha");
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:alpha', 2, 'schedule.created', 1, ?1)",
+            [br#"{"goal":"Duplicate","due_at_unix_millis":2}"#.as_slice()],
+        )
+        .unwrap();
+    let after_corrupt_prefix = store
+        .list_page(first.next_after(), SchedulePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(after_corrupt_prefix.schedules()[0].id().as_str(), "bravo");
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('schedule:charlie', 2, 'schedule.created', 1, ?1)",
+            [br#"{"goal":"Duplicate","due_at_unix_millis":2}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .list_page(first.next_after(), SchedulePageSize::new(1).unwrap())
+            .unwrap_err(),
+        ScheduleStoreError::InvalidHistory { event_count: 2 }
+    ));
+}
+
+#[test]
 fn filters_schedules_by_exact_status_in_id_order_after_reopening() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -1001,6 +1150,11 @@ fn empty_store_has_no_schedules() {
     let store = ScheduleStore::open(directory.path().join("events.sqlite3")).unwrap();
 
     assert!(store.list().unwrap().is_empty());
+    let page = store
+        .list_page(None, SchedulePageSize::new(1).unwrap())
+        .unwrap();
+    assert!(page.schedules().is_empty());
+    assert_eq!(page.next_after(), None);
 }
 
 #[test]
