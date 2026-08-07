@@ -3156,6 +3156,23 @@ impl RecurrenceStore {
 
     /// Returns every durable recurrence definition ordered by exact recurrence ID.
     pub fn list(&self) -> Result<Vec<FixedIntervalRecurrence>, RecurrenceStoreError> {
+        let mut recurrences = self.discover()?;
+        recurrences.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(recurrences)
+    }
+
+    /// Returns recurrences with the exact persisted status, ordered by exact recurrence ID.
+    pub fn list_by_status(
+        &self,
+        status: RecurrenceStatus,
+    ) -> Result<Vec<FixedIntervalRecurrence>, RecurrenceStoreError> {
+        let mut recurrences = self.discover()?;
+        recurrences.retain(|recurrence| recurrence.status() == status);
+        recurrences.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(recurrences)
+    }
+
+    fn discover(&self) -> Result<Vec<FixedIntervalRecurrence>, RecurrenceStoreError> {
         let streams = self
             .event_log
             .replay_streams_with_event_type::<RecurrenceEvent>(RECURRENCE_CREATED_EVENT_TYPE)
@@ -3177,7 +3194,6 @@ impl RecurrenceStore {
             recurrences.push(recurrence);
         }
 
-        recurrences.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(recurrences)
     }
 
