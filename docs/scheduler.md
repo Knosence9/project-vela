@@ -913,6 +913,30 @@ lifecycle state, choose catch-up policy, generate identities, materialize,
 dispatch, retry, grant permission, or execute work. See
 [ADR-0041](adr/0041-read-only-finite-recurrence-cli-inventory.md).
 
+## Read-only bounded recurrence CLI inventory paging
+
+`vela-dev recurrence page DATABASE PAGE_SIZE [AFTER]` validates a positive,
+at-most-1024 inventory page size and optional exact non-blank recurrence ID
+before storage access. The optional ID is a caller-owned exclusive keyset cursor
+and need not identify an existing recurrence. The command opens only the selected
+existing database read-only and delegates bounded discovery and replay to
+`RecurrenceStore::list_page`.
+
+Success emits `{"recurrences":[...],"next_after":...}` with the existing complete
+recurrence objects in exact-ID order. `next_after` contains the last emitted exact
+ID only when a validated lookahead proves another definition exists; terminal,
+empty, and beyond-end pages emit `null`. Exact strings remain JSON escaped.
+
+Invalid inputs emit `invalid_recurrence_page_size` or `invalid_recurrence_id`
+before storage access. Missing or incompatible storage, selected-window
+corruption, projection, and serialization failures emit
+`recurrence_page_inspection_failed` with no partial stdout; missing storage is
+never created. Corruption before the cursor or after the selected lookahead
+cannot block the page. The command reads no clock, mutates nothing, persists no
+cursor, and grants no status-filtered discovery, lifecycle, worker, lease,
+dispatch, retry, permission, or execution authority. See
+[ADR-0092](adr/0092-read-only-bounded-finite-recurrence-inventory-cli-paging.md).
+
 ## Read-only recurrence status CLI filtering
 
 `vela-dev recurrence status DATABASE STATUS` validates one exact lowercase
