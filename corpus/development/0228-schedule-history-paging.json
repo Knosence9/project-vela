@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page complete one-shot schedule lifecycle histories",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1007 with bounded exact-ID discovery of complete validated one-shot schedule histories.",
+    "acceptance_criteria": [
+      "Select at most one positive at-most-1024 schedule window plus lookahead and return complete revision-ordered histories in exact-ID order.",
+      "Advance an exclusive continuation cursor without requiring the cursor schedule to exist.",
+      "Fail closed on selected or lookahead corruption while isolating evidence outside the bounded window."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Targeted schedule-store tests failed because ScheduleHistory, ScheduleHistoryPage, and ScheduleStore::histories_page did not exist.",
+      "patch": "Added focused tests for complete pending and transitioned histories, exact-ID ordering, continuation, empty and terminal pages, and corruption boundaries."
+    },
+    {
+      "summary": "Implemented and refactored the bounded kernel slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented authoritative stream selection with lookahead, complete canonical lifecycle replay in one read snapshot, typed revision-bearing histories, and exclusive continuation.",
+      "patch": "Implemented issue 1007 in crates/vela-kernel/src/scheduler.rs with store tests, ADR-0101, and scheduler documentation; independent pre-commit review found no blocking issue."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit run f021b8ed-02ea-4650-b566-35ab2f5ba79f reviewed exact head ad98fea with no actionable comments and zero unresolved threads.",
+      "patch": "Preserved the verified head and armed squash merge only after the Rust gate and genuine review completed; no rate-limited status was used as review evidence."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 1007 delivered bounded schedule-history discovery without event-level paging or lifecycle authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 1008 exact head ad98fea68024c5dd3f56f80f393a47b0963108c4", "status": "passed" },
+      { "command": "Pull request 1008 squash merge c5c5ab522fdc3ec05d32ab78e2b7be1a6af2a7e6", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Inventory paging followed by exact history calls cannot guarantee that selection and lifecycle evidence came from one read snapshot.",
+    "The page bound limits selected streams and returned histories; complete replay and allocation within each selected schedule remain proportional to that schedule's lifecycle.",
+    "Lookahead must be canonically replayed before proving continuation, while corruption before the cursor, beyond lookahead, and in unrelated stream families remains isolated.",
+    "The boundary is read-only and adds no event-level cursor, clock, mutation, worker, dispatch, retry, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1008"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

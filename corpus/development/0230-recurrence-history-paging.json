@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page complete finite recurrence lifecycle histories",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1011 with bounded exact-ID discovery of complete validated finite recurrence histories.",
+    "acceptance_criteria": [
+      "Select at most one positive at-most-1024 recurrence window plus lookahead and return complete revision-ordered histories in exact-ID order.",
+      "Preserve exact creation and optional cancellation evidence with deterministic exclusive continuation.",
+      "Fail closed on selected or lookahead corruption while isolating evidence outside the bounded window."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Targeted recurrence-store tests failed because RecurrenceHistory, RecurrenceHistoryPage, and RecurrenceStore::histories_page did not exist.",
+      "patch": "Added focused tests for complete active and cancelled histories, exact-ID ordering, continuation, empty and terminal pages, and corruption isolation."
+    },
+    {
+      "summary": "Implemented and refactored the bounded kernel slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented bounded authoritative recurrence selection, complete canonical replay in one read snapshot, revision-bearing history projection, validated lookahead, and exclusive continuation.",
+      "patch": "Implemented issue 1011 in crates/vela-kernel/src/scheduler.rs with recurrence-store tests, ADR-0103, and scheduler documentation; independent pre-commit review found no blocking issue."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "A review-limit false green was excluded; after cooldown, CodeRabbit run 0657c6b4-3ac8-438e-8a05-8d3866c730ce reviewed exact head a2ce35f with no actionable comments and zero unresolved threads.",
+      "patch": "Preserved the verified head until shared review budget, genuine review, and merge-readiness gates all passed."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 1011 delivered bounded recurrence-history discovery while preserving complete fail-closed lifecycle replay.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 1012 exact head a2ce35fa6c196b285f5bfe2c182d8d747150fa4d", "status": "passed" },
+      { "command": "Pull request 1012 squash merge 18c63f2b387459b7defbb2add9fa6853d06ef1b7", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Paging current recurrence projections and then loading exact histories splits selection and audit evidence across storage snapshots.",
+    "Safe event-level continuation would require prior validated state or snapshot proof, so the bounded slice pages streams while fully replaying each selected lifecycle.",
+    "Validated lookahead proves continuation; corruption before the cursor, beyond lookahead, and in unrelated stream families cannot block the selected page.",
+    "The read-only projection adds no occurrence lifecycle, clock, cursor persistence, mutation, worker, lease, dispatch, retry, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1012"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}
