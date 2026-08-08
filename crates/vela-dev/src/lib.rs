@@ -28,7 +28,9 @@ use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
     PermissionDecision, ToolAuthorizer, ToolEffect, ToolId, ToolRegistry, ToolRequest,
 };
-use vela_python_workbench::{HamelnbProcessAdapter, PythonExecutionRequest};
+use vela_python_workbench::{
+    DEFAULT_MAX_OUTPUT_BYTES, HamelnbProcessAdapter, PythonExecutionLimits, PythonExecutionRequest,
+};
 
 /// Project Vela's developer-facing command line.
 #[derive(Debug, Parser)]
@@ -81,6 +83,10 @@ pub enum PythonCommand {
         adapter: PathBuf,
         port: u16,
         notebook_path: String,
+        #[arg(long, default_value_t = 30)]
+        timeout_seconds: u64,
+        #[arg(long, default_value_t = DEFAULT_MAX_OUTPUT_BYTES)]
+        max_output_bytes: usize,
     },
 }
 
@@ -433,8 +439,16 @@ impl Cli {
                         adapter,
                         port,
                         notebook_path,
+                        timeout_seconds,
+                        max_output_bytes,
                     }),
-            }) => execute_python(&adapter, port, &notebook_path),
+            }) => execute_python(
+                &adapter,
+                port,
+                &notebook_path,
+                timeout_seconds,
+                max_output_bytes,
+            ),
             Some(Command::Record {
                 command: Some(RecordCommand::Validate { path }),
             }) => validate_record(&path),
@@ -933,13 +947,26 @@ impl Cli {
     }
 }
 
-fn execute_python(adapter: &Path, port: u16, notebook_path: &str) -> ExitCode {
+fn execute_python(
+    adapter: &Path,
+    port: u16,
+    notebook_path: &str,
+    timeout_seconds: u64,
+    max_output_bytes: usize,
+) -> ExitCode {
     let mut source = String::new();
     if let Err(error) = std::io::stdin().read_to_string(&mut source) {
         return extension_error("python_source_read_failed", error);
     }
+    let limits = match PythonExecutionLimits::new(
+        std::time::Duration::from_secs(timeout_seconds),
+        max_output_bytes,
+    ) {
+        Ok(limits) => limits,
+        Err(error) => return extension_error("python_request_invalid", error),
+    };
     let request = match PythonExecutionRequest::new(port, notebook_path, source) {
-        Ok(request) => request,
+        Ok(request) => request.with_limits(limits),
         Err(error) => return extension_error("python_request_invalid", error),
     };
     let result = match HamelnbProcessAdapter::new(adapter).execute(&request) {
