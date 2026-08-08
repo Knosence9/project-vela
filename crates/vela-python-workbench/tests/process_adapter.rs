@@ -45,7 +45,9 @@ fn process_adapter_kills_a_direct_child_after_the_runtime_budget() {
 
 #[test]
 fn successful_adapter_is_not_held_open_by_inherited_pipes() {
-    let limits = PythonExecutionLimits::new(Duration::from_secs(1), 1024).unwrap();
+    // The fixture's descendant holds both output pipes for 250 ms, beyond this
+    // direct-child runtime budget. The direct child still exits within budget.
+    let limits = PythonExecutionLimits::new(Duration::from_millis(200), 1024).unwrap();
     let request =
         PythonExecutionRequest::new(8888, "scratch.ipynb", "__vela_test_inherited_pipe__")
             .unwrap()
@@ -57,7 +59,7 @@ fn successful_adapter_is_not_held_open_by_inherited_pipes() {
         .expect("an exited adapter must not wait for a descendant's inherited pipes");
 
     assert_eq!(result.status(), "ok");
-    assert!(started.elapsed() < Duration::from_millis(200));
+    assert!(started.elapsed() < Duration::from_millis(250));
     // The fixture leaves a grandchild that sleeps 0.25 s. Wait for it to exit
     // so it does not outlive this test run.
     std::thread::sleep(Duration::from_millis(300));

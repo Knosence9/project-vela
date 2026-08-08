@@ -49,8 +49,10 @@ printf '%s\n' 'sum(values)' \
 
 Vela drains both streams without blocking, kills and reaps a still-running
 direct adapter on timeout, and rejects an overflowing stream without parsing or
-printing partial JSON. Inherited output pipes cannot extend the call beyond its
-deadline. The byte limit applies independently to stdout and stderr.
+printing partial JSON. After observing direct-child exit within its timeout,
+Vela permits a bounded 20 ms post-exit drain interval; inherited output pipes
+cannot hold the call open beyond that interval. The byte limit applies
+independently to stdout and stderr.
 
 ## Current boundary
 
