@@ -3837,6 +3837,25 @@ impl ScheduleStatusPage {
     }
 }
 
+/// One bounded sparse page of pending schedules due by a caller-owned cutoff.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduleDuePage {
+    schedules: Vec<ScheduledTask>,
+    next_after: Option<ScheduleId>,
+}
+
+impl ScheduleDuePage {
+    /// Returns matching schedules in increasing exact-ID order.
+    pub fn schedules(&self) -> &[ScheduledTask] {
+        &self.schedules
+    }
+
+    /// Returns the last inspected exact ID only when more inventory exists.
+    pub fn next_after(&self) -> Option<&ScheduleId> {
+        self.next_after.as_ref()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScheduleStatus {
     Pending,
@@ -4434,6 +4453,47 @@ impl ScheduleStore {
                 .then_with(|| left.id.cmp(&right.id))
         });
         Ok(due)
+    }
+
+    /// Inspects one bounded exact-ID window and returns pending schedules due by `cutoff`.
+    ///
+    /// Unlike [`Self::list_due`], this sparse projection preserves exact-ID scan order so
+    /// storage work can remain bounded. The continuation cursor tracks the last schedule
+    /// inspected rather than the last schedule emitted, so an empty page can still advance.
+    pub fn list_due_page(
+        &self,
+        cutoff: ScheduleInstant,
+        after: Option<&ScheduleId>,
+        scan_size: SchedulePageSize,
+    ) -> Result<ScheduleDuePage, ScheduleStoreError> {
+        let after_stream_id = after.map(schedule_stream);
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_page::<ScheduleEvent>(
+                SCHEDULE_CREATED_EVENT_TYPE,
+                after_stream_id.as_ref().map(StreamId::as_str),
+                scan_size.get() as i64 + 1,
+            )
+            .map_err(ScheduleStoreError::Replay)?;
+        let mut schedules = Self::project_discovered(streams)?;
+        let has_more = schedules.len() > scan_size.get() as usize;
+        if has_more {
+            schedules.pop();
+        }
+        let next_after = has_more.then(|| {
+            schedules
+                .last()
+                .expect("a positive scan with lookahead inspects one schedule")
+                .id()
+                .clone()
+        });
+        schedules.retain(|scheduled| {
+            scheduled.status() == ScheduleStatus::Pending && scheduled.due_at <= cutoff
+        });
+        Ok(ScheduleDuePage {
+            schedules,
+            next_after,
+        })
     }
 
     /// Returns schedules with the exact persisted status, ordered by exact schedule ID.
