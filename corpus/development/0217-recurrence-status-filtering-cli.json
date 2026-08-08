@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter finite recurrences by lifecycle status through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/981 to expose exact recurrence lifecycle-status filtering as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Accept only exact lowercase active or cancelled status before storage access.",
+      "Emit matching complete recurrence definitions in deterministic exact-ID order.",
+      "Open only existing storage read-only and fail without partial stdout on malformed history."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected recurrence status inspection because the status subcommand did not exist.",
+      "patch": "Added focused CLI tests for mixed statuses, ordering, empty results, escaping, validation, missing storage, and malformed histories."
+    },
+    {
+      "summary": "Implemented and refactored the bounded adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented strict status parsing, read-only store delegation, and deterministic inventory JSON while reusing the complete recurrence representation.",
+      "patch": "Implemented issue 981 in crates/vela-dev/src/lib.rs with focused tests, ADR-0090, and scheduler documentation."
+    },
+    {
+      "summary": "Completed independent and substantive review.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking issues; a rate-limited false green was excluded until genuine CodeRabbit run 4df8e49e completed on the exact head with no actionable comments and zero unresolved threads.",
+      "patch": "Preserved the verified head through cooldown and armed merge only after exact-head CI and review readiness were confirmed."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 981 delivered deterministic recurrence status JSON without adding mutation or execution authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 982 exact head 5522caf8d37382cf70fadd1a83e279a52ad5d0ab", "status": "passed" },
+      { "command": "Pull request 982 squash merge 6bb7cdebce960651cbeb5baa669ca40023c49df4", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "CLI status parsing should precede storage access and preserve the kernel as lifecycle-validation authority.",
+    "Complete recurrence serialization can be shared across unfiltered and status-filtered inventory commands.",
+    "The adapter grants no mutation, clock, worker, dispatch, retry, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/982"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

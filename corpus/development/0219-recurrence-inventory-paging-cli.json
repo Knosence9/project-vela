@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page finite recurrence inventory through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/985 to expose bounded recurrence inventory pages as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Validate page size and optional exact recurrence-ID cursor before storage access.",
+      "Emit complete recurrences and nullable next_after in deterministic exact-ID order.",
+      "Delegate bounded selection to the kernel through existing read-only storage and emit no partial stdout on failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected recurrence page because the paging subcommand did not exist.",
+      "patch": "Added focused CLI tests for ordering, continuation, terminal pages, escaping, validation, storage absence, and corruption isolation."
+    },
+    {
+      "summary": "Implemented and refactored the bounded adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented pre-storage input validation, read-only list_page delegation, and compact continuation JSON using the canonical recurrence serializer.",
+      "patch": "Implemented issue 985 in crates/vela-dev/src/lib.rs with focused tests, ADR-0092, and scheduler documentation."
+    },
+    {
+      "summary": "Recorded independent and substantive review disposition.",
+      "outcome": "success",
+      "diagnostic": "Independent review found no blocking issue. Genuine CodeRabbit run 48dac4bf raised one selected-lookahead test comment; the contract-based rebuttal was posted before merge, but the unresolved thread raced the merge and CodeRabbit withdrew the finding afterward.",
+      "patch": "No code change was warranted because ADR-0091 requires validation of the page-size-plus-one lookahead; the post-merge withdrawal confirmed that interpretation and resolved the thread."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 985 delivered bounded recurrence inventory JSON while preserving kernel cursor and validation authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 986 exact head fd51a681b874886ba62da87caa3a932aff4dc90b", "status": "passed" },
+      { "command": "Pull request 986 squash merge 7627efa0c79aecec6f3c939c906434b9afd2e74a", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "The adapter should validate caller-owned bounds and identity before opening storage.",
+    "Kernel continuation evidence should be serialized directly rather than reconstructed in the CLI.",
+    "The selected-lookahead review comment was not applied because ADR-0091 requires validating the page-size-plus-one lookahead; the rebuttal was posted before merge and CodeRabbit withdrew the finding afterward.",
+    "The command adds no persisted cursor, status filtering, lifecycle, clock, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/986"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}
