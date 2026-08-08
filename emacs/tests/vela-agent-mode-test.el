@@ -9,7 +9,7 @@
          (result (alist-get "result" response nil nil #'string=))
          (capabilities (alist-get "capabilities" result nil nil #'string=))
          (features (alist-get "emacs_features" result nil nil #'string=)))
-    (should (equal (alist-get "protocol_version" response nil nil #'string=) 1))
+    (should (equal (alist-get "protocol_version" response nil nil #'string=) 2))
     (should (eq (alist-get "ok" response nil nil #'string=) t))
     (should
      (equal capabilities
@@ -72,9 +72,57 @@
                        ("point" . 7)
                        ("line" . 2)
                        ("column" . 0)
-                       ("region" . :null))))
+                       ("region" . :null)
+                       ("restriction" . (("start" . 1)
+                                          ("end" . 12)
+                                          ("narrowed" . :false))))))
       (should (= (point) point-before))
       (should-not (buffer-modified-p)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-narrowing-without-widening ()
+  (with-temp-buffer
+    (insert "zero\nalpha\nomega\n")
+    (text-mode)
+    (narrow-to-region 6 12)
+    (goto-char 8)
+    (set-mark 10)
+    (setq mark-active t)
+    (set-buffer-modified-p nil)
+    (string-match "b\\(c\\)" "abcd")
+    (let* ((point-before (point))
+           (mark-before (mark t))
+           (mark-active-before mark-active)
+           (restriction-before (cons (point-min) (point-max)))
+           (text-before (save-restriction
+                          (widen)
+                          (buffer-string)))
+           (modified-before (buffer-modified-p))
+           (tick-before (buffer-chars-modified-tick))
+           (undo-before buffer-undo-list)
+           (match-before (match-data t))
+           (response
+            (vela-agent-handle-request
+             '(("operation" . "context.snapshot")
+               ("include" . ["buffer"]))))
+           (result (alist-get "result" response nil nil #'string=))
+           (buffer (alist-get "buffer" result nil nil #'string=)))
+      (should (equal (alist-get "restriction" buffer nil nil #'string=)
+                     '(("start" . 6)
+                       ("end" . 12)
+                       ("narrowed" . t))))
+      (should (equal (cons (point-min) (point-max)) restriction-before))
+      (should (= (point) point-before))
+      (should (equal (mark t) mark-before))
+      (should (eq mark-active mark-active-before))
+      (should
+       (equal (save-restriction
+                (widen)
+                (buffer-string))
+              text-before))
+      (should (eq (buffer-modified-p) modified-before))
+      (should (= (buffer-chars-modified-tick) tick-before))
+      (should (equal buffer-undo-list undo-before))
+      (should (equal (match-data t) match-before)))))
 
 (ert-deftest vela-agent-context-snapshot-uses-native-org-context ()
   (with-temp-buffer
@@ -130,7 +178,7 @@
 (ert-deftest vela-agent-interface-json-preserves-protocol-order ()
   (let* ((json
           (vela-agent-encode-response
-           '(("protocol_version" . 1)
+           '(("protocol_version" . 2)
              ("ok" . t)
              ("result" . (("missing" . :null)
                             ("enabled" . :false)
@@ -142,7 +190,7 @@
                                     :false-object :false)))
     (should
      (equal json
-            "{\"protocol_version\":1,\"ok\":true,\"result\":{\"missing\":null,\"enabled\":false,\"items\":[\"a\",\"b\"]}}"))
+            "{\"protocol_version\":2,\"ok\":true,\"result\":{\"missing\":null,\"enabled\":false,\"items\":[\"a\",\"b\"]}}"))
     (should (eq (alist-get "missing"
                            (alist-get "result" parsed nil nil #'string=)
                            nil nil #'string=)

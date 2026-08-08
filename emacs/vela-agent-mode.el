@@ -22,7 +22,7 @@
 
 (define-error 'vela-agent-protocol-error "Invalid Vela agent request")
 
-(defconst vela-agent-protocol-version 1
+(defconst vela-agent-protocol-version 2
   "Version of the model-neutral Vela Emacs protocol.")
 
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
@@ -164,7 +164,11 @@
               ,(if (use-region-p)
                    `(("start" . ,(region-beginning))
                      ("end" . ,(region-end)))
-                 :null))))
+                 :null))
+    ("restriction" . (("start" . ,(point-min))
+                       ("end" . ,(point-max))
+                       ("narrowed" . ,(vela-agent--boolean
+                                        (buffer-narrowed-p)))))))
 
 (defun vela-agent--org-heading-context ()
   "Return native Org heading metadata at point, or JSON null."
