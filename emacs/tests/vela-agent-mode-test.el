@@ -198,12 +198,29 @@
       ("include" . ["buffer" "secrets"])))
    :type 'vela-agent-protocol-error))
 
-(ert-deftest vela-agent-context-snapshot-bounds-requested-sections ()
-  (should-error
-   (vela-agent-handle-request
-    '(("operation" . "context.snapshot")
-      ("include" . ["buffer" "org" "buffer"])))
-   :type 'vela-agent-protocol-error))
+(ert-deftest vela-agent-context-snapshot-bounds-sections-before-copying ()
+  (cl-letf (((symbol-function 'append)
+             (lambda (&rest _)
+               (error "include vector was copied before its size was checked"))))
+    (should-error
+     (vela-agent-handle-request
+      '(("operation" . "context.snapshot")
+        ("include" . ["buffer" "org" "buffer"])))
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-request-validation-bounds-cyclic-objects ()
+  (let ((request (list '("operation" . "capabilities.list"))))
+    (setcdr request request)
+    (should-error (vela-agent-handle-request request)
+                  :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-request-validation-bounds-object-fields ()
+  (let ((request (cons '("operation" . "capabilities.list")
+                       (mapcar (lambda (number)
+                                 (cons (format "extra-%d" number) t))
+                               (number-sequence 1 8)))))
+    (should-error (vela-agent-handle-request request)
+                  :type 'vela-agent-protocol-error)))
 
 (ert-deftest vela-agent-context-snapshot-rejects-oversized-buffers ()
   (with-temp-buffer
