@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page complete finite recurrence histories through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1013 by exposing bounded recurrence-history pages as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Validate a positive at-most-1024 page size and optional exact recurrence-ID cursor before storage access.",
+      "Emit exact-ID-ordered complete revision-bearing creation and cancellation evidence plus nullable exclusive continuation.",
+      "Preserve missing-storage non-creation and fail without partial stdout on selected or lookahead corruption."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected recurrence history-page because the subcommand did not exist.",
+      "patch": "Added integration tests for active and cancelled evidence, ordering, escaping, continuation, empty and terminal pages, validation, missing storage, and corruption boundaries."
+    },
+    {
+      "summary": "Implemented and refactored the read-only adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented pre-storage validation, one read-only histories_page delegation, deterministic compact JSON, and shared exact/paged recurrence history-entry conversion.",
+      "patch": "Implemented issue 1013 in crates/vela-dev/src/lib.rs with CLI tests, ADR-0104, and scheduler documentation; independent pre-commit review found no blocking issue."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "A review-limit false green was excluded; after cooldown and shared-budget availability, CodeRabbit run 0912870f-8e9d-4915-adc4-38d114b05d0f reviewed exact head 93c3ccc with no actionable comments and zero unresolved threads.",
+      "patch": "Kept auto-merge disabled until exact-head Rust CI, genuine review, and zero-thread readiness were established."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 1013 exposed bounded complete recurrence-history pages without creating storage or adding write authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 1014 exact head 93c3ccccf67969d2552089dc0b26cd2076a73cab", "status": "passed" },
+      { "command": "Pull request 1014 squash merge 135e4f783d91febaa478f5b82ea14b223869e817", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "A dedicated history-page command keeps bounded audit discovery distinct from exact history lookup and current recurrence inventory.",
+    "Reusing typed entry conversion preserves exact field names and fails closed when future history variants are unsupported.",
+    "The cursor advances between complete recurrence histories; it is not an event-level cursor or durable snapshot token.",
+    "The adapter creates no storage, persists no cursor, reads no clock, and adds no lifecycle, worker, dispatch, retry, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1014"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}
