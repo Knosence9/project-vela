@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 vela-extensions = { path = "../vela-extensions" }
 vela-kernel = { path = "../vela-kernel" }
+vela-python-workbench = { path = "../vela-python-workbench" }
 
 [dev-dependencies]
 assert_cmd = "2.1"

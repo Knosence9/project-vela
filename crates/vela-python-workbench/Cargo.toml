@@ -1,0 +1,11 @@
+[package]
+name = "vela-python-workbench"
+description = "Rust control-plane boundary for Vela's persistent Python workbench"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Add a Rust-controlled persistent Python execution slice",
+    "objective": "Complete the first vertical slice of issue https://github.com/Knosence9/project-vela/issues/1021 by keeping Vela's control boundary in Rust while preserving ordinary Python and a live Jupyter kernel as the compute substrate.",
+    "acceptance_criteria": [
+      "Read multiline Python from standard input and preserve it through one explicit adapter, port, and notebook selection.",
+      "Parse compact hamelnb JSON and fail without successful partial output on adapter failure, malformed JSON, or non-ok execution status.",
+      "Demonstrate retained Python state across two separate Vela CLI invocations against one live notebook."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established the Rust process-boundary behavior with a failing test.",
+      "outcome": "failure",
+      "diagnostic": "The focused kernel test failed because vela_kernel::python_workbench did not exist.",
+      "patch": "Added a process-adapter integration test that requires exact multiline Python, port, and notebook-path forwarding."
+    },
+    {
+      "summary": "Established the stdin-driven CLI behavior with a failing test.",
+      "outcome": "failure",
+      "diagnostic": "The focused CLI test failed because vela-dev rejected the python subcommand.",
+      "patch": "Added the python execute command contract before implementing its CLI branch."
+    },
+    {
+      "summary": "Implemented and verified the first Rust/Python workbench boundary.",
+      "outcome": "success",
+      "diagnostic": "The Rust adapter launches one explicit hamelnb program, validates its compact response, and emits output only after an ok status; the CLI reads Python from stdin.",
+      "patch": "Added the focused vela-python-workbench crate, the vela-dev python execute command, fail-closed integration coverage, and boundary documentation."
+    },
+    {
+      "summary": "Corrected the first staged architecture after independent review.",
+      "outcome": "success",
+      "diagnostic": "Review blocked external-process integration inside vela-kernel and noted Python source exposure through child arguments.",
+      "patch": "Moved the boundary into the focused workspace crate required by issue 1021 and changed hamelnb invocation to a permission-restricted temporary code file."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela can now drive ordinary stateful Python through a Rust-controlled command without reimplementing Python or the Jupyter protocol.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo test --locked -p vela-python-workbench",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo test --locked -p vela-dev --test python_workbench_cli",
+        "status": "passed"
+      },
+      {
+        "command": "two nix develop cargo run invocations through localhost scratch.ipynb after crate extraction and code-file forwarding, assigning 80 then evaluating the retained value plus 4",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Rust can own explicit target selection, process failure handling, and response validation while Python remains the compact working language.",
+    "Reading source from stdin and forwarding a temporary code file preserves multiline Python without exposing it in child arguments or ordinary argument-size limits.",
+    "Persistent notebook state is useful exploratory context but is not verified evidence until replay, provenance, resource bounds, and workspace lifecycle controls exist.",
+    "The first slice should integrate the maintained Jupyter adapter rather than reimplementing Python or prematurely owning the full kernel wire protocol."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-python-workbench/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/issues/1021"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

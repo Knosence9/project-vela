@@ -120,6 +120,18 @@ nix develop --command cargo run --locked -p vela-dev -- --help
 nix develop --command cargo run --locked -p vela-dev -- record --help
 ```
 
+The first persistent Python workbench slice keeps control in Rust while sending
+ordinary Python unchanged to one explicit live Jupyter notebook through
+`hamelnb`:
+
+```bash
+printf '%s\n' '40 + 2' | nix develop --command cargo run --locked -p vela-dev -- \
+  python execute "$HOME/.local/bin/hamelnb" 8888 scratch.ipynb
+```
+
+See [`docs/python-workbench.md`](docs/python-workbench.md) for the trust boundary,
+current limitations, and stateful two-invocation example.
+
 The workspace includes schema-versioned development-record validation:
 
 ```bash
