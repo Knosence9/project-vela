@@ -1,54 +1,18 @@
-use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
-use tempfile::{TempDir, tempdir};
 use vela_python_workbench::{
     HamelnbProcessAdapter, PythonExecutionError, PythonExecutionLimits, PythonExecutionRequest,
 };
 
-fn executable_adapter(body: &str) -> (TempDir, PathBuf) {
-    let directory = tempdir().expect("adapter fixture directory");
-    let adapter_path = directory.path().join("fake-hamelnb.py");
-    let staging_path = directory.path().join("fake-hamelnb.py.new");
-    let mut adapter = fs::File::create(&staging_path).expect("create fake adapter");
-    use std::io::Write as _;
-    adapter
-        .write_all(format!("#!/usr/bin/env python3\n{body}").as_bytes())
-        .expect("write fake adapter");
-    adapter.sync_all().expect("sync fake adapter");
-    drop(adapter);
-    let mut permissions = fs::metadata(&staging_path).unwrap().permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(&staging_path, permissions).unwrap();
-    fs::rename(staging_path, &adapter_path).expect("publish fake adapter atomically");
-    (directory, adapter_path)
+fn adapter_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-hamelnb.py")
 }
 
 #[test]
 fn process_adapter_preserves_multiline_python_and_explicit_target() {
-    let (_directory, adapter_path) = executable_adapter(
-        r#"import json
-import sys
-
-args = sys.argv[1:]
-code_file_index = args.index("--code-file") + 1
-port_index = args.index("--port") + 1
-path_index = args.index("--path") + 1
-with open(args[code_file_index], encoding="utf-8") as code_file:
-    source = code_file.read()
-print(json.dumps({
-    "status": "ok",
-    "transport": "websocket",
-    "observed_code": source,
-    "source_exposed_in_argv": source in args,
-    "observed_port": args[port_index],
-    "observed_path": args[path_index],
-}, separators=(",", ":")))
-"#,
-    );
-
     let source = "values = [1, 2, 3]\nprint(sum(values))\n";
     let request = PythonExecutionRequest::new(8888, "scratch.ipynb", source).unwrap();
-    let result = HamelnbProcessAdapter::new(&adapter_path)
+    let result = HamelnbProcessAdapter::new(adapter_path())
         .execute(&request)
         .expect("successful execution");
 
@@ -62,15 +26,13 @@ print(json.dumps({
 
 #[test]
 fn process_adapter_kills_a_direct_child_after_the_runtime_budget() {
-    let (_directory, adapter_path) =
-        executable_adapter("import time\ntime.sleep(30)\nprint('{\"status\":\"ok\"}')\n");
     let limits = PythonExecutionLimits::new(Duration::from_millis(50), 1024).unwrap();
-    let request = PythonExecutionRequest::new(8888, "scratch.ipynb", "40 + 2")
+    let request = PythonExecutionRequest::new(8888, "scratch.ipynb", "__vela_test_sleep__")
         .unwrap()
         .with_limits(limits);
 
     let started = std::time::Instant::now();
-    let error = HamelnbProcessAdapter::new(&adapter_path)
+    let error = HamelnbProcessAdapter::new(adapter_path())
         .execute(&request)
         .expect_err("sleeping adapter must time out");
 
@@ -83,20 +45,14 @@ fn process_adapter_kills_a_direct_child_after_the_runtime_budget() {
 
 #[test]
 fn process_adapter_timeout_is_not_held_open_by_inherited_pipes() {
-    let (_directory, adapter_path) = executable_adapter(
-        r#"import subprocess
-import sys
-subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.1)"])
-print('{"status":"ok"}')
-"#,
-    );
     let limits = PythonExecutionLimits::new(Duration::from_millis(20), 1024).unwrap();
-    let request = PythonExecutionRequest::new(8888, "scratch.ipynb", "40 + 2")
-        .unwrap()
-        .with_limits(limits);
+    let request =
+        PythonExecutionRequest::new(8888, "scratch.ipynb", "__vela_test_inherited_pipe__")
+            .unwrap()
+            .with_limits(limits);
 
     let started = std::time::Instant::now();
-    let error = HamelnbProcessAdapter::new(&adapter_path)
+    let error = HamelnbProcessAdapter::new(adapter_path())
         .execute(&request)
         .expect_err("inherited pipes must not defeat the capture timeout");
 
@@ -110,13 +66,13 @@ print('{"status":"ok"}')
 
 #[test]
 fn process_adapter_rejects_stdout_beyond_the_capture_budget() {
-    let (_directory, adapter_path) = executable_adapter("print('x' * 4096)\n");
     let limits = PythonExecutionLimits::new(Duration::from_secs(1), 128).unwrap();
-    let request = PythonExecutionRequest::new(8888, "scratch.ipynb", "40 + 2")
-        .unwrap()
-        .with_limits(limits);
+    let request =
+        PythonExecutionRequest::new(8888, "scratch.ipynb", "__vela_test_stdout_overflow__")
+            .unwrap()
+            .with_limits(limits);
 
-    let error = HamelnbProcessAdapter::new(&adapter_path)
+    let error = HamelnbProcessAdapter::new(adapter_path())
         .execute(&request)
         .expect_err("oversized stdout must fail");
 
@@ -134,16 +90,14 @@ fn process_adapter_rejects_stdout_beyond_the_capture_budget() {
 
 #[test]
 fn continuous_output_cannot_starve_the_runtime_budget() {
-    let (_directory, adapter_path) = executable_adapter(
-        "import sys\nwhile True:\n    sys.stdout.write('x' * 8192)\n    sys.stdout.flush()\n",
-    );
     let limits = PythonExecutionLimits::new(Duration::from_millis(50), 100 * 1024 * 1024).unwrap();
-    let request = PythonExecutionRequest::new(8888, "scratch.ipynb", "40 + 2")
-        .unwrap()
-        .with_limits(limits);
+    let request =
+        PythonExecutionRequest::new(8888, "scratch.ipynb", "__vela_test_continuous_output__")
+            .unwrap()
+            .with_limits(limits);
 
     let started = std::time::Instant::now();
-    let error = HamelnbProcessAdapter::new(&adapter_path)
+    let error = HamelnbProcessAdapter::new(adapter_path())
         .execute(&request)
         .expect_err("continuous output must not starve the deadline");
 
@@ -153,14 +107,13 @@ fn continuous_output_cannot_starve_the_runtime_budget() {
 
 #[test]
 fn process_adapter_rejects_stderr_beyond_the_capture_budget() {
-    let (_directory, adapter_path) =
-        executable_adapter("import sys\nprint('x' * 4096, file=sys.stderr)\nraise SystemExit(2)\n");
     let limits = PythonExecutionLimits::new(Duration::from_secs(1), 128).unwrap();
-    let request = PythonExecutionRequest::new(8888, "scratch.ipynb", "40 + 2")
-        .unwrap()
-        .with_limits(limits);
+    let request =
+        PythonExecutionRequest::new(8888, "scratch.ipynb", "__vela_test_stderr_overflow__")
+            .unwrap()
+            .with_limits(limits);
 
-    let error = HamelnbProcessAdapter::new(&adapter_path)
+    let error = HamelnbProcessAdapter::new(adapter_path())
         .execute(&request)
         .expect_err("oversized stderr must fail");
 
