@@ -8,16 +8,18 @@ use vela_python_workbench::{
 fn executable_adapter(body: &str) -> (TempDir, PathBuf) {
     let directory = tempdir().expect("adapter fixture directory");
     let adapter_path = directory.path().join("fake-hamelnb.py");
-    let mut adapter = fs::File::create(&adapter_path).expect("create fake adapter");
+    let staging_path = directory.path().join("fake-hamelnb.py.new");
+    let mut adapter = fs::File::create(&staging_path).expect("create fake adapter");
     use std::io::Write as _;
     adapter
         .write_all(format!("#!/usr/bin/env python3\n{body}").as_bytes())
         .expect("write fake adapter");
     adapter.sync_all().expect("sync fake adapter");
     drop(adapter);
-    let mut permissions = fs::metadata(&adapter_path).unwrap().permissions();
+    let mut permissions = fs::metadata(&staging_path).unwrap().permissions();
     permissions.set_mode(0o700);
-    fs::set_permissions(&adapter_path, permissions).unwrap();
+    fs::set_permissions(&staging_path, permissions).unwrap();
+    fs::rename(staging_path, &adapter_path).expect("publish fake adapter atomically");
     (directory, adapter_path)
 }
 
@@ -72,7 +74,10 @@ fn process_adapter_kills_a_direct_child_after_the_runtime_budget() {
         .execute(&request)
         .expect_err("sleeping adapter must time out");
 
-    assert!(matches!(error, PythonExecutionError::TimedOut { .. }));
+    assert!(
+        matches!(error, PythonExecutionError::TimedOut { .. }),
+        "unexpected error: {error:?}"
+    );
     assert!(started.elapsed() < Duration::from_secs(2));
 }
 
