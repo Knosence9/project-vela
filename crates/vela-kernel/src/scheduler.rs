@@ -3760,6 +3760,25 @@ impl SchedulePage {
     }
 }
 
+/// One bounded sparse page of schedules matching an exact persisted status.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduleStatusPage {
+    schedules: Vec<ScheduledTask>,
+    next_after: Option<ScheduleId>,
+}
+
+impl ScheduleStatusPage {
+    /// Returns matching schedules in increasing exact-ID order.
+    pub fn schedules(&self) -> &[ScheduledTask] {
+        &self.schedules
+    }
+
+    /// Returns the last inspected exact ID only when more inventory exists.
+    pub fn next_after(&self) -> Option<&ScheduleId> {
+        self.next_after.as_ref()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScheduleStatus {
     Pending,
@@ -4368,6 +4387,45 @@ impl ScheduleStore {
         schedules.retain(|scheduled| scheduled.status() == status);
         schedules.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(schedules)
+    }
+
+    /// Inspects one bounded exact-ID window and returns its exact status matches.
+    ///
+    /// Unlike [`Self::list_page`], the continuation cursor tracks the last schedule
+    /// inspected rather than the last schedule emitted, so an empty sparse page can
+    /// still make progress.
+    pub fn list_by_status_page(
+        &self,
+        status: ScheduleStatus,
+        after: Option<&ScheduleId>,
+        scan_size: SchedulePageSize,
+    ) -> Result<ScheduleStatusPage, ScheduleStoreError> {
+        let after_stream_id = after.map(schedule_stream);
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_page::<ScheduleEvent>(
+                SCHEDULE_CREATED_EVENT_TYPE,
+                after_stream_id.as_ref().map(StreamId::as_str),
+                scan_size.get() as i64 + 1,
+            )
+            .map_err(ScheduleStoreError::Replay)?;
+        let mut schedules = Self::project_discovered(streams)?;
+        let has_more = schedules.len() > scan_size.get() as usize;
+        if has_more {
+            schedules.pop();
+        }
+        let next_after = has_more.then(|| {
+            schedules
+                .last()
+                .expect("a positive scan with lookahead inspects one schedule")
+                .id()
+                .clone()
+        });
+        schedules.retain(|scheduled| scheduled.status() == status);
+        Ok(ScheduleStatusPage {
+            schedules,
+            next_after,
+        })
     }
 
     /// Returns every durable schedule intent ordered by exact schedule ID.
