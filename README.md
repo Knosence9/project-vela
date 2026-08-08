@@ -463,6 +463,23 @@ storage access; missing storage remains missing, and selected corruption fails
 closed without partial output. Paging reads no clock, mutates nothing, and
 grants no catch-up, dispatch, permission, or execution authority.
 
+Page complete materialized task bindings across every recurrence through a
+bounded global read-only cursor:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence materialized-page path/to/events.sqlite3 128
+nix develop --command cargo run --locked -p vela-dev -- recurrence materialized-page path/to/events.sqlite3 128 --after-recurrence-id recurrence-id --after-offset 42
+```
+
+The command emits complete bindings in deterministic opaque storage order and
+returns `next_after` as either `null` or an exact recurrence-ID and authored-offset
+pair. Both cursor fields must be supplied together and may be round-tripped, but
+their page position does not imply recurrence-ID or numeric-offset ordering.
+Validation precedes storage access; selected and lookahead corruption fail closed
+without partial output. Paging reads no clock, mutates nothing, persists no
+cursor, claims no task uniqueness across pages, and grants no lifecycle,
+dispatch, permission, or execution authority.
+
 Page one exact finite recurrence through an explicit inclusive due cutoff:
 
 ```bash
