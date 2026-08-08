@@ -258,6 +258,13 @@ pub enum RecurrenceCommand {
         page_size: u64,
         after: Option<String>,
     },
+    /// Page finite recurrences sparsely by lifecycle status through a bounded read-only scan.
+    StatusPage {
+        database: PathBuf,
+        status: String,
+        scan_size: u64,
+        after: Option<String>,
+    },
     /// Print finite recurrences with one exact lifecycle status.
     Status { database: PathBuf, status: String },
 }
@@ -814,6 +821,15 @@ impl Cli {
                         after,
                     }),
             }) => page_recurrences(&database, page_size, after.as_deref()),
+            Some(Command::Recurrence {
+                command:
+                    Some(RecurrenceCommand::StatusPage {
+                        database,
+                        status,
+                        scan_size,
+                        after,
+                    }),
+            }) => page_recurrences_by_status(&database, &status, scan_size, after.as_deref()),
             Some(Command::Recurrence {
                 command: Some(RecurrenceCommand::Status { database, status }),
             }) => inspect_recurrences_by_status(&database, &status),
@@ -2754,13 +2770,52 @@ fn page_recurrences(database: &Path, raw_page_size: u64, raw_after: Option<&str>
     ExitCode::SUCCESS
 }
 
+fn page_recurrences_by_status(
+    database: &Path,
+    raw_status: &str,
+    raw_scan_size: u64,
+    raw_after: Option<&str>,
+) -> ExitCode {
+    let status = match parse_recurrence_status(raw_status) {
+        Ok(status) => status,
+        Err(error) => return extension_error("invalid_recurrence_status", error),
+    };
+    let scan_size = match RecurrencePageSize::new(raw_scan_size) {
+        Ok(scan_size) => scan_size,
+        Err(error) => return extension_error("invalid_recurrence_page_size", error),
+    };
+    let after = match raw_after.map(RecurrenceId::new).transpose() {
+        Ok(after) => after,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("recurrence_status_page_inspection_failed", error),
+    };
+    let page = match store.list_by_status_page(status, after.as_ref(), scan_size) {
+        Ok(page) => page,
+        Err(error) => return extension_error("recurrence_status_page_inspection_failed", error),
+    };
+    let inventory = RecurrenceInventoryPage {
+        recurrences: page
+            .recurrences()
+            .iter()
+            .map(recurrence_inspection)
+            .collect(),
+        next_after: page.next_after().map(RecurrenceId::as_str),
+    };
+    let output = match serde_json::to_string(&inventory) {
+        Ok(output) => output,
+        Err(error) => return extension_error("recurrence_status_page_inspection_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
 fn inspect_recurrences_by_status(database: &Path, raw_status: &str) -> ExitCode {
-    let status = match raw_status {
-        "active" => RecurrenceStatus::Active,
-        "cancelled" => RecurrenceStatus::Cancelled,
-        _ => {
-            return extension_error("invalid_recurrence_status", "expected active or cancelled");
-        }
+    let status = match parse_recurrence_status(raw_status) {
+        Ok(status) => status,
+        Err(error) => return extension_error("invalid_recurrence_status", error),
     };
     let store = match RecurrenceStore::open_read_only(database) {
         Ok(store) => store,
@@ -2771,6 +2826,14 @@ fn inspect_recurrences_by_status(database: &Path, raw_status: &str) -> ExitCode 
         Err(error) => return extension_error("recurrence_status_inspection_failed", error),
     };
     write_recurrence_inventory(&recurrences, "recurrence_status_inspection_failed")
+}
+
+fn parse_recurrence_status(raw_status: &str) -> Result<RecurrenceStatus, &'static str> {
+    match raw_status {
+        "active" => Ok(RecurrenceStatus::Active),
+        "cancelled" => Ok(RecurrenceStatus::Cancelled),
+        _ => Err("expected active or cancelled"),
+    }
 }
 
 fn write_recurrence_inventory(

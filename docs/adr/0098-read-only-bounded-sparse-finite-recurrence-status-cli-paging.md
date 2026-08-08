@@ -1,0 +1,54 @@
+# ADR-0098: Read-only bounded sparse finite recurrence status CLI paging
+
+- **Status:** accepted
+- **Date:** 2026-08-08
+- **Decision and execution issue:** [#999](https://github.com/Knosence9/project-vela/issues/999)
+- **Related:** ADR-0090, ADR-0092, ADR-0097
+
+## Context
+
+ADR-0097 exposes bounded sparse finite recurrence status paging through `RecurrenceStore::list_by_status_page`. Operators otherwise need custom kernel code to use it. Client-side composition of ordinary inventory pages with filtering can also misinterpret an empty sparse page as completion or resume from the last emitted match instead of the last inspected recurrence.
+
+The CLI adapter must preserve the kernel's explicit storage-work bound and scan-progress cursor without adding dense-fill behavior, a second projection contract, or mutation authority.
+
+## Decision
+
+Add `vela-dev recurrence status-page DATABASE STATUS SCAN_SIZE [AFTER]`. `STATUS` must be exactly `active` or `cancelled`. `SCAN_SIZE` must form a positive, at-most-1024 `RecurrencePageSize`. Optional `AFTER` must form one exact non-blank `RecurrenceId`; it is an exclusive caller-owned scan cursor and need not identify an existing recurrence. All inputs are validated before storage access.
+
+The command opens only the selected existing database through `RecurrenceStore::open_read_only` and delegates bounded selection, complete selected-window replay, filtering, and continuation to `RecurrenceStore::list_by_status_page`. Success emits compact `{"recurrences":[...],"next_after":...}` JSON using the existing complete recurrence representation. Matching recurrences retain exact-ID order and exact caller-authored content is JSON escaped.
+
+`next_after` preserves the kernel's last-inspected semantics. A page may therefore contain no matches and still return a non-null cursor when validated lookahead proves more inventory exists. Terminal, empty, and beyond-end windows return `null`.
+
+Invalid status, scan size, and cursor inputs emit `invalid_recurrence_status`, `invalid_recurrence_page_size`, and `invalid_recurrence_id`. Missing or incompatible storage, selected-window corruption, projection failures, and serialization failures emit `recurrence_status_page_inspection_failed`, return non-zero, and emit no partial stdout. Missing storage is never created.
+
+The command reads no ambient clock, mutates nothing, persists no cursor or occurrence, and grants no dense-fill scan, lifecycle, worker, claim, materialization, dispatch, retry, permission, or execution authority.
+
+## Alternatives considered
+
+### Add paging flags to `recurrence status`
+
+Rejected because the existing command has a complete fail-closed inventory contract and a different output shape without continuation evidence. An explicit command keeps that behavior compatible.
+
+### Filter `recurrence page` output in callers
+
+Rejected because ordinary paging's cursor identifies the last emitted recurrence. Sparse status paging must identify the last inspected recurrence so an all-nonmatching page can advance safely.
+
+### Fill a dense page of matches
+
+Rejected because sparse inventories could require unbounded storage selection, replay, and allocation.
+
+## Consequences
+
+- Operators can traverse finite recurrences by status with explicitly bounded storage work.
+- Empty nonterminal pages remain distinguishable from terminal pages.
+- CLI continuation and corruption boundaries remain identical to the kernel contract.
+- Complete inventory, complete status filtering, and ordinary inventory paging remain unchanged.
+- No schema, event, write, clock, or execution authority is added.
+
+## Verification
+
+Strict RED→GREEN CLI tests prove sparse mixed-status selection, all-nonmatching progress, exact ordering and escaping, non-overlapping continuation, nonexistent and beyond-end cursors, terminal and empty output, validation before storage access, missing-storage non-creation, selected and lookahead corruption failure, and isolation outside the selected window. The complete repository quality gate must remain green.
+
+## Revisit when
+
+Reconsider before adding due-filtered pages, dense matching pages, durable indexes or cursors, snapshot tokens across calls, destructive deletion, clocks, workers, claims, materialization, dispatch, permissions, retries, or execution.
