@@ -36,6 +36,22 @@ file and gives hamelnb only that file's path through `--code-file`, avoiding
 source disclosure in the child process argument list and ordinary argument-size
 limits. The file is removed when the invocation completes.
 
+Each invocation defaults to a 30-second direct-adapter timeout and captures at
+most 1 MiB from each of stdout and stderr. Callers can select smaller or larger
+non-zero budgets explicitly:
+
+```bash
+printf '%s\n' 'sum(values)' \
+  | nix develop --command cargo run --locked -p vela-dev -- \
+      python execute "$HOME/.local/bin/hamelnb" 8888 scratch.ipynb \
+      --timeout-seconds 10 --max-output-bytes 262144
+```
+
+Vela drains both streams without blocking, kills and reaps a still-running
+direct adapter on timeout, and rejects an overflowing stream without parsing or
+printing partial JSON. Inherited output pipes cannot extend the call beyond its
+deadline. The byte limit applies independently to stdout and stderr.
+
 ## Current boundary
 
 This first slice intentionally does **not**:
@@ -43,14 +59,16 @@ This first slice intentionally does **not**:
 - start, stop, sandbox, or authenticate Jupyter;
 - grant host tools or secrets to Python;
 - persist Vela provenance events or checkpoints;
-- bound adapter runtime or output size;
+- contain adapter-created descendants or impose a kernel-side deadline;
 - replay exploratory state from a clean kernel; or
 - treat notebook state as verified project evidence.
 
 Until those controls land, Python has the authority of the selected kernel
 environment. Use only an explicitly selected localhost notebook. Adapter
 failure, malformed JSON, and non-`ok` execution status fail closed without
-successful partial output.
+successful partial output. Timeout and output overflow fail the same way. See
+[ADR-0107](adr/0107-bounded-python-adapter-execution.md) for the exact process
+and resource authority boundary.
 
 ## Architectural direction
 
