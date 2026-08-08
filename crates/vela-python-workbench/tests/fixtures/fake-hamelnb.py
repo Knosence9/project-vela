@@ -14,7 +14,7 @@ with open(args[code_file_index], encoding="utf-8") as code_file:
 if source == "__vela_test_sleep__":
     time.sleep(30)
 elif source == "__vela_test_inherited_pipe__":
-    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.1)"])
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.25)"])
     print('{"status":"ok"}')
 elif source == "__vela_test_stdout_overflow__":
     print("x" * 4096)

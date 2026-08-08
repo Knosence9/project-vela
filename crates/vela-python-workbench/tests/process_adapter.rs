@@ -44,24 +44,23 @@ fn process_adapter_kills_a_direct_child_after_the_runtime_budget() {
 }
 
 #[test]
-fn process_adapter_timeout_is_not_held_open_by_inherited_pipes() {
-    let limits = PythonExecutionLimits::new(Duration::from_millis(20), 1024).unwrap();
+fn successful_adapter_is_not_held_open_by_inherited_pipes() {
+    let limits = PythonExecutionLimits::new(Duration::from_secs(1), 1024).unwrap();
     let request =
         PythonExecutionRequest::new(8888, "scratch.ipynb", "__vela_test_inherited_pipe__")
             .unwrap()
             .with_limits(limits);
 
     let started = std::time::Instant::now();
-    let error = HamelnbProcessAdapter::new(adapter_path())
+    let result = HamelnbProcessAdapter::new(adapter_path())
         .execute(&request)
-        .expect_err("inherited pipes must not defeat the capture timeout");
+        .expect("an exited adapter must not wait for a descendant's inherited pipes");
 
-    assert!(
-        matches!(error, PythonExecutionError::TimedOut { .. }),
-        "unexpected error: {error:?}"
-    );
-    assert!(started.elapsed() < Duration::from_secs(2));
-    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(result.status(), "ok");
+    assert!(started.elapsed() < Duration::from_millis(200));
+    // The fixture leaves a grandchild that sleeps 0.25 s. Wait for it to exit
+    // so it does not outlive this test run.
+    std::thread::sleep(Duration::from_millis(300));
 }
 
 #[test]

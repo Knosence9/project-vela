@@ -13,6 +13,7 @@ use tempfile::NamedTempFile;
 
 pub const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+const POST_EXIT_DRAIN_GRACE: Duration = Duration::from_millis(20);
 
 /// Runtime and per-stream capture budgets for one adapter process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -231,6 +232,7 @@ impl HamelnbProcessAdapter {
 
         let started = Instant::now();
         let mut status = None;
+        let mut exited_at = None;
         loop {
             if let Err(error) = stdout_capture.drain(&mut stdout) {
                 kill_and_reap_if_running(&mut child, status)?;
@@ -242,11 +244,22 @@ impl HamelnbProcessAdapter {
             }
             if status.is_none() {
                 status = child.try_wait().map_err(PythonExecutionError::Wait)?;
+                if status.is_some() {
+                    if started.elapsed() >= request.limits().timeout() {
+                        return Err(PythonExecutionError::TimedOut {
+                            timeout: request.limits().timeout(),
+                        });
+                    }
+                    exited_at = Some(Instant::now());
+                }
             }
             if status.is_some() && stdout_capture.is_eof() && stderr_capture.is_eof() {
                 break;
             }
-            if started.elapsed() >= request.limits().timeout() {
+            if exited_at.is_some_and(|exited_at| exited_at.elapsed() >= POST_EXIT_DRAIN_GRACE) {
+                break;
+            }
+            if status.is_none() && started.elapsed() >= request.limits().timeout() {
                 kill_and_reap_if_running(&mut child, status)?;
                 return Err(PythonExecutionError::TimedOut {
                     timeout: request.limits().timeout(),
