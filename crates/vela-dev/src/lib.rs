@@ -2,6 +2,7 @@ pub mod record;
 
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -26,6 +27,7 @@ use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
     PermissionDecision, ToolAuthorizer, ToolEffect, ToolId, ToolRegistry, ToolRequest,
 };
+use vela_python_workbench::{HamelnbProcessAdapter, PythonExecutionRequest};
 
 /// Project Vela's developer-facing command line.
 #[derive(Debug, Parser)]
@@ -38,6 +40,11 @@ pub struct Cli {
 /// Top-level developer workflows.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Execute ordinary Python in one explicitly selected live notebook.
+    Python {
+        #[command(subcommand)]
+        command: Option<PythonCommand>,
+    },
     /// Work with Vela development records.
     Record {
         #[command(subcommand)]
@@ -62,6 +69,17 @@ pub enum Command {
     Recurrence {
         #[command(subcommand)]
         command: Option<RecurrenceCommand>,
+    },
+}
+
+/// Persistent Python workbench workflows.
+#[derive(Debug, Subcommand)]
+pub enum PythonCommand {
+    /// Read Python from standard input and execute it through hamelnb.
+    Execute {
+        adapter: PathBuf,
+        port: u16,
+        notebook_path: String,
     },
 }
 
@@ -399,6 +417,14 @@ impl Cli {
     #[must_use]
     pub fn run(self) -> ExitCode {
         match self.command {
+            Some(Command::Python {
+                command:
+                    Some(PythonCommand::Execute {
+                        adapter,
+                        port,
+                        notebook_path,
+                    }),
+            }) => execute_python(&adapter, port, &notebook_path),
             Some(Command::Record {
                 command: Some(RecordCommand::Validate { path }),
             }) => validate_record(&path),
@@ -881,6 +907,27 @@ impl Cli {
             _ => ExitCode::SUCCESS,
         }
     }
+}
+
+fn execute_python(adapter: &Path, port: u16, notebook_path: &str) -> ExitCode {
+    let mut source = String::new();
+    if let Err(error) = std::io::stdin().read_to_string(&mut source) {
+        return extension_error("python_source_read_failed", error);
+    }
+    let request = match PythonExecutionRequest::new(port, notebook_path, source) {
+        Ok(request) => request,
+        Err(error) => return extension_error("python_request_invalid", error),
+    };
+    let result = match HamelnbProcessAdapter::new(adapter).execute(&request) {
+        Ok(result) => result,
+        Err(error) => return extension_error("python_execution_failed", error),
+    };
+    let output = match serde_json::to_string(result.value()) {
+        Ok(output) => output,
+        Err(error) => return extension_error("python_result_serialization_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
 }
 
 #[derive(Serialize)]

@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/vela-dev", "crates/vela-extensions", "crates/vela-kernel"]
+members = [
+  "crates/vela-dev",
+  "crates/vela-extensions",
+  "crates/vela-kernel",
+  "crates/vela-python-workbench",
+]
 resolver = "2"
 
 [workspace.package]
@@ -16,3 +21,4 @@ serde_norway = "0.9"
 wasmtime = { version = "=47.0.2", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
 rusqlite = "0.37"
 rustix = { version = "1.1", features = ["fs"] }
+tempfile = "3.20"
