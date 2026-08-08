@@ -5887,8 +5887,13 @@ fn global_materialized_recurrence_paging_validates_the_complete_cursor_before_st
     for (name, extra, expected_error) in [
         ("zero.sqlite3", vec!["0"], "invalid_occurrence_page_size"),
         (
-            "partial.sqlite3",
+            "partial-id.sqlite3",
             vec!["1", "--after-recurrence-id", "valid"],
+            "invalid_materialized_recurrence_occurrence_cursor",
+        ),
+        (
+            "partial-offset.sqlite3",
+            vec!["1", "--after-offset", "0"],
             "invalid_materialized_recurrence_occurrence_cursor",
         ),
         (
