@@ -14,8 +14,8 @@ use vela_kernel::scheduler::{
     AvailableRecurrenceOccurrence, AvailableRecurrenceOccurrencePage, ClaimedRecurrenceOccurrence,
     ClaimedRecurrenceOccurrencePage, FixedIntervalRecurrence, MaterializedRecurrenceOccurrence,
     MaterializedRecurrenceOccurrencePage, OccurrenceCount, OccurrencePageSize,
-    RecurrenceCancellation, RecurrenceHistoryEvent, RecurrenceId, RecurrenceOccurrence,
-    RecurrenceOccurrenceHistoryEntry, RecurrenceOccurrenceHistoryEvent,
+    RecurrenceCancellation, RecurrenceHistoryEntry, RecurrenceHistoryEvent, RecurrenceId,
+    RecurrenceOccurrence, RecurrenceOccurrenceHistoryEntry, RecurrenceOccurrenceHistoryEvent,
     RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage, RecurrenceOccurrenceRelease,
     RecurrencePageSize, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
     ScheduleCancellation, ScheduleHistoryEntry, ScheduleHistoryEvent, ScheduleId, ScheduleInstant,
@@ -88,6 +88,12 @@ pub enum RecurrenceCommand {
     Get { database: PathBuf, id: String },
     /// Print one exact recurrence's validated lifecycle history.
     History { database: PathBuf, id: String },
+    /// Page complete recurrence lifecycle histories through a read-only boundary.
+    HistoryPage {
+        database: PathBuf,
+        page_size: u64,
+        after: Option<String>,
+    },
     /// Print one exact persisted recurrence occurrence's validated lifecycle history.
     OccurrenceHistory {
         database: PathBuf,
@@ -561,6 +567,14 @@ impl Cli {
             }) => inspect_recurrence_history(&database, &id),
             Some(Command::Recurrence {
                 command:
+                    Some(RecurrenceCommand::HistoryPage {
+                        database,
+                        page_size,
+                        after,
+                    }),
+            }) => page_recurrence_histories(&database, page_size, after.as_deref()),
+            Some(Command::Recurrence {
+                command:
                     Some(RecurrenceCommand::OccurrenceHistory {
                         database,
                         id,
@@ -898,6 +912,12 @@ struct RecurrenceInspection<'a> {
 struct RecurrenceHistoryInspection<'a> {
     id: &'a str,
     history: Option<Vec<RecurrenceHistoryEntryInspection<'a>>>,
+}
+
+#[derive(Serialize)]
+struct RecurrenceHistoryPageInspection<'a> {
+    histories: Vec<RecurrenceHistoryInspection<'a>>,
+    next_after: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -1715,42 +1735,13 @@ fn inspect_recurrence_history(database: &Path, raw_id: &str) -> ExitCode {
         Ok(history) => history,
         Err(error) => return extension_error("recurrence_history_failed", error),
     };
-    let history = match history.as_ref() {
-        None => None,
-        Some(entries) => {
-            let mut output = Vec::with_capacity(entries.len());
-            for entry in entries {
-                let event = match entry.event() {
-                    RecurrenceHistoryEvent::Created {
-                        goal,
-                        anchor,
-                        interval,
-                        occurrence_count,
-                    } => RecurrenceHistoryEventInspection::Created {
-                        goal: goal.as_str(),
-                        anchor_unix_millis: anchor.unix_millis(),
-                        interval_millis: interval.millis(),
-                        occurrence_count: occurrence_count.get(),
-                    },
-                    RecurrenceHistoryEvent::Cancelled { reason } => {
-                        RecurrenceHistoryEventInspection::Cancelled {
-                            reason: reason.as_str(),
-                        }
-                    }
-                    _ => {
-                        return extension_error(
-                            "recurrence_history_failed",
-                            "unsupported recurrence history event",
-                        );
-                    }
-                };
-                output.push(RecurrenceHistoryEntryInspection {
-                    revision: entry.revision(),
-                    event,
-                });
-            }
-            Some(output)
-        }
+    let history = match history
+        .as_deref()
+        .map(inspect_recurrence_history_entries)
+        .transpose()
+    {
+        Ok(history) => history,
+        Err(error) => return extension_error("recurrence_history_failed", error),
     };
     let output = match serde_json::to_string(&RecurrenceHistoryInspection {
         id: id.as_str(),
@@ -1761,6 +1752,86 @@ fn inspect_recurrence_history(database: &Path, raw_id: &str) -> ExitCode {
     };
     println!("{output}");
     ExitCode::SUCCESS
+}
+
+fn page_recurrence_histories(
+    database: &Path,
+    raw_page_size: u64,
+    raw_after: Option<&str>,
+) -> ExitCode {
+    const ERROR: &str = "recurrence_history_page_inspection_failed";
+    let page_size = match RecurrencePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_recurrence_page_size", error),
+    };
+    let after = match raw_after.map(RecurrenceId::new).transpose() {
+        Ok(after) => after,
+        Err(error) => return extension_error("invalid_recurrence_id", error),
+    };
+    let store = match RecurrenceStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error(ERROR, error),
+    };
+    let page = match store.histories_page(after.as_ref(), page_size) {
+        Ok(page) => page,
+        Err(error) => return extension_error(ERROR, error),
+    };
+    let histories = match page
+        .histories()
+        .iter()
+        .map(|history| {
+            Ok(RecurrenceHistoryInspection {
+                id: history.id().as_str(),
+                history: Some(inspect_recurrence_history_entries(history.entries())?),
+            })
+        })
+        .collect::<Result<Vec<_>, &'static str>>()
+    {
+        Ok(histories) => histories,
+        Err(error) => return extension_error(ERROR, error),
+    };
+    let output = match serde_json::to_string(&RecurrenceHistoryPageInspection {
+        histories,
+        next_after: page.next_after().map(RecurrenceId::as_str),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error(ERROR, error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn inspect_recurrence_history_entries(
+    entries: &[RecurrenceHistoryEntry],
+) -> Result<Vec<RecurrenceHistoryEntryInspection<'_>>, &'static str> {
+    entries
+        .iter()
+        .map(|entry| {
+            let event = match entry.event() {
+                RecurrenceHistoryEvent::Created {
+                    goal,
+                    anchor,
+                    interval,
+                    occurrence_count,
+                } => RecurrenceHistoryEventInspection::Created {
+                    goal: goal.as_str(),
+                    anchor_unix_millis: anchor.unix_millis(),
+                    interval_millis: interval.millis(),
+                    occurrence_count: occurrence_count.get(),
+                },
+                RecurrenceHistoryEvent::Cancelled { reason } => {
+                    RecurrenceHistoryEventInspection::Cancelled {
+                        reason: reason.as_str(),
+                    }
+                }
+                _ => return Err("unsupported recurrence history event"),
+            };
+            Ok(RecurrenceHistoryEntryInspection {
+                revision: entry.revision(),
+                event,
+            })
+        })
+        .collect()
 }
 
 fn inspect_recurrence_occurrence_history(database: &Path, raw_id: &str, offset: u64) -> ExitCode {
