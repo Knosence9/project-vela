@@ -319,6 +319,13 @@ pub enum ScheduleCommand {
         page_size: u64,
         after: Option<String>,
     },
+    /// Page schedules sparsely by lifecycle status through a bounded read-only scan.
+    StatusPage {
+        database: PathBuf,
+        status: String,
+        scan_size: u64,
+        after: Option<String>,
+    },
     /// Print one exact durable schedule through a read-only storage boundary.
     Get { database: PathBuf, id: String },
     /// Print durable schedules with one exact lifecycle status.
@@ -453,6 +460,15 @@ impl Cli {
                         after,
                     }),
             }) => page_schedules(&database, page_size, after.as_deref()),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::StatusPage {
+                        database,
+                        status,
+                        scan_size,
+                        after,
+                    }),
+            }) => page_schedules_by_status(&database, &status, scan_size, after.as_deref()),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Get { database, id }),
             }) => inspect_schedule(&database, &id),
@@ -1409,6 +1425,44 @@ fn page_schedules(database: &Path, raw_page_size: u64, raw_after: Option<&str>) 
     let output = match serde_json::to_string(&inventory) {
         Ok(output) => output,
         Err(error) => return extension_error("schedule_page_inspection_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn page_schedules_by_status(
+    database: &Path,
+    raw_status: &str,
+    raw_scan_size: u64,
+    raw_after: Option<&str>,
+) -> ExitCode {
+    let status = match parse_schedule_status(raw_status) {
+        Ok(status) => status,
+        Err(error) => return extension_error("invalid_schedule_status", error),
+    };
+    let scan_size = match SchedulePageSize::new(raw_scan_size) {
+        Ok(scan_size) => scan_size,
+        Err(error) => return extension_error("invalid_schedule_page_size", error),
+    };
+    let after = match raw_after.map(ScheduleId::new).transpose() {
+        Ok(after) => after,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_status_page_inspection_failed", error),
+    };
+    let page = match store.list_by_status_page(status, after.as_ref(), scan_size) {
+        Ok(page) => page,
+        Err(error) => return extension_error("schedule_status_page_inspection_failed", error),
+    };
+    let inventory = ScheduleInventoryPage {
+        schedules: page.schedules().iter().map(schedule_inspection).collect(),
+        next_after: page.next_after().map(ScheduleId::as_str),
+    };
+    let output = match serde_json::to_string(&inventory) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_status_page_inspection_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS
@@ -2752,18 +2806,20 @@ fn recurrence_inspection(recurrence: &FixedIntervalRecurrence) -> RecurrenceInsp
     }
 }
 
+fn parse_schedule_status(raw_status: &str) -> Result<ScheduleStatus, &'static str> {
+    match raw_status {
+        "pending" => Ok(ScheduleStatus::Pending),
+        "cancelled" => Ok(ScheduleStatus::Cancelled),
+        "claimed" => Ok(ScheduleStatus::Claimed),
+        "materialized" => Ok(ScheduleStatus::Materialized),
+        _ => Err("expected pending, cancelled, claimed, or materialized"),
+    }
+}
+
 fn inspect_schedules_by_status(database: &Path, raw_status: &str) -> ExitCode {
-    let status = match raw_status {
-        "pending" => ScheduleStatus::Pending,
-        "cancelled" => ScheduleStatus::Cancelled,
-        "claimed" => ScheduleStatus::Claimed,
-        "materialized" => ScheduleStatus::Materialized,
-        _ => {
-            return extension_error(
-                "invalid_schedule_status",
-                "expected pending, cancelled, claimed, or materialized",
-            );
-        }
+    let status = match parse_schedule_status(raw_status) {
+        Ok(status) => status,
+        Err(error) => return extension_error("invalid_schedule_status", error),
     };
     let store = match ScheduleStore::open_read_only(database) {
         Ok(store) => store,
