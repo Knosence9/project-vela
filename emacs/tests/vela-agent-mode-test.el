@@ -9,7 +9,7 @@
          (result (alist-get "result" response nil nil #'string=))
          (capabilities (alist-get "capabilities" result nil nil #'string=))
          (features (alist-get "emacs_features" result nil nil #'string=)))
-    (should (equal (alist-get "protocol_version" response nil nil #'string=) 2))
+    (should (equal (alist-get "protocol_version" response nil nil #'string=) 3))
     (should (eq (alist-get "ok" response nil nil #'string=) t))
     (should
      (equal capabilities
@@ -57,6 +57,7 @@
     (goto-char 7)
     (set-buffer-modified-p nil)
     (let* ((point-before (point))
+           (tick-before (buffer-chars-modified-tick))
            (response
             (vela-agent-handle-request
              '(("operation" . "context.snapshot")
@@ -65,7 +66,7 @@
            (buffer (alist-get "buffer" result nil nil #'string=)))
       (should (eq (alist-get "ok" response nil nil #'string=) t))
       (should (equal buffer
-                     '(("name" . " *vela-agent-test*")
+                     `(("name" . " *vela-agent-test*")
                        ("file" . :null)
                        ("major_mode" . "text-mode")
                        ("modified" . :false)
@@ -73,6 +74,7 @@
                        ("line" . 2)
                        ("column" . 0)
                        ("region" . :null)
+                       ("text_revision" . ,tick-before)
                        ("restriction" . (("start" . 1)
                                           ("end" . 12)
                                           ("narrowed" . :false))))))
@@ -83,6 +85,7 @@
   (with-temp-buffer
     (insert "zero\nalpha\nomega\n")
     (text-mode)
+    (put-text-property 7 10 'vela-agent-test-property t)
     (narrow-to-region 6 12)
     (goto-char 8)
     (set-mark 10)
@@ -95,7 +98,7 @@
            (restriction-before (cons (point-min) (point-max)))
            (text-before (save-restriction
                           (widen)
-                          (buffer-string)))
+                          (buffer-substring (point-min) (point-max))))
            (modified-before (buffer-modified-p))
            (tick-before (buffer-chars-modified-tick))
            (undo-before buffer-undo-list)
@@ -117,12 +120,35 @@
       (should
        (equal (save-restriction
                 (widen)
-                (buffer-string))
+                (buffer-substring (point-min) (point-max)))
               text-before))
       (should (eq (buffer-modified-p) modified-before))
       (should (= (buffer-chars-modified-tick) tick-before))
       (should (equal buffer-undo-list undo-before))
       (should (equal (match-data t) match-before)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-character-revision ()
+  (with-temp-buffer
+    (insert "alpha")
+    (let* ((request '(("operation" . "context.snapshot")
+                      ("include" . ["buffer"])))
+           (revision
+            (lambda ()
+              (alist-get
+               "text_revision"
+               (alist-get
+                "buffer"
+                (alist-get
+                 "result" (vela-agent-handle-request request)
+                 nil nil #'string=)
+                nil nil #'string=)
+               nil nil #'string=)))
+           (first (funcall revision))
+           (second (funcall revision)))
+      (should (natnump first))
+      (should (= second first))
+      (insert "beta")
+      (should (/= (funcall revision) first)))))
 
 (ert-deftest vela-agent-context-snapshot-uses-native-org-context ()
   (with-temp-buffer
@@ -178,7 +204,7 @@
 (ert-deftest vela-agent-interface-json-preserves-protocol-order ()
   (let* ((json
           (vela-agent-encode-response
-           '(("protocol_version" . 2)
+           '(("protocol_version" . 3)
              ("ok" . t)
              ("result" . (("missing" . :null)
                             ("enabled" . :false)
@@ -190,7 +216,7 @@
                                     :false-object :false)))
     (should
      (equal json
-            "{\"protocol_version\":2,\"ok\":true,\"result\":{\"missing\":null,\"enabled\":false,\"items\":[\"a\",\"b\"]}}"))
+            "{\"protocol_version\":3,\"ok\":true,\"result\":{\"missing\":null,\"enabled\":false,\"items\":[\"a\",\"b\"]}}"))
     (should (eq (alist-get "missing"
                            (alist-get "result" parsed nil nil #'string=)
                            nil nil #'string=)
