@@ -1418,6 +1418,179 @@ fn recurrence_pages_fail_closed_only_for_the_bounded_selected_window() {
 }
 
 #[test]
+fn pages_recurrences_sparsely_by_status_with_an_inspected_id_cursor() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for id in ["alpha", "bravo", "charlie", "delta", "echo"] {
+        let recurrence = store
+            .create(
+                RecurrenceId::new(id).unwrap(),
+                TaskGoal::new(format!("Goal for {id}")).unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+        if matches!(id, "charlie" | "echo") {
+            store
+                .cancel(
+                    recurrence.id(),
+                    recurrence.revision(),
+                    RecurrenceCancellation::new(format!("Cancel {id}")).unwrap(),
+                )
+                .unwrap();
+        }
+    }
+    drop(store);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('unrelated', 1, 'other.created', 1, '{}')",
+            [],
+        )
+        .unwrap();
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let scan_size = RecurrencePageSize::new(2).unwrap();
+    let matching_window = store
+        .list_by_status_page(RecurrenceStatus::Active, None, scan_size)
+        .unwrap();
+    assert_eq!(
+        matching_window
+            .recurrences()
+            .iter()
+            .map(|recurrence| recurrence.id().as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "bravo"]
+    );
+    assert_eq!(matching_window.next_after().unwrap().as_str(), "bravo");
+
+    let first = store
+        .list_by_status_page(RecurrenceStatus::Cancelled, None, scan_size)
+        .unwrap();
+    assert!(first.recurrences().is_empty());
+    assert_eq!(first.next_after().unwrap().as_str(), "bravo");
+
+    let second = store
+        .list_by_status_page(RecurrenceStatus::Cancelled, first.next_after(), scan_size)
+        .unwrap();
+    assert_eq!(second.recurrences()[0].id().as_str(), "charlie");
+    assert_eq!(second.next_after().unwrap().as_str(), "delta");
+
+    let third = store
+        .list_by_status_page(RecurrenceStatus::Cancelled, second.next_after(), scan_size)
+        .unwrap();
+    assert_eq!(third.recurrences()[0].id().as_str(), "echo");
+    assert_eq!(third.next_after(), None);
+
+    let between = RecurrenceId::new("coconut").unwrap();
+    let from_nonexistent = store
+        .list_by_status_page(RecurrenceStatus::Cancelled, Some(&between), scan_size)
+        .unwrap();
+    assert_eq!(from_nonexistent.recurrences()[0].id().as_str(), "echo");
+    assert_eq!(from_nonexistent.next_after(), None);
+
+    let beyond = RecurrenceId::new("zzzz").unwrap();
+    let terminal = store
+        .list_by_status_page(RecurrenceStatus::Cancelled, Some(&beyond), scan_size)
+        .unwrap();
+    assert!(terminal.recurrences().is_empty());
+    assert_eq!(terminal.next_after(), None);
+}
+
+#[test]
+fn recurrence_status_pages_fail_closed_only_for_the_bounded_inspected_window() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for id in ["alpha", "bravo", "charlie", "delta"] {
+        store
+            .create(
+                RecurrenceId::new(id).unwrap(),
+                TaskGoal::new(format!("Goal for {id}")).unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+    }
+    drop(store);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    for id in ["alpha", "delta"] {
+        connection
+            .execute(
+                "INSERT INTO events
+                 (stream_id, stream_version, event_type, payload_version, payload)
+                 VALUES (?1, 2, 'recurrence.fixed_interval_created', 1, ?2)",
+                rusqlite::params![
+                    format!("recurrence:{id}"),
+                    br#"{"goal":"Duplicate","anchor_unix_millis":2,"interval_millis":1,"occurrence_count":1}"#.as_slice()
+                ],
+            )
+            .unwrap();
+    }
+
+    let after = RecurrenceId::new("alpha").unwrap();
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let page = store
+        .list_by_status_page(
+            RecurrenceStatus::Active,
+            Some(&after),
+            RecurrencePageSize::new(1).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(page.recurrences()[0].id().as_str(), "bravo");
+    assert_eq!(page.next_after().unwrap().as_str(), "bravo");
+
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('recurrence:charlie', 2, 'recurrence.fixed_interval_created', 1, ?1)",
+            [br#"{"goal":"Duplicate","anchor_unix_millis":2,"interval_millis":1,"occurrence_count":1}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .list_by_status_page(
+                RecurrenceStatus::Active,
+                Some(&after),
+                RecurrencePageSize::new(1).unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidHistory { event_count: 2 }
+    ));
+
+    connection
+        .execute(
+            "DELETE FROM events WHERE stream_id = 'recurrence:charlie' AND stream_version = 2",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events
+             (stream_id, stream_version, event_type, payload_version, payload)
+             VALUES ('recurrence:bravo', 2, 'recurrence.fixed_interval_created', 1, ?1)",
+            [br#"{"goal":"Duplicate","anchor_unix_millis":2,"interval_millis":1,"occurrence_count":1}"#.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .list_by_status_page(
+                RecurrenceStatus::Active,
+                Some(&after),
+                RecurrencePageSize::new(1).unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::InvalidHistory { event_count: 2 }
+    ));
+}
+
+#[test]
 fn filters_complete_recurrence_definitions_by_exact_status_in_id_order() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("events.sqlite3");
@@ -1548,6 +1721,15 @@ fn read_only_recurrence_inventory_is_empty_and_never_creates_storage() {
         .unwrap();
     assert!(empty_page.recurrences().is_empty());
     assert_eq!(empty_page.next_after(), None);
+    let empty_status_page = read_only
+        .list_by_status_page(
+            RecurrenceStatus::Cancelled,
+            None,
+            RecurrencePageSize::new(1).unwrap(),
+        )
+        .unwrap();
+    assert!(empty_status_page.recurrences().is_empty());
+    assert_eq!(empty_status_page.next_after(), None);
     assert!(matches!(
         read_only.create(
             RecurrenceId::new("blocked").unwrap(),
