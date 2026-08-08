@@ -531,6 +531,25 @@ impl RecurrencePage {
     }
 }
 
+/// One bounded sparse page of recurrences matching an exact persisted status.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceStatusPage {
+    recurrences: Vec<FixedIntervalRecurrence>,
+    next_after: Option<RecurrenceId>,
+}
+
+impl RecurrenceStatusPage {
+    /// Returns matching definitions in increasing exact-ID order.
+    pub fn recurrences(&self) -> &[FixedIntervalRecurrence] {
+        &self.recurrences
+    }
+
+    /// Returns the last inspected exact ID only when more inventory exists.
+    pub fn next_after(&self) -> Option<&RecurrenceId> {
+        self.next_after.as_ref()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecurrenceStatus {
     Active,
@@ -3272,6 +3291,45 @@ impl RecurrenceStore {
         recurrences.retain(|recurrence| recurrence.status() == status);
         recurrences.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(recurrences)
+    }
+
+    /// Inspects one bounded exact-ID window and returns its exact status matches.
+    ///
+    /// Unlike [`Self::list_page`], the continuation cursor tracks the last recurrence
+    /// inspected rather than the last recurrence emitted, so an empty sparse page can
+    /// still make progress.
+    pub fn list_by_status_page(
+        &self,
+        status: RecurrenceStatus,
+        after: Option<&RecurrenceId>,
+        scan_size: RecurrencePageSize,
+    ) -> Result<RecurrenceStatusPage, RecurrenceStoreError> {
+        let after_stream_id = after.map(recurrence_stream);
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_page::<RecurrenceEvent>(
+                RECURRENCE_CREATED_EVENT_TYPE,
+                after_stream_id.as_ref().map(StreamId::as_str),
+                scan_size.get() as i64 + 1,
+            )
+            .map_err(RecurrenceStoreError::Replay)?;
+        let mut recurrences = Self::project_discovered(streams)?;
+        let has_more = recurrences.len() > scan_size.get() as usize;
+        if has_more {
+            recurrences.pop();
+        }
+        let next_after = has_more.then(|| {
+            recurrences
+                .last()
+                .expect("a positive scan with lookahead inspects one recurrence")
+                .id()
+                .clone()
+        });
+        recurrences.retain(|recurrence| recurrence.status() == status);
+        Ok(RecurrenceStatusPage {
+            recurrences,
+            next_after,
+        })
     }
 
     fn discover(&self) -> Result<Vec<FixedIntervalRecurrence>, RecurrenceStoreError> {
