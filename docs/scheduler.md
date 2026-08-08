@@ -1039,6 +1039,32 @@ escaped `schedule_status_inspection_failed` diagnostic and no partial stdout;
 missing storage is never created. Status inspection cannot read time, mutate a
 lifecycle, claim, dispatch, retry, materialize, or execute a schedule or task.
 
+## Read-only bounded sparse schedule status CLI paging
+
+`vela-dev schedule status-page DATABASE STATUS SCAN_SIZE [AFTER]` validates one
+exact lowercase lifecycle status, a positive at-most-1024 scan size, and an
+optional exact non-blank schedule ID before storage access. The optional ID is
+an exclusive caller-owned scan cursor and need not identify an existing
+schedule. The command opens only the selected existing database read-only and
+delegates bounded selection, complete selected-window replay, filtering, and
+continuation to `ScheduleStore::list_by_status_page`.
+
+Success emits `{"schedules":[...],"next_after":...}` with complete matching
+schedule objects in exact-ID order. The cursor identifies the last inspected
+schedule when validated lookahead proves more inventory exists, so an
+all-nonmatching page can emit an empty array with a non-null cursor. Terminal,
+empty, and beyond-end windows emit `null`; exact strings remain JSON escaped.
+
+Invalid inputs emit `invalid_schedule_status`, `invalid_schedule_page_size`, or
+`invalid_schedule_id` before storage access. Missing or incompatible storage,
+selected or lookahead corruption, projection, and serialization failures emit
+`schedule_status_page_inspection_failed` with no partial stdout; missing storage
+is never created. Corruption before the cursor or beyond selected lookahead
+cannot block the page. The command reads no clock, mutates nothing, persists no
+cursor, performs no dense-fill scan, and grants no lifecycle, worker, lease,
+dispatch, retry, permission, or execution authority. See
+[ADR-0096](adr/0096-read-only-bounded-sparse-one-shot-schedule-status-cli-paging.md).
+
 `vela-dev schedule history DATABASE SCHEDULE_ID` validates the exact schedule
 ID before opening the caller-selected database read-only, then emits one compact
 JSON document containing `id` and `history`. Existing histories are arrays in
