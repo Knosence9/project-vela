@@ -23,7 +23,11 @@ Requests use an explicit operation name and explicit `include` vector. Unknown o
 Capability availability uses constant-time callable-function bindings rather
 than scanning `load-path`. The dispatcher rejects calls outside the editor-owner
 thread captured at package load, and `context.snapshot` accepts at most the two
-unique supported sections.
+unique supported sections. It checks the vector length before copying it.
+Top-level requests are bounded to eight unique string-keyed fields and validated
+with a finite cursor walk, so cyclic, dotted, duplicate-keyed, and oversized
+objects fail closed. Request keys and operation/section names have fixed
+character limits.
 
 Every context snapshot rejects source buffers larger than 1,048,576 characters
 before line or Org traversal, source extraction, or hashing. This conservative
@@ -71,7 +75,7 @@ Rejected as the primary authority because native Org APIs already own the editor
 
 ## Verification
 
-Batch byte compilation fails on warnings. ERT tests cover stable constant-time capability discovery and exposed-section metadata, explicit buffer context, native Org heading and source-block context, point/buffer preservation, worker-thread rejection, bounded unique sections, the oversized-buffer bound, deterministic interface JSON, interface rendering, unsupported-operation rejection, and unknown-section rejection. The complete repository quality gate must remain green.
+Batch byte compilation fails on warnings. ERT tests cover stable constant-time capability discovery and exposed-section metadata, explicit buffer context, native Org heading and source-block context, point/buffer preservation, worker-thread rejection, bounded unique sections before copying, cyclic and oversized request-object rejection, the oversized-buffer bound, deterministic interface JSON, interface rendering, malformed and unsupported-operation rejection, and unknown-section rejection. The complete repository quality gate must remain green.
 
 ## Revisit when
 

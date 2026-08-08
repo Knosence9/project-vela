@@ -50,7 +50,10 @@ characters. This cap bounds native line and Org traversal, source extraction,
 and hashing work on the main thread. The interface buffer uses an ordered JSON
 serializer so object order follows the deterministic protocol alist order.
 The `include` vector accepts each of the two supported sections at most once,
-which also bounds request traversal.
+and its vector length is checked before copying. Request objects are traversed
+for at most eight unique fields; keys and operation/section names also have
+fixed character limits. Cyclic, dotted, duplicate-keyed, or oversized request
+objects fail closed without an unbounded walk.
 
 Unknown operations and unknown context sections fail with `vela-agent-protocol-error`. The interface does not accept arbitrary Emacs Lisp.
 
