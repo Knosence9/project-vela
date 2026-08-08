@@ -389,6 +389,22 @@ Their JSON now separates immutable `definition_revision` from mutable
 `aggregate_revision` and includes nullable `cancellation`, so authored
 projection stays inspectable even when new eligible work is blocked.
 
+Page complete recurrence lifecycle histories through one bounded exact-ID
+window:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- recurrence history-page path/to/events.sqlite3 100 optional-exclusive-after-id
+```
+
+The positive page size is capped at 1024, and the optional exact ID need not
+currently exist. Success emits complete revision-ordered creation and optional
+cancellation evidence in exact-ID order. `next_after` names the last emitted ID
+only when validated lookahead proves another history exists. Empty and
+beyond-end pages are terminal. Validation precedes read-only storage access;
+missing storage remains missing, and selected or lookahead corruption fails
+closed without partial JSON. Paging persists no cursor, reads no time, mutates
+nothing, and cannot select occurrences, dispatch, retry, or execute work.
+
 Claim the earliest available due coordinate in one exact bounded recurrence
 window:
 
