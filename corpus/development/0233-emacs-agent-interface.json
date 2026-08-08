@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Add a main-thread-authoritative Emacs agent interface mode",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1025 with a bounded, read-only, model-neutral Emacs and Org interface that does not block the editor or grant arbitrary Emacs Lisp authority.",
+    "acceptance_criteria": [
+      "Provide a read-only interface mode backed by deterministic typed JSON responses.",
+      "Expose explicit buffer and native Org heading/source-block context without changing source-buffer state.",
+      "Advertise power-user facilities without implying unimplemented authority.",
+      "Bound every synchronous request path and reject worker-thread editor access."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Implemented the first typed interface and drove each operation through focused RED tests.",
+      "outcome": "failure",
+      "diagnostic": "The package, context operation, native Org snapshot, and interface mode initially did not exist.",
+      "patch": "Added capability discovery, explicit context snapshots, native Org metadata, deterministic JSON encoding, and a read-only special-mode dashboard."
+    },
+    {
+      "summary": "Corrected two independent review blocks around Emacs main-thread boundedness.",
+      "outcome": "success",
+      "diagnostic": "Review probes found load-path discovery and unbounded buffer, request-list, section-vector, and diagnostic-format traversal before rejection.",
+      "patch": "Replaced load-path scans with constant-time callable checks; added a 1,048,576-character buffer cap; bounded request objects to eight unique fields with a finite cycle-safe walk; checked section-vector length before copying; bounded key and operation names; rejected worker-thread dispatch; and strengthened malformed-input, state-preservation, and deterministic-JSON tests."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now has a batch-tested, read-only Emacs agent interface whose current synchronous operations have explicit finite bounds. Expensive work and all future mutation authority remain outside this first protocol slice.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix flake check --all-systems --no-build --show-trace",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Emacs should own live editor state while long-running model, network, indexing, build, and compute work runs in external cancellable workers.",
+    "Short main-thread callbacks require cycle-safe object validation, pre-copy collection limits, bounded diagnostic formatting, and explicit document-size limits.",
+    "A semantic protocol is safer and more model-neutral than synthesized key sequences or arbitrary eval.",
+    "Capability metadata must distinguish callable facilities from protocol-exposed and authorized operations."
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-agent-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/issues/1025"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
