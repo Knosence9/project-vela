@@ -93,6 +93,9 @@
            (mark-active-before mark-active)
            (narrowed-before (buffer-narrowed-p))
            (undo-before buffer-undo-list)
+           (match-before (progn
+                           (string-match "b\\(c\\)" "abcd")
+                           (match-data t)))
            (response
             (vela-agent-handle-request
              '(("operation" . "context.snapshot")
@@ -121,7 +124,8 @@
       (should (equal (mark t) mark-before))
       (should (eq mark-active mark-active-before))
       (should (eq (buffer-narrowed-p) narrowed-before))
-      (should (equal buffer-undo-list undo-before)))))
+      (should (equal buffer-undo-list undo-before))
+      (should (equal (match-data t) match-before)))))
 
 (ert-deftest vela-agent-interface-json-preserves-protocol-order ()
   (let* ((json
@@ -147,6 +151,36 @@
                            (alist-get "result" parsed nil nil #'string=)
                            nil nil #'string=)
                 :false))))
+
+(ert-deftest vela-agent-json-encoding-rejects-cycles-and-oversized-values ()
+  (let ((cycle (list '("value" . t))))
+    (setcdr cycle cycle)
+    (should-error (vela-agent-encode-response cycle)
+                  :type 'vela-agent-protocol-error))
+  (should-error
+   (vela-agent-encode-response
+    `(("value" . ,(make-string (1+ vela-agent-max-json-string-characters)
+                                ?x))))
+   :type 'vela-agent-protocol-error)
+  (should-error
+   (vela-agent-encode-response
+    (make-vector (1+ vela-agent-max-json-collection-items) t))
+   :type 'vela-agent-protocol-error)
+  (let ((nested t))
+    (dotimes (_ (1+ vela-agent-max-json-depth))
+      (setq nested (vector nested)))
+    (should-error (vela-agent-encode-response nested)
+                  :type 'vela-agent-protocol-error))
+  (let ((many-nodes
+         (make-vector vela-agent-max-json-collection-items
+                      (vector t t t t))))
+    (should-error (vela-agent-encode-response many-nodes)
+                  :type 'vela-agent-protocol-error))
+  (let ((large-output
+         (make-vector 40
+                      (make-string vela-agent-max-json-string-characters ?x))))
+    (should-error (vela-agent-encode-response large-output)
+                  :type 'vela-agent-protocol-error)))
 
 (ert-deftest vela-agent-interface-mode-renders-the-source-context ()
   (with-temp-buffer
@@ -225,6 +259,16 @@
 (ert-deftest vela-agent-context-snapshot-rejects-oversized-buffers ()
   (with-temp-buffer
     (insert (make-string (1+ vela-agent-max-buffer-characters) ?x))
+    (should-error
+     (vela-agent-handle-request
+      '(("operation" . "context.snapshot")
+        ("include" . ["buffer"])))
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-context-snapshot-rejects-oversized-buffer-metadata ()
+  (with-temp-buffer
+    (setq buffer-file-name
+          (make-string (1+ vela-agent-max-metadata-string-characters) ?x))
     (should-error
      (vela-agent-handle-request
       '(("operation" . "context.snapshot")

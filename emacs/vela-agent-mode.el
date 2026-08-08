@@ -37,6 +37,24 @@
 (defconst vela-agent-max-operation-characters 64
   "Largest operation or context-section name accepted by the protocol.")
 
+(defconst vela-agent-max-metadata-string-characters 8192
+  "Largest live editor metadata string accepted by a context snapshot.")
+
+(defconst vela-agent-max-json-string-characters 8192
+  "Largest string accepted by the deterministic JSON encoder.")
+
+(defconst vela-agent-max-json-collection-items 128
+  "Largest object or array accepted by the deterministic JSON encoder.")
+
+(defconst vela-agent-max-json-depth 16
+  "Largest nesting depth accepted by the deterministic JSON encoder.")
+
+(defconst vela-agent-max-json-nodes 512
+  "Largest value-node count accepted by the deterministic JSON encoder.")
+
+(defconst vela-agent-max-json-output-characters (* 256 1024)
+  "Largest encoded response returned by the deterministic JSON encoder.")
+
 (defvar vela-agent--editor-thread (current-thread)
   "Emacs thread that owns Vela interface access to live editor state.")
 
@@ -101,11 +119,22 @@
   "Return VALUE as a JSON-compatible boolean."
   (if value t :false))
 
+(defun vela-agent--bounded-metadata-string (value)
+  "Return editor metadata VALUE when it satisfies the protocol bound."
+  (unless (and (stringp value)
+               (<= (length value) vela-agent-max-metadata-string-characters))
+    (signal 'vela-agent-protocol-error
+            '("editor metadata exceeds the synchronous response bound")))
+  value)
+
 (defun vela-agent--buffer-context ()
   "Snapshot bounded metadata for the current buffer without moving point."
-  `(("name" . ,(buffer-name))
-    ("file" . ,(vela-agent--nullable buffer-file-name))
-    ("major_mode" . ,(symbol-name major-mode))
+  `(("name" . ,(vela-agent--bounded-metadata-string (buffer-name)))
+    ("file" . ,(if buffer-file-name
+                    (vela-agent--bounded-metadata-string buffer-file-name)
+                  :null))
+    ("major_mode" . ,(vela-agent--bounded-metadata-string
+                       (symbol-name major-mode)))
     ("modified" . ,(vela-agent--boolean (buffer-modified-p)))
     ("point" . ,(point))
     ("line" . ,(line-number-at-pos))
@@ -141,10 +170,11 @@
 
 (defun vela-agent--org-context ()
   "Snapshot Org metadata at point using native Org APIs."
-  (if (derived-mode-p 'org-mode)
-      `(("heading" . ,(vela-agent--org-heading-context))
-        ("source_block" . ,(vela-agent--org-source-block-context)))
-    :null))
+  (save-match-data
+    (if (derived-mode-p 'org-mode)
+        `(("heading" . ,(vela-agent--org-heading-context))
+          ("source_block" . ,(vela-agent--org-source-block-context)))
+      :null)))
 
 (defun vela-agent--context-snapshot (request)
   "Return only the explicitly requested context sections from REQUEST."
@@ -226,35 +256,89 @@
        (signal 'vela-agent-protocol-error
                '("unsupported operation"))))))
 
-(defun vela-agent--json-serialize (value)
-  "Serialize protocol VALUE deterministically while preserving alist order."
+(defun vela-agent--json-serialize (value depth active node-count)
+  "Serialize VALUE at DEPTH with ACTIVE ancestors and bounded NODE-COUNT."
+  (when (> depth vela-agent-max-json-depth)
+    (signal 'vela-agent-protocol-error
+            '("JSON response exceeds the nesting-depth bound")))
+  (aset node-count 0 (1+ (aref node-count 0)))
+  (when (> (aref node-count 0) vela-agent-max-json-nodes)
+    (signal 'vela-agent-protocol-error
+            '("JSON response exceeds the value-node bound")))
   (cond
    ((eq value :null) "null")
    ((eq value :false) "false")
    ((eq value t) "true")
-   ((or (stringp value) (numberp value)) (json-serialize value))
+   ((stringp value)
+    (when (> (length value) vela-agent-max-json-string-characters)
+      (signal 'vela-agent-protocol-error
+              '("JSON string exceeds the response bound")))
+    (json-serialize value))
+   ((numberp value)
+    (let ((encoded (json-serialize value)))
+      (when (> (length encoded) vela-agent-max-json-string-characters)
+        (signal 'vela-agent-protocol-error
+                '("JSON number exceeds the response bound")))
+      encoded))
    ((vectorp value)
-    (concat "["
-            (mapconcat #'vela-agent--json-serialize (append value nil) ",")
-            "]"))
-   ((and (listp value)
-         (cl-every (lambda (entry)
-                     (and (consp entry) (stringp (car entry))))
-                   value))
-    (concat "{"
-            (mapconcat
-             (lambda (entry)
-               (concat (json-serialize (car entry)) ":"
-                       (vela-agent--json-serialize (cdr entry))))
-             value ",")
-            "}"))
+    (when (> (length value) vela-agent-max-json-collection-items)
+      (signal 'vela-agent-protocol-error
+              '("JSON array exceeds the collection bound")))
+    (when (gethash value active)
+      (signal 'vela-agent-protocol-error '("cyclic JSON response")))
+    (puthash value t active)
+    (unwind-protect
+        (let (items)
+          (dotimes (index (length value))
+            (push (vela-agent--json-serialize
+                   (aref value index) (1+ depth) active node-count)
+                  items))
+          (concat "[" (mapconcat #'identity (nreverse items) ",") "]"))
+      (remhash value active)))
+   ((listp value)
+    (when (gethash value active)
+      (signal 'vela-agent-protocol-error '("cyclic JSON response")))
+    (puthash value t active)
+    (unwind-protect
+        (let ((cursor value)
+              (count 0)
+              items)
+          (while (consp cursor)
+            (when (>= count vela-agent-max-json-collection-items)
+              (signal 'vela-agent-protocol-error
+                      '("JSON object exceeds the collection bound")))
+            (let ((entry (car cursor)))
+              (unless (and (consp entry)
+                           (stringp (car entry))
+                           (<= (length (car entry))
+                               vela-agent-max-json-string-characters))
+                (signal 'vela-agent-protocol-error
+                        '("JSON object has an invalid bounded key")))
+              (push (concat
+                     (json-serialize (car entry)) ":"
+                     (vela-agent--json-serialize
+                      (cdr entry) (1+ depth) active node-count))
+                    items))
+            (setq cursor (cdr cursor)
+                  count (1+ count)))
+          (unless (null cursor)
+            (signal 'vela-agent-protocol-error
+                    '("JSON object must be a proper list")))
+          (concat "{" (mapconcat #'identity (nreverse items) ",") "}"))
+      (remhash value active)))
    (t
     (signal 'vela-agent-protocol-error
-            (list (format "value is not JSON-compatible: %S" value))))))
+            '("value is not JSON-compatible")))))
 
 (defun vela-agent-encode-response (response)
   "Encode typed RESPONSE as deterministic JSON for an external transport."
-  (vela-agent--json-serialize response))
+  (let ((encoded
+         (vela-agent--json-serialize
+          response 0 (make-hash-table :test #'eq) (vector 0))))
+    (when (> (length encoded) vela-agent-max-json-output-characters)
+      (signal 'vela-agent-protocol-error
+              '("encoded JSON response exceeds the output bound")))
+    encoded))
 
 (defun vela-agent-interface-refresh ()
   "Refresh the interface from `vela-agent-interface-source-buffer'."

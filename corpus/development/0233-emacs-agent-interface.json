@@ -18,10 +18,10 @@
       "patch": "Added capability discovery, explicit context snapshots, native Org metadata, deterministic JSON encoding, and a read-only special-mode dashboard."
     },
     {
-      "summary": "Corrected two independent review blocks around Emacs main-thread boundedness.",
+      "summary": "Corrected three independent review blocks around Emacs main-thread boundedness and state preservation.",
       "outcome": "success",
-      "diagnostic": "Review probes found load-path discovery and unbounded buffer, request-list, section-vector, and diagnostic-format traversal before rejection.",
-      "patch": "Replaced load-path scans with constant-time callable checks; added a 1,048,576-character buffer cap; bounded request objects to eight unique fields with a finite cycle-safe walk; checked section-vector length before copying; bounded key and operation names; rejected worker-thread dispatch; and strengthened malformed-input, state-preservation, and deterministic-JSON tests."
+      "diagnostic": "Review probes found load-path discovery; unbounded buffer, request-list, section-vector, metadata, response-encoding, and diagnostic-format traversal; and changed Org match data.",
+      "patch": "Replaced load-path scans with constant-time callable checks; added source-buffer and metadata caps; bounded request objects, section vectors, names, response strings, collection width, nesting depth, node count, and total JSON output; detected cycles; preserved match data; rejected worker-thread dispatch; and strengthened malformed-input, state-preservation, and deterministic-JSON tests."
     }
   ],
   "outcome": {
@@ -40,7 +40,7 @@
   },
   "lessons": [
     "Emacs should own live editor state while long-running model, network, indexing, build, and compute work runs in external cancellable workers.",
-    "Short main-thread callbacks require cycle-safe object validation, pre-copy collection limits, bounded diagnostic formatting, and explicit document-size limits.",
+    "Short main-thread callbacks require cycle-safe request and response validation, pre-copy collection limits, bounded metadata, output, and diagnostics, and explicit document-size limits.",
     "A semantic protocol is safer and more model-neutral than synthesized key sequences or arbitrary eval.",
     "Capability metadata must distinguish callable facilities from protocol-exposed and authorized operations."
   ],

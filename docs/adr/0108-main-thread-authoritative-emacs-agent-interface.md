@@ -34,6 +34,10 @@ before line or Org traversal, source extraction, or hashing. This conservative
 bound keeps synchronous work finite; later protocol versions may add narrower
 field-specific bounds without weakening the fail-closed default. Dashboard JSON
 is serialized in protocol alist order rather than hash-table iteration order.
+Buffer identity strings are capped at 8,192 characters. The public response
+encoder separately bounds strings, collection width, nesting depth, node count,
+and total output, and detects cycles before recursively walking them. Native Org
+inspection preserves caller match data as part of the read-only state contract.
 
 Emacs remains authoritative for editor state. The interface reads that state synchronously in short main-thread callbacks and does not start long-running work. Future transport process filters may decode and enqueue bounded requests, but handling and every editor mutation must be scheduled back onto the main thread. Long-running reasoning, indexing, network access, builds, and computation belong in external cancellable workers. Their eventual results must re-enter Emacs through short callbacks with buffer identity and modification-tick preconditions.
 
@@ -75,7 +79,7 @@ Rejected as the primary authority because native Org APIs already own the editor
 
 ## Verification
 
-Batch byte compilation fails on warnings. ERT tests cover stable constant-time capability discovery and exposed-section metadata, explicit buffer context, native Org heading and source-block context, point/buffer preservation, worker-thread rejection, bounded unique sections before copying, cyclic and oversized request-object rejection, the oversized-buffer bound, deterministic interface JSON, interface rendering, malformed and unsupported-operation rejection, and unknown-section rejection. The complete repository quality gate must remain green.
+Batch byte compilation fails on warnings. ERT tests cover stable constant-time capability discovery and exposed-section metadata, explicit buffer context, native Org heading and source-block context, point/buffer/match-data preservation, worker-thread rejection, bounded unique sections before copying, cyclic and oversized request-object rejection, oversized buffer and metadata bounds, cycle-safe bounded response encoding, deterministic interface JSON, interface rendering, malformed and unsupported-operation rejection, and unknown-section rejection. The complete repository quality gate must remain green.
 
 ## Revisit when
 
