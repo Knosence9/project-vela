@@ -41,6 +41,7 @@
   "lessons": [
     "The adapter should validate caller-owned bounds and identity before opening storage.",
     "Kernel continuation evidence should be serialized directly rather than reconstructed in the CLI.",
+    "The selected-lookahead review comment was not applied because ADR-0091 requires validating the page-size-plus-one lookahead; the rebuttal was posted before merge and CodeRabbit withdrew the finding afterward.",
     "The command adds no persisted cursor, status filtering, lifecycle, clock, dispatch, permission, or execution authority."
   ],
   "provenance": {
