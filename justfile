@@ -32,9 +32,14 @@ secrets-check:
 process-test:
     bash tests/merge-readiness.sh
 
+# Byte-compile and exercise the Emacs agent interface without user configuration.
+emacs-test:
+    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT; cp emacs/vela-agent-mode.el "$tmp/"; emacs --batch -Q -L "$tmp" --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile "$tmp/vela-agent-mode.el"
+    emacs --batch -Q -L emacs -L emacs/tests -l vela-agent-mode-test -f ert-run-tests-batch-and-exit
+
 # Run a command with Vela's declared secrets resolved by SecretSpec.
 with-secrets *command:
     secretspec run -- {{command}}
 
 # Run the complete local quality gate.
-verify: fmt-check check test clippy secrets-check process-test diff-check
+verify: fmt-check check test clippy secrets-check process-test emacs-test diff-check

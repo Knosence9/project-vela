@@ -1,0 +1,252 @@
+;;; vela-agent-mode.el --- Model-neutral Emacs interface for Vela -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Project Vela contributors
+;; SPDX-License-Identifier: MIT
+;; Package-Requires: ((emacs "30.1"))
+;; Keywords: tools, convenience
+
+;;; Commentary:
+
+;; This package exposes a deliberately small, read-only interface that lets an
+;; agent discover Emacs capabilities and inspect editor context without driving
+;; the UI or evaluating arbitrary Emacs Lisp.  Expensive work belongs in
+;; external asynchronous workers; Emacs handlers should only snapshot native
+;; editor state on the main thread.
+
+;;; Code:
+
+(require 'org)
+(require 'ob-core)
+(require 'json)
+(require 'cl-lib)
+
+(define-error 'vela-agent-protocol-error "Invalid Vela agent request")
+
+(defconst vela-agent-protocol-version 1
+  "Version of the model-neutral Vela Emacs protocol.")
+
+(defconst vela-agent-max-buffer-characters (* 1024 1024)
+  "Largest buffer accepted by a synchronous context snapshot.")
+
+(defvar vela-agent--editor-thread (current-thread)
+  "Emacs thread that owns Vela interface access to live editor state.")
+
+(defvar-local vela-agent-interface-source-buffer nil
+  "Buffer whose context is rendered by this interface buffer.")
+
+(defvar-keymap vela-agent-interface-mode-map
+  :doc "Keymap for `vela-agent-interface-mode'."
+  "g" #'vela-agent-interface-refresh
+  "q" #'quit-window)
+
+(define-derived-mode vela-agent-interface-mode special-mode "Vela-Agent"
+  "Human-readable view of the same structured context exposed to agents.")
+
+(defun vela-agent--capabilities ()
+  "Return stable read-only operations supported by this package."
+  (vector
+   '(("name" . "capabilities.list")
+     ("effect" . "read"))
+   '(("name" . "context.snapshot")
+     ("effect" . "read"))))
+
+(defun vela-agent--emacs-feature (name function agent-use context-section)
+  "Describe NAME using callable FUNCTION for AGENT-USE and CONTEXT-SECTION."
+  `(("name" . ,name)
+    ("available" . ,(vela-agent--boolean (fboundp function)))
+    ("threading" . "main-thread-snapshot")
+    ("context_section" . ,(vela-agent--nullable context-section))
+    ("agent_use" . ,agent-use)))
+
+(defun vela-agent--emacs-features ()
+  "Return the stable Emacs power-user feature catalog."
+  (vector
+   `(("name" . "buffer")
+     ("available" . t)
+     ("threading" . "main-thread-snapshot")
+     ("context_section" . "buffer")
+     ("agent_use" . "read-only buffer identity, position, mode, and region metadata"))
+   (vela-agent--emacs-feature
+    "org" 'org-mode "read-only heading, stable ID, and source-block metadata" "org")
+   (vela-agent--emacs-feature
+    "project" 'project-current "loaded project.el facility metadata" nil)
+   (vela-agent--emacs-feature
+    "diagnostics" 'flymake-diagnostics "loaded Flymake diagnostics facility metadata" nil)
+   (vela-agent--emacs-feature
+    "compilation" 'compilation-start "loaded compilation-mode facility metadata" nil)
+   (vela-agent--emacs-feature
+    "magit" 'magit-status "loaded Magit facility metadata" nil)))
+
+(defun vela-agent--success (operation result)
+  "Return a successful envelope for OPERATION containing RESULT."
+  `(("protocol_version" . ,vela-agent-protocol-version)
+    ("ok" . t)
+    ("operation" . ,operation)
+    ("result" . ,result)))
+
+(defun vela-agent--nullable (value)
+  "Return VALUE, or the JSON null marker when VALUE is nil."
+  (if value value :null))
+
+(defun vela-agent--boolean (value)
+  "Return VALUE as a JSON-compatible boolean."
+  (if value t :false))
+
+(defun vela-agent--buffer-context ()
+  "Snapshot bounded metadata for the current buffer without moving point."
+  `(("name" . ,(buffer-name))
+    ("file" . ,(vela-agent--nullable buffer-file-name))
+    ("major_mode" . ,(symbol-name major-mode))
+    ("modified" . ,(vela-agent--boolean (buffer-modified-p)))
+    ("point" . ,(point))
+    ("line" . ,(line-number-at-pos))
+    ("column" . ,(current-column))
+    ("region" .
+              ,(if (use-region-p)
+                   `(("start" . ,(region-beginning))
+                     ("end" . ,(region-end)))
+                 :null))))
+
+(defun vela-agent--org-heading-context ()
+  "Return native Org heading metadata at point, or JSON null."
+  (save-excursion
+    (condition-case nil
+        (progn
+          (org-back-to-heading t)
+          `(("id" . ,(vela-agent--nullable (org-entry-get nil "ID")))
+            ("title" . ,(org-get-heading t t t t))
+            ("level" . ,(org-current-level))
+            ("todo" . ,(vela-agent--nullable (org-get-todo-state)))
+            ("tags" . ,(vconcat (org-get-tags nil t)))
+            ("outline_path" . ,(vconcat (org-get-outline-path t t)))))
+      (error :null))))
+
+(defun vela-agent--org-source-block-context ()
+  "Return native Org Babel source-block metadata at point, or JSON null."
+  (let ((info (org-babel-get-src-block-info 'light)))
+    (if info
+        `(("name" . ,(vela-agent--nullable (nth 4 info)))
+          ("language" . ,(car info))
+          ("source_sha256" . ,(secure-hash 'sha256 (nth 1 info))))
+      :null)))
+
+(defun vela-agent--org-context ()
+  "Snapshot Org metadata at point using native Org APIs."
+  (if (derived-mode-p 'org-mode)
+      `(("heading" . ,(vela-agent--org-heading-context))
+        ("source_block" . ,(vela-agent--org-source-block-context)))
+    :null))
+
+(defun vela-agent--context-snapshot (request)
+  "Return only the explicitly requested context sections from REQUEST."
+  (let ((include (alist-get "include" request nil nil #'string=)))
+    (unless (vectorp include)
+      (signal 'vela-agent-protocol-error
+              '("context.snapshot requires an include vector")))
+    (let ((sections (append include nil)))
+      (when (or (> (length sections) 2)
+                (/= (length sections)
+                    (length (delete-dups (copy-sequence sections)))))
+        (signal 'vela-agent-protocol-error
+                '("context.snapshot sections must be unique and at most two")))
+      (dolist (section sections)
+        (unless (member section '("buffer" "org"))
+          (signal 'vela-agent-protocol-error
+                  (list (format "unsupported context section: %S" section)))))
+      (when (> (buffer-size) vela-agent-max-buffer-characters)
+        (signal 'vela-agent-protocol-error
+                (list (format "buffer exceeds context snapshot limit: %d characters"
+                              vela-agent-max-buffer-characters))))
+      (let (result)
+        (when (member "buffer" sections)
+          (push (cons "buffer" (vela-agent--buffer-context)) result))
+        (when (member "org" sections)
+          (push (cons "org" (vela-agent--org-context)) result))
+        (nreverse result)))))
+
+(defun vela-agent-handle-request (request)
+  "Handle one typed, read-only REQUEST and return JSON-compatible data."
+  (unless (eq (current-thread) vela-agent--editor-thread)
+    (signal 'vela-agent-protocol-error
+            '("agent requests must run on the editor owner thread")))
+  (unless (and (listp request)
+               (cl-every (lambda (entry)
+                           (and (consp entry) (stringp (car entry))))
+                         request))
+    (signal 'vela-agent-protocol-error
+            '("agent request must be an object with string keys")))
+  (let ((operation (alist-get "operation" request nil nil #'string=)))
+    (pcase operation
+      ("capabilities.list"
+       (vela-agent--success
+        operation
+        `(("capabilities" . ,(vela-agent--capabilities))
+          ("emacs_features" . ,(vela-agent--emacs-features)))))
+      ("context.snapshot"
+       (vela-agent--success operation (vela-agent--context-snapshot request)))
+      (_
+       (signal 'vela-agent-protocol-error
+               (list (format "unsupported operation: %S" operation)))))))
+
+(defun vela-agent--json-serialize (value)
+  "Serialize protocol VALUE deterministically while preserving alist order."
+  (cond
+   ((eq value :null) "null")
+   ((eq value :false) "false")
+   ((eq value t) "true")
+   ((or (stringp value) (numberp value)) (json-serialize value))
+   ((vectorp value)
+    (concat "["
+            (mapconcat #'vela-agent--json-serialize (append value nil) ",")
+            "]"))
+   ((and (listp value)
+         (cl-every (lambda (entry)
+                     (and (consp entry) (stringp (car entry))))
+                   value))
+    (concat "{"
+            (mapconcat
+             (lambda (entry)
+               (concat (json-serialize (car entry)) ":"
+                       (vela-agent--json-serialize (cdr entry))))
+             value ",")
+            "}"))
+   (t
+    (signal 'vela-agent-protocol-error
+            (list (format "value is not JSON-compatible: %S" value))))))
+
+(defun vela-agent-encode-response (response)
+  "Encode typed RESPONSE as deterministic JSON for an external transport."
+  (vela-agent--json-serialize response))
+
+(defun vela-agent-interface-refresh ()
+  "Refresh the interface from `vela-agent-interface-source-buffer'."
+  (interactive)
+  (unless (buffer-live-p vela-agent-interface-source-buffer)
+    (user-error "The Vela agent source buffer is no longer live"))
+  (let ((response
+         (with-current-buffer vela-agent-interface-source-buffer
+           (vela-agent-handle-request
+            '(("operation" . "context.snapshot")
+              ("include" . ["buffer" "org"]))))))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (vela-agent-encode-response response))
+      (json-pretty-print-buffer)
+      (goto-char (point-min)))))
+
+;;;###autoload
+(defun vela-agent-interface-open ()
+  "Open the read-only Vela agent interface for the current buffer."
+  (interactive)
+  (let ((source (current-buffer))
+        (interface (get-buffer-create "*Vela Agent Interface*")))
+    (with-current-buffer interface
+      (vela-agent-interface-mode)
+      (setq vela-agent-interface-source-buffer source)
+      (vela-agent-interface-refresh))
+    (display-buffer interface)
+    interface))
+
+(provide 'vela-agent-mode)
+
+;;; vela-agent-mode.el ends here

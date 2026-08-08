@@ -29,6 +29,9 @@
               rustc
               rustfmt
 
+              # Literate agent workbench and batch-tested interface mode
+              emacs
+
               # Rust quality and dependency tooling
               cargo-audit
               cargo-deny
