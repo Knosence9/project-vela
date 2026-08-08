@@ -1055,6 +1055,37 @@ The due command does not read ambient time or infer that returned work should
 run. It cannot mutate, claim, release, cancel, materialize, dispatch, retry, or
 execute a schedule or task.
 
+## Read-only bounded sparse schedule due CLI paging
+
+`vela-dev schedule due-page DATABASE CUTOFF_UNIX_MILLIS SCAN_SIZE [AFTER]`
+uses clap to parse one explicit non-negative cutoff, then validates a positive
+at-most-1024 scan size and optional exact non-blank schedule ID before storage
+access. The optional ID is an exclusive caller-owned exact-ID scan cursor and
+need not identify an existing schedule. The command opens only the selected
+existing database read-only and delegates bounded selection, complete
+selected-window replay, pending/due filtering, and continuation to
+`ScheduleStore::list_due_page`.
+
+Success emits `{"schedules":[...],"next_after":...}` with complete matching
+schedule objects in exact-ID scan order. This intentionally differs from the
+complete `schedule due` command's due-instant ordering. The cutoff is inclusive,
+and the cursor identifies the last inspected schedule when validated lookahead
+proves more inventory exists. An all-nonmatching page can therefore emit an
+empty array with a non-null cursor; terminal, empty, and beyond-end windows emit
+`null`. Exact strings remain JSON escaped.
+
+Invalid scan sizes and cursors emit `invalid_schedule_page_size` or
+`invalid_schedule_id` before storage access; malformed cutoffs are rejected by
+clap. Missing or incompatible storage, selected or lookahead corruption,
+projection, and serialization failures emit
+`schedule_due_page_inspection_failed` with no partial stdout, and missing
+storage is never created. Corruption before the cursor or beyond selected
+lookahead cannot block the page. The command reads no ambient clock, mutates
+nothing, persists no cursor, performs no dense-fill scan, and grants no
+lifecycle, worker, claim, materialization, dispatch, retry, permission, or
+execution authority. See
+[ADR-0100](adr/0100-read-only-bounded-sparse-one-shot-schedule-due-cli-paging.md).
+
 `vela-dev schedule status DATABASE STATUS` validates one exact lowercase
 `pending`, `cancelled`, `claimed`, or `materialized` status before opening the
 caller-selected database read-only, then supplies that typed status to

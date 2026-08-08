@@ -1871,6 +1871,209 @@ fn schedule_status_paging_fails_on_selected_lookahead_and_isolates_other_corrupt
 }
 
 #[test]
+fn pages_due_schedules_sparsely_with_scan_cursor_progress() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).expect("writable schedule store");
+    for (id, goal, due_at) in [
+        ("alpha", "future alpha", 30),
+        ("bravo", "cancelled bravo", 5),
+        ("charlie", "due at \"cutoff\"", 20),
+        ("delta", "due earlier", 10),
+        ("echo", "future echo", 21),
+    ] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new(goal).unwrap(),
+                ScheduleInstant::from_unix_millis(due_at),
+            )
+            .unwrap();
+    }
+    store
+        .cancel(
+            &ScheduleId::new("bravo").unwrap(),
+            1,
+            ScheduleCancellation::new("operator request").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let cases = [
+        (None, "{\"schedules\":[],\"next_after\":\"bravo\"}\n"),
+        (
+            Some("bravo"),
+            concat!(
+                "{\"schedules\":[",
+                "{\"id\":\"charlie\",\"goal\":\"due at \\\"cutoff\\\"\",\"due_at_unix_millis\":20,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null},",
+                "{\"id\":\"delta\",\"goal\":\"due earlier\",\"due_at_unix_millis\":10,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null}",
+                "],\"next_after\":\"delta\"}\n"
+            ),
+        ),
+        (Some("delta"), "{\"schedules\":[],\"next_after\":null}\n"),
+        (
+            Some("coconut"),
+            "{\"schedules\":[{\"id\":\"delta\",\"goal\":\"due earlier\",\"due_at_unix_millis\":10,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null}],\"next_after\":null}\n",
+        ),
+        (Some("zzzz"), "{\"schedules\":[],\"next_after\":null}\n"),
+    ];
+    for (after, expected) in cases {
+        let mut arguments = vec![
+            "schedule",
+            "due-page",
+            database.to_str().expect("UTF-8 database path"),
+            "20",
+            "2",
+        ];
+        arguments.extend(after);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args(arguments)
+            .assert()
+            .success()
+            .stdout(expected)
+            .stderr(predicate::str::is_empty());
+    }
+}
+
+#[test]
+fn schedule_due_paging_validates_before_read_only_storage_access() {
+    let directory = tempdir().expect("schedule database directory");
+    let empty = directory.path().join("empty.sqlite3");
+    drop(ScheduleStore::open(&empty).expect("empty schedule store"));
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "due-page",
+            empty.to_str().expect("UTF-8 database path"),
+            "0",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout("{\"schedules\":[],\"next_after\":null}\n")
+        .stderr(predicate::str::is_empty());
+
+    let missing = directory.path().join("missing.sqlite3");
+    for (scan_size, after, diagnostic) in [
+        ("0", None, "$: invalid_schedule_page_size:"),
+        ("1025", None, "$: invalid_schedule_page_size:"),
+        ("1", Some("   "), "$: invalid_schedule_id:"),
+    ] {
+        let mut arguments = vec![
+            "schedule",
+            "due-page",
+            missing.to_str().expect("UTF-8 database path"),
+            "20",
+            scan_size,
+        ];
+        arguments.extend(after);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args(arguments)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(diagnostic));
+        assert!(!missing.exists());
+    }
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "due-page",
+            missing.to_str().expect("UTF-8 database path"),
+            "20",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: schedule_due_page_inspection_failed:",
+        ));
+    assert!(!missing.exists());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "due-page",
+            missing.to_str().expect("UTF-8 database path"),
+            "not-a-millisecond",
+            "1",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "invalid value 'not-a-millisecond'",
+        ));
+    assert!(!missing.exists());
+}
+
+#[test]
+fn schedule_due_paging_fails_on_selected_lookahead_and_isolates_other_corruption() {
+    let directory = tempdir().expect("schedule database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = ScheduleStore::open(&database).expect("writable schedule store");
+    for id in ["a-corrupt", "b-valid", "c-valid", "d-corrupt"] {
+        store
+            .schedule(
+                ScheduleId::new(id).unwrap(),
+                TaskGoal::new("goal").unwrap(),
+                ScheduleInstant::from_unix_millis(1),
+            )
+            .unwrap();
+    }
+    drop(store);
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id IN ('schedule:a-corrupt', 'schedule:d-corrupt')",
+            [],
+        )
+        .unwrap();
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "schedule",
+            "due-page",
+            database.to_str().expect("UTF-8 database path"),
+            "1",
+            "1",
+            "a-corrupt",
+        ])
+        .assert()
+        .success()
+        .stdout("{\"schedules\":[{\"id\":\"b-valid\",\"goal\":\"goal\",\"due_at_unix_millis\":1,\"status\":\"pending\",\"revision\":1,\"cancellation\":null,\"latest_release\":null,\"task_id\":null}],\"next_after\":\"b-valid\"}\n")
+        .stderr(predicate::str::is_empty());
+
+    for after in [None, Some("b-valid")] {
+        let mut arguments = vec![
+            "schedule",
+            "due-page",
+            database.to_str().expect("UTF-8 database path"),
+            "1",
+            "1",
+        ];
+        arguments.extend(after);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args(arguments)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: schedule_due_page_inspection_failed:",
+            ));
+    }
+}
+
+#[test]
 fn inspects_due_schedules_at_an_inclusive_caller_owned_cutoff() {
     let directory = tempdir().expect("schedule database directory");
     let database = directory.path().join("events.sqlite3");

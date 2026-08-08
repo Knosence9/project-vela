@@ -342,6 +342,13 @@ pub enum ScheduleCommand {
         database: PathBuf,
         cutoff_unix_millis: u64,
     },
+    /// Page pending due schedules sparsely through a bounded read-only scan.
+    DuePage {
+        database: PathBuf,
+        cutoff_unix_millis: u64,
+        scan_size: u64,
+        after: Option<String>,
+    },
     /// Print one exact schedule's validated lifecycle history.
     History { database: PathBuf, id: String },
     /// Resolve one materialized schedule from an exact task identity.
@@ -489,6 +496,15 @@ impl Cli {
                         cutoff_unix_millis,
                     }),
             }) => inspect_schedules(&database, Some(cutoff_unix_millis)),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::DuePage {
+                        database,
+                        cutoff_unix_millis,
+                        scan_size,
+                        after,
+                    }),
+            }) => page_due_schedules(&database, cutoff_unix_millis, scan_size, after.as_deref()),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::History { database, id }),
             }) => inspect_schedule_history(&database, &id),
@@ -1479,6 +1495,44 @@ fn page_schedules_by_status(
     let output = match serde_json::to_string(&inventory) {
         Ok(output) => output,
         Err(error) => return extension_error("schedule_status_page_inspection_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn page_due_schedules(
+    database: &Path,
+    cutoff_unix_millis: u64,
+    raw_scan_size: u64,
+    raw_after: Option<&str>,
+) -> ExitCode {
+    let scan_size = match SchedulePageSize::new(raw_scan_size) {
+        Ok(scan_size) => scan_size,
+        Err(error) => return extension_error("invalid_schedule_page_size", error),
+    };
+    let after = match raw_after.map(ScheduleId::new).transpose() {
+        Ok(after) => after,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_due_page_inspection_failed", error),
+    };
+    let page = match store.list_due_page(
+        ScheduleInstant::from_unix_millis(cutoff_unix_millis),
+        after.as_ref(),
+        scan_size,
+    ) {
+        Ok(page) => page,
+        Err(error) => return extension_error("schedule_due_page_inspection_failed", error),
+    };
+    let inventory = ScheduleInventoryPage {
+        schedules: page.schedules().iter().map(schedule_inspection).collect(),
+        next_after: page.next_after().map(ScheduleId::as_str),
+    };
+    let output = match serde_json::to_string(&inventory) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_due_page_inspection_failed", error),
     };
     println!("{output}");
     ExitCode::SUCCESS
