@@ -275,4 +275,17 @@
         ("include" . ["buffer"])))
      :type 'vela-agent-protocol-error)))
 
+(ert-deftest vela-agent-context-snapshot-rejects-oversized-org-metadata ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "* "
+            (make-string (1+ vela-agent-max-metadata-string-characters) ?x)
+            "\n")
+    (goto-char (point-max))
+    (should-error
+     (vela-agent-handle-request
+      '(("operation" . "context.snapshot")
+        ("include" . ["org"])))
+     :type 'vela-agent-protocol-error)))
+
 ;;; vela-agent-mode-test.el ends here

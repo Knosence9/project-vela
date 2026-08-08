@@ -41,6 +41,9 @@
   "lessons": [
     "Emacs should own live editor state while long-running model, network, indexing, build, and compute work runs in external cancellable workers.",
     "Short main-thread callbacks require cycle-safe request and response validation, pre-copy collection limits, bounded metadata, output, and diagnostics, and explicit document-size limits.",
+    "Review replaced request-time load-path discovery with constant-time callable-symbol checks so capability listing performs no package or filesystem scan.",
+    "Review bounded cyclic and oversized request alists, section vectors before copying, operation and key diagnostics, source-buffer traversal, and worker-thread access with fail-closed protocol errors.",
+    "Review bounded buffer and Org metadata plus deterministic response encoding, preserved Org match data, and added cycle, depth, width, node, and output budgets to the public encoder.",
     "A semantic protocol is safer and more model-neutral than synthesized key sequences or arbitrary eval.",
     "Capability metadata must distinguish callable facilities from protocol-exposed and authorized operations."
   ],

@@ -34,7 +34,8 @@ before line or Org traversal, source extraction, or hashing. This conservative
 bound keeps synchronous work finite; later protocol versions may add narrower
 field-specific bounds without weakening the fail-closed default. Dashboard JSON
 is serialized in protocol alist order rather than hash-table iteration order.
-Buffer identity strings are capped at 8,192 characters. The public response
+Buffer and Org identity strings are capped at 8,192 characters, and Org
+collections at 128 items, during extraction. The public response
 encoder separately bounds strings, collection width, nesting depth, node count,
 and total output, and detects cycles before recursively walking them. Native Org
 inspection preserves caller match data as part of the read-only state contract.

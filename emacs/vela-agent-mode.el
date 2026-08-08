@@ -127,6 +127,27 @@
             '("editor metadata exceeds the synchronous response bound")))
   value)
 
+(defun vela-agent--bounded-nullable-metadata-string (value)
+  "Return bounded metadata VALUE, or the JSON null marker when VALUE is nil."
+  (if value (vela-agent--bounded-metadata-string value) :null))
+
+(defun vela-agent--bounded-metadata-vector (values)
+  "Return proper string list VALUES as a bounded protocol vector."
+  (let ((cursor values)
+        (count 0)
+        items)
+    (while (consp cursor)
+      (when (>= count vela-agent-max-json-collection-items)
+        (signal 'vela-agent-protocol-error
+                '("editor metadata exceeds the collection bound")))
+      (push (vela-agent--bounded-metadata-string (car cursor)) items)
+      (setq cursor (cdr cursor)
+            count (1+ count)))
+    (unless (null cursor)
+      (signal 'vela-agent-protocol-error
+              '("editor metadata must be a proper string list")))
+    (vconcat (nreverse items))))
+
 (defun vela-agent--buffer-context ()
   "Snapshot bounded metadata for the current buffer without moving point."
   `(("name" . ,(vela-agent--bounded-metadata-string (buffer-name)))
@@ -148,23 +169,31 @@
 (defun vela-agent--org-heading-context ()
   "Return native Org heading metadata at point, or JSON null."
   (save-excursion
-    (condition-case nil
+    (condition-case err
         (progn
           (org-back-to-heading t)
-          `(("id" . ,(vela-agent--nullable (org-entry-get nil "ID")))
-            ("title" . ,(org-get-heading t t t t))
+          `(("id" . ,(vela-agent--bounded-nullable-metadata-string
+                       (org-entry-get nil "ID")))
+            ("title" . ,(vela-agent--bounded-metadata-string
+                          (org-get-heading t t t t)))
             ("level" . ,(org-current-level))
-            ("todo" . ,(vela-agent--nullable (org-get-todo-state)))
-            ("tags" . ,(vconcat (org-get-tags nil t)))
-            ("outline_path" . ,(vconcat (org-get-outline-path t t)))))
+            ("todo" . ,(vela-agent--bounded-nullable-metadata-string
+                         (org-get-todo-state)))
+            ("tags" . ,(vela-agent--bounded-metadata-vector
+                         (org-get-tags nil t)))
+            ("outline_path" . ,(vela-agent--bounded-metadata-vector
+                                 (org-get-outline-path t t)))))
+      (vela-agent-protocol-error
+       (signal (car err) (cdr err)))
       (error :null))))
 
 (defun vela-agent--org-source-block-context ()
   "Return native Org Babel source-block metadata at point, or JSON null."
   (let ((info (org-babel-get-src-block-info 'light)))
     (if info
-        `(("name" . ,(vela-agent--nullable (nth 4 info)))
-          ("language" . ,(car info))
+        `(("name" . ,(vela-agent--bounded-nullable-metadata-string
+                       (nth 4 info)))
+          ("language" . ,(vela-agent--bounded-metadata-string (car info)))
           ("source_sha256" . ,(secure-hash 'sha256 (nth 1 info))))
       :null)))
 

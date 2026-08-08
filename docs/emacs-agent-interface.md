@@ -49,7 +49,8 @@ Every context request fails closed when the source buffer exceeds 1,048,576
 characters. This cap bounds native line and Org traversal, source extraction,
 and hashing work on the main thread. The interface buffer uses an ordered JSON
 serializer so object order follows the deterministic protocol alist order.
-Live buffer name, file, and mode strings are capped at 8,192 characters. The
+Live buffer, Org heading, tag, outline, source-block name, and language strings
+are capped at 8,192 characters; Org collections are capped at 128 items. The
 encoder independently caps string length, collection width, nesting depth,
 value-node count, and total output; cyclic response values fail closed.
 The `include` vector accepts each of the two supported sections at most once,
