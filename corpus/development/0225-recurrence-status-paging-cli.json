@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page finite recurrences sparsely by status through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/999 by exposing bounded recurrence status scans as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Validate exact status, positive at-most-1024 scan size, and optional exact recurrence-ID cursor before storage access.",
+      "Emit complete matching recurrences and the kernel-owned nullable last-inspected continuation cursor.",
+      "Open existing storage read-only and fail without partial stdout on selected-window corruption or storage errors."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected recurrence status-page because the subcommand did not exist.",
+      "patch": "Added CLI tests for sparse continuation, validation, exact JSON, storage absence, and selected-window corruption isolation."
+    },
+    {
+      "summary": "Implemented and refactored the read-only adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented shared status parsing, pre-storage size and cursor validation, read-only kernel delegation, and compact continuation JSON.",
+      "patch": "Implemented issue 999 in crates/vela-dev/src/lib.rs with CLI tests, ADR-0098, and scheduler documentation; independent review found no blocking issue."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "A rate-limited false green was excluded; after cooldown, CodeRabbit command 732a0b3a completed on exact head 075e226 with no actionable comments and zero unresolved threads.",
+      "patch": "Kept auto-merge disabled until genuine review and the exact-head Rust gate both succeeded."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 999 exposed bounded sparse recurrence status paging while preserving kernel validation and cursor semantics.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 1000 exact head 075e226de62e3ee69ec3ce5a27b7d1d9acbd78e4", "status": "passed" },
+      { "command": "Pull request 1000 squash merge 2067cb1e5122f56aa269c194bc2b3c7b4a0b8eb2", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "The CLI should parse persisted-status vocabulary once and delegate sparse selection rather than reconstructing kernel policy.",
+    "Nullable next_after reports inspected scan progress independently from result density.",
+    "The adapter adds no global discovery, ambient clock, persisted cursor, lifecycle mutation, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1000"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

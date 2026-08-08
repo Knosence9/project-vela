@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page one-shot schedules sparsely by status",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/993 with bounded exact-ID scan pages filtered by persisted one-shot schedule status.",
+    "acceptance_criteria": [
+      "Inspect at most one positive at-most-1024 schedule window plus lookahead and return complete exact-status matches in exact-ID order.",
+      "Advance continuation from the last inspected schedule even when no schedule matches.",
+      "Fail closed on selected or lookahead corruption while isolating evidence outside the bounded window."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Targeted store tests failed because ScheduleStatusPage and ScheduleStore::list_by_status_page did not exist.",
+      "patch": "Added focused tests for sparse matches, all-nonmatching progress, exact ordering, cursors, empty storage, and corruption boundaries."
+    },
+    {
+      "summary": "Implemented and refactored the bounded kernel slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented bounded authoritative-stream selection, canonical selected-window replay, exact persisted-status filtering, and last-inspected continuation.",
+      "patch": "Implemented issue 993 in crates/vela-kernel/src/scheduler.rs with store tests, ADR-0095, and scheduler documentation; independent review prompted additional ordering coverage."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "A review-limit false green was excluded; after cooldown, CodeRabbit command eab23ce7 completed on exact head 1435534 with no actionable comments and zero unresolved threads.",
+      "patch": "Preserved the verified head and armed squash merge only after the Rust gate and genuine review completed."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 993 delivered bounded sparse schedule status paging without adding lifecycle or execution authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 994 exact head 1435534dc53e04bbdf97f9d0bcb42cfa5687ba0f", "status": "passed" },
+      { "command": "Pull request 994 squash merge 650d21b76dd352378ebf2f6623a8eb24118f70bc", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Sparse filtering must advance from the last inspected ID rather than the last emitted match so empty pages cannot stall.",
+    "The lookahead must be canonically replayed before it can prove continuation; corruption beyond that bounded window remains isolated.",
+    "Independent review found that the exact-ID ordering contract needed explicit regression coverage; the store test was extended to assert the complete emitted match order.",
+    "The projection reads persisted status only and adds no clock, cursor persistence, mutation, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/994"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

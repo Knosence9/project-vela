@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page one-shot schedules sparsely by status through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/995 by exposing bounded schedule status scans as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Validate exact status, positive at-most-1024 scan size, and optional exact schedule-ID cursor before storage access.",
+      "Emit complete matching schedules and the kernel-owned nullable last-inspected continuation cursor.",
+      "Open only existing storage read-only and fail without partial stdout on selected-window corruption or storage errors."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected schedule status-page because the subcommand did not exist.",
+      "patch": "Added CLI tests for sparse continuation, ordering, escaping, validation before storage, missing paths, and corruption isolation."
+    },
+    {
+      "summary": "Implemented and refactored the read-only adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented pre-storage status, size, and cursor validation, read-only kernel delegation, and compact continuation JSON.",
+      "patch": "Implemented issue 995 in crates/vela-dev/src/lib.rs with CLI tests, ADR-0096, and scheduler documentation; independent review prompted ordering and escaping coverage."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "A rate-limited false green was excluded; after cooldown, CodeRabbit command 73de27bd completed on exact head 4a0f25d with no actionable comments and zero unresolved threads.",
+      "patch": "Kept auto-merge disabled until exact-head Rust CI and genuine review both passed."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 995 exposed bounded sparse schedule status paging while preserving kernel cursor and read-only authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 996 exact head 4a0f25de51c99a37e065ab23e4dc226c161d82a0", "status": "passed" },
+      { "command": "Pull request 996 squash merge 96337c9db4e2d9e7c3cd695e608d1d07be009744", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "Caller-owned filters, bounds, and cursors belong before storage access while continuation truth remains kernel-owned.",
+    "An empty schedules array with non-null next_after is valid progress, not terminal evidence.",
+    "Independent review found that deterministic output needed explicit ordering and JSON-escaping regressions; the CLI tests were extended to assert both contracts.",
+    "The adapter adds no ambient clock, persisted cursor, lifecycle mutation, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/996"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page pending due one-shot schedules sparsely through the CLI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1003 by exposing bounded pending-due schedule scans as deterministic read-only JSON.",
+    "acceptance_criteria": [
+      "Parse the explicit cutoff and validate a positive at-most-1024 scan size plus optional exact schedule-ID cursor before storage access.",
+      "Emit complete pending-due schedules in exact-ID scan order with the kernel-owned nullable last-inspected continuation cursor.",
+      "Preserve missing-storage non-creation and fail without partial stdout on selected-window corruption or serialization failure."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected schedule due-page because the subcommand did not exist.",
+      "patch": "Added tests for sparse mixed lifecycle and due pages, inclusive cutoff, ordering, escaping, validation, missing storage, and corruption boundaries."
+    },
+    {
+      "summary": "Implemented and refactored the read-only adapter.",
+      "outcome": "success",
+      "diagnostic": "Implemented pre-storage size and cursor validation, read-only list_due_page delegation, and compact JSON using the canonical complete schedule projection.",
+      "patch": "Implemented issue 1003 in crates/vela-dev/src/lib.rs with CLI tests, ADR-0100, and scheduler documentation; independent review found no blocking issue."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "A review-limit false green was excluded; after cooldown and shared-budget recheck, CodeRabbit command 28c5e937 completed on exact head d923e01 with no actionable comments and zero unresolved threads.",
+      "patch": "Kept auto-merge disabled until exact-head Rust CI and the deliberate genuine review succeeded."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 1003 exposed bounded pending-due schedule paging without changing complete due discovery or granting mutation authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 1004 exact head d923e01a6a64b3f26a0a249786c438f72783b8b2", "status": "passed" },
+      { "command": "Pull request 1004 squash merge 781c266a9000b98f0105175c33523bfd766a48a3", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "An explicit due-page command avoids silently changing complete schedule due ordering and output compatibility.",
+    "Sparse pages can contain no schedules while next_after still proves bounded scan progress.",
+    "The CLI serializes kernel continuation directly and adds no dense-fill scan, ambient clock, persisted cursor, lifecycle, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1004"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}
