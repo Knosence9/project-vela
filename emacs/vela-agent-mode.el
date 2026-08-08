@@ -28,6 +28,15 @@
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
   "Largest buffer accepted by a synchronous context snapshot.")
 
+(defconst vela-agent-max-request-fields 8
+  "Largest number of fields accepted in one typed request object.")
+
+(defconst vela-agent-max-request-key-characters 64
+  "Largest request object key accepted by the protocol.")
+
+(defconst vela-agent-max-operation-characters 64
+  "Largest operation or context-section name accepted by the protocol.")
+
 (defvar vela-agent--editor-thread (current-thread)
   "Emacs thread that owns Vela interface access to live editor state.")
 
@@ -143,16 +152,20 @@
     (unless (vectorp include)
       (signal 'vela-agent-protocol-error
               '("context.snapshot requires an include vector")))
+    (when (> (length include) 2)
+      (signal 'vela-agent-protocol-error
+              '("context.snapshot accepts at most two sections")))
     (let ((sections (append include nil)))
-      (when (or (> (length sections) 2)
-                (/= (length sections)
-                    (length (delete-dups (copy-sequence sections)))))
+      (when (and (= (length sections) 2)
+                 (equal (car sections) (cadr sections)))
         (signal 'vela-agent-protocol-error
-                '("context.snapshot sections must be unique and at most two")))
+                '("context.snapshot sections must be unique")))
       (dolist (section sections)
-        (unless (member section '("buffer" "org"))
+        (unless (and (stringp section)
+                     (<= (length section) vela-agent-max-operation-characters)
+                     (member section '("buffer" "org")))
           (signal 'vela-agent-protocol-error
-                  (list (format "unsupported context section: %S" section)))))
+                  '("unsupported context section"))))
       (when (> (buffer-size) vela-agent-max-buffer-characters)
         (signal 'vela-agent-protocol-error
                 (list (format "buffer exceeds context snapshot limit: %d characters"
@@ -164,18 +177,43 @@
           (push (cons "org" (vela-agent--org-context)) result))
         (nreverse result)))))
 
+(defun vela-agent--validate-request-object (request)
+  "Validate REQUEST as a small, finite, unambiguous string-keyed alist."
+  (let ((cursor request)
+        (fields 0)
+        keys)
+    (while (consp cursor)
+      (when (>= fields vela-agent-max-request-fields)
+        (signal 'vela-agent-protocol-error
+                '("agent request has too many fields")))
+      (let* ((entry (car cursor))
+             (key (and (consp entry) (car entry))))
+        (unless (and (stringp key)
+                     (<= (length key) vela-agent-max-request-key-characters))
+          (signal 'vela-agent-protocol-error
+                  '("agent request keys must be bounded strings")))
+        (when (member key keys)
+          (signal 'vela-agent-protocol-error
+                  '("agent request keys must be unique")))
+        (push key keys))
+      (setq fields (1+ fields)
+            cursor (cdr cursor)))
+    (unless (null cursor)
+      (signal 'vela-agent-protocol-error
+              '("agent request must be a proper object")))
+    request))
+
 (defun vela-agent-handle-request (request)
   "Handle one typed, read-only REQUEST and return JSON-compatible data."
   (unless (eq (current-thread) vela-agent--editor-thread)
     (signal 'vela-agent-protocol-error
             '("agent requests must run on the editor owner thread")))
-  (unless (and (listp request)
-               (cl-every (lambda (entry)
-                           (and (consp entry) (stringp (car entry))))
-                         request))
-    (signal 'vela-agent-protocol-error
-            '("agent request must be an object with string keys")))
+  (vela-agent--validate-request-object request)
   (let ((operation (alist-get "operation" request nil nil #'string=)))
+    (unless (and (stringp operation)
+                 (<= (length operation) vela-agent-max-operation-characters))
+      (signal 'vela-agent-protocol-error
+              '("agent request requires a bounded operation name")))
     (pcase operation
       ("capabilities.list"
        (vela-agent--success
@@ -186,7 +224,7 @@
        (vela-agent--success operation (vela-agent--context-snapshot request)))
       (_
        (signal 'vela-agent-protocol-error
-               (list (format "unsupported operation: %S" operation)))))))
+               '("unsupported operation"))))))
 
 (defun vela-agent--json-serialize (value)
   "Serialize protocol VALUE deterministically while preserving alist order."
