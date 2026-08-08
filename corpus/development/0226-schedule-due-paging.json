@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page pending due one-shot schedules sparsely",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1001 with bounded exact-ID scan pages filtered to pending schedules due by a caller-owned cutoff.",
+    "acceptance_criteria": [
+      "Inspect at most one positive at-most-1024 authoritative schedule window plus lookahead and return complete pending schedules due at or before the inclusive cutoff.",
+      "Preserve exact-ID scan order and advance continuation from the last inspected schedule across nonmatching windows.",
+      "Fail closed on selected or lookahead corruption while keeping complete due-instant-ordered discovery behavior unchanged."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Targeted store tests failed because ScheduleDuePage and ScheduleStore::list_due_page did not exist.",
+      "patch": "Added tests for sparse lifecycle and cutoff filtering, exact-ID order, empty progress, cursors, bounded work, and corruption windows."
+    },
+    {
+      "summary": "Implemented and refactored the bounded kernel slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented bounded exact-ID stream selection, complete selected-window replay, pending and inclusive-cutoff filtering, and last-inspected continuation.",
+      "patch": "Implemented issue 1001 in crates/vela-kernel/src/scheduler.rs with store tests, ADR-0099, and scheduler documentation; independent review hardening was batched before commit."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "Rate-limited false greens, including one failed deliberate resume, were excluded; CodeRabbit command a73ed9be completed on exact head adb7b51 with no actionable comments and zero unresolved threads.",
+      "patch": "Rechecked review capacity and preserved the exact verified head until genuine review completed before squash merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 1001 delivered storage-work-bounded pending-due paging without adding indexed schema, clocks, or lifecycle authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 1002 exact head adb7b51f93cb8cff6817f0c59560f387a9ec0e83", "status": "passed" },
+      { "command": "Pull request 1002 squash merge 6c6f3c6019b5c26cadb4aa90ecda0d065308d6dd", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "A dense due-result page cannot honestly bound work when future or non-pending schedules may be arbitrarily sparse.",
+    "Exact-ID scan order provides bounded fail-closed paging but intentionally differs from complete list_due ordering by due instant then ID.",
+    "Arbitrary u64 due instants in JSON payloads require a separate indexed-schema and migration decision before due-instant keyset paging.",
+    "The boundary reads no clock and adds no persisted cursor, claim, materialization, dispatch, permission, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1002"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}

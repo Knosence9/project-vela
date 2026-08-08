@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Page finite recurrences sparsely by status",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/997 with bounded exact-ID scan pages filtered by persisted finite-recurrence status.",
+    "acceptance_criteria": [
+      "Inspect at most one positive at-most-1024 recurrence window plus lookahead and return complete exact-status matches in exact-ID order.",
+      "Advance continuation from the last inspected recurrence even across all-nonmatching windows.",
+      "Canonically validate selected definitions and lookahead while isolating corruption outside bounded work."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Established RED behavior coverage.",
+      "outcome": "failure",
+      "diagnostic": "Targeted recurrence-store tests failed because RecurrenceStatusPage and RecurrenceStore::list_by_status_page did not exist.",
+      "patch": "Added focused tests for sparse active and cancelled pages, cursor progress, terminal windows, empty storage, and bounded corruption behavior."
+    },
+    {
+      "summary": "Implemented and refactored the bounded kernel slice.",
+      "outcome": "success",
+      "diagnostic": "Implemented bounded exact-ID selection, complete selected-window replay, persisted-status filtering, and last-inspected continuation.",
+      "patch": "Implemented issue 997 in crates/vela-kernel/src/scheduler.rs with store tests, ADR-0097, and scheduler documentation; independent review found no blocking issue."
+    },
+    {
+      "summary": "Completed substantive exact-head review.",
+      "outcome": "success",
+      "diagnostic": "A rate-limited false green was excluded; after cooldown, CodeRabbit command 68978c3d completed on exact head 69c1a5b with no actionable comments and zero unresolved threads.",
+      "patch": "Preserved the exact verified commit until review capacity returned before enabling squash merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Issue 997 delivered bounded sparse finite-recurrence status paging without adding occurrence or execution authority.",
+    "verified": true,
+    "verification": [
+      { "command": "nix develop --command just verify", "status": "passed" },
+      { "command": "GitHub Rust quality gate for pull request 998 exact head 69c1a5bc00d1784529d704988859776adc624daf", "status": "passed" },
+      { "command": "Pull request 998 squash merge 1b403ecf03e5b3fc1ec7e34577e185f2e105d500", "status": "passed" }
+    ]
+  },
+  "lessons": [
+    "A bounded sparse page must define work by inspected inventory, not by the number of matches returned.",
+    "Last-inspected recurrence cursors make all-nonmatching pages advance without overlapping scans.",
+    "Complete selected-definition replay preserves fail-closed status truth without adding occurrence, lifecycle, clock, or execution authority."
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-kernel/src/scheduler.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/998"
+  },
+  "sanitation": { "passed": true, "blockers": [] },
+  "trust": "curated",
+  "example": { "type": "positive", "rejection_rationale": null }
+}
