@@ -7050,6 +7050,207 @@ fn recurrence_paging_isolates_corruption_outside_the_selected_window() {
 }
 
 #[test]
+fn pages_finite_recurrences_sparsely_by_status_with_scan_cursor_progress() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    for (id, goal) in [
+        ("alpha", "active alpha"),
+        ("bravo", "active bravo"),
+        ("charlie", "cancel \"exactly\""),
+        ("delta", "cancel delta"),
+        ("echo", "cancel later"),
+    ] {
+        store
+            .create(
+                RecurrenceId::new(id).unwrap(),
+                TaskGoal::new(goal).unwrap(),
+                ScheduleInstant::from_unix_millis(10),
+                ScheduleInterval::from_millis(5).unwrap(),
+                OccurrenceCount::new(2).unwrap(),
+            )
+            .unwrap();
+    }
+    for id in ["charlie", "delta", "echo"] {
+        store
+            .cancel(
+                &RecurrenceId::new(id).unwrap(),
+                1,
+                RecurrenceCancellation::new("operator request").unwrap(),
+            )
+            .unwrap();
+    }
+    drop(store);
+
+    let cases = [
+        (None, "{\"recurrences\":[],\"next_after\":\"bravo\"}\n"),
+        (
+            Some("bravo"),
+            concat!(
+                "{\"recurrences\":[",
+                "{\"id\":\"charlie\",\"goal\":\"cancel \\\"exactly\\\"\",\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":2,\"status\":\"cancelled\",\"final_occurrence_unix_millis\":15,\"definition_revision\":1,\"aggregate_revision\":2,\"cancellation\":\"operator request\"},",
+                "{\"id\":\"delta\",\"goal\":\"cancel delta\",\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":2,\"status\":\"cancelled\",\"final_occurrence_unix_millis\":15,\"definition_revision\":1,\"aggregate_revision\":2,\"cancellation\":\"operator request\"}",
+                "],\"next_after\":\"delta\"}\n"
+            ),
+        ),
+        (
+            Some("delta"),
+            "{\"recurrences\":[{\"id\":\"echo\",\"goal\":\"cancel later\",\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":2,\"status\":\"cancelled\",\"final_occurrence_unix_millis\":15,\"definition_revision\":1,\"aggregate_revision\":2,\"cancellation\":\"operator request\"}],\"next_after\":null}\n",
+        ),
+        (
+            Some("coconut"),
+            concat!(
+                "{\"recurrences\":[",
+                "{\"id\":\"delta\",\"goal\":\"cancel delta\",\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":2,\"status\":\"cancelled\",\"final_occurrence_unix_millis\":15,\"definition_revision\":1,\"aggregate_revision\":2,\"cancellation\":\"operator request\"},",
+                "{\"id\":\"echo\",\"goal\":\"cancel later\",\"anchor_unix_millis\":10,\"interval_millis\":5,\"occurrence_count\":2,\"status\":\"cancelled\",\"final_occurrence_unix_millis\":15,\"definition_revision\":1,\"aggregate_revision\":2,\"cancellation\":\"operator request\"}",
+                "],\"next_after\":null}\n"
+            ),
+        ),
+        (Some("zzzz"), "{\"recurrences\":[],\"next_after\":null}\n"),
+    ];
+    for (after, expected) in cases {
+        let mut arguments = vec![
+            "recurrence",
+            "status-page",
+            database.to_str().expect("UTF-8 database path"),
+            "cancelled",
+            "2",
+        ];
+        arguments.extend(after);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args(arguments)
+            .assert()
+            .success()
+            .stdout(expected)
+            .stderr(predicate::str::is_empty());
+    }
+}
+
+#[test]
+fn recurrence_status_paging_validates_before_read_only_storage_access() {
+    let directory = tempdir().expect("recurrence database directory");
+    let empty = directory.path().join("empty.sqlite3");
+    drop(RecurrenceStore::open(&empty).expect("empty recurrence store"));
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "status-page",
+            empty.to_str().expect("UTF-8 database path"),
+            "active",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout("{\"recurrences\":[],\"next_after\":null}\n")
+        .stderr(predicate::str::is_empty());
+
+    let missing = directory.path().join("missing.sqlite3");
+    for (status, scan_size, after, diagnostic) in [
+        ("ACTIVE", "1", None, "$: invalid_recurrence_status:"),
+        ("active", "0", None, "$: invalid_recurrence_page_size:"),
+        ("active", "1025", None, "$: invalid_recurrence_page_size:"),
+        ("active", "1", Some("   "), "$: invalid_recurrence_id:"),
+    ] {
+        let mut arguments = vec![
+            "recurrence",
+            "status-page",
+            missing.to_str().expect("UTF-8 database path"),
+            status,
+            scan_size,
+        ];
+        arguments.extend(after);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args(arguments)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(diagnostic));
+        assert!(!missing.exists());
+    }
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "status-page",
+            missing.to_str().expect("UTF-8 database path"),
+            "active",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::starts_with(
+            "$: recurrence_status_page_inspection_failed:",
+        ));
+    assert!(!missing.exists());
+}
+
+#[test]
+fn recurrence_status_paging_fails_on_selected_lookahead_and_isolates_other_corruption() {
+    let directory = tempdir().expect("recurrence database directory");
+    let database = directory.path().join("events.sqlite3");
+    let mut store = RecurrenceStore::open(&database).expect("writable recurrence store");
+    for id in ["a-corrupt", "b-valid", "c-valid", "d-corrupt"] {
+        store
+            .create(
+                RecurrenceId::new(id).unwrap(),
+                TaskGoal::new("goal").unwrap(),
+                ScheduleInstant::from_unix_millis(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+    }
+    drop(store);
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE events SET payload = X'7B7D' WHERE stream_id IN ('recurrence:a-corrupt', 'recurrence:d-corrupt')",
+            [],
+        )
+        .unwrap();
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "recurrence",
+            "status-page",
+            database.to_str().expect("UTF-8 database path"),
+            "active",
+            "1",
+            "a-corrupt",
+        ])
+        .assert()
+        .success()
+        .stdout("{\"recurrences\":[{\"id\":\"b-valid\",\"goal\":\"goal\",\"anchor_unix_millis\":1,\"interval_millis\":1,\"occurrence_count\":1,\"status\":\"active\",\"final_occurrence_unix_millis\":1,\"definition_revision\":1,\"aggregate_revision\":1,\"cancellation\":null}],\"next_after\":\"b-valid\"}\n")
+        .stderr(predicate::str::is_empty());
+
+    for after in [None, Some("b-valid")] {
+        let mut arguments = vec![
+            "recurrence",
+            "status-page",
+            database.to_str().expect("UTF-8 database path"),
+            "active",
+            "1",
+        ];
+        arguments.extend(after);
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args(arguments)
+            .assert()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::starts_with(
+                "$: recurrence_status_page_inspection_failed:",
+            ));
+    }
+}
+
+#[test]
 fn filters_finite_recurrences_by_exact_lifecycle_status() {
     let directory = tempdir().expect("recurrence database directory");
     let database = directory.path().join("events.sqlite3");

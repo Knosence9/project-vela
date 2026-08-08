@@ -960,6 +960,33 @@ status. The command reads no clock, mutates no lifecycle, and cannot cancel,
 claim, materialize, dispatch, retry, grant permission, or execute work. See
 [ADR-0090](adr/0090-read-only-finite-recurrence-status-cli-filtering.md).
 
+## Read-only bounded sparse recurrence status CLI paging
+
+`vela-dev recurrence status-page DATABASE STATUS SCAN_SIZE [AFTER]` validates
+one exact lowercase lifecycle status, a positive at-most-1024 scan size, and an
+optional exact non-blank recurrence ID before storage access. The optional ID
+is an exclusive caller-owned scan cursor and need not identify an existing
+recurrence. The command opens only the selected existing database read-only and
+delegates bounded selection, complete selected-window replay, filtering, and
+continuation to `RecurrenceStore::list_by_status_page`.
+
+Success emits `{"recurrences":[...],"next_after":...}` with complete matching
+recurrence objects in exact-ID order. The cursor identifies the last inspected
+recurrence when validated lookahead proves more inventory exists, so an
+all-nonmatching page can emit an empty array with a non-null cursor. Terminal,
+empty, and beyond-end windows emit `null`; exact strings remain JSON escaped.
+
+Invalid inputs emit `invalid_recurrence_status`, `invalid_recurrence_page_size`,
+or `invalid_recurrence_id` before storage access. Missing or incompatible
+storage, selected or lookahead corruption, projection, and serialization
+failures emit `recurrence_status_page_inspection_failed` with no partial stdout;
+missing storage is never created. Corruption before the cursor or beyond
+selected lookahead cannot block the page. The command reads no clock, mutates
+nothing, persists no cursor or occurrence, performs no dense-fill scan, and
+grants no lifecycle, worker, claim, materialization, dispatch, retry,
+permission, or execution authority. See
+[ADR-0098](adr/0098-read-only-bounded-sparse-finite-recurrence-status-cli-paging.md).
+
 ## Read-only CLI inspection
 
 `vela-dev schedule inspect DATABASE` opens the exact caller-selected database
