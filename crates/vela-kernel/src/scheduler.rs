@@ -3818,6 +3818,42 @@ impl SchedulePage {
     }
 }
 
+/// One exact schedule identity with its complete validated lifecycle history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduleHistory {
+    id: ScheduleId,
+    entries: Vec<ScheduleHistoryEntry>,
+}
+
+impl ScheduleHistory {
+    pub fn id(&self) -> &ScheduleId {
+        &self.id
+    }
+
+    /// Returns complete lifecycle evidence in exact revision order.
+    pub fn entries(&self) -> &[ScheduleHistoryEntry] {
+        &self.entries
+    }
+}
+
+/// One bounded exact-ID-ordered page of complete schedule histories.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduleHistoryPage {
+    histories: Vec<ScheduleHistory>,
+    next_after: Option<ScheduleId>,
+}
+
+impl ScheduleHistoryPage {
+    pub fn histories(&self) -> &[ScheduleHistory] {
+        &self.histories
+    }
+
+    /// Returns the last emitted exact ID only when another history exists.
+    pub fn next_after(&self) -> Option<&ScheduleId> {
+        self.next_after.as_ref()
+    }
+}
+
 /// One bounded sparse page of schedules matching an exact persisted status.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScheduleStatusPage {
@@ -4163,6 +4199,39 @@ impl ScheduleStore {
                 })
                 .collect(),
         ))
+    }
+
+    /// Returns one bounded exact-ID-ordered page of complete validated histories.
+    pub fn histories_page(
+        &self,
+        after: Option<&ScheduleId>,
+        page_size: SchedulePageSize,
+    ) -> Result<ScheduleHistoryPage, ScheduleStoreError> {
+        let after_stream_id = after.map(schedule_stream);
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_page::<ScheduleEvent>(
+                SCHEDULE_CREATED_EVENT_TYPE,
+                after_stream_id.as_ref().map(StreamId::as_str),
+                page_size.get() as i64 + 1,
+            )
+            .map_err(ScheduleStoreError::Replay)?;
+        let mut histories = Self::project_discovered_histories(streams)?;
+        let has_more = histories.len() > page_size.get() as usize;
+        if has_more {
+            histories.pop();
+        }
+        let next_after = has_more.then(|| {
+            histories
+                .last()
+                .expect("a positive page with lookahead has one returned history")
+                .id()
+                .clone()
+        });
+        Ok(ScheduleHistoryPage {
+            histories,
+            next_after,
+        })
     }
 
     /// Resolves exact schedule provenance for one materialized task without changing lifecycle state.
@@ -4614,6 +4683,36 @@ impl ScheduleStore {
         }
 
         Ok(schedules)
+    }
+
+    fn project_discovered_histories(
+        streams: Vec<(String, Vec<ScheduleEvent>)>,
+    ) -> Result<Vec<ScheduleHistory>, ScheduleStoreError> {
+        let mut histories = Vec::with_capacity(streams.len());
+
+        for (stream_id, events) in streams {
+            let Some(external_id) = stream_id.strip_prefix(SCHEDULE_STREAM_PREFIX) else {
+                return Err(ScheduleStoreError::InvalidStreamId { stream_id });
+            };
+            let id =
+                ScheduleId::new(external_id).map_err(|_| ScheduleStoreError::InvalidStreamId {
+                    stream_id: stream_id.clone(),
+                })?;
+            if Self::project(id.clone(), events.clone())?.is_none() {
+                return Err(ScheduleStoreError::InvalidHistory { event_count: 0 });
+            }
+            let entries = events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| ScheduleHistoryEntry {
+                    revision: index as u64 + 1,
+                    event: ScheduleHistoryEvent::from(event),
+                })
+                .collect();
+            histories.push(ScheduleHistory { id, entries });
+        }
+
+        Ok(histories)
     }
 
     fn project(
