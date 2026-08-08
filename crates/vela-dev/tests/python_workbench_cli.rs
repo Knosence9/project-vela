@@ -100,3 +100,30 @@ fn python_execute_fails_closed_on_non_ok_execution_status() {
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::starts_with("$: python_execution_failed:"));
 }
+
+#[test]
+fn python_execute_honors_a_caller_selected_timeout() {
+    let (_directory, adapter_path) =
+        fake_adapter("import time\ntime.sleep(30)\nprint('{\"status\":\"ok\"}')\n");
+
+    python_command(&adapter_path)
+        .args(["--timeout-seconds", "1"])
+        .write_stdin("40 + 2\n")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("python_execution_failed"));
+}
+
+#[test]
+fn python_execute_rejects_a_zero_output_budget_before_launch() {
+    let (_directory, adapter_path) = fake_adapter("raise SystemExit(99)\n");
+
+    python_command(&adapter_path)
+        .args(["--max-output-bytes", "0"])
+        .write_stdin("40 + 2\n")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("python_request_invalid"));
+}
