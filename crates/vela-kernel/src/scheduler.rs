@@ -1034,6 +1034,50 @@ impl MaterializedRecurrenceOccurrence {
     }
 }
 
+/// One typed opaque continuation coordinate for global materialized-binding discovery.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterializedRecurrenceOccurrenceCursor {
+    recurrence_id: RecurrenceId,
+    offset: u64,
+}
+
+impl MaterializedRecurrenceOccurrenceCursor {
+    /// Creates an exact coordinate without exposing its internal stream-key encoding.
+    pub const fn new(recurrence_id: RecurrenceId, offset: u64) -> Self {
+        Self {
+            recurrence_id,
+            offset,
+        }
+    }
+
+    pub const fn recurrence_id(&self) -> &RecurrenceId {
+        &self.recurrence_id
+    }
+
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+}
+
+/// One bounded global page of complete materialized recurrence bindings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GlobalMaterializedRecurrenceOccurrencePage {
+    occurrences: Vec<MaterializedRecurrenceOccurrence>,
+    next_after: Option<MaterializedRecurrenceOccurrenceCursor>,
+}
+
+impl GlobalMaterializedRecurrenceOccurrencePage {
+    /// Returns bindings in deterministic opaque cursor order.
+    pub fn occurrences(&self) -> &[MaterializedRecurrenceOccurrence] {
+        &self.occurrences
+    }
+
+    /// Returns the last emitted coordinate only when validated lookahead exists.
+    pub const fn next_after(&self) -> Option<&MaterializedRecurrenceOccurrenceCursor> {
+        self.next_after.as_ref()
+    }
+}
+
 /// One bounded selection that may atomically bind the next available due occurrence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterializeNextRecurrenceOccurrenceSelection {
@@ -1977,35 +2021,7 @@ impl RecurrenceStore {
             .map_err(RecurrenceStoreError::Replay)?;
         let mut matches = Vec::with_capacity(streams.len());
         for (stream_id, events) in streams {
-            let Some((id, offset)) = parse_recurrence_occurrence_stream(&stream_id) else {
-                return Err(RecurrenceStoreError::InvalidStreamId { stream_id });
-            };
-            let Some(recurrence) = self.load(&id)? else {
-                return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
-                    recurrence_id: id,
-                    offset,
-                    event_count: events.len(),
-                });
-            };
-            let Some(state) = Self::project_occurrence_state(&recurrence, offset, &events)? else {
-                return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
-                    recurrence_id: id,
-                    offset,
-                    event_count: events.len(),
-                });
-            };
-            let Some(bound_task_id) = state.task_id else {
-                return Err(RecurrenceStoreError::InvalidOccurrenceHistory {
-                    recurrence_id: id,
-                    offset,
-                    event_count: events.len(),
-                });
-            };
-            matches.push(MaterializedRecurrenceOccurrence {
-                occurrence: state.occurrence,
-                revision: state.revision,
-                task_id: bound_task_id,
-            });
+            matches.push(self.project_materialized_occurrence_stream(stream_id, &events)?);
         }
         if matches.len() > 1 {
             return Err(RecurrenceStoreError::AmbiguousTaskBinding {
@@ -2014,6 +2030,30 @@ impl RecurrenceStore {
             });
         }
         Ok(matches.pop())
+    }
+
+    fn project_materialized_occurrence_stream(
+        &self,
+        stream_id: String,
+        events: &[RecurrenceOccurrenceEvent],
+    ) -> Result<MaterializedRecurrenceOccurrence, RecurrenceStoreError> {
+        let Some((id, offset)) = parse_recurrence_occurrence_stream(&stream_id) else {
+            return Err(RecurrenceStoreError::InvalidStreamId { stream_id });
+        };
+        let invalid_history = || RecurrenceStoreError::InvalidOccurrenceHistory {
+            recurrence_id: id.clone(),
+            offset,
+            event_count: events.len(),
+        };
+        let recurrence = self.load(&id)?.ok_or_else(&invalid_history)?;
+        let state = Self::project_occurrence_state(&recurrence, offset, events)?
+            .ok_or_else(&invalid_history)?;
+        let task_id = state.task_id.ok_or_else(invalid_history)?;
+        Ok(MaterializedRecurrenceOccurrence {
+            occurrence: state.occurrence,
+            revision: state.revision,
+            task_id,
+        })
     }
 
     /// Atomically consumes one exact claimed occurrence into a caller-owned task.
@@ -2817,6 +2857,48 @@ impl RecurrenceStore {
         Ok(MaterializedRecurrenceOccurrencePage {
             occurrences,
             next_offset: authored_page.next_offset(),
+        })
+    }
+
+    /// Pages complete materialized bindings globally in deterministic opaque cursor order.
+    pub fn materialized_occurrences_global_page(
+        &self,
+        after: Option<&MaterializedRecurrenceOccurrenceCursor>,
+        page_size: OccurrencePageSize,
+    ) -> Result<GlobalMaterializedRecurrenceOccurrencePage, RecurrenceStoreError> {
+        let after_stream = after
+            .map(|cursor| recurrence_occurrence_stream(cursor.recurrence_id(), cursor.offset()));
+        let limit = i64::try_from(page_size.get() + 1)
+            .expect("bounded occurrence page lookahead fits an i64");
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_page::<RecurrenceOccurrenceEvent>(
+                RECURRENCE_OCCURRENCE_MATERIALIZED_EVENT_TYPE,
+                after_stream.as_ref().map(StreamId::as_str),
+                limit,
+            )
+            .map_err(RecurrenceStoreError::Replay)?;
+        let mut occurrences = Vec::with_capacity(streams.len());
+        for (stream_id, events) in streams {
+            occurrences.push(self.project_materialized_occurrence_stream(stream_id, &events)?);
+        }
+
+        let has_more = occurrences.len() > page_size.get() as usize;
+        if has_more {
+            occurrences.pop();
+        }
+        let next_after = has_more.then(|| {
+            let last = occurrences
+                .last()
+                .expect("positive page size with lookahead has an emitted binding");
+            MaterializedRecurrenceOccurrenceCursor::new(
+                last.occurrence().recurrence_id().clone(),
+                last.occurrence().offset(),
+            )
+        });
+        Ok(GlobalMaterializedRecurrenceOccurrencePage {
+            occurrences,
+            next_after,
         })
     }
 

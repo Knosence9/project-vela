@@ -2,11 +2,11 @@ use tempfile::tempdir;
 use vela_kernel::{
     event_log::ReplayError,
     scheduler::{
-        OccurrenceCount, OccurrencePageSize, OccurrencePageSizeError, RecurrenceCancellation,
-        RecurrenceHistoryEvent, RecurrenceId, RecurrenceOccurrenceHistoryEvent,
-        RecurrenceOccurrenceLookupError, RecurrenceOccurrenceRelease, RecurrencePageSize,
-        RecurrencePageSizeError, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
-        ScheduleInstant, ScheduleInterval,
+        MaterializedRecurrenceOccurrenceCursor, OccurrenceCount, OccurrencePageSize,
+        OccurrencePageSizeError, RecurrenceCancellation, RecurrenceHistoryEvent, RecurrenceId,
+        RecurrenceOccurrenceHistoryEvent, RecurrenceOccurrenceLookupError,
+        RecurrenceOccurrenceRelease, RecurrencePageSize, RecurrencePageSizeError, RecurrenceStatus,
+        RecurrenceStore, RecurrenceStoreError, ScheduleInstant, ScheduleInterval,
     },
     task::{TaskGoal, TaskId, TaskStore},
 };
@@ -6064,6 +6064,248 @@ fn materialized_occurrence_pages_fail_closed_only_for_the_selected_window() {
             .unwrap_err(),
         RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
     ));
+}
+
+#[test]
+fn pages_global_materialized_bindings_with_an_opaque_exclusive_cursor() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let short_id = RecurrenceId::new("a").unwrap();
+    let separator_id = RecurrenceId::new("bbb:scope").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    for id in [&short_id, &separator_id] {
+        store
+            .create(
+                id.clone(),
+                TaskGoal::new(format!("Audit binding {id}")).unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(11).unwrap(),
+            )
+            .unwrap();
+    }
+    for (id, offset, task_id) in [
+        (&short_id, 2, "short-two"),
+        (&short_id, 10, "short-ten"),
+        (&separator_id, 0, "separator-zero"),
+    ] {
+        store.persist_occurrence(id, 1, offset).unwrap();
+        store
+            .materialize_occurrence(id, offset, 1, TaskId::new(task_id).unwrap())
+            .unwrap();
+    }
+    drop(store);
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let first = store
+        .materialized_occurrences_global_page(None, OccurrencePageSize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(
+        first
+            .occurrences()
+            .iter()
+            .map(|binding| (
+                binding.occurrence().recurrence_id().as_str(),
+                binding.occurrence().offset(),
+                binding.task_id().as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![("a", 10, "short-ten"), ("a", 2, "short-two")]
+    );
+    let cursor = first.next_after().unwrap();
+    assert_eq!(cursor.recurrence_id(), &short_id);
+    assert_eq!(cursor.offset(), 2);
+
+    let final_page = store
+        .materialized_occurrences_global_page(Some(cursor), OccurrencePageSize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(
+        final_page
+            .occurrences()
+            .iter()
+            .map(|binding| (
+                binding.occurrence().recurrence_id().as_str(),
+                binding.occurrence().offset(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![("bbb:scope", 0)]
+    );
+    assert_eq!(final_page.next_after(), None);
+}
+
+#[test]
+fn global_materialized_binding_pages_are_empty_and_accept_exact_typed_cursors() {
+    let directory = tempdir().unwrap();
+    let store = RecurrenceStore::open(directory.path().join("events.sqlite3")).unwrap();
+    let after = MaterializedRecurrenceOccurrenceCursor::new(
+        RecurrenceId::new("not-present").unwrap(),
+        u64::MAX,
+    );
+
+    let page = store
+        .materialized_occurrences_global_page(Some(&after), OccurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert!(page.occurrences().is_empty());
+    assert_eq!(page.next_after(), None);
+}
+
+#[test]
+fn global_materialized_binding_pages_validate_lookahead_and_isolate_other_windows() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("events.sqlite3");
+    let id = RecurrenceId::new("global-materialized-corruption").unwrap();
+    let mut store = RecurrenceStore::open(&path).unwrap();
+    store
+        .create(
+            id.clone(),
+            TaskGoal::new("Audit bounded corruption").unwrap(),
+            instant(1),
+            ScheduleInterval::from_millis(1).unwrap(),
+            OccurrenceCount::new(4).unwrap(),
+        )
+        .unwrap();
+    for offset in 0..4 {
+        store.persist_occurrence(&id, 1, offset).unwrap();
+        store
+            .materialize_occurrence(
+                &id,
+                offset,
+                1,
+                TaskId::new(format!("global-corrupt-{offset}")).unwrap(),
+            )
+            .unwrap();
+    }
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE events SET payload_version = 2
+                 WHERE event_type = 'recurrence.occurrence_materialized'
+                   AND json_extract(CAST(payload AS TEXT), '$.task_id') = 'global-corrupt-2'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .execute(
+                "INSERT INTO events
+                 (stream_id, stream_version, event_type, payload_version, payload)
+                 VALUES ('unrelated:corrupt', 1, 'unrelated.corrupt', 1, X'FF')",
+                [],
+            )
+            .unwrap(),
+        1
+    );
+    drop(connection);
+
+    let store = RecurrenceStore::open_read_only(&path).unwrap();
+    let before_lookahead = store
+        .materialized_occurrences_global_page(None, OccurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(before_lookahead.occurrences()[0].occurrence().offset(), 0);
+    assert_eq!(before_lookahead.next_after().unwrap().offset(), 0);
+    assert!(matches!(
+        store
+            .materialized_occurrences_global_page(None, OccurrencePageSize::new(2).unwrap())
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+    let selected_after = MaterializedRecurrenceOccurrenceCursor::new(id.clone(), 1);
+    assert!(matches!(
+        store
+            .materialized_occurrences_global_page(
+                Some(&selected_after),
+                OccurrencePageSize::new(1).unwrap(),
+            )
+            .unwrap_err(),
+        RecurrenceStoreError::Replay(ReplayError::UnsupportedEvent { .. })
+    ));
+
+    let after = MaterializedRecurrenceOccurrenceCursor::new(id.clone(), 2);
+    let isolated = store
+        .materialized_occurrences_global_page(Some(&after), OccurrencePageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(isolated.occurrences().len(), 1);
+    assert_eq!(isolated.occurrences()[0].occurrence().offset(), 3);
+    assert_eq!(isolated.next_after(), None);
+}
+
+#[test]
+fn global_materialized_binding_pages_reject_missing_definitions_and_invalid_stream_ids() {
+    for invalid_stream_id in [false, true] {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("events.sqlite3");
+        let id = RecurrenceId::new(if invalid_stream_id {
+            "global-invalid-stream"
+        } else {
+            "global-missing-definition"
+        })
+        .unwrap();
+        let mut store = RecurrenceStore::open(&path).unwrap();
+        store
+            .create(
+                id.clone(),
+                TaskGoal::new("Reject invalid global provenance").unwrap(),
+                instant(1),
+                ScheduleInterval::from_millis(1).unwrap(),
+                OccurrenceCount::new(1).unwrap(),
+            )
+            .unwrap();
+        store.persist_occurrence(&id, 1, 0).unwrap();
+        store
+            .materialize_occurrence(&id, 0, 1, TaskId::new("global-invalid-task").unwrap())
+            .unwrap();
+        drop(store);
+
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        if invalid_stream_id {
+            assert_eq!(
+                connection
+                    .execute(
+                        "UPDATE events SET stream_id = 'recurrence-occurrence:invalid'
+                         WHERE stream_id LIKE 'recurrence-occurrence:%'",
+                        [],
+                    )
+                    .unwrap(),
+                2
+            );
+        } else {
+            assert_eq!(
+                connection
+                    .execute(
+                        "DELETE FROM events WHERE stream_id = ?1",
+                        [format!("recurrence:{id}")],
+                    )
+                    .unwrap(),
+                1
+            );
+        }
+        drop(connection);
+
+        let error = RecurrenceStore::open_read_only(&path)
+            .unwrap()
+            .materialized_occurrences_global_page(None, OccurrencePageSize::new(1).unwrap())
+            .unwrap_err();
+        if invalid_stream_id {
+            assert!(matches!(
+                error,
+                RecurrenceStoreError::InvalidStreamId { .. }
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                RecurrenceStoreError::InvalidOccurrenceHistory {
+                    recurrence_id,
+                    offset: 0,
+                    ..
+                } if recurrence_id == id
+            ));
+        }
+    }
 }
 
 #[test]
