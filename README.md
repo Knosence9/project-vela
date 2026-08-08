@@ -132,9 +132,11 @@ printf '%s\n' '40 + 2' | nix develop --command cargo run --locked -p vela-dev --
 See [`docs/python-workbench.md`](docs/python-workbench.md) for the trust boundary,
 current limitations, and stateful two-invocation example.
 
-The first Emacs-facing slice exposes a model-neutral, read-only capability and
-context protocol plus a human-readable interface buffer. It does not drive the
-UI, evaluate arbitrary Emacs Lisp, or provide mutation or transport authority.
+The Emacs-facing slice exposes a model-neutral, read-only capability and context
+protocol plus a human-readable interface buffer. Buffer snapshots identify
+live narrowing through observational accessibility bounds without exposing
+text or widening the source buffer. The interface does not drive the UI,
+evaluate arbitrary Emacs Lisp, or provide mutation or transport authority.
 See [`docs/emacs-agent-interface.md`](docs/emacs-agent-interface.md) for the
 protocol, execution boundary, and batch verification contract.
 

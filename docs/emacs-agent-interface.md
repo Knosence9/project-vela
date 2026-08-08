@@ -2,7 +2,7 @@
 
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md).
+The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md).
 
 ## Load and open
 
@@ -21,13 +21,13 @@ M-x vela-agent-interface-open
 
 The resulting `*Vela Agent Interface*` buffer uses `vela-agent-interface-mode`, is read-only, and displays the structured context an agent receives. Press `g` to refresh it and `q` to close its window.
 
-## Protocol version 1
+## Protocol version 2
 
 The in-process dispatcher accepts JSON-compatible alists. A future local transport can encode the same request and response shapes without changing the semantic operations.
 
 List operations and native Emacs feature availability. Each feature identifies
 its exposed `context_section`; null means a callable facility is cataloged but
-is not exposed by protocol version 1. Discovery uses constant-time function
+is not exposed by the current protocol. Discovery uses constant-time function
 bindings and never scans `load-path`:
 
 ```elisp
@@ -43,7 +43,15 @@ Read explicitly selected context:
    ("include" . ["buffer" "org"])))
 ```
 
-Buffer context includes name, optional file, major mode, modified status, point, line, column, and active-region bounds. Org context uses native Org APIs to expose the current heading ID, title, level, TODO keyword, tags, outline path, and source-block name, language, and source digest. It does not return source contents implicitly.
+Buffer context includes name, optional file, major mode, modified status, point,
+line, column, active-region bounds, and the current accessibility restriction.
+Restriction `start` is Emacs's 1-based `point-min`, `end` is the exclusive
+`point-max`, and `narrowed` identifies whether those bounds exclude part of the
+buffer. Snapshotting never widens the source buffer. These bounds are
+observational metadata, expose no text, and cannot authorize a delayed edit.
+Org context uses native Org APIs to expose the current heading ID, title, level,
+TODO keyword, tags, outline path, and source-block name, language, and source
+digest. It does not return source contents implicitly.
 
 Every context request fails closed when the source buffer exceeds 1,048,576
 characters. This cap bounds native line and Org traversal, source extraction,
