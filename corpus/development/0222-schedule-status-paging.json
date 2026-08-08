@@ -41,6 +41,7 @@
   "lessons": [
     "Sparse filtering must advance from the last inspected ID rather than the last emitted match so empty pages cannot stall.",
     "The lookahead must be canonically replayed before it can prove continuation; corruption beyond that bounded window remains isolated.",
+    "Independent review found that the exact-ID ordering contract needed explicit regression coverage; the store test was extended to assert the complete emitted match order.",
     "The projection reads persisted status only and adds no clock, cursor persistence, mutation, dispatch, permission, or execution authority."
   ],
   "provenance": {

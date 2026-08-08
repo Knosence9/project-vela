@@ -41,6 +41,7 @@
   "lessons": [
     "Caller-owned filters, bounds, and cursors belong before storage access while continuation truth remains kernel-owned.",
     "An empty schedules array with non-null next_after is valid progress, not terminal evidence.",
+    "Independent review found that deterministic output needed explicit ordering and JSON-escaping regressions; the CLI tests were extended to assert both contracts.",
     "The adapter adds no ambient clock, persisted cursor, lifecycle mutation, dispatch, permission, or execution authority."
   ],
   "provenance": {

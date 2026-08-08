@@ -20,7 +20,7 @@
       "summary": "Implemented and refactored the bounded kernel slice.",
       "outcome": "success",
       "diagnostic": "Implemented bounded exact-ID stream selection, complete selected-window replay, pending and inclusive-cutoff filtering, and last-inspected continuation.",
-      "patch": "Implemented issue 1001 in crates/vela-kernel/src/scheduler.rs with store tests, ADR-0099, and scheduler documentation; independent review hardening was batched before commit."
+      "patch": "Implemented issue 1001 in crates/vela-kernel/src/scheduler.rs with store tests, ADR-0099, and scheduler documentation; independent review identified missing fail-closed lookahead-corruption coverage, which was added before commit."
     },
     {
       "summary": "Completed substantive exact-head review.",
@@ -41,6 +41,7 @@
   "lessons": [
     "A dense due-result page cannot honestly bound work when future or non-pending schedules may be arbitrarily sparse.",
     "Exact-ID scan order provides bounded fail-closed paging but intentionally differs from complete list_due ordering by due instant then ID.",
+    "Independent review found that continuation relied on an untested lookahead-validation boundary; the corruption regression was extended to prove malformed lookahead fails closed while evidence beyond the bounded window remains isolated.",
     "Arbitrary u64 due instants in JSON payloads require a separate indexed-schema and migration decision before due-instant keyset paging.",
     "The boundary reads no clock and adds no persisted cursor, claim, materialization, dispatch, permission, or execution authority."
   ],
