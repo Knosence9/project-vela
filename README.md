@@ -756,6 +756,7 @@ The first milestone is the **evidence loop**:
 164. Page complete recurrence occurrence histories through bounded deterministic CLI JSON without granting global discovery, lifecycle, or execution authority. ✅
 165. Page complete one-shot schedule lifecycle histories through bounded exact-ID windows without granting lifecycle or execution authority. ✅
 166. Page complete one-shot schedule lifecycle histories through bounded deterministic CLI JSON without granting lifecycle or execution authority. ✅
+167. Page complete finite recurrence lifecycle histories through bounded exact-ID windows without granting lifecycle or execution authority. ✅
 
 ## Project documents
 

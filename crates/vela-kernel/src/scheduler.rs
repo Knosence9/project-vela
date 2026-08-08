@@ -589,6 +589,42 @@ impl RecurrenceHistoryEntry {
     }
 }
 
+/// One exact recurrence identity with its complete validated lifecycle history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceHistory {
+    id: RecurrenceId,
+    entries: Vec<RecurrenceHistoryEntry>,
+}
+
+impl RecurrenceHistory {
+    pub fn id(&self) -> &RecurrenceId {
+        &self.id
+    }
+
+    /// Returns complete lifecycle evidence in exact revision order.
+    pub fn entries(&self) -> &[RecurrenceHistoryEntry] {
+        &self.entries
+    }
+}
+
+/// One bounded exact-ID-ordered page of complete recurrence histories.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurrenceHistoryPage {
+    histories: Vec<RecurrenceHistory>,
+    next_after: Option<RecurrenceId>,
+}
+
+impl RecurrenceHistoryPage {
+    pub fn histories(&self) -> &[RecurrenceHistory] {
+        &self.histories
+    }
+
+    /// Returns the last emitted exact ID only when another history exists.
+    pub fn next_after(&self) -> Option<&RecurrenceId> {
+        self.next_after.as_ref()
+    }
+}
+
 /// One validated persisted transition in an exact recurrence occurrence's lifecycle.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -1466,6 +1502,39 @@ impl RecurrenceStore {
                 })
                 .collect(),
         ))
+    }
+
+    /// Returns one bounded exact-ID-ordered page of complete validated histories.
+    pub fn histories_page(
+        &self,
+        after: Option<&RecurrenceId>,
+        page_size: RecurrencePageSize,
+    ) -> Result<RecurrenceHistoryPage, RecurrenceStoreError> {
+        let after_stream_id = after.map(recurrence_stream);
+        let streams = self
+            .event_log
+            .replay_streams_with_event_type_page::<RecurrenceEvent>(
+                RECURRENCE_CREATED_EVENT_TYPE,
+                after_stream_id.as_ref().map(StreamId::as_str),
+                page_size.get() as i64 + 1,
+            )
+            .map_err(RecurrenceStoreError::Replay)?;
+        let mut histories = Self::project_discovered_histories(streams)?;
+        let has_more = histories.len() > page_size.get() as usize;
+        if has_more {
+            histories.pop();
+        }
+        let next_after = has_more.then(|| {
+            histories
+                .last()
+                .expect("a positive page with lookahead has one returned history")
+                .id()
+                .clone()
+        });
+        Ok(RecurrenceHistoryPage {
+            histories,
+            next_after,
+        })
     }
 
     /// Returns complete validated lifecycle evidence for one exact occurrence coordinate.
@@ -3361,6 +3430,37 @@ impl RecurrenceStore {
         }
 
         Ok(recurrences)
+    }
+
+    fn project_discovered_histories(
+        streams: Vec<(String, Vec<RecurrenceEvent>)>,
+    ) -> Result<Vec<RecurrenceHistory>, RecurrenceStoreError> {
+        let mut histories = Vec::with_capacity(streams.len());
+
+        for (stream_id, events) in streams {
+            let Some(external_id) = stream_id.strip_prefix(RECURRENCE_STREAM_PREFIX) else {
+                return Err(RecurrenceStoreError::InvalidStreamId { stream_id });
+            };
+            let id = RecurrenceId::new(external_id).map_err(|_| {
+                RecurrenceStoreError::InvalidStreamId {
+                    stream_id: stream_id.clone(),
+                }
+            })?;
+            if Self::project(id.clone(), events.clone())?.is_none() {
+                return Err(RecurrenceStoreError::InvalidHistory { event_count: 0 });
+            }
+            let entries = events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| RecurrenceHistoryEntry {
+                    revision: index as u64 + 1,
+                    event: RecurrenceHistoryEvent::from(event),
+                })
+                .collect();
+            histories.push(RecurrenceHistory { id, entries });
+        }
+
+        Ok(histories)
     }
 
     fn project(
