@@ -18,8 +18,9 @@ use vela_kernel::scheduler::{
     RecurrenceOccurrenceHistoryEntry, RecurrenceOccurrenceHistoryEvent,
     RecurrenceOccurrenceLookupError, RecurrenceOccurrencePage, RecurrenceOccurrenceRelease,
     RecurrencePageSize, RecurrenceStatus, RecurrenceStore, RecurrenceStoreError,
-    ScheduleCancellation, ScheduleHistoryEvent, ScheduleId, ScheduleInstant, ScheduleInterval,
-    SchedulePageSize, ScheduleRelease, ScheduleStatus, ScheduleStore, ScheduledTask,
+    ScheduleCancellation, ScheduleHistoryEntry, ScheduleHistoryEvent, ScheduleId, ScheduleInstant,
+    ScheduleInterval, SchedulePageSize, ScheduleRelease, ScheduleStatus, ScheduleStore,
+    ScheduledTask,
 };
 use vela_kernel::task::{TaskGoal, TaskId};
 use vela_kernel::tool::{
@@ -351,6 +352,12 @@ pub enum ScheduleCommand {
     },
     /// Print one exact schedule's validated lifecycle history.
     History { database: PathBuf, id: String },
+    /// Page complete schedule lifecycle histories through a read-only boundary.
+    Histories {
+        database: PathBuf,
+        page_size: u64,
+        after: Option<String>,
+    },
     /// Resolve one materialized schedule from an exact task identity.
     Task { database: PathBuf, task_id: String },
 }
@@ -508,6 +515,14 @@ impl Cli {
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::History { database, id }),
             }) => inspect_schedule_history(&database, &id),
+            Some(Command::Schedule {
+                command:
+                    Some(ScheduleCommand::Histories {
+                        database,
+                        page_size,
+                        after,
+                    }),
+            }) => page_schedule_histories(&database, page_size, after.as_deref()),
             Some(Command::Schedule {
                 command: Some(ScheduleCommand::Task { database, task_id }),
             }) => inspect_schedule_task(&database, &task_id),
@@ -1107,6 +1122,12 @@ struct ScheduleHistoryInspection<'a> {
 }
 
 #[derive(Serialize)]
+struct ScheduleHistoryPageInspection<'a> {
+    histories: Vec<ScheduleHistoryInspection<'a>>,
+    next_after: Option<&'a str>,
+}
+
+#[derive(Serialize)]
 struct ScheduleHistoryEntryInspection<'a> {
     revision: u64,
     #[serde(flatten)]
@@ -1364,48 +1385,13 @@ fn inspect_schedule_history(database: &Path, raw_id: &str) -> ExitCode {
         Ok(history) => history,
         Err(error) => return extension_error("schedule_history_failed", error),
     };
-    let history = match history.as_ref() {
-        None => None,
-        Some(entries) => {
-            let mut output = Vec::with_capacity(entries.len());
-            for entry in entries {
-                let event = match entry.event() {
-                    ScheduleHistoryEvent::Created { goal, due_at } => {
-                        ScheduleHistoryEventInspection::Created {
-                            goal: goal.as_str(),
-                            due_at_unix_millis: due_at.unix_millis(),
-                        }
-                    }
-                    ScheduleHistoryEvent::Cancelled { reason } => {
-                        ScheduleHistoryEventInspection::Cancelled {
-                            reason: reason.as_str(),
-                        }
-                    }
-                    ScheduleHistoryEvent::Claimed => ScheduleHistoryEventInspection::Claimed,
-                    ScheduleHistoryEvent::Released { reason } => {
-                        ScheduleHistoryEventInspection::Released {
-                            reason: reason.as_str(),
-                        }
-                    }
-                    ScheduleHistoryEvent::Materialized { task_id } => {
-                        ScheduleHistoryEventInspection::Materialized {
-                            task_id: task_id.as_str(),
-                        }
-                    }
-                    _ => {
-                        return extension_error(
-                            "schedule_history_failed",
-                            "unsupported schedule history event",
-                        );
-                    }
-                };
-                output.push(ScheduleHistoryEntryInspection {
-                    revision: entry.revision(),
-                    event,
-                });
-            }
-            Some(output)
-        }
+    let history = match history
+        .as_deref()
+        .map(inspect_schedule_history_entries)
+        .transpose()
+    {
+        Ok(history) => history,
+        Err(error) => return extension_error("schedule_history_failed", error),
     };
     let output = match serde_json::to_string(&ScheduleHistoryInspection {
         id: id.as_str(),
@@ -1416,6 +1402,91 @@ fn inspect_schedule_history(database: &Path, raw_id: &str) -> ExitCode {
     };
     println!("{output}");
     ExitCode::SUCCESS
+}
+
+fn page_schedule_histories(
+    database: &Path,
+    raw_page_size: u64,
+    raw_after: Option<&str>,
+) -> ExitCode {
+    let page_size = match SchedulePageSize::new(raw_page_size) {
+        Ok(page_size) => page_size,
+        Err(error) => return extension_error("invalid_schedule_page_size", error),
+    };
+    let after = match raw_after.map(ScheduleId::new).transpose() {
+        Ok(after) => after,
+        Err(error) => return extension_error("invalid_schedule_id", error),
+    };
+    let store = match ScheduleStore::open_read_only(database) {
+        Ok(store) => store,
+        Err(error) => return extension_error("schedule_history_page_inspection_failed", error),
+    };
+    let page = match store.histories_page(after.as_ref(), page_size) {
+        Ok(page) => page,
+        Err(error) => return extension_error("schedule_history_page_inspection_failed", error),
+    };
+    let histories = match page
+        .histories()
+        .iter()
+        .map(|history| {
+            Ok(ScheduleHistoryInspection {
+                id: history.id().as_str(),
+                history: Some(inspect_schedule_history_entries(history.entries())?),
+            })
+        })
+        .collect::<Result<Vec<_>, &'static str>>()
+    {
+        Ok(histories) => histories,
+        Err(error) => return extension_error("schedule_history_page_inspection_failed", error),
+    };
+    let output = match serde_json::to_string(&ScheduleHistoryPageInspection {
+        histories,
+        next_after: page.next_after().map(ScheduleId::as_str),
+    }) {
+        Ok(output) => output,
+        Err(error) => return extension_error("schedule_history_page_inspection_failed", error),
+    };
+    println!("{output}");
+    ExitCode::SUCCESS
+}
+
+fn inspect_schedule_history_entries(
+    entries: &[ScheduleHistoryEntry],
+) -> Result<Vec<ScheduleHistoryEntryInspection<'_>>, &'static str> {
+    entries
+        .iter()
+        .map(|entry| {
+            let event = match entry.event() {
+                ScheduleHistoryEvent::Created { goal, due_at } => {
+                    ScheduleHistoryEventInspection::Created {
+                        goal: goal.as_str(),
+                        due_at_unix_millis: due_at.unix_millis(),
+                    }
+                }
+                ScheduleHistoryEvent::Cancelled { reason } => {
+                    ScheduleHistoryEventInspection::Cancelled {
+                        reason: reason.as_str(),
+                    }
+                }
+                ScheduleHistoryEvent::Claimed => ScheduleHistoryEventInspection::Claimed,
+                ScheduleHistoryEvent::Released { reason } => {
+                    ScheduleHistoryEventInspection::Released {
+                        reason: reason.as_str(),
+                    }
+                }
+                ScheduleHistoryEvent::Materialized { task_id } => {
+                    ScheduleHistoryEventInspection::Materialized {
+                        task_id: task_id.as_str(),
+                    }
+                }
+                _ => return Err("unsupported schedule history event"),
+            };
+            Ok(ScheduleHistoryEntryInspection {
+                revision: entry.revision(),
+                event,
+            })
+        })
+        .collect()
 }
 
 fn inspect_schedules(database: &Path, cutoff_unix_millis: Option<u64>) -> ExitCode {

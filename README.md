@@ -328,6 +328,21 @@ claim, release, cancellation, and materialization evidence. A valid missing ID
 is represented by `"history":null`; invalid IDs fail before storage is opened.
 History inspection opens storage read-only and cannot mutate or execute work.
 
+Page complete one-shot schedule histories through one bounded exact-ID window:
+
+```bash
+nix develop --command cargo run --locked -p vela-dev -- schedule histories path/to/events.sqlite3 100 optional-exclusive-after-id
+```
+
+The positive page size is capped at 1024, and the optional exact ID need not
+exist. Success emits exact-ID-ordered complete revision histories plus
+`next_after`, which names the last emitted ID only when validated lookahead
+proves another history exists. Empty and beyond-end pages are terminal.
+Validation precedes read-only storage access; selected or lookahead corruption
+fails without partial JSON, while corruption outside that bounded window is
+isolated. The command does not create storage, persist a cursor, page events
+within one history, mutate lifecycle state, dispatch, or execute work.
+
 Resolve the exact materialized schedule bound to one caller-owned task identity:
 
 ```bash
@@ -740,6 +755,7 @@ The first milestone is the **evidence loop**:
 163. Page complete recurrence occurrence histories through bounded authored-offset windows without granting global discovery, lifecycle, or execution authority. ✅
 164. Page complete recurrence occurrence histories through bounded deterministic CLI JSON without granting global discovery, lifecycle, or execution authority. ✅
 165. Page complete one-shot schedule lifecycle histories through bounded exact-ID windows without granting lifecycle or execution authority. ✅
+166. Page complete one-shot schedule lifecycle histories through bounded deterministic CLI JSON without granting lifecycle or execution authority. ✅
 
 ## Project documents
 
