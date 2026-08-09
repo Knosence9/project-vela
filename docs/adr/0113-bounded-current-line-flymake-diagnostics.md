@@ -22,7 +22,7 @@ The section is an ordered vector. Vela asks native `flymake-diagnostics` only fo
 - `type`: the bounded diagnostic type name without a keyword prefix; and
 - `text`: the bounded native diagnostic text.
 
-Results are sorted deterministically by start, end, type, and text. At most 128 diagnostics are accepted. Every diagnostic must belong to the current buffer, intersect the requested accessible line, remain within the current restriction, and provide valid integer bounds, a symbol type, and bounded string text. Flymake's valid zero-width point diagnostics belong to the line containing that position, including the accessible end position of a final line. Marker bounds must also belong to the current buffer. Wider, improper, cross-buffer, inaccessible, or malformed native results fail closed. The complete source buffer remains subject to the existing 1,048,576-character synchronous snapshot cap.
+Results are sorted deterministically by start, end, type, and text. At most 128 diagnostics are accepted. Every diagnostic must belong to the current buffer, intersect the requested accessible line, remain within the current restriction, and provide valid non-empty integer bounds, a symbol type, and bounded string text. Zero-width diagnostics are rejected because Emacs 30.1 removes their overlays before `flymake-diagnostics` can publish them; the protocol does not promise mocked state that the native API cannot expose. Marker bounds must also belong to the current buffer. The serialized diagnostic items share a 131,072-character aggregate budget in addition to the 8,192-character per-string bound. Wider, improper, cross-buffer, inaccessible, aggregate-oversized, or malformed native results fail closed. The complete source buffer remains subject to the existing 1,048,576-character synchronous snapshot cap, and the encoder node bound admits a complete four-section response containing 128 diagnostics.
 
 The dispatcher reads only Flymake state already published in the current buffer. It does not enable Flymake, start or refresh a backend, wait for results, expose backend objects, propose fixes, read files, or run processes. Extraction remains on the editor-owner thread and preserves point, mark, narrowing, text and properties, modification state and tick, undo state, and match data.
 
@@ -56,7 +56,7 @@ Rejected because counts omit the exact location and message needed to understand
 
 ## Verification
 
-- ERT covers protocol and capability metadata, current-line range dispatch, deterministic shape and ordering, empty state, bounds and metadata failures, request width, and preservation of live editor state.
+- ERT covers protocol and capability metadata, current-line range dispatch, deterministic shape and ordering, empty state, bounds and metadata failures, aggregate diagnostic output, the complete four-section node boundary, request width, and preservation of live editor state.
 - Byte compilation treats warnings as errors.
 - The repository-wide `just verify` gate remains authoritative.
 

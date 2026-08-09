@@ -95,7 +95,11 @@ Diagnostics context reads already-published native Flymake findings that
 intersect the current accessible line. It returns at most 128 items, ordered by
 start, exclusive end, type, and text. Each item contains those four fields;
 positions use Emacs-native 1-based coordinates and text is capped at 8,192
-characters. Empty or not-yet-published state is an empty vector. Snapshotting
+characters. Spans must be non-empty because Emacs 30.1 removes zero-width
+Flymake overlays before `flymake-diagnostics` can publish them. The encoded
+diagnostic items also share a 131,072-character aggregate budget, so repeated
+individually valid messages cannot exceed the finite response envelope. Empty
+or not-yet-published state is an empty vector. Snapshotting
 does not enable Flymake, start or refresh a backend, wait for results, expose
 backend objects or fixes, widen the buffer, read files, or run processes.
 Results can become stale immediately and should be correlated with the buffer
@@ -108,7 +112,8 @@ serializer so object order follows the deterministic protocol alist order.
 Live buffer, Org heading, tag, outline, source-block name, and language strings
 are capped at 8,192 characters; Org collections are capped at 128 items. The
 encoder independently caps string length, collection width, nesting depth,
-value-node count, and total output; cyclic response values fail closed.
+value-node count, and total output; the node bound admits the largest legal
+four-section shape with 128 diagnostics, and cyclic response values fail closed.
 The `include` vector accepts each of the four supported sections at most once,
 and its vector length is checked before copying. Request objects are traversed
 for at most eight unique fields; keys and operation/section names also have

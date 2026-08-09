@@ -42,6 +42,9 @@
 (defconst vela-agent-max-metadata-string-characters 8192
   "Largest live editor metadata string accepted by a context snapshot.")
 
+(defconst vela-agent-max-diagnostics-json-characters (* 128 1024)
+  "Largest aggregate encoded diagnostic collection accepted by a snapshot.")
+
 (defconst vela-agent-max-json-string-characters 8192
   "Largest string accepted by the deterministic JSON encoder.")
 
@@ -52,10 +55,15 @@
   "Largest nesting depth accepted by the deterministic JSON encoder.")
 
 (defconst vela-agent-max-json-nodes
-  (+ 7 (* vela-agent-max-json-collection-items 5))
+  (+ 5                         ; success envelope through its result object
+     17                        ; complete buffer section
+     268                       ; complete Org section
+     2                         ; complete project section
+     1                         ; diagnostics vector
+     (* vela-agent-max-json-collection-items 5))
   "Largest value-node count accepted by the deterministic JSON encoder.
 
-This admits a response envelope containing the maximum collection of
+This admits one complete four-section snapshot with the maximum collection of
 four-field diagnostics while retaining a finite traversal bound.")
 
 (defconst vela-agent-max-json-output-characters (* 256 1024)
@@ -275,14 +283,11 @@ four-field diagnostics while retaining a finite traversal bound.")
           end (if (markerp end) (marker-position end) end))
     (unless (and (integerp start)
                  (integerp end)
-                 (<= (point-min) start end (point-max))
-                 (if (= start end)
-                     (and (<= line-start start)
-                          (or (< start line-end)
-                              (and (= line-end (point-max))
-                                   (= start line-end))))
-                   (and (< start line-end)
-                        (> end line-start))))
+                 (<= (point-min) start)
+                 (< start end)
+                 (<= end (point-max))
+                 (< start line-end)
+                 (> end line-start))
       (signal 'vela-agent-protocol-error
               '("Flymake diagnostic has invalid accessible line bounds")))
     `(("start" . ,start)
@@ -314,14 +319,24 @@ four-field diagnostics while retaining a finite traversal bound.")
              (line-end (min (point-max) (1+ (line-end-position))))
              (cursor (flymake-diagnostics line-start line-end))
              (count 0)
+             (encoded-characters 0)
              items)
         (while (consp cursor)
           (when (>= count vela-agent-max-json-collection-items)
             (signal 'vela-agent-protocol-error
                     '("Flymake diagnostics exceed the collection bound")))
-          (push (vela-agent--diagnostic-context-item
-                 (car cursor) line-start line-end)
-                items)
+          (let* ((item (vela-agent--diagnostic-context-item
+                        (car cursor) line-start line-end))
+                 (item-characters
+                  (length
+                   (vela-agent--json-serialize
+                    item 0 (make-hash-table :test #'eq) (vector 0)))))
+            (setq encoded-characters (+ encoded-characters item-characters))
+            (when (> encoded-characters
+                     vela-agent-max-diagnostics-json-characters)
+              (signal 'vela-agent-protocol-error
+                      '("Flymake diagnostics exceed the aggregate JSON bound")))
+            (push item items))
           (setq cursor (cdr cursor)
                 count (1+ count)))
         (unless (null cursor)

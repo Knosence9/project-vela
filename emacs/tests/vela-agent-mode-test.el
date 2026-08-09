@@ -156,7 +156,7 @@
                            (3 "warning" "a")
                            (3 "warning" "z")))))))))
 
-(ert-deftest vela-agent-context-snapshot-accepts-current-line-point-diagnostics ()
+(ert-deftest vela-agent-context-snapshot-rejects-zero-width-flymake-diagnostics ()
   (with-temp-buffer
     (insert "line")
     (dolist (position '(1 5))
@@ -166,19 +166,11 @@
               (current-buffer) position position :note "point")))
         (cl-letf (((symbol-function 'flymake-diagnostics)
                    (lambda (&rest _) (list diagnostic))))
-          (let* ((response
-                  (vela-agent-handle-request
-                   '(("operation" . "context.snapshot")
-                     ("include" . ["diagnostics"]))))
-                 (items (alist-get
-                         "diagnostics"
-                         (alist-get "result" response nil nil #'string=)
-                         nil nil #'string=)))
-            (should (= (length items) 1))
-            (should (= (alist-get "start" (aref items 0) nil nil #'string=)
-                       position))
-            (should (= (alist-get "end" (aref items 0) nil nil #'string=)
-                       position))))))))
+          (should-error
+           (vela-agent-handle-request
+            '(("operation" . "context.snapshot")
+              ("include" . ["diagnostics"])))
+           :type 'vela-agent-protocol-error))))))
 
 (ert-deftest vela-agent-context-snapshot-bounds-flymake-diagnostic-count ()
   (with-temp-buffer
@@ -195,18 +187,43 @@
             ("include" . ["diagnostics"])))
          :type 'vela-agent-protocol-error)))))
 
-(ert-deftest vela-agent-json-encoding-accepts-bounded-diagnostics-snapshot ()
-  (let* ((diagnostic '(("start" . 1)
-                       ("end" . 2)
-                       ("type" . "note")
-                       ("text" . "note")))
-         (diagnostics (vconcat (make-list 102 diagnostic)))
-         (response
-          `(("protocol_version" . ,vela-agent-protocol-version)
-            ("ok" . t)
-            ("operation" . "context.snapshot")
-            ("result" . (("diagnostics" . ,diagnostics))))))
-    (should (stringp (vela-agent-encode-response response)))))
+(ert-deftest vela-agent-json-encoding-accepts-complete-bounded-snapshot ()
+  (with-temp-buffer
+    (insert "x")
+    (let* ((text-length
+            (- (/ vela-agent-max-diagnostics-json-characters
+                  vela-agent-max-json-collection-items)
+               80))
+           (diagnostic
+            (flymake-make-diagnostic
+             (current-buffer) 1 2 :note (make-string text-length ?x)))
+           (diagnostics
+            (make-list vela-agent-max-json-collection-items diagnostic)))
+      (cl-letf (((symbol-function 'flymake-diagnostics)
+                 (lambda (&rest _) diagnostics))
+                ((symbol-function 'project-current) (lambda (&rest _) nil)))
+        (let ((response
+               (vela-agent-handle-request
+                '(("operation" . "context.snapshot")
+                  ("include" . ["buffer" "org" "project" "diagnostics"])))))
+          (should (stringp (vela-agent-encode-response response))))))))
+
+(ert-deftest vela-agent-context-snapshot-bounds-aggregate-diagnostic-json ()
+  (with-temp-buffer
+    (insert "x")
+    (let* ((diagnostic
+            (flymake-make-diagnostic
+             (current-buffer) 1 2 :note
+             (make-string vela-agent-max-metadata-string-characters ?x)))
+           (diagnostics
+            (make-list vela-agent-max-json-collection-items diagnostic)))
+      (cl-letf (((symbol-function 'flymake-diagnostics)
+                 (lambda (&rest _) diagnostics)))
+        (should-error
+         (vela-agent-handle-request
+          '(("operation" . "context.snapshot")
+            ("include" . ["diagnostics"])))
+         :type 'vela-agent-protocol-error)))))
 
 (ert-deftest vela-agent-context-snapshot-rejects-invalid-flymake-metadata ()
   (with-temp-buffer
@@ -625,7 +642,7 @@
                   :type 'vela-agent-protocol-error))
   (let ((many-nodes
          (make-vector vela-agent-max-json-collection-items
-                      (vector t t t t t))))
+                      (vector t t t t t t t))))
     (should-error (vela-agent-encode-response many-nodes)
                   :type 'vela-agent-protocol-error))
   (let ((large-output
