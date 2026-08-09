@@ -165,16 +165,22 @@
   :init-value nil
   :lighter nil
   (if vela-workbench-ui-mode
-      (unless vela-workbench-ui--saved-local-state
-        (setq vela-workbench-ui--saved-local-state
-              (vela-workbench-ui--snapshot-local-state))
-        (setq-local header-line-format '(:eval (vela-workbench-ui--header-line)))
-        (setq-local mode-line-format (vela-workbench-ui--mode-line))
-        (setq-local line-spacing 0.12)
-        (setq-local cursor-type 'bar)
-        (setq-local truncate-lines nil)
-        (font-lock-add-keywords nil vela-workbench-ui--font-lock-keywords 'append)
-        (font-lock-flush))
+      (progn
+        ;; Explicit local activation transfers this buffer away from global
+        ;; ownership.  The global hook adds a buffer back only after activation.
+        (setq vela-workbench-ui--managed-buffers
+              (delq (current-buffer)
+                    (copy-sequence vela-workbench-ui--managed-buffers)))
+        (unless vela-workbench-ui--saved-local-state
+          (setq vela-workbench-ui--saved-local-state
+                (vela-workbench-ui--snapshot-local-state))
+          (setq-local header-line-format '(:eval (vela-workbench-ui--header-line)))
+          (setq-local mode-line-format (vela-workbench-ui--mode-line))
+          (setq-local line-spacing 0.12)
+          (setq-local cursor-type 'bar)
+          (setq-local truncate-lines nil)
+          (font-lock-add-keywords nil vela-workbench-ui--font-lock-keywords 'append)
+          (font-lock-flush)))
     (when vela-workbench-ui--saved-local-state
       (font-lock-remove-keywords nil vela-workbench-ui--font-lock-keywords)
       (vela-workbench-ui--restore-local-state)

@@ -100,6 +100,22 @@
       (vela-workbench-ui-disable)
       (set-default 'vela-agent-interface-mode-hook default-hook-before))))
 
+(ert-deftest vela-workbench-ui-manual-enable-revokes-global-buffer-ownership ()
+  (unwind-protect
+      (with-temp-buffer
+        (vela-agent-interface-mode)
+        (vela-workbench-ui-enable)
+        (should vela-workbench-ui-mode)
+        (should (memq (current-buffer) vela-workbench-ui--managed-buffers))
+        (vela-workbench-ui-mode -1)
+        (should-not vela-workbench-ui-mode)
+        (should (memq (current-buffer) vela-workbench-ui--managed-buffers))
+        (vela-workbench-ui-mode 1)
+        (should-not (memq (current-buffer) vela-workbench-ui--managed-buffers))
+        (vela-workbench-ui-disable)
+        (should vela-workbench-ui-mode))
+    (vela-workbench-ui-disable)))
+
 (ert-deftest vela-workbench-ui-highlights-structured-protocol-values ()
   (with-temp-buffer
     (insert "{\"operation\\\"name\": \"context\\\"snapshot\", "
