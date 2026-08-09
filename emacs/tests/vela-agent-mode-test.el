@@ -449,13 +449,19 @@
       (cl-letf (((symbol-function 'flymake-diagnostics)
                  (lambda (&rest _) diagnostics))
                 ((symbol-function 'project-current) (lambda (&rest _) nil))
-                ((symbol-function 'magit-status) (lambda (&rest _)))
-                ((symbol-function 'derived-mode-p) (lambda (_) t)))
-        (let ((response
+                ((symbol-function 'magit-status) (lambda (&rest _))))
+        (let* ((major-mode (make-symbol "vela-test-aggregate-magit-mode"))
+               (_ (put major-mode 'derived-mode-parent 'magit-mode))
+               (response
                (vela-agent-handle-request
                 '(("operation" . "context.snapshot")
                   ("include" . ["buffer" "org" "project" "diagnostics"
                                 "compilation" "magit"])))))
+          (should
+           (equal (alist-get
+                   "magit" (alist-get "result" response nil nil #'string=)
+                   nil nil #'string=)
+                  '(("major_mode" . "vela-test-aggregate-magit-mode"))))
           (should (stringp (vela-agent-encode-response response))))))))
 
 (ert-deftest vela-agent-context-snapshot-bounds-aggregate-diagnostic-json ()
@@ -934,18 +940,24 @@
     (rename-buffer " *vela-agent-source*")
     (insert "durable context")
     (text-mode)
-    (let ((interface (vela-agent-interface-open)))
-      (unwind-protect
-          (with-current-buffer interface
-            (should (eq major-mode 'vela-agent-interface-mode))
-            (should buffer-read-only)
-            (should (string-match-p
-                     "context\\.snapshot"
-                     (buffer-substring-no-properties (point-min) (point-max))))
-            (should (string-match-p
-                     "vela-agent-source"
-                     (buffer-substring-no-properties (point-min) (point-max)))))
-        (kill-buffer interface)))))
+    (let ((major-mode (make-symbol "vela-test-interface-magit-mode")))
+      (put major-mode 'derived-mode-parent 'magit-mode)
+      (cl-letf (((symbol-function 'magit-status) (lambda (&rest _))))
+        (let ((interface (vela-agent-interface-open)))
+          (unwind-protect
+              (with-current-buffer interface
+                (should (eq major-mode 'vela-agent-interface-mode))
+                (should buffer-read-only)
+                (should (string-match-p
+                         "context\\.snapshot"
+                         (buffer-substring-no-properties (point-min) (point-max))))
+                (should (string-match-p
+                         "vela-agent-source"
+                         (buffer-substring-no-properties (point-min) (point-max))))
+                (should (string-match-p
+                         "\\\"magit\\\"[[:space:]]*:[[:space:]]*{"
+                         (buffer-substring-no-properties (point-min) (point-max)))))
+            (kill-buffer interface)))))))
 
 (ert-deftest vela-agent-unsupported-operation-fails-closed ()
   (should-error

@@ -39,6 +39,10 @@
 (defconst vela-agent-max-operation-characters 64
   "Largest operation or context-section name accepted by the protocol.")
 
+(defconst vela-agent-context-sections
+  '("buffer" "org" "project" "diagnostics" "compilation" "magit")
+  "Context section names accepted by `context.snapshot'.")
+
 (defconst vela-agent-max-metadata-string-characters 8192
   "Largest live editor metadata string accepted by a context snapshot.")
 
@@ -471,7 +475,7 @@ maximum-size partial frame.")
     (unless (vectorp include)
       (signal 'vela-agent-protocol-error
               '("context.snapshot requires an include vector")))
-    (when (> (length include) 6)
+    (when (> (length include) (length vela-agent-context-sections))
       (signal 'vela-agent-protocol-error
               '("context.snapshot accepts at most six sections")))
     (let ((sections (append include nil)))
@@ -479,9 +483,7 @@ maximum-size partial frame.")
         (dolist (section sections)
           (unless (and (stringp section)
                        (<= (length section) vela-agent-max-operation-characters)
-                       (member section
-                               '("buffer" "org" "project" "diagnostics"
-                                 "compilation" "magit")))
+                       (member section vela-agent-context-sections))
             (signal 'vela-agent-protocol-error
                     '("unsupported context section")))
           (vela-agent--record-unique-section section seen)))
@@ -865,7 +867,7 @@ Any framing, request, dispatch, or response error rejects the complete feed."
            (vela-agent-handle-request
             '(("operation" . "context.snapshot")
               ("include" . ["buffer" "org" "project" "diagnostics"
-                            "compilation"]))))))
+                            "compilation" "magit"]))))))
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (vela-agent-encode-response response))
