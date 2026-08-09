@@ -2,7 +2,7 @@
 
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md).
+The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), and the text-revision contract is recorded in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md).
 
 ## Load and open
 
@@ -21,7 +21,7 @@ M-x vela-agent-interface-open
 
 The resulting `*Vela Agent Interface*` buffer uses `vela-agent-interface-mode`, is read-only, and displays the structured context an agent receives. Press `g` to refresh it and `q` to close its window.
 
-## Protocol version 2
+## Protocol version 3
 
 The in-process dispatcher accepts JSON-compatible alists. A future local transport can encode the same request and response shapes without changing the semantic operations.
 
@@ -44,7 +44,13 @@ Read explicitly selected context:
 ```
 
 Buffer context includes name, optional file, major mode, modified status, point,
-line, column, active-region bounds, and the current accessibility restriction.
+line, column, active-region bounds, the current text revision, and the current
+accessibility restriction. `text_revision` is the non-negative integer returned
+by Emacs's `buffer-chars-modified-tick`. It is opaque equality evidence for
+detecting stale character observations: callers must not perform arithmetic,
+infer elapsed edits, treat it as globally unique, or use it by itself to
+authorize a delayed edit. Repeated snapshots without intervening character
+changes report the same revision; a character change produces a different one.
 Restriction `start` is Emacs's 1-based `point-min`, `end` is the exclusive
 `point-max`, and `narrowed` identifies whether those bounds exclude part of the
 buffer. Snapshotting never widens the source buffer. These bounds are

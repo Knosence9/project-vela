@@ -22,7 +22,7 @@
 
 (define-error 'vela-agent-protocol-error "Invalid Vela agent request")
 
-(defconst vela-agent-protocol-version 2
+(defconst vela-agent-protocol-version 3
   "Version of the model-neutral Vela Emacs protocol.")
 
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
@@ -165,6 +165,7 @@
                    `(("start" . ,(region-beginning))
                      ("end" . ,(region-end)))
                  :null))
+    ("text_revision" . ,(buffer-chars-modified-tick))
     ("restriction" . (("start" . ,(point-min))
                        ("end" . ,(point-max))
                        ("narrowed" . ,(vela-agent--boolean
