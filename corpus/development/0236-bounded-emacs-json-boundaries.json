@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Compose bounded Emacs JSON protocol boundaries",
+    "objective": "Complete issues https://github.com/Knosence9/project-vela/issues/1043, https://github.com/Knosence9/project-vela/issues/1045, https://github.com/Knosence9/project-vela/issues/1047, https://github.com/Knosence9/project-vela/issues/1048, and https://github.com/Knosence9/project-vela/issues/1051 by building strict transport-neutral JSON request, framing, and feed boundaries without selecting a peer or granting transport or mutation authority.",
+    "acceptance_criteria": [
+      "Decode, validate, dispatch, and deterministically encode one bounded JSON object on the editor-owner thread.",
+      "Split canonical UTF-8 newline-delimited request bytes and encode deterministic responses with exact frame, feed, and count bounds.",
+      "Compose complete request batches in arrival order while preserving exact partial input and rejecting failed feeds without a partial result.",
+      "Keep process, socket, peer, authentication, queue, callback, retry, asynchronous job, cancellation, and mutation policy outside these helpers."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a strict in-process JSON adapter through a RED to GREEN protocol slice.",
+      "outcome": "success",
+      "diagnostic": "Focused RED coverage showed there was no single bounded wire entry point and established parser-sensitive failures for malformed or trailing input, non-object roots, duplicate members, oversized and deeply nested values, JSON markers, and worker-thread access.",
+      "patch": "Pull request https://github.com/Knosence9/project-vela/pull/1044 bounded encoded input before parsing, retained ordered duplicate members for fail-closed validation, capped decoded depth, width, and nodes, reused the typed dispatcher and deterministic encoder, translated parser failures into protocol errors, and documented that the adapter opens no transport and grants no mutation authority."
+    },
+    {
+      "summary": "Added canonical bounded inbound and outbound newline framing as separate pure slices.",
+      "outcome": "success",
+      "diagnostic": "Focused RED runs exposed missing contracts for chunks split inside UTF-8 characters, CRLF accounting, empty and oversized frames, complete-frame counts, raw high bytes, delimiter injection, invalid Unicode, and the distinction between Emacs character limits and encoded byte limits. The outbound RED test also showed deterministic ASCII JSON may be represented as an unibyte string, invalidating an initial plan to reject every unibyte payload.",
+      "patch": "Pull requests https://github.com/Knosence9/project-vela/pull/1046 and https://github.com/Knosence9/project-vela/pull/1050 added caller-owned unibyte feed and remainder handling, strict canonical UTF-8 round trips, finite frame and feed limits, optional-CR semantics, and one-LF response encoding. They accept safe ASCII-only unibyte output while rejecting raw high bytes, invalid Unicode, embedded delimiters, oversized payloads, and ambiguous partial results."
+    },
+    {
+      "summary": "Pinned Python in the Nix development shell after the complete quality gate exposed an undeclared runtime dependency.",
+      "outcome": "success",
+      "diagnostic": "The exact quality command failed when a repository verification script invoked `python3`, because the flake shell did not declare Python even though an ambient executable had previously masked the dependency.",
+      "patch": "Pull request https://github.com/Knosence9/project-vela/pull/1049 added pinned Python to the flake development packages, verified all supported flake systems, and restored a reproducible complete quality gate without relying on global project tooling."
+    },
+    {
+      "summary": "Composed framing and dispatch into one bounded synchronous feed boundary.",
+      "outcome": "success",
+      "diagnostic": "Focused RED coverage established missing split-input composition, ordered multi-response framing, exact raw remainder preservation, complete-feed failure behavior, and owner-thread rejection. Transport implementations would otherwise duplicate these semantics and could return plausible partial batches.",
+      "patch": "Pull request https://github.com/Knosence9/project-vela/pull/1052 added `vela-agent-handle-json-feed`, which preflights owner-thread access, reuses the accepted inbound framer and JSON adapter, frames responses in arrival order, returns only after all complete requests succeed, and retains no process, peer, queue, callback, retry, or mutation state."
+    },
+    {
+      "summary": "Preserved transport-boundary pull requests through false-green review rate limits and resumed substantive review only after cooldown and shared-budget checks.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit published successful statuses whose comments explicitly reported review rate limiting, so those exact heads were not merge-ready despite green status contexts.",
+      "patch": "Kept auto-merge disabled, recorded each new blocker once, waited beyond the stated cooldown, checked recent review activity across the shared repositories, deliberately resumed review once per ready exact head, and required successful Rust quality gates, substantive exact-head reviews, and zero unresolved threads before squash merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Protocol version 7 now has bounded transport-neutral JSON dispatch, canonical request and response framing, and synchronous ordered feed composition while peer selection, authentication, lifecycle, queues, callbacks, error delivery, external work, and editor mutation remain explicit future authority decisions.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- record validate corpus/development/0236-bounded-emacs-json-boundaries.json",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 236 records: 236 valid, 0 invalid",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1044 squash merge 5744c88eb6526d41d94bbc32461ec77681b9344e",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1046 squash merge dfe113f86dedfdaa6a14a1cfbf4475c6642f9fb4",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1049 squash merge 82f7f5cffc8f8174e4c798b6ce180f8007945893",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1050 squash merge 2bdeb912dedcb773070d365af6fb941cf9bb867a",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1052 squash merge 0592d7492a14ee613a1e5f6ff5a9fd055be940f8",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Bound encoded input before native JSON parsing, then validate decoded depth, width, node count, member uniqueness, and root shape independently of encoded size.",
+    "Canonical UTF-8 framing needs exact decode and encode round trips because Emacs can preserve malformed bytes as raw characters instead of rejecting them.",
+    "Character limits do not imply byte limits, and safe deterministic ASCII may be unibyte even though raw unibyte high characters must fail closed.",
+    "Keep partial request bytes caller-owned until peer identity, lifecycle, backpressure, callback, and transport error policy are selected deliberately.",
+    "Batch composition can guarantee no partial returned response vector because every current operation is read-only; mutation would require a different atomicity and approval contract.",
+    "Development-shell dependencies must be declared in the flake even when ambient tools make local verification appear successful.",
+    "A successful review status that reports rate limiting is not substantive review evidence and must never race auto-merge.",
+    "Historical aggregate review claims should be qualified when exact-head artifacts are unavailable; verified squash commit identities remain auditable merge evidence and should be recorded separately from review-process lessons."
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-agent-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1052"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
