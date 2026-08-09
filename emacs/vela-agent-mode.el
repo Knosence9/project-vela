@@ -51,8 +51,12 @@
 (defconst vela-agent-max-json-depth 16
   "Largest nesting depth accepted by the deterministic JSON encoder.")
 
-(defconst vela-agent-max-json-nodes 512
-  "Largest value-node count accepted by the deterministic JSON encoder.")
+(defconst vela-agent-max-json-nodes
+  (+ 7 (* vela-agent-max-json-collection-items 5))
+  "Largest value-node count accepted by the deterministic JSON encoder.
+
+This admits a response envelope containing the maximum collection of
+four-field diagnostics while retaining a finite traversal bound.")
 
 (defconst vela-agent-max-json-output-characters (* 256 1024)
   "Largest encoded response returned by the deterministic JSON encoder.")

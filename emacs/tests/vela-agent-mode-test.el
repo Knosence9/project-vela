@@ -195,6 +195,19 @@
             ("include" . ["diagnostics"])))
          :type 'vela-agent-protocol-error)))))
 
+(ert-deftest vela-agent-json-encoding-accepts-bounded-diagnostics-snapshot ()
+  (let* ((diagnostic '(("start" . 1)
+                       ("end" . 2)
+                       ("type" . "note")
+                       ("text" . "note")))
+         (diagnostics (vconcat (make-list 102 diagnostic)))
+         (response
+          `(("protocol_version" . ,vela-agent-protocol-version)
+            ("ok" . t)
+            ("operation" . "context.snapshot")
+            ("result" . (("diagnostics" . ,diagnostics))))))
+    (should (stringp (vela-agent-encode-response response)))))
+
 (ert-deftest vela-agent-context-snapshot-rejects-invalid-flymake-metadata ()
   (with-temp-buffer
     (insert "line\n")
@@ -612,7 +625,7 @@
                   :type 'vela-agent-protocol-error))
   (let ((many-nodes
          (make-vector vela-agent-max-json-collection-items
-                      (vector t t t t))))
+                      (vector t t t t t))))
     (should-error (vela-agent-encode-response many-nodes)
                   :type 'vela-agent-protocol-error))
   (let ((large-output
