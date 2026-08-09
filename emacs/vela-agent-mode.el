@@ -319,7 +319,9 @@ four-field diagnostics while retaining a finite traversal bound.")
              (line-end (min (point-max) (1+ (line-end-position))))
              (cursor (flymake-diagnostics line-start line-end))
              (count 0)
-             (encoded-characters 0)
+             ;; Include the JSON array brackets before adding each item and
+             ;; the comma that precedes every item after the first.
+             (encoded-characters 2)
              items)
         (while (consp cursor)
           (when (>= count vela-agent-max-json-collection-items)
@@ -331,7 +333,8 @@ four-field diagnostics while retaining a finite traversal bound.")
                   (length
                    (vela-agent--json-serialize
                     item 0 (make-hash-table :test #'eq) (vector 0)))))
-            (setq encoded-characters (+ encoded-characters item-characters))
+            (setq encoded-characters
+                  (+ encoded-characters item-characters (if (> count 0) 1 0)))
             (when (> encoded-characters
                      vela-agent-max-diagnostics-json-characters)
               (signal 'vela-agent-protocol-error

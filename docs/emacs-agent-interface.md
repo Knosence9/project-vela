@@ -97,8 +97,9 @@ start, exclusive end, type, and text. Each item contains those four fields;
 positions use Emacs-native 1-based coordinates and text is capped at 8,192
 characters. Spans must be non-empty because Emacs 30.1 removes zero-width
 Flymake overlays before `flymake-diagnostics` can publish them. The encoded
-diagnostic items also share a 131,072-character aggregate budget, so repeated
-individually valid messages cannot exceed the finite response envelope. Empty
+diagnostic array, including brackets and item separators, also has a
+131,072-character aggregate budget, so repeated individually valid messages
+cannot exceed the finite response envelope. Empty
 or not-yet-published state is an empty vector. Snapshotting
 does not enable Flymake, start or refresh a backend, wait for results, expose
 backend objects or fixes, widen the buffer, read files, or run processes.

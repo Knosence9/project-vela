@@ -225,6 +225,34 @@
             ("include" . ["diagnostics"])))
          :type 'vela-agent-protocol-error)))))
 
+(ert-deftest vela-agent-context-snapshot-counts-diagnostic-array-separators ()
+  (with-temp-buffer
+    (insert "x")
+    (let* ((empty-diagnostic
+            (flymake-make-diagnostic (current-buffer) 1 2 :note ""))
+           (empty-item
+            (vela-agent--diagnostic-context-item empty-diagnostic 1 2))
+           (empty-item-characters
+            (length
+             (vela-agent--json-serialize
+              empty-item 0 (make-hash-table :test #'eq) (vector 0))))
+           (item-budget
+            (/ vela-agent-max-diagnostics-json-characters
+               vela-agent-max-json-collection-items))
+           (diagnostic
+            (flymake-make-diagnostic
+             (current-buffer) 1 2 :note
+             (make-string (- item-budget empty-item-characters) ?x)))
+           (diagnostics
+            (make-list vela-agent-max-json-collection-items diagnostic)))
+      (cl-letf (((symbol-function 'flymake-diagnostics)
+                 (lambda (&rest _) diagnostics)))
+        (should-error
+         (vela-agent-handle-request
+          '(("operation" . "context.snapshot")
+            ("include" . ["diagnostics"])))
+         :type 'vela-agent-protocol-error)))))
+
 (ert-deftest vela-agent-context-snapshot-rejects-invalid-flymake-metadata ()
   (with-temp-buffer
     (insert "line\n")
