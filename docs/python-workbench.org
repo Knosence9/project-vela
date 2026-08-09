@@ -1,0 +1,89 @@
+* Persistent Python workbench
+:PROPERTIES:
+:CUSTOM_ID: persistent-python-workbench
+:END:
+Vela's first persistent Python workbench slice keeps the authority boundary in
+Rust while preserving ordinary Python as the working language. The Rust
+=vela-dev= command selects one explicit live Jupyter notebook, reads multiline
+Python from standard input, invokes the caller-selected =hamelnb= adapter, and
+parses its compact JSON result before printing anything.
+
+#+begin_src text
+Rust command and validation
+        ↓ explicit adapter + port + notebook path
+hamelnb Jupyter adapter
+        ↓
+live Python kernel with persistent variables
+#+end_src
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+Start a localhost-only Jupyter server and a live notebook session through the
+separately installed =hamelnb= workflow. Then execute Python through Vela:
+
+#+begin_src sh
+printf '%s\n' 'values = [1, 2, 3]' \
+  | nix develop --command cargo run --locked -p vela-dev -- \
+      python execute "$HOME/.local/bin/hamelnb" 8888 scratch.ipynb
+
+printf '%s\n' 'sum(values)' \
+  | nix develop --command cargo run --locked -p vela-dev -- \
+      python execute "$HOME/.local/bin/hamelnb" 8888 scratch.ipynb
+#+end_src
+
+The second command uses the same Python namespace as the first. Python source
+is read from standard input so multiline code is not reinterpreted by the
+caller's shell. The Rust adapter writes it to a permission-restricted temporary
+file and gives hamelnb only that file's path through =--code-file=, avoiding
+source disclosure in the child process argument list and ordinary argument-size
+limits. The file is removed when the invocation completes.
+
+Each invocation defaults to a 30-second direct-adapter timeout and captures at
+most 1 MiB from each of stdout and stderr. Callers can select smaller or larger
+non-zero budgets explicitly:
+
+#+begin_src sh
+printf '%s\n' 'sum(values)' \
+  | nix develop --command cargo run --locked -p vela-dev -- \
+      python execute "$HOME/.local/bin/hamelnb" 8888 scratch.ipynb \
+      --timeout-seconds 10 --max-output-bytes 262144
+#+end_src
+
+Vela drains both streams without blocking, kills and reaps a still-running
+direct adapter on timeout, and rejects an overflowing stream without parsing or
+printing partial JSON. After observing direct-child exit within its timeout,
+Vela permits a bounded 20 ms post-exit drain interval; inherited output pipes
+cannot hold the call open beyond that interval. The byte limit applies
+independently to stdout and stderr.
+
+** Current boundary
+:PROPERTIES:
+:CUSTOM_ID: current-boundary
+:END:
+This first slice intentionally does *not*:
+
+- start, stop, sandbox, or authenticate Jupyter;
+- grant host tools or secrets to Python;
+- persist Vela provenance events or checkpoints;
+- contain adapter-created descendants or impose a kernel-side deadline;
+- replay exploratory state from a clean kernel; or
+- treat notebook state as verified project evidence.
+
+Until those controls land, Python has the authority of the selected kernel
+environment. Use only an explicitly selected localhost notebook. Adapter
+failure, malformed JSON, and non-=ok= execution status fail closed without
+successful partial output. Timeout and output overflow fail the same way. See
+[[file:adr/0107-bounded-python-adapter-execution.org][ADR-0107]] for the exact process
+and resource authority boundary.
+
+** Architectural direction
+:PROPERTIES:
+:CUSTOM_ID: architectural-direction
+:END:
+The Rust plane will grow toward workspace identity, policy, budgets,
+provenance, checkpoints, and replay. Python remains the compact, familiar
+language for exploration, parsing, tables, calculations, and retained
+intermediate state. Vela should integrate the Jupyter protocol rather than
+reimplement Python or invent a project-specific compute language.

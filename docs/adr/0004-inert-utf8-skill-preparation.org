@@ -1,0 +1,91 @@
+* ADR-0004: Prepare skills as inert UTF-8 instruction artifacts
+:PROPERTIES:
+:CUSTOM_ID: adr-0004-prepare-skills-as-inert-utf-8-instruction-artifacts
+:END:
+- *Status:* accepted
+- *Date:* 2026-07-27
+- *Owners:* Project Vela maintainers
+- *Related issue:* [[https://github.com/Knosence9/project-vela/issues/651][#651]]
+- *First execution issue:* [[https://github.com/Knosence9/project-vela/issues/652][#652]]
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+Version-one extension manifests distinguish tools, skills, and workflows, but ADR-0003 intentionally defines executable activation only for tools. Skills need a separate boundary because instruction text influences model behavior even though it is not native or WebAssembly code. Treating discovery as activation, or automatically inserting discovered text into a provider request, would obscure who selected the instructions and when they became authoritative.
+
+The project plans describe a skill as a reusable procedure containing prompts, checklists, decision rules, and verification steps. They also require modular capability registries, deterministic validation, and explicit, auditable self-improvement. The existing descriptor-anchored preparation boundary already protects selected tool artifacts from root, package, manifest, and entrypoint substitution between discovery and use.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+The first supported skill boundary prepares selected version-one =skill= entrypoints as immutable, owned UTF-8 instruction artifacts. It does not activate them.
+
+A caller supplies the original extension root and an immutable selection. The operation rejects the lexicographically first non-skill record before filesystem access. An empty selection returns an empty artifact set without opening the root. For a non-empty skill selection, preparation reopens the root without following a final-component symlink; requires the root and each package to retain their discovery-time filesystem identities; reloads and exactly compares each manifest; and reopens each entrypoint descriptor-relatively without following symlinks. It reads at most 1 MiB plus one boundary byte and rejects invalid UTF-8.
+
+Success returns exact IDs and exact authored instruction text in deterministic exact-ID order. The operation is all-or-nothing: a root, package, manifest, entrypoint, size, encoding, or kind failure returns no artifact prefix. Filesystem, manifest, and UTF-8 failures preserve their standard error sources.
+
+Prepared skill instructions are inert data. Preparation does not parse Markdown structure or front matter, register or enable a skill, compose or mutate a provider prompt, execute content, grant tool permission, persist configuration, watch files, activate workflows, or authorize later use. A future decision must define a caller-owned skill registry and explicit prompt-composition boundary before prepared instructions may influence an assistant turn.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Treat discovery as skill activation
+:PROPERTIES:
+:CUSTOM_ID: treat-discovery-as-skill-activation
+:END:
+Discovery proves only that metadata and an entrypoint target are valid at one instant. It neither records caller enablement intent nor protects later reads from package substitution, so treating it as activation would collapse distinct trust boundaries.
+
+*** Inject selected skill text directly into provider turns
+:PROPERTIES:
+:CUSTOM_ID: inject-selected-skill-text-directly-into-provider-turns
+:END:
+This would make filesystem loading, lifecycle, precedence, prompt ordering, and model influence one operation. Vela does not yet have a skill registry or a provider-neutral system/developer prompt contract, so direct injection would establish those semantics accidentally.
+
+*** Require a structured skill schema now
+:PROPERTIES:
+:CUSTOM_ID: require-a-structured-skill-schema-now
+:END:
+Front matter or a dedicated instruction language could add metadata and composition rules, but the plans do not yet justify a stable semantic schema. Exact bounded UTF-8 preserves authored content while leaving later parsing additive and explicit.
+
+*** Execute skills as WebAssembly components
+:PROPERTIES:
+:CUSTOM_ID: execute-skills-as-webassembly-components
+:END:
+Skills are procedures and instruction material, not one authorized tool invocation. Reusing the executable tool ABI would erase that distinction and introduce code execution where inert data is sufficient.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+*** Positive
+:PROPERTIES:
+:CUSTOM_ID: positive
+:END:
+- Untrusted skill text remains inert until a later caller-owned composition decision.
+- Skill preparation reuses the proven descriptor-anchored filesystem boundary.
+- Exact UTF-8 text is provider-neutral and easy to inspect, test, and hash later.
+- A small size bound limits memory use before future prompt-budget policy exists.
+
+*** Negative
+:PROPERTIES:
+:CUSTOM_ID: negative
+:END:
+- Prepared skills cannot yet affect an assistant turn.
+- UTF-8 validation does not establish semantic quality, Markdown validity, or resistance to malicious instructions.
+- The 1 MiB implementation limit may need tightening once prompt composition and token budgets exist.
+- No registry, precedence, dependency, persistence, or lifecycle semantics are provided.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+Execution must follow RED→GREEN tests proving deterministic exact-content preparation, wrong-kind rejection before filesystem access, no-op empty selection, the exact size boundary, UTF-8 rejection with a source, descriptor-anchored package and manifest revalidation, unsafe or missing entrypoint rejection, and all-or-nothing failure. Existing tool preparation tests and the complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider this decision before adding structured skill metadata, skill registries, provider prompt composition, precedence or conflict rules, token budgeting, persisted enablement, hot reload, skill-authored tool grants, workflow activation, remote skill packages, signatures, or content-addressed identity.

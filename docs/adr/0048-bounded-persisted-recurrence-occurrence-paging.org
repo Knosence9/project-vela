@@ -1,0 +1,77 @@
+* ADR-0048: Bounded persisted recurrence occurrence paging
+:PROPERTIES:
+:CUSTOM_ID: adr-0048-bounded-persisted-recurrence-occurrence-paging
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-03
+- *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/883][#883]]
+- *Related:* ADR-0039, ADR-0045, ADR-0047
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+ADR-0045 establishes canonical durable provenance for exact finite recurrence coordinates, while ADR-0047 exposes exact read-only lookup. Callers still cannot inspect a range without issuing one lookup per authored offset. A global inventory would introduce broader discovery, ordering, corruption-domain, and allocation decisions than the next kernel boundary requires.
+
+The recurrence definition already provides a finite stable offset space and ADR-0039 provides a validated allocation bound. Paging one caller-selected authored offset window can therefore expose sparse durable provenance without inventing a second cursor or granting global discovery authority.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+=RecurrenceStore::persisted_occurrences_page(id, start_offset, page_size)= strictly loads one exact recurrence definition. A missing definition returns typed =NotFound= evidence. =OccurrencePageSize= remains the shared positive =1..=1024= work and allocation bound, and a start at or beyond the recurrence's authored occurrence count returns typed =OccurrenceOutOfRange= evidence.
+
+The method inspects exactly the authored offset window beginning at =start_offset=, in ascending order, and returns only coordinates whose canonical provenance stream exists and passes strict replay. Missing coordinates are omitted, so a valid page may contain no occurrences. =next_offset= is the first uninspected authored offset, or =None= when the inspected window reaches the finite definition's end. Cursor progress therefore reflects inspected authored coordinates rather than the number of persisted results.
+
+The selected definition is replayed once. Each selected coordinate reuses exact canonical-stream replay and validates its ID, definition revision, offset, goal, and instant against that already-loaded authoritative definition. Any selected-window corruption fails closed before a partial page is returned. Corruption in unrelated definitions or coordinates outside the selected window cannot block the page.
+
+The boundary reads no ambient clock and persists nothing. Returned coordinates and cursors are inspection evidence only; they do not decide catch-up, due state, materialization, claims, permissions, dispatch, retries, or execution.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Return the next persisted coordinate as the cursor
+:PROPERTIES:
+:CUSTOM_ID: return-the-next-persisted-coordinate-as-the-cursor
+:END:
+Rejected because finding it requires unbounded sparse discovery or a new storage index. Authored offsets already form a finite deterministic cursor space, including progress across empty windows.
+
+*** Scan every persisted occurrence globally and filter
+:PROPERTIES:
+:CUSTOM_ID: scan-every-persisted-occurrence-globally-and-filter
+:END:
+Rejected because it performs unrelated work, broadens the corruption domain, and defeats the existing exact-recurrence authority boundary.
+
+*** Return projected occurrences for missing provenance
+:PROPERTIES:
+:CUSTOM_ID: return-projected-occurrences-for-missing-provenance
+:END:
+Rejected because projection does not prove persistence. The page must not blur authored coordinates with durable evidence.
+
+*** Add the CLI in the same slice
+:PROPERTIES:
+:CUSTOM_ID: add-the-cli-in-the-same-slice
+:END:
+Rejected because the kernel contract, sparse cursor semantics, and corruption isolation should be independently tested before an adapter fixes JSON and diagnostic behavior.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Callers can inspect sparse persisted provenance with bounded work and allocation.
+- Empty pages advance deterministically across authored gaps.
+- Exact lookup and page lookup share canonical replay and authoritative validation without reloading the recurrence per coordinate.
+- Global occurrence inventory, CLI exposure, catch-up policy, materialization, dispatch, and execution remain deferred.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+Strict RED→GREEN tests prove sparse ordering, empty-gap cursor progress, final-page truncation, read-only reopen, missing definitions, out-of-range starts, selected-window fail-closed corruption, and isolation from unrelated or out-of-window corruption. The complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider before adding global persisted-occurrence inventory, a persisted cursor, mutable recurrence lifecycle, catch-up or missed-run policy, generated identities, schedule/task materialization, workers, ambient clocks, dispatch, or execution.

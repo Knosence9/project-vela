@@ -113,7 +113,7 @@ fn preparation_and_registry_failures_leave_existing_workflows_unchanged() {
             )])
             .unwrap();
         if failure == "preparation" {
-            fs::remove_file(root.path().join("zeta/WORKFLOW.md")).unwrap();
+            fs::remove_file(root.path().join("zeta/WORKFLOW.org")).unwrap();
         }
 
         let error =
@@ -161,8 +161,8 @@ fn write_extension(root: &std::path::Path, package: &str, id: &str, kind: &str, 
     fs::create_dir(&package).unwrap();
     fs::write(
         package.join("extension.yaml"),
-        format!("manifest_version: 1\nid: {id}\nkind: {kind}\nentrypoint: WORKFLOW.md\n"),
+        format!("manifest_version: 1\nid: {id}\nkind: {kind}\nentrypoint: WORKFLOW.org\n"),
     )
     .unwrap();
-    fs::write(package.join("WORKFLOW.md"), content).unwrap();
+    fs::write(package.join("WORKFLOW.org"), content).unwrap();
 }

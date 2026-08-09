@@ -3002,8 +3002,8 @@ fn inspects_validated_extensions_in_manifest_path_order() {
         .assert()
         .success()
         .stdout(predicate::eq(
-            "\"alpha.skill\"\tskill\t\"SKILL.md\"\t\"alpha/extension.yaml\"\n\
-             \"beta.workflow\"\tworkflow\t\"WORKFLOW.md\"\t\"beta/extension.yaml\"\n\
+            "\"alpha.skill\"\tskill\t\"SKILL.org\"\t\"alpha/extension.yaml\"\n\
+             \"beta.workflow\"\tworkflow\t\"WORKFLOW.org\"\t\"beta/extension.yaml\"\n\
              \"zeta.tool\"\ttool\t\"bin/zeta.wasm\"\t\"zeta/extension.yaml\"\n\
              inspected 3 extensions\n",
         ))

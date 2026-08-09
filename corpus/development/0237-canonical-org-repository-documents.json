@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Make Org Mode the canonical repository document format",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1055 by replacing parallel-format risk with one Org-native source tree that remains usable in Emacs, GitHub, and optional Obsidian compatibility tooling.",
+    "acceptance_criteria": [
+      "Replace every tracked authored Markdown file with an Org source and update repository-local references.",
+      "Move extension skill and workflow fixtures to Org without changing extension validation semantics.",
+      "Reject future tracked Markdown sources and unresolved local Org file links in the deterministic quality gate.",
+      "Document the format decision, GitHub boundary, and optional Obsidian Orgmode compatibility path."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Inventoried the complete Markdown surface and established a failing Org-source policy test before migration.",
+      "outcome": "success",
+      "diagnostic": "The baseline contained 139 tracked Markdown files across root documentation, 118 ADRs, topic documentation, plans, and extension fixtures, plus 159 reference-bearing lines in 41 files. The initial focused ERT run failed because the repository still tracked Markdown and had no Org source tree.",
+      "patch": "Added emacs/tests/vela-org-source-test.el and loaded it from just emacs-test so the gate rejects case-insensitive .md and .markdown paths, requires Org sources, parses every tracked Org file, and resolves each local file link relative to its source."
+    },
+    {
+      "summary": "Converted all authored documents and fixture entrypoints through a pinned Pandoc invocation, then updated repository references and contracts.",
+      "outcome": "success",
+      "diagnostic": "The pinned development shell did not include Pandoc, so the one-shot conversion used nix shell --inputs-from . nixpkgs#pandoc to obtain Pandoc from the repository's locked nixpkgs input without changing the durable toolchain.",
+      "patch": "Replaced 139 Markdown files with Org equivalents, updated live local links, preserved historical evidence path strings, changed extension fixtures and exact test expectations to .org entrypoints, and retained JSON, YAML, Rust, Emacs Lisp, TOML, and HTML in their native formats."
+    },
+    {
+      "summary": "Compared pre-migration and post-migration Pandoc syntax trees and repaired Org-specific rendering hazards.",
+      "outcome": "success",
+      "diagnostic": "The semantic comparison reduced differences to intentional policy additions, ordered-list and source-language metadata, typographic normalization, and three adjacent verbatim spans whose slash separator could be consumed as one Org verbatim element.",
+      "patch": "Separated the ratatui/crossterm, serde/schemars, and Send/Sync verbatim spans with explicit spaces, removed Markdown-only README presentation HTML, and batch-exported the README, scheduler documentation, and ADR 0119 through Emacs Org HTML export."
+    },
+    {
+      "summary": "Checked the pure-Org boundary against current GitHub behavior instead of retaining speculative Markdown mirrors.",
+      "outcome": "success",
+      "diagnostic": "GitHub's live markup implementation and README API support README.org, and the Community Profile API demonstrates recognized Org contribution guidance. GitHub issue and pull-request templates remain Markdown-specific, but this repository does not currently carry those authored template files.",
+      "patch": "Documented Org as the sole authored source, kept generated Markdown out of the design, and recorded optional Obsidian access through the Orgmode (CM6) plugin with detection of all file extensions enabled."
+    }
+  ],
+  "outcome": {
+    "summary": "Project Vela now has one Org-native authored document tree: 140 tracked Org files including ADR 0119, no tracked Markdown files, resolved local file links, Org extension fixtures, and a quality gate that prevents format regression.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix flake check --all-systems --no-build --show-trace",
+        "status": "passed"
+      },
+      {
+        "command": "batch Emacs Org HTML export of README.org, docs/scheduler.org, and docs/adr/0119-canonical-org-repository-documents.org",
+        "status": "passed"
+      },
+      {
+        "command": "current GitHub org-ruby parser render of all 140 Org files to 972573 HTML bytes, with the README bootstrap notice visible and 24 resolved href values",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Contents API live HTML rendering of README.org from docs/1055-pure-org to 80498 bytes, with the bootstrap notice and CONTRIBUTING.org link visible",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A documentation format migration needs an explicit one-source rule; bidirectional Org and Markdown editing would create avoidable drift.",
+    "GitHub renders Org repository documents, but feature-specific GitHub templates must be evaluated separately from ordinary repository markup.",
+    "Mechanical Markdown-to-Org conversion needs semantic review because adjacent verbatim spans can collapse even when headings, lists, links, and source blocks parse successfully.",
+    "Historical corpus paths describe what happened at the time and must not be rewritten merely because the referenced source later moved.",
+    "Extension entrypoint paths are data rather than hard-coded Markdown contracts, so fixture documents can move to Org without widening runtime authority.",
+    "A durable format policy belongs in the normal quality gate and must validate both file extensions and repository-local link resolution."
+  ],
+  "provenance": {
+    "repository_path": "docs/adr/0119-canonical-org-repository-documents.org",
+    "url": "https://github.com/Knosence9/project-vela/pull/1056"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

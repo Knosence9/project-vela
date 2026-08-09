@@ -35,7 +35,7 @@ process-test:
 # Byte-compile and exercise the Emacs agent interface without user configuration.
 emacs-test:
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT; cp emacs/vela-agent-mode.el emacs/vela-workbench-ui.el "$tmp/"; emacs --batch -Q -L "$tmp" --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile "$tmp/vela-agent-mode.el" "$tmp/vela-workbench-ui.el"
-    emacs --batch -Q -L emacs -L emacs/tests -l vela-agent-mode-test -l vela-workbench-ui-test -f ert-run-tests-batch-and-exit
+    emacs --batch -Q -L emacs -L emacs/tests -l vela-agent-mode-test -l vela-workbench-ui-test -l vela-org-source-test -f ert-run-tests-batch-and-exit
 
 # Run a command with Vela's declared secrets resolved by SecretSpec.
 with-secrets *command:

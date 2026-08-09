@@ -1,0 +1,78 @@
+* ADR-0097: Bounded sparse finite recurrence status paging
+:PROPERTIES:
+:CUSTOM_ID: adr-0097-bounded-sparse-finite-recurrence-status-paging
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-08
+- *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/997][#997]]
+- *Related:* ADR-0089, ADR-0091, ADR-0095
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+The complete finite recurrence status projection validates and filters the entire authoritative inventory. ADR-0091 adds bounded exact-ID inventory pages but deliberately does not compose filtering with paging: filling a requested number of matches could scan an unbounded number of nonmatching definitions. Its last-emitted cursor also cannot advance when a bounded window contains no matches.
+
+Callers need bounded storage work more than dense output. Existing exact recurrence IDs can identify scan progress without a persisted cursor, index, snapshot token, or new identity.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+Add =RecurrenceStatusPage=, containing complete matching recurrence definitions and an optional =next_after= exact recurrence ID. Add =RecurrenceStore::list_by_status_page(status, after, scan_size)=, reusing validated =RecurrencePageSize= values from 1 through 1024 as an explicit bound on inspected authoritative definitions.
+
+The event log selects at most =scan_size + 1= authoritative =recurrence.fixed_interval_created= streams after the optional caller-owned exclusive exact-ID cursor. It fully replays that exact-ID-ordered window in one read snapshot. Canonical projection validates every selected history, including lookahead, before filtering. The first at most =scan_size= projections are filtered by exact persisted =RecurrenceStatus=, and matching definitions retain exact-ID order.
+
+When validated lookahead proves more inventory exists, =next_after= is the last *inspected* recurrence ID, even when no recurrence matched. Otherwise it is absent. The cursor need not identify an existing recurrence. Empty stores and cursors beyond the end return empty terminal pages.
+
+This sparse scan cursor is intentionally distinct from =RecurrencePage::next_after=, which identifies the last emitted recurrence. The operation works through read-only storage, reads no ambient clock, mutates nothing, persists no cursor, and grants no lifecycle, occurrence, claim, materialization, worker, lease, dispatch, retry, permission, or execution authority.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Filter =RecurrenceStore::list_page= results in each caller
+:PROPERTIES:
+:CUSTOM_ID: filter-recurrencestorelist_page-results-in-each-caller
+:END:
+Rejected because callers could resume from a matching definition rather than the last inspected coordinate, repeat nonmatches, or fail to advance after an empty page. The kernel owns storage selection and corruption boundaries.
+
+*** Fill a dense page of matching recurrences
+:PROPERTIES:
+:CUSTOM_ID: fill-a-dense-page-of-matching-recurrences
+:END:
+Rejected because a sparse inventory can require unbounded stream selection, replay, and allocation to find one match.
+
+*** Change =RecurrencePage= cursor semantics
+:PROPERTIES:
+:CUSTOM_ID: change-recurrencepage-cursor-semantics
+:END:
+Rejected because its established cursor means the last emitted recurrence. Overloading it with scan progress would make identical fields carry incompatible continuation contracts.
+
+*** Add a durable status index
+:PROPERTIES:
+:CUSTOM_ID: add-a-durable-status-index
+:END:
+Rejected for this slice because sparse bounded inspection satisfies incremental callers without schema, migration, index-maintenance, or repair authority.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Storage selection, replay, and allocation are bounded by one explicit scan window plus lookahead; result density may range from zero through =scan_size=.
+- Empty nonterminal pages can advance safely, and continuation windows do not overlap.
+- Corruption in the inspected window or lookahead fails closed before any partial page is returned. Corruption before the cursor, beyond lookahead, or in unrelated stream families remains isolated.
+- Complete status inventory retains its global fail-closed contract, and ordinary inventory paging retains its last-emitted cursor contract.
+- No schema, event, write, clock, worker, permission, or execution authority is added.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+Strict RED→GREEN tests prove sparse mixed-status selection, an all-nonmatching advancing page, exact ordering, non-overlapping continuation, nonexistent and beyond-end cursors, terminal and empty read-only behavior, unrelated-stream exclusion, selected and lookahead corruption failures, and corruption isolation outside the bounded window. The complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider before adding a CLI adapter, due-filtered pages, dense matching pages, durable indexes or cursors, snapshot tokens across calls, destructive deletion, clocks, workers, leases, dispatch, permissions, retries, or execution.

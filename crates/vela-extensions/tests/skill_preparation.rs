@@ -99,7 +99,7 @@ fn rejects_invalid_utf8_with_the_exact_id_and_source() {
     let selection = registry
         .select_kind(ExtensionKind::Skill, ["review.skill"])
         .expect("skill selection");
-    fs::write(root.path().join("skill/SKILL.md"), [0xff, 0xfe]).expect("write invalid UTF-8");
+    fs::write(root.path().join("skill/SKILL.org"), [0xff, 0xfe]).expect("write invalid UTF-8");
 
     let error = prepare_skill_artifacts(root.path(), &selection)
         .expect_err("invalid UTF-8 must fail preparation");
@@ -123,7 +123,7 @@ fn accepts_exact_limit_and_rejects_first_byte_beyond_it() {
         let selection = registry
             .select_kind(ExtensionKind::Skill, ["bounded.skill"])
             .expect("skill selection");
-        fs::write(root.path().join("skill/SKILL.md"), vec![b'x'; size])
+        fs::write(root.path().join("skill/SKILL.org"), vec![b'x'; size])
             .expect("write bounded instructions");
 
         let result = prepare_skill_artifacts(root.path(), &selection);
@@ -174,7 +174,7 @@ fn revalidates_manifest_package_and_entrypoint_and_returns_no_prefix() {
                 fs::create_dir(root.path().join("zeta")).expect("replace package");
             }
             "entrypoint" => {
-                fs::remove_file(root.path().join("zeta/SKILL.md")).expect("remove entrypoint")
+                fs::remove_file(root.path().join("zeta/SKILL.org")).expect("remove entrypoint")
             }
             _ => unreachable!("fixed cases"),
         }
@@ -215,9 +215,9 @@ fn rejects_an_entrypoint_replaced_by_a_symlink() {
     let selection = registry
         .select_kind(ExtensionKind::Skill, ["review.skill"])
         .expect("skill selection");
-    fs::remove_file(root.path().join("skill/SKILL.md")).expect("remove discovered entrypoint");
-    fs::write(root.path().join("outside.md"), "unsafe alias").expect("write outside target");
-    symlink("../outside.md", root.path().join("skill/SKILL.md")).expect("replace with symlink");
+    fs::remove_file(root.path().join("skill/SKILL.org")).expect("remove discovered entrypoint");
+    fs::write(root.path().join("outside.org"), "unsafe alias").expect("write outside target");
+    symlink("../outside.org", root.path().join("skill/SKILL.org")).expect("replace with symlink");
 
     let error = prepare_skill_artifacts(root.path(), &selection)
         .expect_err("descriptor-anchored preparation must reject an entrypoint symlink");
@@ -251,9 +251,9 @@ fn write_extension(root: &std::path::Path, package: &str, id: &str, kind: &str, 
     let package = root.join(package);
     fs::create_dir(&package).expect("create package");
     fs::write(package.join("extension.yaml"), manifest(id, kind)).expect("write manifest");
-    fs::write(package.join("SKILL.md"), content).expect("write entrypoint");
+    fs::write(package.join("SKILL.org"), content).expect("write entrypoint");
 }
 
 fn manifest(id: &str, kind: &str) -> String {
-    format!("manifest_version: 1\nid: {id}\nkind: {kind}\nentrypoint: SKILL.md\n")
+    format!("manifest_version: 1\nid: {id}\nkind: {kind}\nentrypoint: SKILL.org\n")
 }
