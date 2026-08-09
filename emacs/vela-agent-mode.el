@@ -22,7 +22,7 @@
 
 (define-error 'vela-agent-protocol-error "Invalid Vela agent request")
 
-(defconst vela-agent-protocol-version 3
+(defconst vela-agent-protocol-version 4
   "Version of the model-neutral Vela Emacs protocol.")
 
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
@@ -148,12 +148,30 @@
               '("editor metadata must be a proper string list")))
     (vconcat (nreverse items))))
 
+(defun vela-agent--buffer-identity-state ()
+  "Return process-lifetime buffer identity state that survives feature reload."
+  (or (get 'vela-agent-mode 'vela-agent--buffer-identity-state)
+      (let ((state (cons (make-hash-table :test #'eq :weakness 'key) 0)))
+        (put 'vela-agent-mode 'vela-agent--buffer-identity-state state)
+        state)))
+
+(defun vela-agent--buffer-identity ()
+  "Return an opaque process-local identity for the current live buffer."
+  (let* ((state (vela-agent--buffer-identity-state))
+         (identities (car state)))
+    (or (gethash (current-buffer) identities)
+        (let ((identity (format "vela-buffer-%d" (1+ (cdr state)))))
+          (setcdr state (1+ (cdr state)))
+          (puthash (current-buffer) identity identities)
+          identity))))
+
 (defun vela-agent--buffer-context ()
   "Snapshot bounded metadata for the current buffer without moving point."
   `(("name" . ,(vela-agent--bounded-metadata-string (buffer-name)))
     ("file" . ,(if buffer-file-name
                     (vela-agent--bounded-metadata-string buffer-file-name)
                   :null))
+    ("identity" . ,(vela-agent--buffer-identity))
     ("major_mode" . ,(vela-agent--bounded-metadata-string
                        (symbol-name major-mode)))
     ("modified" . ,(vela-agent--boolean (buffer-modified-p)))

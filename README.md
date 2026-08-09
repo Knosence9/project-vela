@@ -134,8 +134,9 @@ current limitations, and stateful two-invocation example.
 
 The Emacs-facing slice exposes a model-neutral, read-only capability and context
 protocol plus a human-readable interface buffer. Buffer snapshots identify
-live narrowing through observational accessibility bounds without exposing
-text or widening the source buffer. The interface does not drive the UI,
+the exact live buffer through a process-local non-reused token and live
+narrowing through observational accessibility bounds without exposing text or
+widening the source buffer. The interface does not drive the UI,
 evaluate arbitrary Emacs Lisp, or provide mutation or transport authority.
 See [`docs/emacs-agent-interface.md`](docs/emacs-agent-interface.md) for the
 protocol, execution boundary, and batch verification contract.
