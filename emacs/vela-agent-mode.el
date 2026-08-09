@@ -19,10 +19,11 @@
 (require 'ob-core)
 (require 'json)
 (require 'cl-lib)
+(require 'project)
 
 (define-error 'vela-agent-protocol-error "Invalid Vela agent request")
 
-(defconst vela-agent-protocol-version 4
+(defconst vela-agent-protocol-version 5
   "Version of the model-neutral Vela Emacs protocol.")
 
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
@@ -96,7 +97,7 @@
    (vela-agent--emacs-feature
     "org" 'org-mode "read-only heading, stable ID, and source-block metadata" "org")
    (vela-agent--emacs-feature
-    "project" 'project-current "loaded project.el facility metadata" nil)
+    "project" 'project-current "read-only native project root metadata" "project")
    (vela-agent--emacs-feature
     "diagnostics" 'flymake-diagnostics "loaded Flymake diagnostics facility metadata" nil)
    (vela-agent--emacs-feature
@@ -228,26 +229,43 @@
           ("source_block" . ,(vela-agent--org-source-block-context)))
       :null)))
 
+(defun vela-agent--project-context ()
+  "Snapshot the bounded native project root for the current buffer."
+  (save-match-data
+    (let ((project (project-current nil)))
+      (if project
+          (let ((root (project-root project)))
+            (unless (and (stringp root) (file-name-absolute-p root))
+              (signal 'vela-agent-protocol-error
+                      '("native project root must be an absolute path")))
+            `(("root" . ,(vela-agent--bounded-metadata-string root))))
+        :null))))
+
+(defun vela-agent--record-unique-section (section seen)
+  "Record bounded SECTION in SEEN, or reject an existing entry."
+  (when (gethash section seen)
+    (signal 'vela-agent-protocol-error
+            '("context.snapshot sections must be unique")))
+  (puthash section t seen))
+
 (defun vela-agent--context-snapshot (request)
   "Return only the explicitly requested context sections from REQUEST."
   (let ((include (alist-get "include" request nil nil #'string=)))
     (unless (vectorp include)
       (signal 'vela-agent-protocol-error
               '("context.snapshot requires an include vector")))
-    (when (> (length include) 2)
+    (when (> (length include) 3)
       (signal 'vela-agent-protocol-error
-              '("context.snapshot accepts at most two sections")))
+              '("context.snapshot accepts at most three sections")))
     (let ((sections (append include nil)))
-      (when (and (= (length sections) 2)
-                 (equal (car sections) (cadr sections)))
-        (signal 'vela-agent-protocol-error
-                '("context.snapshot sections must be unique")))
-      (dolist (section sections)
-        (unless (and (stringp section)
-                     (<= (length section) vela-agent-max-operation-characters)
-                     (member section '("buffer" "org")))
-          (signal 'vela-agent-protocol-error
-                  '("unsupported context section"))))
+      (let ((seen (make-hash-table :test #'equal)))
+        (dolist (section sections)
+          (unless (and (stringp section)
+                       (<= (length section) vela-agent-max-operation-characters)
+                       (member section '("buffer" "org" "project")))
+            (signal 'vela-agent-protocol-error
+                    '("unsupported context section")))
+          (vela-agent--record-unique-section section seen)))
       (when (> (buffer-size) vela-agent-max-buffer-characters)
         (signal 'vela-agent-protocol-error
                 (list (format "buffer exceeds context snapshot limit: %d characters"
@@ -257,6 +275,8 @@
           (push (cons "buffer" (vela-agent--buffer-context)) result))
         (when (member "org" sections)
           (push (cons "org" (vela-agent--org-context)) result))
+        (when (member "project" sections)
+          (push (cons "project" (vela-agent--project-context)) result))
         (nreverse result)))))
 
 (defun vela-agent--validate-request-object (request)
@@ -401,7 +421,7 @@
          (with-current-buffer vela-agent-interface-source-buffer
            (vela-agent-handle-request
             '(("operation" . "context.snapshot")
-              ("include" . ["buffer" "org"]))))))
+              ("include" . ["buffer" "org" "project"]))))))
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (vela-agent-encode-response response))
