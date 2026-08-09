@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Make canonical Org file-link validation fail closed",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1058 by rejecting repository-escaping, untracked, and semantically broken Org file links in the normal quality gate.",
+    "acceptance_criteria": [
+      "Reject absolute file links and relative links that resolve outside the repository.",
+      "Reject file-link targets that are not tracked by Git.",
+      "Validate custom-ID search targets instead of accepting path existence alone.",
+      "Preserve valid tracked file links and pass the complete verification boundary."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Processed the delayed independent review of the pure-Org migration after its merge.",
+      "outcome": "failure",
+      "diagnostic": "The review's captured tree was stale for the README and evidence findings, which had already been corrected and reverified before merge, but its focused probe demonstrated that the merged link gate accepted an absolute existing path, repository traversal, an untracked target, and a missing custom-ID target.",
+      "patch": "Opened issue 1058 and isolated the follow-up from unrelated work already present in the primary worktree."
+    },
+    {
+      "summary": "Added focused regression tests before changing the link validator.",
+      "outcome": "failure",
+      "diagnostic": "The initial ERT run produced four expected failures: absolute, repository-traversing, untracked, and missing-custom-ID links all returned no diagnostics under the path-existence-only implementation.",
+      "patch": "Added disposable-repository ERT fixtures for each rejected link class plus a positive tracked custom-ID case."
+    },
+    {
+      "summary": "Enforced repository containment, Git tracking, and custom-ID resolution for Org file links.",
+      "outcome": "success",
+      "diagnostic": "The focused ERT run passed all seven Org policy tests, including the four regressions and the positive custom-ID case.",
+      "patch": "Resolve the Git repository root, reject absolute and escaping targets, require each target in git ls-files, and parse target Org headlines when a #CUSTOM_ID search option is present."
+    },
+    {
+      "summary": "Corrected Git pathspec interpretation found by independent review.",
+      "outcome": "success",
+      "diagnostic": "The reviewer reproduced one false positive where an existing untracked literal target-*.org path was accepted because git ls-files interpreted the asterisk as a pathspec and matched tracked target-tracked.org. A focused regression failed once under the reviewed implementation and then all eight Org policy tests passed after correction.",
+      "patch": "Invoke git ls-files with --literal-pathspecs so each Org target path is checked byte-for-byte rather than as a wildcard expression."
+    }
+  ],
+  "outcome": {
+    "summary": "The canonical Org source gate now fails closed for links that exist on the host but are outside Vela, links to untracked files, and links to absent custom IDs while retaining valid repository-local links.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command emacs --batch -Q -L emacs/tests -l vela-org-source-test -f ert-run-tests-batch-and-exit",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix flake check --all-systems --no-build --show-trace",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A path-existence check is not semantic link validation: host files, untracked files, and missing Org search targets can all produce false confidence.",
+    "Git path arguments sourced from document links must disable pathspec expansion; quoting a process argument does not make wildcard characters literal to Git.",
+    "Delayed review findings must be mapped to the exact reviewed tree; stale findings should not overwrite later corrections, but independently reproducible unresolved findings still require a follow-up.",
+    "Disposable Git repositories make containment and index-membership policy tests deterministic without depending on host paths."
+  ],
+  "provenance": {
+    "repository_path": "emacs/tests/vela-org-source-test.el",
+    "url": "https://github.com/Knosence9/project-vela/issues/1058"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
