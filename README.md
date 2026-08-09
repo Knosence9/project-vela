@@ -139,6 +139,8 @@ text or widening the source buffer. The interface does not drive the UI,
 evaluate arbitrary Emacs Lisp, or provide mutation or transport authority.
 See [`docs/emacs-agent-interface.md`](docs/emacs-agent-interface.md) for the
 protocol, execution boundary, and batch verification contract.
+An optional dependency-light Doom-inspired presentation is available through
+`vela-workbench-ui-enable` and is fully reversible.
 
 The workspace includes schema-versioned development-record validation:
 

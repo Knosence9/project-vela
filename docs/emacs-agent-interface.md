@@ -21,6 +21,25 @@ M-x vela-agent-interface-open
 
 The resulting `*Vela Agent Interface*` buffer uses `vela-agent-interface-mode`, is read-only, and displays the structured context an agent receives. Press `g` to refresh it and `q` to close its window.
 
+### Optional Doom-like workbench
+
+Load the dependency-light visual layer after the protocol module:
+
+```elisp
+(require 'vela-workbench-ui)
+(vela-workbench-ui-enable)
+```
+
+This applies a dark Doom-inspired palette, compact Vela header and modeline,
+readable JSON highlighting, restrained typography, and reduced window chrome.
+It works under `emacs -Q` and requires neither Doom Emacs nor icon fonts. The
+presentation stays separate from the trusted protocol and does not grant any
+additional capability. Undo all visual changes with:
+
+```elisp
+(vela-workbench-ui-disable)
+```
+
 ## Protocol version 3
 
 The in-process dispatcher accepts JSON-compatible alists. A future local transport can encode the same request and response shapes without changing the semantic operations.
