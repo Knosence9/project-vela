@@ -2,7 +2,7 @@
 
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), and the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md).
+The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), and the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md).
 
 ## Load and open
 
@@ -40,7 +40,7 @@ additional capability. Undo all visual changes with:
 (vela-workbench-ui-disable)
 ```
 
-## Protocol version 4
+## Protocol version 5
 
 The in-process dispatcher accepts JSON-compatible alists. A future local transport can encode the same request and response shapes without changing the semantic operations.
 
@@ -59,7 +59,7 @@ Read explicitly selected context:
 ```elisp
 (vela-agent-handle-request
  '(("operation" . "context.snapshot")
-   ("include" . ["buffer" "org"])))
+   ("include" . ["buffer" "org" "project"])))
 ```
 
 Buffer context includes name, optional file, opaque process-local identity,
@@ -85,6 +85,12 @@ Org context uses native Org APIs to expose the current heading ID, title, level,
 TODO keyword, tags, outline path, and source-block name, language, and source
 digest. It does not return source contents implicitly.
 
+Project context uses native `project-current` without prompting and reports the
+bounded absolute root returned by `project-root`, or null when Emacs recognizes
+no project for the current buffer. The root is observational metadata only: no
+project files are enumerated or read, and it grants no filesystem, indexing,
+project-switching, process, VCS, or mutation authority.
+
 Every context request fails closed when the source buffer exceeds 1,048,576
 characters. This cap bounds native line and Org traversal, source extraction,
 and hashing work on the main thread. The interface buffer uses an ordered JSON
@@ -93,7 +99,7 @@ Live buffer, Org heading, tag, outline, source-block name, and language strings
 are capped at 8,192 characters; Org collections are capped at 128 items. The
 encoder independently caps string length, collection width, nesting depth,
 value-node count, and total output; cyclic response values fail closed.
-The `include` vector accepts each of the two supported sections at most once,
+The `include` vector accepts each of the three supported sections at most once,
 and its vector length is checked before copying. Request objects are traversed
 for at most eight unique fields; keys and operation/section names also have
 fixed character limits. Cyclic, dotted, duplicate-keyed, or oversized request

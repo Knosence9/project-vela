@@ -9,7 +9,7 @@
          (result (alist-get "result" response nil nil #'string=))
          (capabilities (alist-get "capabilities" result nil nil #'string=))
          (features (alist-get "emacs_features" result nil nil #'string=)))
-    (should (equal (alist-get "protocol_version" response nil nil #'string=) 4))
+    (should (equal (alist-get "protocol_version" response nil nil #'string=) 5))
     (should (eq (alist-get "ok" response nil nil #'string=) t))
     (should
      (equal capabilities
@@ -47,7 +47,103 @@
     (should (equal (mapcar (lambda (feature)
                              (alist-get "context_section" feature nil nil #'string=))
                            (append features nil))
-                   '("buffer" "org" :null :null :null :null)))))
+                   '("buffer" "org" "project" :null :null :null)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-native-project-root-read-only ()
+  (with-temp-buffer
+    (insert "alpha\nbeta\n")
+    (goto-char 7)
+    (narrow-to-region 2 10)
+    (set-mark 8)
+    (setq mark-active t)
+    (set-buffer-modified-p nil)
+    (string-match "b\\(c\\)" "abcd")
+    (let ((point-before (point))
+          (mark-before (mark t))
+          (mark-active-before mark-active)
+          (restriction-before (cons (point-min) (point-max)))
+          (text-before (save-restriction
+                         (widen)
+                         (buffer-substring (point-min) (point-max))))
+          (modified-before (buffer-modified-p))
+          (tick-before (buffer-chars-modified-tick))
+          (undo-before buffer-undo-list)
+          (match-before (match-data t))
+          (project-object '(vela-test-project)))
+      (cl-letf (((symbol-function 'project-current)
+                 (lambda (&optional _maybe-prompt _directory) project-object))
+                ((symbol-function 'project-root)
+                 (lambda (project)
+                   (should (eq project project-object))
+                   "/tmp/vela-project/")))
+        (let* ((response
+                (vela-agent-handle-request
+                 '(("operation" . "context.snapshot")
+                   ("include" . ["project"]))))
+               (result (alist-get "result" response nil nil #'string=)))
+          (should (equal result
+                         '(("project" . (("root" . "/tmp/vela-project/"))))))))
+      (should (= (point) point-before))
+      (should (equal (mark t) mark-before))
+      (should (eq mark-active mark-active-before))
+      (should (equal (cons (point-min) (point-max)) restriction-before))
+      (should
+       (equal-including-properties
+        (save-restriction
+          (widen)
+          (buffer-substring (point-min) (point-max)))
+        text-before))
+      (should (eq (buffer-modified-p) modified-before))
+      (should (= (buffer-chars-modified-tick) tick-before))
+      (should (equal buffer-undo-list undo-before))
+      (should (equal (match-data t) match-before)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-missing-project-as-null ()
+  (cl-letf (((symbol-function 'project-current) (lambda (&rest _) nil))
+            ((symbol-function 'project-root)
+             (lambda (&rest _) (ert-fail "missing project resolved a root"))))
+    (let* ((response
+            (vela-agent-handle-request
+             '(("operation" . "context.snapshot")
+               ("include" . ["project"]))))
+           (result (alist-get "result" response nil nil #'string=)))
+      (should (equal result '(("project" . :null)))))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-oversized-project-root ()
+  (cl-letf (((symbol-function 'project-current) (lambda (&rest _) 'project))
+            ((symbol-function 'project-root)
+             (lambda (_project)
+               (make-string (1+ vela-agent-max-metadata-string-characters) ?x))))
+    (should-error
+     (vela-agent-handle-request
+      '(("operation" . "context.snapshot")
+        ("include" . ["project"])))
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-context-snapshot-rejects-invalid-project-roots ()
+  (dolist (root '("relative/project/" 42))
+    (cl-letf (((symbol-function 'project-current) (lambda (&rest _) 'project))
+              ((symbol-function 'project-root) (lambda (_project) root)))
+      (should-error
+       (vela-agent-handle-request
+        '(("operation" . "context.snapshot")
+          ("include" . ["project"])))
+       :type 'vela-agent-protocol-error))))
+
+(ert-deftest vela-agent-context-snapshot-uses-project-api-dispatch ()
+  (let ((default-directory temporary-file-directory)
+        (project-find-functions
+         (list (lambda (_directory) `(transient . ,temporary-file-directory)))))
+    (let* ((response
+            (vela-agent-handle-request
+             '(("operation" . "context.snapshot")
+               ("include" . ["project"]))))
+           (project (alist-get
+                     "project"
+                     (alist-get "result" response nil nil #'string=)
+                     nil nil #'string=)))
+      (should (equal (alist-get "root" project nil nil #'string=)
+                     temporary-file-directory)))))
 
 (ert-deftest vela-agent-context-snapshot-reports-buffer-without-mutating-it ()
   (with-temp-buffer
@@ -282,7 +378,7 @@
 (ert-deftest vela-agent-interface-json-preserves-protocol-order ()
   (let* ((json
           (vela-agent-encode-response
-           '(("protocol_version" . 4)
+           '(("protocol_version" . 5)
              ("ok" . t)
              ("result" . (("missing" . :null)
                             ("enabled" . :false)
@@ -294,7 +390,7 @@
                                     :false-object :false)))
     (should
      (equal json
-            "{\"protocol_version\":4,\"ok\":true,\"result\":{\"missing\":null,\"enabled\":false,\"items\":[\"a\",\"b\"]}}"))
+            "{\"protocol_version\":5,\"ok\":true,\"result\":{\"missing\":null,\"enabled\":false,\"items\":[\"a\",\"b\"]}}"))
     (should (eq (alist-get "missing"
                            (alist-get "result" parsed nil nil #'string=)
                            nil nil #'string=)
@@ -391,7 +487,25 @@
     (should-error
      (vela-agent-handle-request
       '(("operation" . "context.snapshot")
-        ("include" . ["buffer" "org" "buffer"])))
+        ("include" . ["buffer" "org" "project" "buffer"])))
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-context-snapshot-rejects-duplicate-sections ()
+  (should-error
+   (vela-agent-handle-request
+    '(("operation" . "context.snapshot")
+      ("include" . ["buffer" "org" "buffer"])))
+   :type 'vela-agent-protocol-error))
+
+(ert-deftest vela-agent-context-snapshot-validates-section-before-hashing ()
+  (cl-letf (((symbol-function 'vela-agent--record-unique-section)
+             (lambda (&rest _)
+               (ert-fail "oversized section was hashed before validation"))))
+    (should-error
+     (vela-agent-handle-request
+      `(("operation" . "context.snapshot")
+        ("include" . [,(make-string
+                         (1+ vela-agent-max-operation-characters) ?x)])))
      :type 'vela-agent-protocol-error)))
 
 (ert-deftest vela-agent-request-validation-bounds-cyclic-objects ()
