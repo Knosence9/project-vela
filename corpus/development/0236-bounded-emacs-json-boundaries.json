@@ -51,7 +51,7 @@
         "status": "passed"
       },
       {
-        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development",
+        "command": "nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development # result: inspected 236 records: 236 valid, 0 invalid",
         "status": "passed"
       },
       {
@@ -59,7 +59,23 @@
         "status": "passed"
       },
       {
-        "command": "exact-head Rust quality gates and substantive CodeRabbit reviews with zero unresolved threads for pull requests 1044, 1046, 1049, 1050, and 1052",
+        "command": "Pull request 1044 squash merge 5744c88eb6526d41d94bbc32461ec77681b9344e",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1046 squash merge dfe113f86dedfdaa6a14a1cfbf4475c6642f9fb4",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1049 squash merge 82f7f5cffc8f8174e4c798b6ce180f8007945893",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1050 squash merge 2bdeb912dedcb773070d365af6fb941cf9bb867a",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1052 squash merge 0592d7492a14ee613a1e5f6ff5a9fd055be940f8",
         "status": "passed"
       }
     ]
@@ -71,7 +87,8 @@
     "Keep partial request bytes caller-owned until peer identity, lifecycle, backpressure, callback, and transport error policy are selected deliberately.",
     "Batch composition can guarantee no partial returned response vector because every current operation is read-only; mutation would require a different atomicity and approval contract.",
     "Development-shell dependencies must be declared in the flake even when ambient tools make local verification appear successful.",
-    "A successful review status that reports rate limiting is not substantive review evidence and must never race auto-merge."
+    "A successful review status that reports rate limiting is not substantive review evidence and must never race auto-merge.",
+    "Historical aggregate review claims should be qualified when exact-head artifacts are unavailable; verified squash commit identities remain auditable merge evidence and should be recorded separately from review-process lessons."
   ],
   "provenance": {
     "repository_path": "emacs/vela-agent-mode.el",
