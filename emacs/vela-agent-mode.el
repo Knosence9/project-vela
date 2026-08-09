@@ -20,10 +20,11 @@
 (require 'json)
 (require 'cl-lib)
 (require 'project)
+(require 'flymake)
 
 (define-error 'vela-agent-protocol-error "Invalid Vela agent request")
 
-(defconst vela-agent-protocol-version 5
+(defconst vela-agent-protocol-version 6
   "Version of the model-neutral Vela Emacs protocol.")
 
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
@@ -99,7 +100,8 @@
    (vela-agent--emacs-feature
     "project" 'project-current "read-only native project root metadata" "project")
    (vela-agent--emacs-feature
-    "diagnostics" 'flymake-diagnostics "loaded Flymake diagnostics facility metadata" nil)
+    "diagnostics" 'flymake-diagnostics
+    "read-only current-line Flymake diagnostic metadata" "diagnostics")
    (vela-agent--emacs-feature
     "compilation" 'compilation-start "loaded compilation-mode facility metadata" nil)
    (vela-agent--emacs-feature
@@ -241,6 +243,88 @@
             `(("root" . ,(vela-agent--bounded-metadata-string root))))
         :null))))
 
+(defun vela-agent--diagnostic-type-string (type)
+  "Return bounded protocol text for Flymake diagnostic TYPE."
+  (unless (symbolp type)
+    (signal 'vela-agent-protocol-error
+            '("Flymake diagnostic type must be a symbol")))
+  (let ((name (symbol-name type)))
+    (vela-agent--bounded-metadata-string
+     (if (string-prefix-p ":" name) (substring name 1) name))))
+
+(defun vela-agent--diagnostic-context-item (diagnostic line-start line-end)
+  "Validate and convert DIAGNOSTIC intersecting LINE-START and LINE-END."
+  (let ((buffer (flymake-diagnostic-buffer diagnostic))
+        (start (flymake-diagnostic-beg diagnostic))
+        (end (flymake-diagnostic-end diagnostic))
+        (type (flymake-diagnostic-type diagnostic))
+        (text (flymake-diagnostic-text diagnostic)))
+    (unless (eq buffer (current-buffer))
+      (signal 'vela-agent-protocol-error
+              '("Flymake diagnostic belongs to another buffer")))
+    (dolist (bound (list start end))
+      (when (and (markerp bound)
+                 (not (eq (marker-buffer bound) (current-buffer))))
+        (signal 'vela-agent-protocol-error
+                '("Flymake diagnostic marker belongs to another buffer"))))
+    (setq start (if (markerp start) (marker-position start) start)
+          end (if (markerp end) (marker-position end) end))
+    (unless (and (integerp start)
+                 (integerp end)
+                 (<= (point-min) start end (point-max))
+                 (if (= start end)
+                     (and (<= line-start start)
+                          (or (< start line-end)
+                              (and (= line-end (point-max))
+                                   (= start line-end))))
+                   (and (< start line-end)
+                        (> end line-start))))
+      (signal 'vela-agent-protocol-error
+              '("Flymake diagnostic has invalid accessible line bounds")))
+    `(("start" . ,start)
+      ("end" . ,end)
+      ("type" . ,(vela-agent--diagnostic-type-string type))
+      ("text" . ,(vela-agent--bounded-metadata-string text)))))
+
+(defun vela-agent--diagnostic-item-less-p (left right)
+  "Return non-nil when diagnostic item LEFT sorts before RIGHT."
+  (let ((left-start (alist-get "start" left nil nil #'string=))
+        (right-start (alist-get "start" right nil nil #'string=))
+        (left-end (alist-get "end" left nil nil #'string=))
+        (right-end (alist-get "end" right nil nil #'string=))
+        (left-type (alist-get "type" left nil nil #'string=))
+        (right-type (alist-get "type" right nil nil #'string=))
+        (left-text (alist-get "text" left nil nil #'string=))
+        (right-text (alist-get "text" right nil nil #'string=)))
+    (cond
+     ((/= left-start right-start) (< left-start right-start))
+     ((/= left-end right-end) (< left-end right-end))
+     ((not (string= left-type right-type)) (string-lessp left-type right-type))
+     (t (string-lessp left-text right-text)))))
+
+(defun vela-agent--diagnostics-context ()
+  "Snapshot bounded published Flymake diagnostics for the accessible line."
+  (save-match-data
+    (save-excursion
+      (let* ((line-start (line-beginning-position))
+             (line-end (min (point-max) (1+ (line-end-position))))
+             (cursor (flymake-diagnostics line-start line-end))
+             (count 0)
+             items)
+        (while (consp cursor)
+          (when (>= count vela-agent-max-json-collection-items)
+            (signal 'vela-agent-protocol-error
+                    '("Flymake diagnostics exceed the collection bound")))
+          (push (vela-agent--diagnostic-context-item
+                 (car cursor) line-start line-end)
+                items)
+          (setq cursor (cdr cursor)
+                count (1+ count)))
+        (unless (null cursor)
+          (signal 'vela-agent-protocol-error
+                  '("Flymake diagnostics must be a proper list")))
+        (vconcat (sort items #'vela-agent--diagnostic-item-less-p))))))
+
 (defun vela-agent--record-unique-section (section seen)
   "Record bounded SECTION in SEEN, or reject an existing entry."
   (when (gethash section seen)
@@ -254,15 +338,16 @@
     (unless (vectorp include)
       (signal 'vela-agent-protocol-error
               '("context.snapshot requires an include vector")))
-    (when (> (length include) 3)
+    (when (> (length include) 4)
       (signal 'vela-agent-protocol-error
-              '("context.snapshot accepts at most three sections")))
+              '("context.snapshot accepts at most four sections")))
     (let ((sections (append include nil)))
       (let ((seen (make-hash-table :test #'equal)))
         (dolist (section sections)
           (unless (and (stringp section)
                        (<= (length section) vela-agent-max-operation-characters)
-                       (member section '("buffer" "org" "project")))
+                       (member section
+                               '("buffer" "org" "project" "diagnostics")))
             (signal 'vela-agent-protocol-error
                     '("unsupported context section")))
           (vela-agent--record-unique-section section seen)))
@@ -277,6 +362,8 @@
           (push (cons "org" (vela-agent--org-context)) result))
         (when (member "project" sections)
           (push (cons "project" (vela-agent--project-context)) result))
+        (when (member "diagnostics" sections)
+          (push (cons "diagnostics" (vela-agent--diagnostics-context)) result))
         (nreverse result)))))
 
 (defun vela-agent--validate-request-object (request)
@@ -421,7 +508,7 @@
          (with-current-buffer vela-agent-interface-source-buffer
            (vela-agent-handle-request
             '(("operation" . "context.snapshot")
-              ("include" . ["buffer" "org" "project"]))))))
+              ("include" . ["buffer" "org" "project" "diagnostics"]))))))
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (vela-agent-encode-response response))

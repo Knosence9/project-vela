@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 'vela-agent-mode)
+(require 'flymake)
 
 (ert-deftest vela-agent-capabilities-are-stable-and-read-only ()
   (let* ((response (vela-agent-handle-request
@@ -9,7 +10,7 @@
          (result (alist-get "result" response nil nil #'string=))
          (capabilities (alist-get "capabilities" result nil nil #'string=))
          (features (alist-get "emacs_features" result nil nil #'string=)))
-    (should (equal (alist-get "protocol_version" response nil nil #'string=) 5))
+    (should (equal (alist-get "protocol_version" response nil nil #'string=) 6))
     (should (eq (alist-get "ok" response nil nil #'string=) t))
     (should
      (equal capabilities
@@ -47,7 +48,196 @@
     (should (equal (mapcar (lambda (feature)
                              (alist-get "context_section" feature nil nil #'string=))
                            (append features nil))
-                   '("buffer" "org" "project" :null :null :null)))))
+                   '("buffer" "org" "project" "diagnostics" :null :null)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-current-line-flymake-diagnostics ()
+  (with-temp-buffer
+    (insert "alpha\nbeta\ngamma\n")
+    (goto-char 8)
+    (narrow-to-region 2 17)
+    (set-mark 10)
+    (setq mark-active t)
+    (set-buffer-modified-p nil)
+    (string-match "b\\(c\\)" "abcd")
+    (let* ((point-before (point))
+           (mark-before (mark t))
+           (mark-active-before mark-active)
+           (restriction-before (cons (point-min) (point-max)))
+           (text-before (save-restriction
+                          (widen)
+                          (buffer-substring (point-min) (point-max))))
+           (modified-before (buffer-modified-p))
+           (tick-before (buffer-chars-modified-tick))
+           (undo-before buffer-undo-list)
+           (match-before (match-data t))
+           (warning (flymake-make-diagnostic
+                     (current-buffer) 8 10 :warning "later"))
+           (error (flymake-make-diagnostic
+                   (current-buffer) 7 8 :error "first"))
+           requested-range)
+      (cl-letf (((symbol-function 'flymake-diagnostics)
+                 (lambda (beg end)
+                   (setq requested-range (cons beg end))
+                   (list warning error))))
+        (let* ((response
+                (vela-agent-handle-request
+                 '(("operation" . "context.snapshot")
+                   ("include" . ["diagnostics"]))))
+               (result (alist-get "result" response nil nil #'string=)))
+          (should (equal requested-range '(7 . 12)))
+          (should
+           (equal result
+                  '(("diagnostics" .
+                     [(("start" . 7)
+                       ("end" . 8)
+                       ("type" . "error")
+                       ("text" . "first"))
+                      (("start" . 8)
+                       ("end" . 10)
+                       ("type" . "warning")
+                       ("text" . "later"))]))))))
+      (should (= (point) point-before))
+      (should (equal (mark t) mark-before))
+      (should (eq mark-active mark-active-before))
+      (should (equal (cons (point-min) (point-max)) restriction-before))
+      (should
+       (equal-including-properties
+        (save-restriction
+          (widen)
+          (buffer-substring (point-min) (point-max)))
+        text-before))
+      (should (eq (buffer-modified-p) modified-before))
+      (should (= (buffer-chars-modified-tick) tick-before))
+      (should (equal buffer-undo-list undo-before))
+      (should (equal (match-data t) match-before)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-empty-flymake-diagnostics ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'flymake-diagnostics)
+               (lambda (&rest _) nil)))
+      (let* ((response
+              (vela-agent-handle-request
+               '(("operation" . "context.snapshot")
+                 ("include" . ["diagnostics"]))))
+             (result (alist-get "result" response nil nil #'string=)))
+        (should (equal result '(("diagnostics" . []))))))))
+
+(ert-deftest vela-agent-context-snapshot-orders-all-flymake-diagnostic-fields ()
+  (with-temp-buffer
+    (insert "line")
+    (let ((diagnostics
+           (list
+            (flymake-make-diagnostic (current-buffer) 1 3 :warning "z")
+            (flymake-make-diagnostic (current-buffer) 1 3 :warning "a")
+            (flymake-make-diagnostic (current-buffer) 1 3 :error "z")
+            (flymake-make-diagnostic (current-buffer) 1 2 :warning "z"))))
+      (cl-letf (((symbol-function 'flymake-diagnostics)
+                 (lambda (&rest _) diagnostics)))
+        (let* ((items
+                (alist-get
+                 "diagnostics"
+                 (alist-get
+                  "result"
+                  (vela-agent-handle-request
+                   '(("operation" . "context.snapshot")
+                     ("include" . ["diagnostics"])))
+                  nil nil #'string=)
+                 nil nil #'string=))
+               (keys
+                (mapcar
+                 (lambda (item)
+                   (list (alist-get "end" item nil nil #'string=)
+                         (alist-get "type" item nil nil #'string=)
+                         (alist-get "text" item nil nil #'string=)))
+                 (append items nil))))
+          (should (equal keys
+                         '((2 "warning" "z")
+                           (3 "error" "z")
+                           (3 "warning" "a")
+                           (3 "warning" "z")))))))))
+
+(ert-deftest vela-agent-context-snapshot-accepts-current-line-point-diagnostics ()
+  (with-temp-buffer
+    (insert "line")
+    (dolist (position '(1 5))
+      (goto-char position)
+      (let ((diagnostic
+             (flymake-make-diagnostic
+              (current-buffer) position position :note "point")))
+        (cl-letf (((symbol-function 'flymake-diagnostics)
+                   (lambda (&rest _) (list diagnostic))))
+          (let* ((response
+                  (vela-agent-handle-request
+                   '(("operation" . "context.snapshot")
+                     ("include" . ["diagnostics"]))))
+                 (items (alist-get
+                         "diagnostics"
+                         (alist-get "result" response nil nil #'string=)
+                         nil nil #'string=)))
+            (should (= (length items) 1))
+            (should (= (alist-get "start" (aref items 0) nil nil #'string=)
+                       position))
+            (should (= (alist-get "end" (aref items 0) nil nil #'string=)
+                       position))))))))
+
+(ert-deftest vela-agent-context-snapshot-bounds-flymake-diagnostic-count ()
+  (with-temp-buffer
+    (insert "x")
+    (let ((diagnostic
+           (flymake-make-diagnostic (current-buffer) 1 2 :note "note")))
+      (cl-letf (((symbol-function 'flymake-diagnostics)
+                 (lambda (&rest _)
+                   (make-list (1+ vela-agent-max-json-collection-items)
+                              diagnostic))))
+        (should-error
+         (vela-agent-handle-request
+          '(("operation" . "context.snapshot")
+            ("include" . ["diagnostics"])))
+         :type 'vela-agent-protocol-error)))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-invalid-flymake-metadata ()
+  (with-temp-buffer
+    (insert "line\n")
+    (let* ((other-buffer (generate-new-buffer " *vela-other-diagnostic*"))
+           (foreign-marker (set-marker (make-marker) 1 other-buffer))
+           (unset-marker (make-marker)))
+      (unwind-protect
+          (dolist (fields `((,other-buffer 1 2 :error "text")
+                            (,(current-buffer) 0 2 :error "text")
+                            (,(current-buffer) 3 2 :error "text")
+                            (,(current-buffer) 1 7 :error "text")
+                            (,(current-buffer) ,foreign-marker 2 :error "text")
+                            (,(current-buffer) ,unset-marker 2 :error "text")
+                            (,(current-buffer) 1 2 "error" "text")
+                            (,(current-buffer) 1 2 :error
+                             ,(make-string
+                               (1+ vela-agent-max-metadata-string-characters)
+                               ?x))))
+            (cl-letf (((symbol-function 'flymake-diagnostic-buffer)
+                       (lambda (_) (nth 0 fields)))
+                      ((symbol-function 'flymake-diagnostic-beg)
+                       (lambda (_) (nth 1 fields)))
+                      ((symbol-function 'flymake-diagnostic-end)
+                       (lambda (_) (nth 2 fields)))
+                      ((symbol-function 'flymake-diagnostic-type)
+                       (lambda (_) (nth 3 fields)))
+                      ((symbol-function 'flymake-diagnostic-text)
+                       (lambda (_) (nth 4 fields))))
+              (should-error
+               (vela-agent--diagnostic-context-item 'diagnostic 1 6)
+               :type 'vela-agent-protocol-error)))
+        (kill-buffer other-buffer)))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-improper-flymake-results ()
+  (with-temp-buffer
+    (insert "line")
+    (cl-letf (((symbol-function 'flymake-diagnostics)
+               (lambda (&rest _) (cons 'diagnostic 'improper))))
+      (cl-letf (((symbol-function 'vela-agent--diagnostic-context-item)
+                 (lambda (&rest _) '(("start" . 1)))))
+        (should-error
+         (vela-agent--diagnostics-context)
+         :type 'vela-agent-protocol-error)))))
 
 (ert-deftest vela-agent-context-snapshot-reports-native-project-root-read-only ()
   (with-temp-buffer
@@ -488,7 +678,7 @@
     (should-error
      (vela-agent-handle-request
       '(("operation" . "context.snapshot")
-        ("include" . ["buffer" "org" "project" "buffer"])))
+        ("include" . ["buffer" "org" "project" "diagnostics" "buffer"])))
      :type 'vela-agent-protocol-error)))
 
 (ert-deftest vela-agent-context-snapshot-rejects-duplicate-sections ()
