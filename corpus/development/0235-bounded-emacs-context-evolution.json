@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Evolve the Emacs interface with bounded observational context",
+    "objective": "Complete issues https://github.com/Knosence9/project-vela/issues/1027, https://github.com/Knosence9/project-vela/issues/1029, https://github.com/Knosence9/project-vela/issues/1033, https://github.com/Knosence9/project-vela/issues/1035, https://github.com/Knosence9/project-vela/issues/1037, and https://github.com/Knosence9/project-vela/issues/1039 by exposing useful live editor context without widening the read-only model-neutral authority boundary.",
+    "acceptance_criteria": [
+      "Expose restriction bounds, text revision, and non-reused process-local live-buffer identity while preserving editor state.",
+      "Expose bounded current-buffer native project, Flymake, and compilation observations without request-time library loading or searching, file reads, unrelated-buffer selection, or starting work.",
+      "Reject malformed, oversized, duplicate, inherited, and unsupported added-section state before unbounded copying or traversal.",
+      "Document each observational authority boundary and verify every slice through focused ERT and the complete repository quality gate."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added observational restriction bounds, text revision, and live-buffer identity through separate RED to GREEN slices.",
+      "outcome": "success",
+      "diagnostic": "Focused RED runs established that snapshots could not report accessible bounds, correlate observations with exact buffer text, or distinguish a killed buffer from a later buffer reusing its display name.",
+      "patch": "Pull requests https://github.com/Knosence9/project-vela/pull/1028, https://github.com/Knosence9/project-vela/pull/1030, and https://github.com/Knosence9/project-vela/pull/1034 added preserved point-min and point-max metadata, a character modification tick, and opaque process-local non-reused live-buffer tokens; expanded state-preservation, lifecycle, reload, and protocol-version tests; and documented that tokens are not durable identities or authorization."
+    },
+    {
+      "summary": "Added bounded native project and current-line Flymake context without filesystem or backend authority.",
+      "outcome": "success",
+      "diagnostic": "Focused RED runs showed that callers lacked structured project roots and current-line diagnostics, while naive discovery or diagnostic projection could search load paths, visit files, expose backend objects, return unbounded metadata, or mutate match data.",
+      "patch": "Pull requests https://github.com/Knosence9/project-vela/pull/1036 and https://github.com/Knosence9/project-vela/pull/1038 used native project and Flymake APIs already required by the package in the current buffer; returned nullable project roots and ordered bounded diagnostic metadata; rejected oversized, malformed, improper, and zero-width observations; preserved match data and source-buffer state; and documented immediate staleness and non-authority."
+    },
+    {
+      "summary": "Added bounded current-buffer native compilation progress after pinning lifecycle and counter semantics.",
+      "outcome": "success",
+      "diagnostic": "Focused RED runs established missing protocol metadata and shapes for active and inactive processes, malformed or inherited counters, five-section width, complete-response encoding, and editor-state preservation.",
+      "patch": "Pull request https://github.com/Knosence9/project-vela/pull/1040 advanced the protocol to version 7; recognized only the current native compilation buffer without request-time compilation-library loading or searching; reported live associated-process state and bounded buffer-local error, warning, and info counters; rejected malformed state; updated finite response budgets; and documented that inactive does not prove any completion outcome."
+    },
+    {
+      "summary": "Preserved the compilation pull request through a false-green rate limit and resumed review once after the stated cooldown.",
+      "outcome": "success",
+      "diagnostic": "CodeRabbit initially published a successful status whose comment explicitly said the review was rate limited, so the exact head lacked a genuine substantive review and was not merge-ready.",
+      "patch": "Kept auto-merge disabled, recorded the blocker once, waited beyond the published cooldown, confirmed the shared review budget, triggered one deliberate review, required the substantive exact-head walkthrough with no actionable findings and zero threads, then armed squash auto-merge."
+    }
+  ],
+  "outcome": {
+    "summary": "Protocol version 7 now correlates bounded live-buffer identity and revision with restriction, native project, current-line Flymake, and current-buffer compilation observations while retaining a read-only owner-thread boundary and explicit finite request and response budgets.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "exact-head Rust quality gates for pull requests 1028, 1030, 1034, 1036, 1038, and 1040",
+        "status": "passed"
+      },
+      {
+        "command": "substantive exact-head CodeRabbit reviews for pull requests 1028, 1030, 1034, 1036, 1038, and 1040 with zero unresolved threads before each merge",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A live-buffer observation needs both a process-local non-reused identity and a text revision; names, files, and ticks alone do not establish exact buffer identity across lifecycle changes.",
+    "Narrowing bounds can be observed without widening, and snapshot code must preserve point, mark, restriction, text properties, modification state and tick, undo state, and match data.",
+    "Native project and Flymake APIs are safe only behind current-buffer, already-callable, bounded projection contracts that do not load libraries, read files, expose backend objects, or imply freshness.",
+    "Compilation progress counters are transient native observations; a missing live process does not prove success, failure, completion, cancellation, or prior execution.",
+    "Every added optional section must update pre-copy request width and the deterministic encoder node budget for the largest complete legal response.",
+    "A green review status is not sufficient when the accompanying review explicitly reports rate limiting; merge readiness requires substantive exact-head review content and zero unresolved threads."
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-agent-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1040"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
