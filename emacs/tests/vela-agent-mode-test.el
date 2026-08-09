@@ -75,6 +75,7 @@
                 ((symbol-function 'project-root)
                  (lambda (project)
                    (should (eq project project-object))
+                   (string-match "changed" "backend-changed-match-data")
                    "/tmp/vela-project/")))
         (let* ((response
                 (vela-agent-handle-request
