@@ -1,0 +1,59 @@
+* ADR-NNNN: Decision title
+:PROPERTIES:
+:CUSTOM_ID: adr-nnnn-decision-title
+:END:
+- *Status:* proposed
+- *Date:* YYYY-MM-DD
+- *Owners:*
+- *Related issue:*
+- *Related pull request:*
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+What problem, constraint, or conflict requires a durable decision?
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+What will Project Vela do?
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Alternative name
+:PROPERTIES:
+:CUSTOM_ID: alternative-name
+:END:
+Why was this plausible, and why was it not selected?
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+*** Positive
+:PROPERTIES:
+:CUSTOM_ID: positive
+:END:
+- Expected benefit
+
+*** Negative
+:PROPERTIES:
+:CUSTOM_ID: negative
+:END:
+- Cost, constraint, or risk
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+How will we know the decision works in practice?
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+What evidence or changed condition should cause this decision to be reconsidered?

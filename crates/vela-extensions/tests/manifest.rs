@@ -61,7 +61,7 @@ fn accepts_each_supported_kind() {
 
 #[test]
 fn accepts_portable_relative_entrypoints() {
-    for entrypoint in ["SKILL.md", "bin/search.wasm", "workflows/review.yaml"] {
+    for entrypoint in ["SKILL.org", "bin/search.wasm", "workflows/review.yaml"] {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("extension.yaml");
         fs::write(
@@ -95,7 +95,7 @@ fn rejects_non_portable_entrypoints() {
         "bin/search ",
         "bin/CON.txt",
         "bin/CON .txt",
-        "bin/LPT1 .md",
+        "bin/LPT1 .org",
         "bin/conout$.log",
         "bin/COM¹.txt",
         r"bin\search",

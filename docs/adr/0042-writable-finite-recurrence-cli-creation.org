@@ -1,0 +1,80 @@
+* ADR-0042: Writable finite recurrence CLI creation
+:PROPERTIES:
+:CUSTOM_ID: adr-0042-writable-finite-recurrence-cli-creation
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-02
+- *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/869][#869]]
+- *Related:* ADR-0037, ADR-0040, ADR-0041
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+ADR-0037 establishes immutable durable finite fixed-interval definitions, and ADR-0041 exposes their complete inventory without write authority. Operators still have no supported adapter for authoring a definition. Combining creation with occurrence projection, generated identities, or lifecycle policy would grant unrelated authority and obscure which inputs are caller owned.
+
+The smallest responsible mutation boundary is one explicit CLI creation command that delegates all durable validation to the existing kernel.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+=vela-dev recurrence create DATABASE RECURRENCE_ID GOAL ANCHOR_UNIX_MILLIS INTERVAL_MILLIS OCCURRENCE_COUNT= validates typed inputs before opening the exact caller-selected database through =RecurrenceStore::open=.
+
+The recurrence ID must be non-blank and the task goal must be non-empty under the existing exact-preserving kernel contracts. Clap parses anchor, interval, and occurrence count as =u64=; the CLI then rejects zero interval and zero count through =ScheduleInterval= and =OccurrenceCount= before storage access. Whitespace and other exact caller-authored content accepted by =TaskGoal= is preserved without trimming or normalization.
+
+After validation, creation may initialize the selected database. =RecurrenceStore::create= remains authoritative for representable final-occurrence validation, immutable duplicate protection, event encoding, and append behavior. Success emits the same compact complete recurrence object used by inspection: =id=, =goal=, =anchor_unix_millis=, =interval_millis=, =occurrence_count=, =final_occurrence_unix_millis=, and =revision=.
+
+Invalid IDs, goals, intervals, and counts emit =invalid_recurrence_id=, =invalid_task_goal=, =invalid_recurrence_interval=, or =invalid_occurrence_count= diagnostics without creating storage. Duplicate, overflow, open, schema, append, and serialization failures emit one escaped =recurrence_creation_failed= diagnostic, return non-zero, and emit no stdout. Failed creation does not replace an existing definition or persist an overflowing one.
+
+The command is inert. It reads no ambient time, generates no occurrence, schedule, or task identity, persists no occurrence lifecycle, and grants no catch-up, materialization, claim, cancellation, dispatch, retry, permission, worker, or execution authority.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Add occurrence paging at the same time
+:PROPERTIES:
+:CUSTOM_ID: add-occurrence-paging-at-the-same-time
+:END:
+Rejected because read-only paging has a distinct bounded output contract and creation does not need projection coordinates.
+
+*** Accept zero as an empty recurrence
+:PROPERTIES:
+:CUSTOM_ID: accept-zero-as-an-empty-recurrence
+:END:
+Rejected because ADR-0037 defines a positive finite count and validates a representable final authored occurrence.
+
+*** Validate after opening storage
+:PROPERTIES:
+:CUSTOM_ID: validate-after-opening-storage
+:END:
+Rejected because invalid caller input should not initialize or access the selected database.
+
+*** Generate a recurrence identity
+:PROPERTIES:
+:CUSTOM_ID: generate-a-recurrence-identity
+:END:
+Rejected because identity policy and collision ownership belong to the caller at this boundary.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Operators can author one exact immutable finite recurrence through a deterministic machine-readable adapter.
+- All value validation before open avoids filesystem side effects for invalid inputs.
+- The output shape is shared with inventory and preserves exact JSON escaping.
+- Valid creation intentionally grants database initialization and append authority for the exact caller-selected path.
+- Exact lookup, CLI occurrence paging, occurrence persistence and lifecycle, generated identities, catch-up, cancellation, materialization, claims, retries, workers, calendar/time-zone semantics, and execution remain deferred.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+RED→GREEN CLI integration tests prove exact successful JSON plus durable reopen, pre-open validation without path creation, overflow without persistence, and duplicate preservation. The complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider before adding exact recurrence lookup, occurrence paging, mutable recurrence histories, persisted occurrences, catch-up policy, generated identities, schedule/task materialization, claims, cancellation, retries, workers, calendars, time zones, ambient clocks, or execution.

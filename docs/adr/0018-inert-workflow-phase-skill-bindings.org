@@ -1,0 +1,81 @@
+* ADR-0018: Preserve inert workflow phase skill bindings
+:PROPERTIES:
+:CUSTOM_ID: adr-0018-preserve-inert-workflow-phase-skill-bindings
+:END:
+- *Status:* accepted
+- *Date:* 2026-07-29
+- *Decision owners:* Project Vela maintainers
+- *Related:* ADR-0005, ADR-0006, ADR-0007, ADR-0009, issues #736 and #737
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+Workflow definitions can express validated phases, gates, transitions, and terminal stops. Skills already have a separate caller-owned registration and explicit prompt-composition boundary, but a workflow cannot declare which reusable skills are intended for work in one phase. Automatically resolving or composing skills would let workflow availability mutate provider instructions and would violate ADR-0005. Omitting all binding metadata, however, prevents the authored workflow from describing its intended procedure.
+
+Durable workflow runs own immutable topology snapshots so replay never depends on a later registry or extension package. Any phase metadata that can guide later execution therefore has to survive preparation, registration, run start, replay, and discovery without gaining execution authority.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+Workflow definition version one remains accepted unchanged. Its phases expose empty skill bindings, and a version-one document containing a =skills= field is rejected rather than silently changing the established schema.
+
+Workflow definition version two adds an optional =skills= sequence to each non-terminal phase. Each skill ID must contain at least one non-whitespace character and be unique by exact authored text within that phase. IDs and their authored order are preserved without trimming, normalization, case folding, registry lookup, or dependency interpretation. Terminal phases reject a =skills= field because no phase work occurs after authored terminal arrival.
+
+Preparation carries validated bindings in =WorkflowPhase=. Atomic workflow registration copies them into =RegisteredWorkflowPhase=, and cursors expose the bindings of their current borrowed phase without resolving them.
+
+New =workflow_run.started= events use payload version three. The immutable workflow snapshot owns every phase's exact skill bindings and an optional task attribution. Replay continues to accept payload version one starts without task attribution and payload version two starts with task attribution; both legacy forms project empty skill bindings. Each payload version remains strict, so legacy payloads cannot smuggle version-three fields. Exact loading and authoritative discovery preserve the owned bindings without consulting a workflow or skill registry.
+
+Bindings are inert declarative intent only. Preparation, registration, cursor construction, run start, loading, and listing do not discover or require a matching skill, select registered instructions, compose or mutate a provider prompt, invoke a provider or tool, grant permission, advance a workflow, schedule work, or infer that a bound skill is safe or available. A later decision must define the caller-owned resolution and prompt-composition operation for one current phase.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Automatically compose bound skills on workflow start or advancement
+:PROPERTIES:
+:CUSTOM_ID: automatically-compose-bound-skills-on-workflow-start-or-advancement
+:END:
+That would make persistence or topology movement alter provider instructions without the explicit per-request selection required by ADR-0005. It would also require unresolved policy for missing skills, precedence, token budgets, and execution ownership.
+
+*** Store bindings only in extension definitions and registries
+:PROPERTIES:
+:CUSTOM_ID: store-bindings-only-in-extension-definitions-and-registries
+:END:
+Durable run replay would then depend on mutable ambient registration state or silently lose authored procedure intent. Owning bindings in the start snapshot preserves the same provenance guarantee as phases, transitions, and gates.
+
+*** Add skill IDs to version one
+:PROPERTIES:
+:CUSTOM_ID: add-skill-ids-to-version-one
+:END:
+Version-one workflow YAML rejects unknown fields. Retrofitting a recognized field would make the meaning of an established schema depend on library version. An explicit version two keeps parsing and compatibility deterministic.
+
+*** Allow bindings on terminal phases
+:PROPERTIES:
+:CUSTOM_ID: allow-bindings-on-terminal-phases
+:END:
+Terminal phases reject advancement and represent authored stop conditions. Retaining executable-looking procedure intent there would be ambiguous without a separate terminal-output or completion contract.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Workflows can describe exact reusable-skill intent while prompt authority remains caller-owned.
+- Version-one documents and durable starts replay unchanged with empty bindings.
+- New durable snapshots preserve bindings independently of extension files and registries.
+- Callers can inspect current-phase bindings, but must not treat them as resolved, authorized, or executed capabilities.
+- Workflow payload version three unifies attributed and unassociated starts with optional task identity.
+- Tool bindings, provider execution, skill resolution, prompt composition, dependency rules, and automatic advancement remain deferred.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+The bounded execution slice follows RED→GREEN tests proving version-one empty bindings, version-two authored-order preservation, blank and duplicate rejection, terminal-phase rejection, atomic registration propagation, version-three durable start/load/list projection, and backward-compatible version-one and version-two start replay. Existing workflow graph, registry, cursor, lifecycle, discovery, and complete repository quality gates remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider this decision before resolving bindings against a skill registry, composing current-phase provider requests, adding tool or agent bindings, defining missing-skill policy, dependency or precedence rules, token budgeting, automatic routing, persisted execution outcomes, scheduling, or migration support.

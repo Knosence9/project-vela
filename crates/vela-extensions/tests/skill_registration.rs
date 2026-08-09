@@ -74,7 +74,7 @@ fn preparation_and_registry_failures_leave_existing_skills_unchanged() {
             )])
             .unwrap();
         if failure == "preparation" {
-            fs::remove_file(root.path().join("zeta/SKILL.md")).unwrap();
+            fs::remove_file(root.path().join("zeta/SKILL.org")).unwrap();
         }
 
         let error = register_skill_selection(root.path(), &selection, &mut skills).unwrap_err();
@@ -115,8 +115,8 @@ fn write_extension(root: &std::path::Path, package: &str, id: &str, kind: &str, 
     fs::create_dir(&package).unwrap();
     fs::write(
         package.join("extension.yaml"),
-        format!("manifest_version: 1\nid: {id}\nkind: {kind}\nentrypoint: SKILL.md\n"),
+        format!("manifest_version: 1\nid: {id}\nkind: {kind}\nentrypoint: SKILL.org\n"),
     )
     .unwrap();
-    fs::write(package.join("SKILL.md"), content).unwrap();
+    fs::write(package.join("SKILL.org"), content).unwrap();
 }

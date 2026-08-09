@@ -1,0 +1,86 @@
+* ADR-0014: Query durable workflow-run lifecycle history as typed semantic evidence
+:PROPERTIES:
+:CUSTOM_ID: adr-0014-query-durable-workflow-run-lifecycle-history-as-typed-semantic-evidence
+:END:
+- *Status:* accepted
+- *Date:* 2026-07-28
+- *Decision owners:* Project Vela maintainers
+- *Related:* ADR-0009, ADR-0010, ADR-0011, ADR-0012, ADR-0013, issues #704 and #705
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+Durable workflow-run streams retain immutable start provenance, transition choices, gate acknowledgements, pause and resume rationale, and cancellation rationale. The aggregate projection intentionally exposes only current state, so a successful resume clears the visible pause reason and does not expose its own reason. Callers needing audit and recovery evidence would otherwise need access to private serialized event payloads and internal phase indexes.
+
+The North Star requires observability and replay, while ADR-0013 requires this boundary to be reconsidered before adding a public lifecycle-history query. The query must preserve the existing strict projector as the authority for whether a history is valid.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+=WorkflowRunStore::history= reads one exact workflow-run stream and returns =None= when it has no events. A present run returns =WorkflowRunHistoryEntry= values in ascending event-stream order. Each entry exposes its one-based stream revision and one typed =WorkflowRunHistoryEvent=.
+
+Public history is semantic rather than storage-shaped:
+
+- =Started= exposes the exact workflow ID and resolved starting phase ID.
+- =Advanced= exposes source and target phase IDs, the authored transition index, and optional exact gate acknowledgement.
+- =Paused= and =Resumed= expose the unchanged phase ID and their separate exact caller-owned reasons.
+- =Cancelled= exposes the unchanged phase ID and exact caller-owned reason.
+
+The API does not expose serialized payloads, payload versions, stream IDs, or internal phase indexes. Reasons and gate acknowledgements preserve exact UTF-8 text.
+
+The query first decodes the complete stream and projects it through the same fail-closed lifecycle validation used by exact loading and deterministic listing. Only after complete validation succeeds are internal topology indexes translated to public phase IDs. Unsupported or malformed events, version gaps, invalid topology, impossible transitions, gate mismatches, phase-provenance mismatches, illegal pause/resume ordering, duplicate starts, or post-cancellation events return a typed error and no partial history.
+
+History is read-only and registry-free. It does not mutate runs, discover manifests or files, select transitions, evaluate gates, grant permission, invoke capabilities, bind tasks, schedule work, or expose execution authority.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Expose raw durable events
+:PROPERTIES:
+:CUSTOM_ID: expose-raw-durable-events
+:END:
+Raw payloads would make callers depend on storage schema, payload versions, and internal phase indexes. A semantic projection preserves useful evidence without turning persistence representation into a public API.
+
+*** Return the current aggregate plus only pause/resume history
+:PROPERTIES:
+:CUSTOM_ID: return-the-current-aggregate-plus-only-pauseresume-history
+:END:
+A special-case audit trail would omit transition and cancellation provenance and create a second incomplete ordering model. One typed revision-ordered lifecycle history is simpler and complete.
+
+*** Convert events while validating and return partial entries on failure
+:PROPERTIES:
+:CUSTOM_ID: convert-events-while-validating-and-return-partial-entries-on-failure
+:END:
+Partial evidence can conceal corruption and make audit results depend on where validation stopped. Complete validation before conversion retains the existing all-or-nothing replay contract.
+
+*** Add cross-run history and pagination now
+:PROPERTIES:
+:CUSTOM_ID: add-cross-run-history-and-pagination-now
+:END:
+Exact-run history is the smallest useful boundary. Cross-run ordering requires timestamps or another global ordering contract, while pagination needs continuation and consistency semantics that current requirements do not justify.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Callers can inspect complete lifecycle rationale without parsing storage payloads.
+- Exact revisions correlate history entries with revision-bound mutation intent.
+- Public phase IDs remain stable even if internal topology indexing changes.
+- Exact load, list, and history share the same lifecycle validity boundary.
+- The current implementation decodes the stream once and validates a cloned in-memory event sequence before semantic conversion; this favors a small auditable boundary over a second projector.
+- Pagination, cross-run ordering, timestamps, actors, migration, deletion, filtering, and lifecycle snapshots remain deferred.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+The bounded execution slice follows RED→GREEN tests proving missing-run behavior; exact revisions; start, advance, pause, resume, and cancellation evidence; exact gate and reason preservation; registry-free reopen; semantic phase IDs; and fail-closed malformed history. Existing workflow-run lifecycle tests and the complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider this decision before adding pagination, filtering, cross-run ordering, timestamps, actor identity, raw event export, migration, deletion, snapshots, scheduling, remote execution, or task/skill/tool/provider binding.

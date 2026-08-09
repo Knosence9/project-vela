@@ -1,0 +1,77 @@
+* ADR-0051: Writable exact recurrence occurrence task materialization CLI
+:PROPERTIES:
+:CUSTOM_ID: adr-0051-writable-exact-recurrence-occurrence-task-materialization-cli
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-03
+- *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/891][#891]]
+- *Related:* ADR-0046, ADR-0047, ADR-0050
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+ADR-0050 defines the atomic kernel boundary that binds one exact persisted recurrence occurrence to one caller-owned inert task. The development CLI already exposes exact occurrence persistence and lookup, but callers cannot exercise the materialization boundary without writing Rust code.
+
+The smallest responsible CLI boundary should preserve the kernel's exact-coordinate, exact-revision, and caller-owned-identity contract. It must not add selection, time, catch-up, identity generation, dispatch, or execution policy.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+Add:
+
+#+begin_src text
+vela-dev recurrence materialize DATABASE RECURRENCE_ID OFFSET EXPECTED_OCCURRENCE_REVISION TASK_ID
+#+end_src
+
+Clap parses the zero-based offset and expected occurrence revision as non-negative =u64= values before command execution. The command validates =RECURRENCE_ID= through =RecurrenceId= and =TASK_ID= through =TaskId= before opening the exact caller-selected database with =RecurrenceStore::open=.
+
+The command delegates definition and occurrence replay, exact optimistic concurrency, lifecycle validation, task-stream uniqueness, and the atomic two-stream append to =RecurrenceStore::materialize_occurrence=. It does not duplicate those rules.
+
+Success emits one compact deterministic JSON object containing exact =recurrence_id=, =goal=, =offset=, =unix_millis=, =definition_revision=, resulting =occurrence_revision=, and =task_id=. Serde JSON escaping preserves untrusted caller-authored strings safely.
+
+Invalid identities emit =invalid_recurrence_id= or =invalid_task_id= before storage access. Missing or stale occurrence evidence, an existing materialization, a task-ID collision, malformed durable history, and open, replay, append, or serialization failures emit one escaped =recurrence_occurrence_materialization_failed= diagnostic, return non-zero, and emit no stdout. The kernel transaction remains authoritative: every failed operation leaves both occurrence and task streams unchanged.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Generate the task identity in the CLI
+:PROPERTIES:
+:CUSTOM_ID: generate-the-task-identity-in-the-cli
+:END:
+Rejected because identity generation, collision handling, and retry policy belong to the caller. The command accepts one exact caller-owned identity.
+
+*** Persist a projected occurrence implicitly
+:PROPERTIES:
+:CUSTOM_ID: persist-a-projected-occurrence-implicitly
+:END:
+Rejected because projection is not durable provenance. Materialization requires an already-persisted exact coordinate and its observed occurrence revision.
+
+*** Select due or missed occurrences automatically
+:PROPERTIES:
+:CUSTOM_ID: select-due-or-missed-occurrences-automatically
+:END:
+Rejected because ambient time and catch-up policy are separate authorities. This command mutates only one exact caller-selected coordinate.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Scripts can atomically bind exact persisted recurrence evidence to an inert active task without custom Rust code.
+- Output preserves both definition and occurrence revisions for subsequent inspection and concurrency decisions.
+- Input validation cannot create a missing database.
+- The command reads no clock, generates no identity, scans no unrelated coordinate, and grants no catch-up, claim, lease, dispatch, retry, permission, provider/tool, workflow, or execution authority.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+Strict RED→GREEN CLI tests cover deterministic success output, durable occurrence and task state after reopen, recurrence/task identity validation before storage access, missing and stale occurrence evidence, task collision atomicity, and duplicate materialization rejection. The complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider before adding generated task identities, due or catch-up selection, global materialized-occurrence discovery, claims or leases, workers, clocks, dispatch, retries, or execution.

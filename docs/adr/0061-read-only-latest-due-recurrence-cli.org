@@ -1,0 +1,68 @@
+* ADR-0061: Read-only latest-due recurrence CLI adapter
+:PROPERTIES:
+:CUSTOM_ID: adr-0061-read-only-latest-due-recurrence-cli-adapter
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-04
+- *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/915][#915]]
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+ADR-0060 makes latest-only catch-up an explicit constant-space kernel policy for one exact finite recurrence. Operators still need a deterministic adapter to invoke that policy without writing custom code. The adapter must not quietly add ambient time, discovery, persistence, identity, or execution authority.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+=vela-dev recurrence latest-due DATABASE RECURRENCE_ID START_OFFSET CUTOFF_UNIX_MILLIS= is the read-only adapter for =RecurrenceStore::latest_due_occurrence=. The caller owns the exact recurrence identity, authored starting coordinate, existing database, and inclusive Unix-millisecond cutoff. Clap parses both numeric inputs as =u64=; recurrence identity validation precedes storage access.
+
+The command opens only the selected existing database through =RecurrenceStore::open_read_only= and strictly replays only the exact definition. Success emits compact JSON with =occurrence= containing the complete selected occurrence or =null=, plus the kernel-owned =next_offset=. A future start preserves its unchanged cursor; finite completion emits =null=.
+
+Invalid identity emits =invalid_recurrence_id=, absence emits =recurrence_not_found=, and invalid starts emit =recurrence_occurrence_out_of_range=. Other open, selected replay, projection, and serialization failures share =latest_due_recurrence_occurrence_lookup_failed=, return non-zero, and emit no stdout. Missing storage is not created, and unrelated corruption cannot block the exact query.
+
+The adapter reads no ambient clock, persists no cursor or skip evidence, scans no unrelated definitions, generates no identity, and grants no occurrence persistence, materialization, task lifecycle, dispatch, workflow, provider/tool, permission, retry, or execution authority.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Reuse due paging and keep only its last item
+:PROPERTIES:
+:CUSTOM_ID: reuse-due-paging-and-keep-only-its-last-item
+:END:
+Rejected because work would scale with backlog size and the explicit kernel policy would be reimplemented in adapter code.
+
+*** Read the current clock in the CLI
+:PROPERTIES:
+:CUSTOM_ID: read-the-current-clock-in-the-cli
+:END:
+Rejected because the due horizon is caller authority and deterministic replay must not depend on ambient time.
+
+*** Persist the returned cursor or skipped coordinates
+:PROPERTIES:
+:CUSTOM_ID: persist-the-returned-cursor-or-skipped-coordinates
+:END:
+Rejected because selection is not proof that the caller accepted or acted on skipped work. Durable cursor and skip evidence need a separate revision-bound lifecycle.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Operators can invoke the explicit latest-only policy with constant-space kernel arithmetic.
+- JSON preserves complete occurrence provenance and resumable cursor semantics.
+- Exact validation and read-only storage boundaries remain visible and testable.
+- Selecting a result creates no durable lifecycle evidence and executes nothing.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+RED→GREEN CLI integration tests cover exact-hit and between-instant selection, escaped authored strings, future-horizon resumption, nonzero starts, finite completion, =u64::MAX=, missing definitions, invalid starts, invalid IDs before storage access, missing storage, and exact-stream corruption isolation. The complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider before adding persisted skip evidence or cursors, automatic recurrence discovery, generated identity, materialization, dispatch, retries, ambient-clock behavior, or execution.

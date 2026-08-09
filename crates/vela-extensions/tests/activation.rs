@@ -322,10 +322,10 @@ fn non_tool_selection_cannot_deactivate_a_same_id_adapter() {
     fs::create_dir(&package).expect("create package");
     fs::write(
         package.join("extension.yaml"),
-        "manifest_version: 1\nid: shared.id\nkind: skill\nentrypoint: skill.md\n",
+        "manifest_version: 1\nid: shared.id\nkind: skill\nentrypoint: skill.org\n",
     )
     .expect("write manifest");
-    fs::write(package.join("skill.md"), "instructions").expect("write entrypoint");
+    fs::write(package.join("skill.org"), "instructions").expect("write entrypoint");
     let extensions = ExtensionRegistry::discover(root.path()).expect("extension registry");
     let skill = extensions.select(["shared.id"]).expect("skill selection");
     let mut tools = ToolRegistry::new();
@@ -800,10 +800,10 @@ fn non_tool_selection_cannot_participate_in_tool_reconciliation() {
     fs::create_dir(&package).expect("skill package");
     fs::write(
         package.join("extension.yaml"),
-        "manifest_version: 1\nid: shared.id\nkind: skill\nentrypoint: skill.md\n",
+        "manifest_version: 1\nid: shared.id\nkind: skill\nentrypoint: skill.org\n",
     )
     .expect("skill manifest");
-    fs::write(package.join("skill.md"), "instructions").expect("skill entrypoint");
+    fs::write(package.join("skill.org"), "instructions").expect("skill entrypoint");
     let previous_extensions =
         ExtensionRegistry::discover(previous_root.path()).expect("previous registry");
     let previous = previous_extensions

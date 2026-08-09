@@ -1,0 +1,84 @@
+* ADR-0088: Read-only bounded recurrence occurrence history CLI paging
+:PROPERTIES:
+:CUSTOM_ID: adr-0088-read-only-bounded-recurrence-occurrence-history-cli-paging
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-07
+- *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/975][#975]]
+- *Related:* ADR-0044, ADR-0085, ADR-0086, ADR-0087
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+ADR-0087 provides bounded recurrence-local discovery of complete typed occurrence histories. Operators otherwise need to issue one exact-coordinate command per authored offset or decode raw event-log rows, duplicating paging, replay, and corruption policy.
+
+The CLI adapter must preserve the kernel's exact-recurrence, authored-window, and read-only authority boundary. It must not turn bounded audit discovery into global inventory or lifecycle authority.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+Add =vela-dev recurrence occurrence-histories DATABASE RECURRENCE_ID START_OFFSET PAGE_SIZE=. Clap parses the caller-owned zero-based start as =u64=; the command validates the exact recurrence ID and positive page size of at most 1024 before storage access, then opens only the selected existing database through =RecurrenceStore::open_read_only=.
+
+The adapter delegates the complete selected authored window to =RecurrenceStore::occurrence_histories_page=. Success emits compact deterministic JSON with =histories= ordered by offset and =next_offset= naming the first uninspected authored coordinate or =null= at finite completion. Each present history preserves its exact recurrence ID, offset, and complete revision-ordered tagged entries:
+
+- =persisted=: exact goal, Unix-millisecond instant, and immutable definition revision
+- =claimed=
+- =released=: exact caller-authored recovery reason
+- =materialized=: exact caller-owned task ID
+
+Missing coordinates are omitted. A valid non-final all-gap window emits an empty =histories= array while retaining its advancing cursor. Caller-authored strings remain JSON escaped.
+
+Invalid identities and page sizes emit =invalid_recurrence_id= and =invalid_occurrence_page_size= before storage access. Missing storage, definitions, out-of-range starts, selected-window replay or projection corruption, and serialization failures emit one escaped =recurrence_occurrence_histories_failed= diagnostic, return non-zero, and emit no partial stdout.
+
+The command never creates missing storage, mutates lifecycle state, persists a cursor, inspects unrelated recurrences or out-of-window coordinates, reads ambient time, or grants lifecycle, worker, lease, dispatch, retry, permission, or execution authority.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Repeat exact occurrence-history commands
+:PROPERTIES:
+:CUSTOM_ID: repeat-exact-occurrence-history-commands
+:END:
+Rejected because callers would duplicate finite-window cursor advancement, sparse-gap handling, and selected corruption policy.
+
+*** Return raw event-log rows
+:PROPERTIES:
+:CUSTOM_ID: return-raw-event-log-rows
+:END:
+Rejected because callers could consume malformed, divergent, unsupported, or impossible histories and would duplicate canonical projection.
+
+*** Discover histories globally
+:PROPERTIES:
+:CUSTOM_ID: discover-histories-globally
+:END:
+Rejected because unbounded cross-recurrence inventory requires separate ordering, pagination, indexing, and corruption-domain decisions.
+
+*** Persist the paging cursor
+:PROPERTIES:
+:CUSTOM_ID: persist-the-paging-cursor
+:END:
+Rejected because cursor acceptance is caller policy and not durable lifecycle evidence.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Operators can audit complete sparse lifecycle histories through deterministic bounded JSON.
+- Empty windows advance independently of durable history density.
+- Exact and paged adapters share one typed entry serializer.
+- No schema, event, lifecycle transition, clock, global discovery, or execution authority is added.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+RED→GREEN CLI tests prove repeated claim/release and materialization evidence with exact revisions and escaped values, ordered sparse output, non-final all-gap progress, finite completion, read-only reopen, pre-storage validation, missing-storage non-creation, missing and out-of-range definitions, selected-window corruption rejection, and unrelated/out-of-window corruption isolation. The complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider before adding global or cross-recurrence discovery, persisted cursors, destructive deletion, claim interruption, undo or resume semantics, clocks, workers, leases, dispatch, permissions, retries, or execution.

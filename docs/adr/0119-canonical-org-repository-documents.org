@@ -1,0 +1,92 @@
+* ADR-0119: Canonical Org repository documents
+:PROPERTIES:
+:CUSTOM_ID: adr-0119-canonical-org-repository-documents
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-09
+- *Owners:* Project Vela
+- *Related issue:* [[https://github.com/Knosence9/project-vela/issues/1055][#1055]]
+- *Related pull request:* [[https://github.com/Knosence9/project-vela/pull/1056][#1056]]
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+Vela is moving its durable workbench into Emacs and already treats Org as the model-neutral document and orchestration layer. Keeping plans, architecture decisions, and implementation guidance in Markdown would split the workbench between two source formats and prevent the repository's own documents from exercising the Org interface it is building.
+
+Obsidian does not natively treat Org as a first-class note format. A community Orgmode (CM6) plugin can display and edit Org files, but its parser and editor do not implement every Org construct. Maintaining Markdown mirrors to accommodate those limitations would create two authorities and invite drift.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+Org is the sole canonical authored document format in Project Vela.
+
+- Plans, ADRs, implementation documentation, root guidance, and textual extension fixtures use =.org=.
+- Emacs Org Mode is the primary editor and semantic workbench.
+- GitHub renders and reviews the committed Org sources directly.
+- Vela does not maintain generated or hand-edited Markdown mirrors.
+- The deterministic quality gate rejects tracked =.md= files and unresolved repository-local Org file links.
+- Historical evidence records preserve path strings exactly as observed; a retired =.md= name inside JSON evidence is provenance, not an authored Markdown document or live link.
+- Obsidian interoperability is optional through the community Orgmode (CM6) plugin and does not constrain canonical syntax.
+- Prano Org viewing or editing is a separate product capability and is not required by this migration.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Org sources with generated Markdown mirrors
+:PROPERTIES:
+:CUSTOM_ID: org-sources-with-generated-markdown-mirrors
+:END:
+This would preserve broad Markdown-tool compatibility, but generated files would enlarge diffs, complicate reviews, and risk unclear authority whenever an export is stale.
+
+*** Keep Markdown for documentation and use Org only for live work
+:PROPERTIES:
+:CUSTOM_ID: keep-markdown-for-documentation
+:END:
+This would minimize migration work but would retain the exact format split the Emacs workbench is intended to remove.
+
+*** Keep Obsidian as the primary notes interface
+:PROPERTIES:
+:CUSTOM_ID: keep-obsidian-primary
+:END:
+This would make plugin limitations an architectural constraint and would not exercise Vela's owner-thread-authoritative Emacs interface.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+*** Positive
+:PROPERTIES:
+:CUSTOM_ID: positive
+:END:
+- One durable source format serves human plans, executable notebooks, provenance, and future typed agent operations.
+- The repository continuously exercises real Org syntax and links.
+- Emacs features such as stable IDs, TODO state, Babel, tangling, export, agenda, and narrowing can be adopted without another migration.
+
+*** Negative
+:PROPERTIES:
+:CUSTOM_ID: negative
+:END:
+- Markdown-only tools cannot edit canonical documents directly.
+- Obsidian requires a community plugin and still has incomplete Org behavior.
+- Existing live links and fixture contracts must move atomically with the source files.
+- Contributors unfamiliar with Org need an Org-capable editor or must edit its plain-text syntax carefully.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+- Convert every tracked authored =.md= file and its live repository links while preserving historical evidence.
+- Parse every tracked Org document in batch Emacs.
+- Reject tracked Markdown files.
+- Resolve every repository-local Org file link.
+- Run all fixture, Rust, Emacs, and Nix quality gates.
+- Confirm GitHub renders the root =README.org= on the pull request branch.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Reconsider only if a required distribution platform cannot consume Org directly and no bounded adapter or export-on-demand path can satisfy that boundary without creating a second source of truth.
