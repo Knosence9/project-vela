@@ -1008,6 +1008,59 @@
       (should-error (vela-agent-json-frame-encode (concat maximum "x"))
                     :type 'vela-agent-protocol-error))))
 
+(ert-deftest vela-agent-framed-json-handler-preserves-split-and-response-order ()
+  (let* ((empty (string-as-unibyte ""))
+         (request-one "{\"operation\":\"capabilities.list\"}")
+         (request-two
+          "{\"operation\":\"context.snapshot\",\"include\":[]}")
+         (split 17)
+         (first
+          (vela-agent-handle-json-feed
+           empty (string-as-unibyte (substring request-one 0 split))))
+         (second
+          (vela-agent-handle-json-feed
+           (alist-get "remainder" first nil nil #'string=)
+           (string-as-unibyte
+            (concat (substring request-one split) "\n" request-two "\npartial"))))
+         (responses (alist-get "responses" second nil nil #'string=)))
+    (should (equal (alist-get "responses" first nil nil #'string=) []))
+    (should (equal (alist-get "remainder" first nil nil #'string=)
+                   (string-as-unibyte (substring request-one 0 split))))
+    (should (= (length responses) 2))
+    (should (equal (aref responses 0)
+                   (vela-agent-json-frame-encode
+                    (vela-agent-handle-json request-one))))
+    (should (equal (aref responses 1)
+                   (vela-agent-json-frame-encode
+                    (vela-agent-handle-json request-two))))
+    (dolist (response (append responses nil))
+      (should-not (multibyte-string-p response)))
+    (should (equal (alist-get "remainder" second nil nil #'string=)
+                   (string-as-unibyte "partial")))))
+
+(ert-deftest vela-agent-framed-json-handler-fails-complete-feed-atomically ()
+  (should-error
+   (vela-agent-handle-json-feed
+    (string-as-unibyte "")
+    (string-as-unibyte
+     "{\"operation\":\"capabilities.list\"}\n{malformed}\n"))
+   :type 'vela-agent-protocol-error))
+
+(ert-deftest vela-agent-framed-json-handler-rejects-worker-thread-access ()
+  (let* ((worker
+          (make-thread
+           (lambda ()
+             (condition-case error-data
+                 (progn
+                   (vela-agent-handle-json-feed
+                    (string-as-unibyte "")
+                    (string-as-unibyte
+                     "{\"operation\":\"capabilities.list\"}\n"))
+                   'unexpected-success)
+               (error error-data)))))
+         (result (thread-join worker)))
+    (should (eq (car result) 'vela-agent-protocol-error))))
+
 (ert-deftest vela-agent-json-adapter-round-trips-capabilities ()
   (let ((expected
          (vela-agent-encode-response

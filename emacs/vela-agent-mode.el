@@ -776,6 +776,26 @@ queue, asynchronous job, or mutation authority."
     (vela-agent--validate-decoded-json request 0 (vector 0))
     (vela-agent-encode-response (vela-agent-handle-request request))))
 
+(defun vela-agent-handle-json-feed (pending chunk)
+  "Handle complete bounded JSON requests from raw PENDING and CHUNK bytes.
+
+The returned ordered object contains an unibyte `responses' vector and the exact
+unibyte `remainder'.  The caller owns the remainder and all transport policy.
+Any framing, request, dispatch, or response error rejects the complete feed."
+  (unless (eq (current-thread) vela-agent--editor-thread)
+    (signal 'vela-agent-protocol-error
+            '("framed agent requests must run on the editor owner thread")))
+  (let* ((feed (vela-agent-json-frame-feed pending chunk))
+         (requests (alist-get "frames" feed nil nil #'string=))
+         responses)
+    (dotimes (index (length requests))
+      (push
+       (vela-agent-json-frame-encode
+        (vela-agent-handle-json (aref requests index)))
+       responses))
+    `(("responses" . ,(vconcat (nreverse responses)))
+      ("remainder" . ,(alist-get "remainder" feed nil nil #'string=)))))
+
 (defun vela-agent-interface-refresh ()
   "Refresh the interface from `vela-agent-interface-source-buffer'."
   (interactive)
