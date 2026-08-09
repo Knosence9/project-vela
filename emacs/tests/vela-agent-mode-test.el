@@ -118,10 +118,11 @@
       (should (equal (mark t) mark-before))
       (should (eq mark-active mark-active-before))
       (should
-       (equal (save-restriction
-                (widen)
-                (buffer-substring (point-min) (point-max)))
-              text-before))
+       (equal-including-properties
+        (save-restriction
+          (widen)
+          (buffer-substring (point-min) (point-max)))
+        text-before))
       (should (eq (buffer-modified-p) modified-before))
       (should (= (buffer-chars-modified-tick) tick-before))
       (should (equal buffer-undo-list undo-before))
