@@ -834,6 +834,97 @@
    (vela-agent-handle-request "not-an-object")
    :type 'vela-agent-protocol-error))
 
+(ert-deftest vela-agent-json-adapter-round-trips-capabilities ()
+  (let ((expected
+         (vela-agent-encode-response
+          (vela-agent-handle-request
+           '(("operation" . "capabilities.list"))))))
+    (should
+     (equal (vela-agent-handle-json
+             "{\"operation\":\"capabilities.list\"}")
+            expected))))
+
+(ert-deftest vela-agent-json-adapter-round-trips-context ()
+  (with-temp-buffer
+    (rename-buffer " *vela-json-source*")
+    (should
+     (equal
+      (vela-agent-handle-json
+       "{\"operation\":\"context.snapshot\",\"include\":[\"buffer\"]}")
+      (vela-agent-encode-response
+       (vela-agent-handle-request
+        '(("operation" . "context.snapshot")
+          ("include" . ["buffer"]))))))))
+
+(ert-deftest vela-agent-json-adapter-preserves-json-value-markers ()
+  (let (decoded)
+    (cl-letf (((symbol-function 'vela-agent-handle-request)
+               (lambda (request)
+                 (setq decoded request)
+                 '(("ok" . t)))))
+      (should
+       (equal
+        (vela-agent-handle-json
+         "{\"operation\":\"test\",\"values\":[null,false,true]}")
+        "{\"ok\":true}")))
+    (should
+     (equal (alist-get "values" decoded nil nil #'string=)
+            [:null :false t]))))
+
+(ert-deftest vela-agent-json-adapter-rejects-invalid-input ()
+  (dolist (input '("{" "{} trailing" "{\"operation\":\"capabilities.list\",}"
+                   "[]" "null" "\"request\""))
+    (should-error (vela-agent-handle-json input)
+                  :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-adapter-rejects-duplicate-object-keys ()
+  (dolist
+      (input
+       '("{\"operation\":\"capabilities.list\",\"operation\":\"context.snapshot\"}"
+         "{\"operation\":\"capabilities.list\",\"extra\":{\"x\":1,\"x\":2}}"))
+    (should-error (vela-agent-handle-json input)
+                  :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-adapter-bounds-input-before-parsing ()
+  (cl-letf (((symbol-function 'json-read)
+             (lambda (&rest _)
+               (ert-fail "oversized JSON input was parsed"))))
+    (should-error
+     (vela-agent-handle-json
+      (make-string (1+ vela-agent-max-json-request-characters) ?x))
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-adapter-bounds-decoded-shape ()
+  (let ((deep "true"))
+    (dotimes (_ (+ vela-agent-max-json-depth 2))
+      (setq deep (concat "[" deep "]")))
+    (dolist
+        (value
+         (list deep
+               (json-serialize
+                (make-vector (1+ vela-agent-max-json-collection-items) t))
+               (json-serialize
+                (make-vector vela-agent-max-json-collection-items
+                             (make-vector 8 t)))))
+      (should-error
+       (vela-agent-handle-json
+        (concat "{\"operation\":\"capabilities.list\",\"extra\":"
+                value "}"))
+       :type 'vela-agent-protocol-error))))
+
+(ert-deftest vela-agent-json-adapter-rejects-worker-thread-access ()
+  (let* ((worker
+          (make-thread
+           (lambda ()
+             (condition-case error-data
+                 (progn
+                   (vela-agent-handle-json
+                    "{\"operation\":\"capabilities.list\"}")
+                   'unexpected-success)
+               (error error-data)))))
+         (result (thread-join worker)))
+    (should (eq (car result) 'vela-agent-protocol-error))))
+
 (ert-deftest vela-agent-dispatch-rejects-worker-thread-editor-access ()
   (let* ((worker
           (make-thread
