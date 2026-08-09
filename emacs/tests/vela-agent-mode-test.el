@@ -9,7 +9,7 @@
          (result (alist-get "result" response nil nil #'string=))
          (capabilities (alist-get "capabilities" result nil nil #'string=))
          (features (alist-get "emacs_features" result nil nil #'string=)))
-    (should (equal (alist-get "protocol_version" response nil nil #'string=) 3))
+    (should (equal (alist-get "protocol_version" response nil nil #'string=) 4))
     (should (eq (alist-get "ok" response nil nil #'string=) t))
     (should
      (equal capabilities
@@ -63,11 +63,14 @@
              '(("operation" . "context.snapshot")
                ("include" . ["buffer"]))))
            (result (alist-get "result" response nil nil #'string=))
-           (buffer (alist-get "buffer" result nil nil #'string=)))
+           (buffer (alist-get "buffer" result nil nil #'string=))
+           (identity (alist-get "identity" buffer nil nil #'string=)))
       (should (eq (alist-get "ok" response nil nil #'string=) t))
+      (should (stringp identity))
       (should (equal buffer
                      `(("name" . " *vela-agent-test*")
                        ("file" . :null)
+                       ("identity" . ,identity)
                        ("major_mode" . "text-mode")
                        ("modified" . :false)
                        ("point" . 7)
@@ -151,6 +154,80 @@
       (insert "beta")
       (should (/= (funcall revision) first)))))
 
+(ert-deftest vela-agent-context-snapshot-identifies-the-exact-live-buffer ()
+  (let ((first-buffer (generate-new-buffer " *vela-agent-identity*"))
+        (second-buffer (generate-new-buffer " *vela-agent-identity*")))
+    (unwind-protect
+        (let* ((request '(("operation" . "context.snapshot")
+                          ("include" . ["buffer"])))
+               (identity
+                (lambda (buffer)
+                  (with-current-buffer buffer
+                    (alist-get
+                     "identity"
+                     (alist-get
+                      "buffer"
+                      (alist-get
+                       "result" (vela-agent-handle-request request)
+                       nil nil #'string=)
+                      nil nil #'string=)
+                     nil nil #'string=))))
+               (first-locals
+                (with-current-buffer first-buffer (buffer-local-variables)))
+               (first (funcall identity first-buffer))
+               (repeated (funcall identity first-buffer))
+               (second (funcall identity second-buffer)))
+          (should (stringp first))
+          (with-current-buffer first-buffer
+            (should (equal (buffer-local-variables) first-locals)))
+          (should (equal repeated first))
+          (should-not (equal second first))
+          (with-current-buffer first-buffer
+            (insert "changed")
+            (setq first-locals (buffer-local-variables))
+            (should (equal (funcall identity first-buffer) first))
+            (should (equal (buffer-local-variables) first-locals)))
+          (let ((reused-name (buffer-name first-buffer)))
+            (kill-buffer first-buffer)
+            (setq first-buffer (generate-new-buffer reused-name))
+            (should-not (equal (funcall identity first-buffer) first))))
+      (when (buffer-live-p first-buffer)
+        (kill-buffer first-buffer))
+      (when (buffer-live-p second-buffer)
+        (kill-buffer second-buffer)))))
+
+(ert-deftest vela-agent-context-snapshot-identity-survives-feature-reload ()
+  (let ((first-buffer (generate-new-buffer " *vela-agent-before-reload*"))
+        (second-buffer nil)
+        first)
+    (unwind-protect
+        (progn
+          (with-current-buffer first-buffer
+            (setq first
+                  (alist-get
+                   "identity" (vela-agent--buffer-context)
+                   nil nil #'string=)))
+          (unload-feature 'vela-agent-mode t)
+          (require 'vela-agent-mode)
+          (with-current-buffer first-buffer
+            (should
+             (equal
+              (alist-get "identity" (vela-agent--buffer-context)
+                         nil nil #'string=)
+              first)))
+          (setq second-buffer
+                (generate-new-buffer " *vela-agent-after-reload*"))
+          (with-current-buffer second-buffer
+            (should-not
+             (equal
+              (alist-get "identity" (vela-agent--buffer-context)
+                         nil nil #'string=)
+              first))))
+      (when (buffer-live-p first-buffer)
+        (kill-buffer first-buffer))
+      (when (buffer-live-p second-buffer)
+        (kill-buffer second-buffer)))))
+
 (ert-deftest vela-agent-context-snapshot-uses-native-org-context ()
   (with-temp-buffer
     (org-mode)
@@ -205,7 +282,7 @@
 (ert-deftest vela-agent-interface-json-preserves-protocol-order ()
   (let* ((json
           (vela-agent-encode-response
-           '(("protocol_version" . 3)
+           '(("protocol_version" . 4)
              ("ok" . t)
              ("result" . (("missing" . :null)
                             ("enabled" . :false)
@@ -217,7 +294,7 @@
                                     :false-object :false)))
     (should
      (equal json
-            "{\"protocol_version\":3,\"ok\":true,\"result\":{\"missing\":null,\"enabled\":false,\"items\":[\"a\",\"b\"]}}"))
+            "{\"protocol_version\":4,\"ok\":true,\"result\":{\"missing\":null,\"enabled\":false,\"items\":[\"a\",\"b\"]}}"))
     (should (eq (alist-get "missing"
                            (alist-get "result" parsed nil nil #'string=)
                            nil nil #'string=)

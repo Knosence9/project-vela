@@ -2,7 +2,7 @@
 
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), and the text-revision contract is recorded in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md).
+The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), and the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md).
 
 ## Load and open
 
@@ -40,7 +40,7 @@ additional capability. Undo all visual changes with:
 (vela-workbench-ui-disable)
 ```
 
-## Protocol version 3
+## Protocol version 4
 
 The in-process dispatcher accepts JSON-compatible alists. A future local transport can encode the same request and response shapes without changing the semantic operations.
 
@@ -62,9 +62,16 @@ Read explicitly selected context:
    ("include" . ["buffer" "org"])))
 ```
 
-Buffer context includes name, optional file, major mode, modified status, point,
-line, column, active-region bounds, the current text revision, and the current
-accessibility restriction. `text_revision` is the non-negative integer returned
+Buffer context includes name, optional file, opaque process-local identity,
+major mode, modified status, point, line, column, active-region bounds, the
+current text revision, and the current accessibility restriction. `identity`
+distinguishes the exact live buffer object, remains stable while that object is
+live, survives package unload/reload, and is never reused during the current
+Emacs process. It is equality
+evidence only: it is invalid after Emacs restarts and grants no lookup, text, or
+mutation authority. Future delayed mutation must pair it with the expected text
+revision, live restriction and operation scope, and Vela approval evidence.
+`text_revision` is the non-negative integer returned
 by Emacs's `buffer-chars-modified-tick`. It is opaque equality evidence for
 detecting stale character observations: callers must not perform arithmetic,
 infer elapsed edits, treat it as globally unique, or use it by itself to
