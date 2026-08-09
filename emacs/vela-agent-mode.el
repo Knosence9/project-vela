@@ -24,7 +24,7 @@
 
 (define-error 'vela-agent-protocol-error "Invalid Vela agent request")
 
-(defconst vela-agent-protocol-version 6
+(defconst vela-agent-protocol-version 7
   "Version of the model-neutral Vela Emacs protocol.")
 
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
@@ -45,6 +45,9 @@
 (defconst vela-agent-max-diagnostics-json-characters (* 128 1024)
   "Largest aggregate encoded diagnostic collection accepted by a snapshot.")
 
+(defconst vela-agent-max-compilation-count (* 1024 1024)
+  "Largest native compilation diagnostic count accepted by a snapshot.")
+
 (defconst vela-agent-max-json-string-characters 8192
   "Largest string accepted by the deterministic JSON encoder.")
 
@@ -60,10 +63,11 @@
      268                       ; complete Org section
      2                         ; complete project section
      1                         ; diagnostics vector
-     (* vela-agent-max-json-collection-items 5))
+     (* vela-agent-max-json-collection-items 5)
+     5)                        ; complete compilation section
   "Largest value-node count accepted by the deterministic JSON encoder.
 
-This admits one complete four-section snapshot with the maximum collection of
+This admits one complete five-section snapshot with the maximum collection of
 four-field diagnostics while retaining a finite traversal bound.")
 
 (defconst vela-agent-max-json-output-characters (* 256 1024)
@@ -115,7 +119,8 @@ four-field diagnostics while retaining a finite traversal bound.")
     "diagnostics" 'flymake-diagnostics
     "read-only current-line Flymake diagnostic metadata" "diagnostics")
    (vela-agent--emacs-feature
-    "compilation" 'compilation-start "loaded compilation-mode facility metadata" nil)
+    "compilation" 'compilation-start
+    "read-only current-buffer compilation progress counts" "compilation")
    (vela-agent--emacs-feature
     "magit" 'magit-status "loaded Magit facility metadata" nil)))
 
@@ -347,6 +352,34 @@ four-field diagnostics while retaining a finite traversal bound.")
                   '("Flymake diagnostics must be a proper list")))
         (vconcat (sort items #'vela-agent--diagnostic-item-less-p))))))
 
+(defun vela-agent--compilation-count (variable)
+  "Return bounded current-buffer compilation counter VARIABLE."
+  (unless (local-variable-p variable (current-buffer))
+    (signal 'vela-agent-protocol-error
+            '("native compilation counter must be buffer-local")))
+  (let ((value (symbol-value variable)))
+    (unless (and (natnump value)
+                 (<= value vela-agent-max-compilation-count))
+      (signal 'vela-agent-protocol-error
+              '("native compilation counter exceeds the response bound")))
+    value))
+
+(defun vela-agent--compilation-context ()
+  "Snapshot bounded native state for the current compilation buffer."
+  (save-match-data
+    (if (and (fboundp 'compilation-buffer-p)
+             (compilation-buffer-p (current-buffer)))
+        (let ((process (get-buffer-process (current-buffer))))
+          `(("process_active" . ,(vela-agent--boolean
+                                   (and process (process-live-p process))))
+            ("errors" . ,(vela-agent--compilation-count
+                           'compilation-num-errors-found))
+            ("warnings" . ,(vela-agent--compilation-count
+                             'compilation-num-warnings-found))
+            ("infos" . ,(vela-agent--compilation-count
+                          'compilation-num-infos-found))))
+      :null)))
+
 (defun vela-agent--record-unique-section (section seen)
   "Record bounded SECTION in SEEN, or reject an existing entry."
   (when (gethash section seen)
@@ -360,16 +393,17 @@ four-field diagnostics while retaining a finite traversal bound.")
     (unless (vectorp include)
       (signal 'vela-agent-protocol-error
               '("context.snapshot requires an include vector")))
-    (when (> (length include) 4)
+    (when (> (length include) 5)
       (signal 'vela-agent-protocol-error
-              '("context.snapshot accepts at most four sections")))
+              '("context.snapshot accepts at most five sections")))
     (let ((sections (append include nil)))
       (let ((seen (make-hash-table :test #'equal)))
         (dolist (section sections)
           (unless (and (stringp section)
                        (<= (length section) vela-agent-max-operation-characters)
                        (member section
-                               '("buffer" "org" "project" "diagnostics")))
+                               '("buffer" "org" "project" "diagnostics"
+                                 "compilation")))
             (signal 'vela-agent-protocol-error
                     '("unsupported context section")))
           (vela-agent--record-unique-section section seen)))
@@ -386,6 +420,8 @@ four-field diagnostics while retaining a finite traversal bound.")
           (push (cons "project" (vela-agent--project-context)) result))
         (when (member "diagnostics" sections)
           (push (cons "diagnostics" (vela-agent--diagnostics-context)) result))
+        (when (member "compilation" sections)
+          (push (cons "compilation" (vela-agent--compilation-context)) result))
         (nreverse result)))))
 
 (defun vela-agent--validate-request-object (request)
@@ -530,7 +566,8 @@ four-field diagnostics while retaining a finite traversal bound.")
          (with-current-buffer vela-agent-interface-source-buffer
            (vela-agent-handle-request
             '(("operation" . "context.snapshot")
-              ("include" . ["buffer" "org" "project" "diagnostics"]))))))
+              ("include" . ["buffer" "org" "project" "diagnostics"
+                            "compilation"]))))))
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (vela-agent-encode-response response))

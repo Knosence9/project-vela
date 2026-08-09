@@ -2,7 +2,7 @@
 
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md), and the current-line Flymake contract in [ADR-0113](adr/0113-bounded-current-line-flymake-diagnostics.md).
+The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md), the current-line Flymake contract in [ADR-0113](adr/0113-bounded-current-line-flymake-diagnostics.md), and the current-buffer compilation contract in [ADR-0114](adr/0114-bounded-native-emacs-compilation-context.md).
 
 ## Load and open
 
@@ -40,7 +40,7 @@ additional capability. Undo all visual changes with:
 (vela-workbench-ui-disable)
 ```
 
-## Protocol version 6
+## Protocol version 7
 
 The in-process dispatcher accepts JSON-compatible alists. A future local transport can encode the same request and response shapes without changing the semantic operations.
 
@@ -59,7 +59,7 @@ Read explicitly selected context:
 ```elisp
 (vela-agent-handle-request
  '(("operation" . "context.snapshot")
-   ("include" . ["buffer" "org" "project" "diagnostics"])))
+   ("include" . ["buffer" "org" "project" "diagnostics" "compilation"])))
 ```
 
 Buffer context includes name, optional file, opaque process-local identity,
@@ -106,6 +106,19 @@ backend objects or fixes, widen the buffer, read files, or run processes.
 Results can become stale immediately and should be correlated with the buffer
 identity and text revision from the same snapshot.
 
+Compilation context is JSON null unless already-loaded native
+`compilation-buffer-p` recognizes the current buffer. A recognized buffer
+reports `process_active`, `errors`, `warnings`, and `infos` in that order.
+`process_active` means only that an associated buffer process is currently
+live. Each diagnostic counter must be buffer-local, non-negative, and no more
+than 1,048,576. Counters are already-published native progress metadata and may
+be incomplete or immediately stale; an inactive process does not prove
+success, failure, completion, cancellation, or prior execution. Snapshotting
+does not load compilation mode, choose another or last compilation buffer,
+start or control a process, wait, inspect commands or environment, return
+directories or output, force parsing or fontification, navigate errors, or
+read files.
+
 Every context request fails closed when the source buffer exceeds 1,048,576
 characters. This cap bounds native line and Org traversal, source extraction,
 and hashing work on the main thread. The interface buffer uses an ordered JSON
@@ -114,8 +127,8 @@ Live buffer, Org heading, tag, outline, source-block name, and language strings
 are capped at 8,192 characters; Org collections are capped at 128 items. The
 encoder independently caps string length, collection width, nesting depth,
 value-node count, and total output; the node bound admits the largest legal
-four-section shape with 128 diagnostics, and cyclic response values fail closed.
-The `include` vector accepts each of the four supported sections at most once,
+five-section shape with 128 diagnostics, and cyclic response values fail closed.
+The `include` vector accepts each of the five supported sections at most once,
 and its vector length is checked before copying. Request objects are traversed
 for at most eight unique fields; keys and operation/section names also have
 fixed character limits. Cyclic, dotted, duplicate-keyed, or oversized request
@@ -135,7 +148,10 @@ handles, cancellation, and short main-thread callbacks. Delayed edits must carry
 buffer identity and modification-tick preconditions, and authority-bearing
 operations must carry Vela approval evidence.
 
-The current slice has no transport, queue, edits, Babel execution, tangling, exporting, shell execution, or Magit mutation. Feature metadata advertises the Emacs facilities the interface is intended to standardize; it does not claim those effects are currently authorized.
+The current slice has no transport, queue, edits, Babel execution, tangling,
+exporting, shell or compilation execution/control, or Magit mutation. Feature
+metadata advertises the Emacs facilities the interface is intended to
+standardize; it does not claim those effects are currently authorized.
 
 ## Verification
 
