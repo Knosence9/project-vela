@@ -973,6 +973,41 @@
     (should-error (apply #'vela-agent-json-frame-feed arguments)
                   :type 'vela-agent-protocol-error)))
 
+(ert-deftest vela-agent-json-frame-encoder-emits-one-unibyte-utf8-frame ()
+  (let ((ascii (vela-agent-json-frame-encode "{\"ok\":true}"))
+        (multibyte-ascii
+         (vela-agent-json-frame-encode
+          (string-to-multibyte (string-as-unibyte "{}"))))
+        (unicode (vela-agent-json-frame-encode "{\"value\":\"λ\"}")))
+    (dolist (frame (list ascii multibyte-ascii unicode))
+      (should-not (multibyte-string-p frame)))
+    (should (equal ascii (string-as-unibyte "{\"ok\":true}\n")))
+    (should (equal multibyte-ascii (string-as-unibyte "{}\n")))
+    (should (equal unicode
+                   (concat (string-as-unibyte "{\"value\":\"")
+                           (unibyte-string #xce #xbb)
+                           (string-as-unibyte "\"}\n"))))))
+
+(ert-deftest vela-agent-json-frame-encoder-rejects-raw-bytes-and-delimited-input ()
+  (dolist (payload (list (unibyte-string #xff) "{}\n{}" "{}\r{}"))
+    (should-error (vela-agent-json-frame-encode payload)
+                  :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-frame-encoder-rejects-invalid-unicode ()
+  (dolist (character (list #xd800 #x110000))
+    (should-error (vela-agent-json-frame-encode (string character))
+                  :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-frame-encoder-bounds-encoded-payload-bytes ()
+  (let ((maximum-ascii (make-string vela-agent-max-json-frame-bytes ?x))
+        (maximum-unicode
+         (make-string (/ vela-agent-max-json-frame-bytes 2) ?λ)))
+    (dolist (maximum (list maximum-ascii maximum-unicode))
+      (should (= (length (vela-agent-json-frame-encode maximum))
+                 (1+ vela-agent-max-json-frame-bytes)))
+      (should-error (vela-agent-json-frame-encode (concat maximum "x"))
+                    :type 'vela-agent-protocol-error))))
+
 (ert-deftest vela-agent-json-adapter-round-trips-capabilities ()
   (let ((expected
          (vela-agent-encode-response
