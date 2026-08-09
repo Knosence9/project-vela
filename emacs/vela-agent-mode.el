@@ -24,7 +24,7 @@
 
 (define-error 'vela-agent-protocol-error "Invalid Vela agent request")
 
-(defconst vela-agent-protocol-version 7
+(defconst vela-agent-protocol-version 8
   "Version of the model-neutral Vela Emacs protocol.")
 
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
@@ -64,10 +64,11 @@
      2                         ; complete project section
      1                         ; diagnostics vector
      (* vela-agent-max-json-collection-items 5)
-     5)                        ; complete compilation section
+     5                         ; complete compilation section
+     2)                        ; complete Magit section
   "Largest value-node count accepted by the deterministic JSON encoder.
 
-This admits one complete five-section snapshot with the maximum collection of
+This admits one complete six-section snapshot with the maximum collection of
 four-field diagnostics while retaining a finite traversal bound.")
 
 (defconst vela-agent-max-json-output-characters (* 256 1024)
@@ -143,7 +144,7 @@ maximum-size partial frame.")
     "compilation" 'compilation-start
     "read-only current-buffer compilation progress counts" "compilation")
    (vela-agent--emacs-feature
-    "magit" 'magit-status "loaded Magit facility metadata" nil)))
+    "magit" 'magit-status "read-only current-buffer Magit mode metadata" "magit")))
 
 (defun vela-agent--success (operation result)
   "Return a successful envelope for OPERATION containing RESULT."
@@ -401,6 +402,19 @@ maximum-size partial frame.")
                           'compilation-num-infos-found))))
       :null)))
 
+(defun vela-agent--magit-context ()
+  "Snapshot bounded mode metadata for the current loaded Magit buffer."
+  (save-match-data
+    (if (and (fboundp 'magit-status)
+             (derived-mode-p 'magit-mode))
+        (progn
+          (unless (symbolp major-mode)
+            (signal 'vela-agent-protocol-error
+                    '("native Magit major mode must be a symbol")))
+          `(("major_mode" . ,(vela-agent--bounded-metadata-string
+                              (symbol-name major-mode)))))
+      :null)))
+
 (defun vela-agent--record-unique-section (section seen)
   "Record bounded SECTION in SEEN, or reject an existing entry."
   (when (gethash section seen)
@@ -414,9 +428,9 @@ maximum-size partial frame.")
     (unless (vectorp include)
       (signal 'vela-agent-protocol-error
               '("context.snapshot requires an include vector")))
-    (when (> (length include) 5)
+    (when (> (length include) 6)
       (signal 'vela-agent-protocol-error
-              '("context.snapshot accepts at most five sections")))
+              '("context.snapshot accepts at most six sections")))
     (let ((sections (append include nil)))
       (let ((seen (make-hash-table :test #'equal)))
         (dolist (section sections)
@@ -424,7 +438,7 @@ maximum-size partial frame.")
                        (<= (length section) vela-agent-max-operation-characters)
                        (member section
                                '("buffer" "org" "project" "diagnostics"
-                                 "compilation")))
+                                 "compilation" "magit")))
             (signal 'vela-agent-protocol-error
                     '("unsupported context section")))
           (vela-agent--record-unique-section section seen)))
@@ -443,6 +457,8 @@ maximum-size partial frame.")
           (push (cons "diagnostics" (vela-agent--diagnostics-context)) result))
         (when (member "compilation" sections)
           (push (cons "compilation" (vela-agent--compilation-context)) result))
+        (when (member "magit" sections)
+          (push (cons "magit" (vela-agent--magit-context)) result))
         (nreverse result)))))
 
 (defun vela-agent--validate-request-object (request)

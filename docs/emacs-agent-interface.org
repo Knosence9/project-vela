@@ -4,7 +4,7 @@
 :END:
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [[file:adr/0108-main-thread-authoritative-emacs-agent-interface.org][ADR-0108]]. The observational buffer-restriction contract is recorded in [[file:adr/0109-observational-emacs-buffer-restriction-context.org][ADR-0109]], the text-revision contract in [[file:adr/0110-observational-emacs-buffer-text-revision.org][ADR-0110]], the live-buffer identity contract in [[file:adr/0111-process-local-live-emacs-buffer-identity.org][ADR-0111]], the bounded native project context in [[file:adr/0112-bounded-native-emacs-project-context.org][ADR-0112]], the current-line Flymake contract in [[file:adr/0113-bounded-current-line-flymake-diagnostics.org][ADR-0113]], the current-buffer compilation contract in [[file:adr/0114-bounded-native-emacs-compilation-context.org][ADR-0114]], the in-process JSON codec boundary in [[file:adr/0115-bounded-in-process-emacs-json-adapter.org][ADR-0115]], the inbound byte-framing contract in [[file:adr/0116-bounded-newline-delimited-emacs-json-framing.org][ADR-0116]], the outbound byte-framing contract in [[file:adr/0117-bounded-outbound-emacs-json-framing.org][ADR-0117]], and their synchronous feed composition in [[file:adr/0118-bounded-synchronous-emacs-json-feed-handling.org][ADR-0118]].
+The concurrency and authority decision is recorded in [[file:adr/0108-main-thread-authoritative-emacs-agent-interface.org][ADR-0108]]. The observational buffer-restriction contract is recorded in [[file:adr/0109-observational-emacs-buffer-restriction-context.org][ADR-0109]], the text-revision contract in [[file:adr/0110-observational-emacs-buffer-text-revision.org][ADR-0110]], the live-buffer identity contract in [[file:adr/0111-process-local-live-emacs-buffer-identity.org][ADR-0111]], the bounded native project context in [[file:adr/0112-bounded-native-emacs-project-context.org][ADR-0112]], the current-line Flymake contract in [[file:adr/0113-bounded-current-line-flymake-diagnostics.org][ADR-0113]], the current-buffer compilation contract in [[file:adr/0114-bounded-native-emacs-compilation-context.org][ADR-0114]], the in-process JSON codec boundary in [[file:adr/0115-bounded-in-process-emacs-json-adapter.org][ADR-0115]], the inbound byte-framing contract in [[file:adr/0116-bounded-newline-delimited-emacs-json-framing.org][ADR-0116]], the outbound byte-framing contract in [[file:adr/0117-bounded-outbound-emacs-json-framing.org][ADR-0117]], their synchronous feed composition in [[file:adr/0118-bounded-synchronous-emacs-json-feed-handling.org][ADR-0118]], and the current-buffer Magit contract in [[file:adr/0120-bounded-current-buffer-magit-metadata.org][ADR-0120]].
 
 ** Load and open
 :PROPERTIES:
@@ -46,9 +46,9 @@ additional capability. Undo all visual changes with:
 (vela-workbench-ui-disable)
 #+end_src
 
-** Protocol version 7
+** Protocol version 8
 :PROPERTIES:
-:CUSTOM_ID: protocol-version-7
+:CUSTOM_ID: protocol-version-8
 :END:
 The in-process dispatcher accepts JSON-compatible alists. A future local transport can encode the same request and response shapes without changing the semantic operations.
 
@@ -127,6 +127,14 @@ start or control a process, wait, inspect commands or environment, return
 directories or output, force parsing or fontification, navigate errors, or
 read files.
 
+Magit context is JSON null unless =magit-status= is already callable and the
+current buffer derives from =magit-mode=. A recognized buffer reports only the
+bounded exact =major_mode= symbol name. This classifies already-loaded current
+Magit buffers without loading Magit, calling Git, resolving or selecting a
+repository or another buffer, reading section values, exposing paths, refs,
+revisions, commands, process state, or buffer text, refreshing status,
+navigating, staging, committing, pushing, or granting mutation authority.
+
 Every context request fails closed when the source buffer exceeds 1,048,576
 characters. This cap bounds native line and Org traversal, source extraction,
 and hashing work on the main thread. The interface buffer uses an ordered JSON
@@ -135,8 +143,8 @@ Live buffer, Org heading, tag, outline, source-block name, and language strings
 are capped at 8,192 characters; Org collections are capped at 128 items. The
 encoder independently caps string length, collection width, nesting depth,
 value-node count, and total output; the node bound admits the largest legal
-five-section shape with 128 diagnostics, and cyclic response values fail closed.
-The =include= vector accepts each of the five supported sections at most once,
+six-section shape with 128 diagnostics, and cyclic response values fail closed.
+The =include= vector accepts each of the six supported sections at most once,
 and its vector length is checked before copying. Request objects are traversed
 for at most eight unique fields; keys and operation/section names also have
 fixed character limits. Cyclic, dotted, duplicate-keyed, or oversized request
