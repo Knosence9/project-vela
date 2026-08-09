@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'vela-agent-mode)
 (require 'flymake)
+(require 'compile)
 
 (ert-deftest vela-agent-capabilities-are-stable-and-read-only ()
   (let* ((response (vela-agent-handle-request
@@ -10,7 +11,7 @@
          (result (alist-get "result" response nil nil #'string=))
          (capabilities (alist-get "capabilities" result nil nil #'string=))
          (features (alist-get "emacs_features" result nil nil #'string=)))
-    (should (equal (alist-get "protocol_version" response nil nil #'string=) 6))
+    (should (equal (alist-get "protocol_version" response nil nil #'string=) 7))
     (should (eq (alist-get "ok" response nil nil #'string=) t))
     (should
      (equal capabilities
@@ -48,7 +49,126 @@
     (should (equal (mapcar (lambda (feature)
                              (alist-get "context_section" feature nil nil #'string=))
                            (append features nil))
-                   '("buffer" "org" "project" "diagnostics" :null :null)))))
+                   '("buffer" "org" "project" "diagnostics" "compilation" :null)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-native-compilation-state ()
+  (with-temp-buffer
+    (insert "error: broken\nwarning: careful\n")
+    (compilation-mode)
+    (goto-char 8)
+    (narrow-to-region 2 28)
+    (set-mark 12)
+    (setq mark-active t)
+    (setq-local compilation-num-errors-found 2)
+    (setq-local compilation-num-warnings-found 3)
+    (setq-local compilation-num-infos-found 4)
+    (set-buffer-modified-p nil)
+    (string-match "b\\(c\\)" "abcd")
+    (let ((point-before (point))
+          (mark-before (mark t))
+          (mark-active-before mark-active)
+          (restriction-before (cons (point-min) (point-max)))
+          (text-before (save-restriction
+                         (widen)
+                         (buffer-substring (point-min) (point-max))))
+          (modified-before (buffer-modified-p))
+          (tick-before (buffer-chars-modified-tick))
+          (undo-before buffer-undo-list)
+          (match-before (match-data t)))
+      (cl-letf (((symbol-function 'get-buffer-process)
+                 (lambda (buffer)
+                   (should (eq buffer (current-buffer)))
+                   'vela-test-process))
+                ((symbol-function 'process-live-p)
+                 (lambda (process)
+                   (should (eq process 'vela-test-process))
+                   t)))
+        (let* ((response
+                (vela-agent-handle-request
+                 '(("operation" . "context.snapshot")
+                   ("include" . ["compilation"]))))
+               (result (alist-get "result" response nil nil #'string=)))
+          (should
+           (equal result
+                  '(("compilation" .
+                     (("process_active" . t)
+                      ("errors" . 2)
+                      ("warnings" . 3)
+                      ("infos" . 4))))))))
+      (should (= (point) point-before))
+      (should (equal (mark t) mark-before))
+      (should (eq mark-active mark-active-before))
+      (should (equal (cons (point-min) (point-max)) restriction-before))
+      (should
+       (equal-including-properties
+        (save-restriction
+          (widen)
+          (buffer-substring (point-min) (point-max)))
+        text-before))
+      (should (eq (buffer-modified-p) modified-before))
+      (should (= (buffer-chars-modified-tick) tick-before))
+      (should (equal buffer-undo-list undo-before))
+      (should (equal (match-data t) match-before)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-inactive-compilation-process ()
+  (with-temp-buffer
+    (compilation-mode)
+    (setq-local compilation-num-errors-found 0)
+    (setq-local compilation-num-warnings-found 0)
+    (setq-local compilation-num-infos-found 0)
+    (cl-letf (((symbol-function 'get-buffer-process) (lambda (_) nil))
+              ((symbol-function 'process-live-p)
+               (lambda (&rest _) (ert-fail "nil process was inspected"))))
+      (let* ((response
+              (vela-agent-handle-request
+               '(("operation" . "context.snapshot")
+                 ("include" . ["compilation"]))))
+             (result (alist-get "result" response nil nil #'string=)))
+        (should
+         (equal result
+                '(("compilation" .
+                   (("process_active" . :false)
+                    ("errors" . 0)
+                    ("warnings" . 0)
+                    ("infos" . 0))))))))))
+
+(ert-deftest vela-agent-context-snapshot-reports-non-compilation-as-null ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'compilation-buffer-p) (lambda (_) nil))
+              ((symbol-function 'get-buffer-process)
+               (lambda (&rest _) (ert-fail "non-compilation process inspected"))))
+      (let* ((response
+              (vela-agent-handle-request
+               '(("operation" . "context.snapshot")
+                 ("include" . ["compilation"]))))
+             (result (alist-get "result" response nil nil #'string=)))
+        (should (equal result '(("compilation" . :null))))))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-malformed-compilation-counters ()
+  (with-temp-buffer
+    (compilation-mode)
+    (dolist (binding `((compilation-num-errors-found . -1)
+                       (compilation-num-warnings-found . 1048577)
+                       (compilation-num-infos-found . "1")))
+      (setq-local compilation-num-errors-found 0)
+      (setq-local compilation-num-warnings-found 0)
+      (setq-local compilation-num-infos-found 0)
+      (set (make-local-variable (car binding)) (cdr binding))
+      (should-error
+       (vela-agent-handle-request
+        '(("operation" . "context.snapshot")
+          ("include" . ["compilation"])))
+       :type 'vela-agent-protocol-error))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-nonlocal-compilation-counters ()
+  (with-temp-buffer
+    (compilation-mode)
+    (kill-local-variable 'compilation-num-errors-found)
+    (should-error
+     (vela-agent-handle-request
+      '(("operation" . "context.snapshot")
+        ("include" . ["compilation"])))
+     :type 'vela-agent-protocol-error)))
 
 (ert-deftest vela-agent-context-snapshot-reports-current-line-flymake-diagnostics ()
   (with-temp-buffer
@@ -190,6 +310,10 @@
 (ert-deftest vela-agent-json-encoding-accepts-complete-bounded-snapshot ()
   (with-temp-buffer
     (insert "x")
+    (compilation-mode)
+    (setq-local compilation-num-errors-found vela-agent-max-compilation-count)
+    (setq-local compilation-num-warnings-found vela-agent-max-compilation-count)
+    (setq-local compilation-num-infos-found vela-agent-max-compilation-count)
     (let* ((text-length
             (- (/ vela-agent-max-diagnostics-json-characters
                   vela-agent-max-json-collection-items)
@@ -205,7 +329,8 @@
         (let ((response
                (vela-agent-handle-request
                 '(("operation" . "context.snapshot")
-                  ("include" . ["buffer" "org" "project" "diagnostics"])))))
+                  ("include" . ["buffer" "org" "project" "diagnostics"
+                                "compilation"])))))
           (should (stringp (vela-agent-encode-response response))))))))
 
 (ert-deftest vela-agent-context-snapshot-bounds-aggregate-diagnostic-json ()
@@ -736,7 +861,8 @@
     (should-error
      (vela-agent-handle-request
       '(("operation" . "context.snapshot")
-        ("include" . ["buffer" "org" "project" "diagnostics" "buffer"])))
+        ("include" . ["buffer" "org" "project" "diagnostics" "compilation"
+                      "buffer"])))
      :type 'vela-agent-protocol-error)))
 
 (ert-deftest vela-agent-context-snapshot-rejects-duplicate-sections ()
