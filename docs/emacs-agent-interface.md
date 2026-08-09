@@ -2,7 +2,7 @@
 
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md), the current-line Flymake contract in [ADR-0113](adr/0113-bounded-current-line-flymake-diagnostics.md), and the current-buffer compilation contract in [ADR-0114](adr/0114-bounded-native-emacs-compilation-context.md).
+The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md), the current-line Flymake contract in [ADR-0113](adr/0113-bounded-current-line-flymake-diagnostics.md), the current-buffer compilation contract in [ADR-0114](adr/0114-bounded-native-emacs-compilation-context.md), and the in-process JSON codec boundary in [ADR-0115](adr/0115-bounded-in-process-emacs-json-adapter.md).
 
 ## Load and open
 
@@ -137,6 +137,31 @@ Native Org extraction also preserves the caller's match data in addition to
 point, mark, narrowing, modification state, undo state, and buffer text.
 
 Unknown operations and unknown context sections fail with `vela-agent-protocol-error`. The interface does not accept arbitrary Emacs Lisp.
+
+## Bounded JSON adapter
+
+Local integrations can enter the same protocol through one JSON request string:
+
+```elisp
+(vela-agent-handle-json
+ "{\"operation\":\"context.snapshot\",\"include\":[\"buffer\",\"org\"]}")
+```
+
+`vela-agent-handle-json` returns deterministic bounded JSON. It accepts exactly
+one object no larger than 262,144 Emacs characters, preserves object member
+order and duplicate members for fail-closed validation, uses vectors for JSON
+arrays, and rejects malformed syntax, trailing non-whitespace input, non-object
+roots, and duplicate keys at any object depth as `vela-agent-protocol-error`.
+Decoded requests are independently capped at 16 levels, 128 members per object
+or array, and 1,024 value nodes. The adapter runs only on the captured
+editor-owner thread and reuses all existing request, context, and response
+bounds.
+
+This adapter does not create a JSON-RPC service or any transport. It has no
+socket, process filter, framing, multi-request stream, queue, timer,
+authentication, asynchronous job, cancellation, approval, or mutation
+authority. A later byte-framed transport must impose its own byte bound before
+decoding and schedule this short adapter on the editor-owner thread.
 
 ## Single-thread boundary
 

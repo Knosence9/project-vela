@@ -73,6 +73,12 @@ four-field diagnostics while retaining a finite traversal bound.")
 (defconst vela-agent-max-json-output-characters (* 256 1024)
   "Largest encoded response returned by the deterministic JSON encoder.")
 
+(defconst vela-agent-max-json-request-characters (* 256 1024)
+  "Largest encoded JSON request accepted by the in-process wire adapter.")
+
+(defconst vela-agent-max-json-request-nodes 1024
+  "Largest decoded value-node count accepted by the JSON wire adapter.")
+
 (defvar vela-agent--editor-thread (current-thread)
   "Emacs thread that owns Vela interface access to live editor state.")
 
@@ -556,6 +562,94 @@ four-field diagnostics while retaining a finite traversal bound.")
       (signal 'vela-agent-protocol-error
               '("encoded JSON response exceeds the output bound")))
     encoded))
+
+(defun vela-agent--validate-decoded-json (value depth node-count)
+  "Reject ambiguous or deeply nested decoded JSON VALUE.
+
+DEPTH and NODE-COUNT bound recursive validation independently of encoded size."
+  (when (> depth vela-agent-max-json-depth)
+    (signal 'vela-agent-protocol-error
+            '("JSON request exceeds the nesting-depth bound")))
+  (aset node-count 0 (1+ (aref node-count 0)))
+  (when (> (aref node-count 0) vela-agent-max-json-request-nodes)
+    (signal 'vela-agent-protocol-error
+            '("JSON request exceeds the value-node bound")))
+  (cond
+   ((vectorp value)
+    (when (> (length value) vela-agent-max-json-collection-items)
+      (signal 'vela-agent-protocol-error
+              '("JSON request array exceeds the collection bound")))
+    (dotimes (index (length value))
+      (vela-agent--validate-decoded-json
+       (aref value index) (1+ depth) node-count)))
+   ((listp value)
+    (let ((cursor value)
+          (count 0)
+          (keys (make-hash-table :test #'equal)))
+      (while (consp cursor)
+        (when (>= count vela-agent-max-json-collection-items)
+          (signal 'vela-agent-protocol-error
+                  '("JSON request object exceeds the collection bound")))
+        (let ((entry (car cursor)))
+          (unless (and (consp entry) (stringp (car entry)))
+            (signal 'vela-agent-protocol-error
+                    '("decoded JSON request object is malformed")))
+          (when (gethash (car entry) keys)
+            (signal 'vela-agent-protocol-error
+                    '("JSON request object keys must be unique")))
+          (puthash (car entry) t keys)
+          (vela-agent--validate-decoded-json
+           (cdr entry) (1+ depth) node-count))
+        (setq cursor (cdr cursor)
+              count (1+ count)))
+      (unless (null cursor)
+        (signal 'vela-agent-protocol-error
+                '("decoded JSON request object must be proper")))))
+   ((or (eq value :null) (eq value :false) (eq value t)
+        (stringp value) (numberp value)) nil)
+   (t
+    (signal 'vela-agent-protocol-error
+            '("decoded request value is not JSON-compatible")))))
+
+(defun vela-agent-handle-json (encoded-request)
+  "Decode, dispatch, and encode one bounded JSON ENCODED-REQUEST.
+
+This is an in-process wire adapter only.  It provides no framing, transport,
+queue, asynchronous job, or mutation authority."
+  (unless (eq (current-thread) vela-agent--editor-thread)
+    (signal 'vela-agent-protocol-error
+            '("agent requests must run on the editor owner thread")))
+  (unless (and (stringp encoded-request)
+               (<= (length encoded-request)
+                   vela-agent-max-json-request-characters))
+    (signal 'vela-agent-protocol-error
+            '("encoded JSON request exceeds the input bound")))
+  (let ((request
+         (condition-case nil
+             (with-temp-buffer
+               (insert encoded-request)
+               (goto-char (point-min))
+               ;; `json-read' preserves duplicate object members but accepts
+               ;; some non-standard syntax.  Validate strict JSON first, then
+               ;; decode to the ordered alists required by request validation.
+               (ignore (json-parse-string encoded-request))
+               (let ((json-object-type 'alist)
+                     (json-key-type 'string)
+                     (json-array-type 'vector)
+                     (json-null :null)
+                     (json-false :false))
+                 (prog1 (json-read)
+                   (skip-chars-forward " \t\r\n")
+                   (unless (eobp)
+                     (error "trailing JSON input")))))
+           (error
+            (signal 'vela-agent-protocol-error
+                    '("encoded JSON request is malformed"))))))
+    (unless (listp request)
+      (signal 'vela-agent-protocol-error
+              '("encoded JSON request must be an object")))
+    (vela-agent--validate-decoded-json request 0 (vector 0))
+    (vela-agent-encode-response (vela-agent-handle-request request))))
 
 (defun vela-agent-interface-refresh ()
   "Refresh the interface from `vela-agent-interface-source-buffer'."
