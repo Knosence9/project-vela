@@ -834,6 +834,145 @@
    (vela-agent-handle-request "not-an-object")
    :type 'vela-agent-protocol-error))
 
+(defun vela-agent-test--frame-result (pending chunk)
+  "Feed raw PENDING and CHUNK bytes to the JSON framer."
+  (vela-agent-json-frame-feed
+   (string-as-unibyte pending) (string-as-unibyte chunk)))
+
+(ert-deftest vela-agent-json-framer-preserves-split-and-multiple-frames ()
+  (let* ((first (vela-agent-test--frame-result "" "{\"one\":"))
+         (second
+          (vela-agent-json-frame-feed
+           (alist-get "remainder" first nil nil #'string=)
+           (string-as-unibyte "1}\n{\"two\":2}\npartial"))))
+    (should (equal (alist-get "frames" first nil nil #'string=) []))
+    (should (equal (alist-get "remainder" first nil nil #'string=)
+                   (string-as-unibyte "{\"one\":")))
+    (should (equal (alist-get "frames" second nil nil #'string=)
+                   ["{\"one\":1}" "{\"two\":2}"]))
+    (should (equal (alist-get "remainder" second nil nil #'string=)
+                   (string-as-unibyte "partial")))))
+
+(ert-deftest vela-agent-json-framer-accepts-crlf ()
+  (let ((result (vela-agent-test--frame-result "" "{\"ok\":true}\r\n")))
+    (should (equal (alist-get "frames" result nil nil #'string=)
+                   ["{\"ok\":true}"]))
+    (should (equal (alist-get "remainder" result nil nil #'string=)
+                   (string-as-unibyte "")))))
+
+(ert-deftest vela-agent-json-framer-decodes-utf8-split-across-chunks ()
+  (let* ((first
+          (vela-agent-json-frame-feed
+           (string-as-unibyte "")
+           (concat (string-as-unibyte "{\"value\":\"")
+                   (unibyte-string #xce))))
+         (second
+          (vela-agent-json-frame-feed
+           (alist-get "remainder" first nil nil #'string=)
+           (concat (unibyte-string #xbb)
+                   (string-as-unibyte "\"}\n")))))
+    (should (equal (alist-get "frames" first nil nil #'string=) []))
+    (should (equal (alist-get "frames" second nil nil #'string=)
+                   ["{\"value\":\"λ\"}"]))))
+
+(ert-deftest vela-agent-json-framer-rejects-invalid-utf8 ()
+  (dolist (chunk (list (concat (unibyte-string #xff) "\n")
+                       (concat (unibyte-string #xc0 #xaf) "\n")
+                       ;; First scalar above Unicode's maximum.
+                       (concat (unibyte-string #xf4 #x90 #x80 #x80) "\n")
+                       ;; Historical five-byte UTF-8 is never canonical.
+                       (concat (unibyte-string #xf8 #x88 #x80 #x80 #x80) "\n")))
+    (should-error
+     (vela-agent-json-frame-feed (string-as-unibyte "") chunk)
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-framer-rejects-empty-frames ()
+  (dolist (chunk '("\n" "\r\n" "{}\n\n"))
+    (should-error (vela-agent-test--frame-result "" chunk)
+                  :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-framer-bounds-partial-and-complete-frames ()
+  (let* ((maximum
+          (string-as-unibyte
+           (make-string vela-agent-max-json-frame-bytes ?x)))
+         (oversized (concat maximum (string-as-unibyte "x"))))
+    (should (= (length
+                (alist-get "remainder"
+                           (vela-agent-json-frame-feed
+                            (string-as-unibyte "") maximum)
+                           nil nil #'string=))
+               vela-agent-max-json-frame-bytes))
+    (should (= (length
+                (aref
+                 (alist-get "frames"
+                            (vela-agent-json-frame-feed
+                             (string-as-unibyte "")
+                             (concat maximum (string-as-unibyte "\n")))
+                            nil nil #'string=)
+                 0))
+               vela-agent-max-json-frame-bytes))
+    (should-error (vela-agent-json-frame-feed (string-as-unibyte "") oversized)
+                  :type 'vela-agent-protocol-error)
+    (should-error
+     (vela-agent-json-frame-feed
+      (string-as-unibyte "") (concat oversized (string-as-unibyte "\n")))
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-framer-counts-optional-cr-in-frame-byte-bound ()
+  (let ((maximum-crlf
+         (concat
+          (string-as-unibyte
+           (make-string (1- vela-agent-max-json-frame-bytes) ?x))
+          (string-as-unibyte "\r\n")))
+        (oversized-crlf
+         (concat
+          (string-as-unibyte
+           (make-string vela-agent-max-json-frame-bytes ?x))
+          (string-as-unibyte "\r\n"))))
+    (should (= (length
+                (aref
+                 (alist-get "frames"
+                            (vela-agent-json-frame-feed
+                             (string-as-unibyte "") maximum-crlf)
+                            nil nil #'string=)
+                 0))
+               (1- vela-agent-max-json-frame-bytes)))
+    (should-error
+     (vela-agent-json-frame-feed (string-as-unibyte "") oversized-crlf)
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-framer-bounds-raw-feed-before-copying ()
+  (should-error
+   (vela-agent-json-frame-feed
+    (string-as-unibyte "")
+    (string-as-unibyte
+     (make-string (1+ vela-agent-max-json-feed-bytes) ?x)))
+   :type 'vela-agent-protocol-error))
+
+(ert-deftest vela-agent-json-framer-bounds-completed-frames-per-feed ()
+  (let (sixteen seventeen)
+    ;; Non-empty payloads distinguish the frame-count bound from empty-frame
+    ;; validation.
+    (setq sixteen (string-as-unibyte (mapconcat #'identity (make-list 16 "{}") "\n"))
+          seventeen (string-as-unibyte (mapconcat #'identity (make-list 17 "{}") "\n")))
+    (setq sixteen (concat sixteen (string-as-unibyte "\n"))
+          seventeen (concat seventeen (string-as-unibyte "\n")))
+    (should (= (length
+                (alist-get "frames"
+                           (vela-agent-json-frame-feed
+                            (string-as-unibyte "") sixteen)
+                           nil nil #'string=))
+               16))
+    (should-error
+     (vela-agent-json-frame-feed (string-as-unibyte "") seventeen)
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-json-framer-requires-unibyte-input ()
+  (dolist (arguments (list (list "λ" (string-as-unibyte ""))
+                           (list (string-as-unibyte "") "λ")))
+    (should-error (apply #'vela-agent-json-frame-feed arguments)
+                  :type 'vela-agent-protocol-error)))
+
 (ert-deftest vela-agent-json-adapter-round-trips-capabilities ()
   (let ((expected
          (vela-agent-encode-response

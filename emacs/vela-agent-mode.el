@@ -79,6 +79,21 @@ four-field diagnostics while retaining a finite traversal bound.")
 (defconst vela-agent-max-json-request-nodes 1024
   "Largest decoded value-node count accepted by the JSON wire adapter.")
 
+(defconst vela-agent-max-json-frame-bytes (* 256 1024)
+  "Largest raw newline-delimited JSON frame accepted before decoding.")
+
+(defconst vela-agent-max-json-frames-per-feed 16
+  "Largest number of complete JSON frames accepted by one framer feed.")
+
+(defconst vela-agent-max-json-feed-bytes
+  (+ (* vela-agent-max-json-frames-per-feed
+        (1+ vela-agent-max-json-frame-bytes))
+     vela-agent-max-json-frame-bytes)
+  "Largest raw chunk accepted by one JSON framer feed.
+
+This admits the maximum number of bounded frames and delimiters followed by one
+maximum-size partial frame.")
+
 (defvar vela-agent--editor-thread (current-thread)
   "Emacs thread that owns Vela interface access to live editor state.")
 
@@ -610,6 +625,74 @@ DEPTH and NODE-COUNT bound recursive validation independently of encoded size."
    (t
     (signal 'vela-agent-protocol-error
             '("decoded request value is not JSON-compatible")))))
+
+(defun vela-agent--decode-json-frame (bytes)
+  "Strictly decode one non-empty unibyte JSON frame BYTES as UTF-8."
+  (when (and (> (length bytes) 0)
+             (= (aref bytes (1- (length bytes))) ?\r))
+    (setq bytes (substring bytes 0 -1)))
+  (when (= (length bytes) 0)
+    (signal 'vela-agent-protocol-error '("JSON frames must not be empty")))
+  (condition-case nil
+      (let ((decoded (decode-coding-string bytes 'utf-8 t)))
+        ;; Emacs can preserve malformed byte sequences as raw characters.
+        ;; Reject that eight-bit preservation before checking canonical bytes.
+        (dotimes (index (length decoded))
+          (let ((character (aref decoded index)))
+            (when (or (eq (char-charset character) 'eight-bit)
+                      (> character #x10ffff)
+                      (<= #xd800 character #xdfff))
+              (signal 'vela-agent-protocol-error
+                      '("JSON frame is not valid Unicode UTF-8")))))
+        ;; Canonical UTF-8 must survive an exact decode/encode round trip.
+        (unless (equal (encode-coding-string decoded 'utf-8 t) bytes)
+          (signal 'vela-agent-protocol-error
+                  '("JSON frame is not canonical UTF-8")))
+        decoded)
+    (vela-agent-protocol-error
+     (signal 'vela-agent-protocol-error '("JSON frame is not canonical UTF-8")))
+    (error
+     (signal 'vela-agent-protocol-error '("JSON frame is not valid UTF-8")))))
+
+(defun vela-agent-json-frame-feed (pending chunk)
+  "Split bounded raw PENDING and CHUNK bytes into newline JSON frames.
+
+Both arguments must be unibyte strings.  The returned ordered object contains a
+`frames' vector of strictly decoded UTF-8 strings and an unibyte `remainder'
+for the caller to supply as PENDING on its next feed.  This pure framing helper
+does not dispatch requests or own transport state."
+  (unless (and (stringp pending) (not (multibyte-string-p pending))
+               (stringp chunk) (not (multibyte-string-p chunk)))
+    (signal 'vela-agent-protocol-error
+            '("JSON framing accepts only unibyte strings")))
+  (when (> (length pending) vela-agent-max-json-frame-bytes)
+    (signal 'vela-agent-protocol-error
+            '("partial JSON frame exceeds the byte bound")))
+  (when (> (length chunk) vela-agent-max-json-feed-bytes)
+    (signal 'vela-agent-protocol-error
+            '("JSON framing chunk exceeds the feed byte bound")))
+  (let* ((bytes (concat pending chunk))
+         (start 0)
+         (count 0)
+         frames
+         delimiter)
+    (while (setq delimiter (string-search "\n" bytes start))
+      (when (>= count vela-agent-max-json-frames-per-feed)
+        (signal 'vela-agent-protocol-error
+                '("JSON framing feed has too many complete frames")))
+      (when (> (- delimiter start) vela-agent-max-json-frame-bytes)
+        (signal 'vela-agent-protocol-error
+                '("complete JSON frame exceeds the byte bound")))
+      (push (vela-agent--decode-json-frame (substring bytes start delimiter))
+            frames)
+      (setq count (1+ count)
+            start (1+ delimiter)))
+    (let ((remainder (substring bytes start)))
+      (when (> (length remainder) vela-agent-max-json-frame-bytes)
+        (signal 'vela-agent-protocol-error
+                '("partial JSON frame exceeds the byte bound")))
+      `(("frames" . ,(vconcat (nreverse frames)))
+        ("remainder" . ,remainder)))))
 
 (defun vela-agent-handle-json (encoded-request)
   "Decode, dispatch, and encode one bounded JSON ENCODED-REQUEST.
