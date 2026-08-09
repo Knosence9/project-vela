@@ -31,6 +31,7 @@
 
               # Literate agent workbench and batch-tested interface mode
               emacs
+              python3
 
               # Rust quality and dependency tooling
               cargo-audit
