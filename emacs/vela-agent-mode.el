@@ -654,6 +654,48 @@ DEPTH and NODE-COUNT bound recursive validation independently of encoded size."
     (error
      (signal 'vela-agent-protocol-error '("JSON frame is not valid UTF-8")))))
 
+(defun vela-agent-json-frame-encode (payload)
+  "Encode one bounded Emacs JSON PAYLOAD as a newline frame.
+
+The returned string contains canonical unibyte UTF-8 followed by one LF.  This
+pure helper does not parse JSON, dispatch requests, or own transport state."
+  (unless (stringp payload)
+    (signal 'vela-agent-protocol-error
+            '("JSON frame payload must be a string")))
+  (when (> (length payload) vela-agent-max-json-frame-bytes)
+    (signal 'vela-agent-protocol-error
+            '("JSON frame payload exceeds the character preflight bound")))
+  (when (or (string-search "\n" payload) (string-search "\r" payload))
+    (signal 'vela-agent-protocol-error
+            '("JSON frame payload must not contain delimiters")))
+  (dotimes (index (length payload))
+    (let ((character (aref payload index)))
+      (when (or (eq (char-charset character) 'eight-bit)
+                (> character #x10ffff)
+                (<= #xd800 character #xdfff))
+        (signal 'vela-agent-protocol-error
+                '("JSON frame payload is not valid Unicode")))))
+  (let ((bytes
+         (condition-case nil
+             (encode-coding-string payload 'utf-8)
+           (error
+            (signal 'vela-agent-protocol-error
+                    '("JSON frame payload is not valid Unicode"))))))
+    (unless
+        (equal
+         (condition-case nil
+             (decode-coding-string bytes 'utf-8 t)
+           (error
+            (signal 'vela-agent-protocol-error
+                    '("JSON frame payload is not valid Unicode"))))
+         payload)
+      (signal 'vela-agent-protocol-error
+              '("JSON frame payload is not canonical Unicode")))
+    (when (> (length bytes) vela-agent-max-json-frame-bytes)
+      (signal 'vela-agent-protocol-error
+              '("encoded JSON frame exceeds the byte bound")))
+    (concat bytes (unibyte-string ?\n))))
+
 (defun vela-agent-json-frame-feed (pending chunk)
   "Split bounded raw PENDING and CHUNK bytes into newline JSON frames.
 

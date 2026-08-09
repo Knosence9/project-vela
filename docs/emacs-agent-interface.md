@@ -2,7 +2,7 @@
 
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md), the current-line Flymake contract in [ADR-0113](adr/0113-bounded-current-line-flymake-diagnostics.md), the current-buffer compilation contract in [ADR-0114](adr/0114-bounded-native-emacs-compilation-context.md), the in-process JSON codec boundary in [ADR-0115](adr/0115-bounded-in-process-emacs-json-adapter.md), and the byte-framing contract in [ADR-0116](adr/0116-bounded-newline-delimited-emacs-json-framing.md).
+The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md), the current-line Flymake contract in [ADR-0113](adr/0113-bounded-current-line-flymake-diagnostics.md), the current-buffer compilation contract in [ADR-0114](adr/0114-bounded-native-emacs-compilation-context.md), the in-process JSON codec boundary in [ADR-0115](adr/0115-bounded-in-process-emacs-json-adapter.md), the inbound byte-framing contract in [ADR-0116](adr/0116-bounded-newline-delimited-emacs-json-framing.md), and the outbound byte-framing contract in [ADR-0117](adr/0117-bounded-outbound-emacs-json-framing.md).
 
 ## Load and open
 
@@ -194,6 +194,23 @@ or grant editor or mutation authority. A later transport must decide those
 contracts separately and invoke `vela-agent-handle-json` only through a short
 editor-owner-thread callback. The codec's independent 262,144-character input
 bound still applies after framing.
+
+Frame a deterministic response for that later transport with:
+
+```elisp
+(vela-agent-json-frame-encode
+ (vela-agent-handle-json
+  "{\"operation\":\"capabilities.list\"}"))
+```
+
+`vela-agent-json-frame-encode` accepts the JSON string returned by the adapter,
+encodes canonical UTF-8, and returns unibyte bytes followed by exactly one LF.
+ASCII-only unibyte strings are accepted because the deterministic encoder may
+produce them; raw high bytes, invalid Unicode, and literal CR or LF fail closed.
+The encoded payload is capped at 262,144 bytes before the delimiter, separately
+from the JSON encoder's character bound. The helper does not parse JSON again,
+write to a process, own queue state, select a peer, schedule a callback, or
+grant editor or mutation authority.
 
 ## Single-thread boundary
 
