@@ -2,7 +2,7 @@
 
 Vela's first Emacs integration is a read-only, model-neutral interface over native editor and Org state. It is deliberately small: Emacs remains responsive and authoritative for live editor state while expensive agent work stays in external workers.
 
-The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md), the current-line Flymake contract in [ADR-0113](adr/0113-bounded-current-line-flymake-diagnostics.md), the current-buffer compilation contract in [ADR-0114](adr/0114-bounded-native-emacs-compilation-context.md), and the in-process JSON codec boundary in [ADR-0115](adr/0115-bounded-in-process-emacs-json-adapter.md).
+The concurrency and authority decision is recorded in [ADR-0108](adr/0108-main-thread-authoritative-emacs-agent-interface.md). The observational buffer-restriction contract is recorded in [ADR-0109](adr/0109-observational-emacs-buffer-restriction-context.md), the text-revision contract in [ADR-0110](adr/0110-observational-emacs-buffer-text-revision.md), the live-buffer identity contract in [ADR-0111](adr/0111-process-local-live-emacs-buffer-identity.md), the bounded native project context in [ADR-0112](adr/0112-bounded-native-emacs-project-context.md), the current-line Flymake contract in [ADR-0113](adr/0113-bounded-current-line-flymake-diagnostics.md), the current-buffer compilation contract in [ADR-0114](adr/0114-bounded-native-emacs-compilation-context.md), the in-process JSON codec boundary in [ADR-0115](adr/0115-bounded-in-process-emacs-json-adapter.md), and the byte-framing contract in [ADR-0116](adr/0116-bounded-newline-delimited-emacs-json-framing.md).
 
 ## Load and open
 
@@ -162,6 +162,38 @@ socket, process filter, framing, multi-request stream, queue, timer,
 authentication, asynchronous job, cancellation, approval, or mutation
 authority. A later byte-framed transport must impose its own byte bound before
 decoding and schedule this short adapter on the editor-owner thread.
+
+## Bounded byte framing
+
+A future local transport can feed raw chunks to the transport-neutral newline
+framer before calling the JSON adapter:
+
+```elisp
+(let* ((first (vela-agent-json-frame-feed
+               (string-as-unibyte "")
+               (string-as-unibyte "{\"operation\":\"capabilities.")))
+       (second (vela-agent-json-frame-feed
+                (alist-get "remainder" first nil nil #'string=)
+                (string-as-unibyte "list\"}\n"))))
+  (aref (alist-get "frames" second nil nil #'string=) 0))
+```
+
+`vela-agent-json-frame-feed` accepts only unibyte `pending` and `chunk`
+strings. LF terminates a frame; one immediately preceding CR is removed. The
+function rejects empty frames and decodes complete frames as canonical UTF-8,
+so a multibyte character may safely arrive across chunks. Each raw frame span,
+including optional CR, and the returned partial remainder is capped at 262,144
+bytes. One feed accepts at most 16 complete frames and a chunk no larger than
+4,456,464 bytes. It returns decoded frames in arrival order and the exact
+unconsumed raw remainder. Any error rejects the complete feed.
+
+The caller owns and must retain the remainder. The helper keeps no state and
+does not parse or dispatch JSON, open a process or socket, select or
+authenticate a peer, queue work, schedule an editor callback, frame responses,
+or grant editor or mutation authority. A later transport must decide those
+contracts separately and invoke `vela-agent-handle-json` only through a short
+editor-owner-thread callback. The codec's independent 262,144-character input
+bound still applies after framing.
 
 ## Single-thread boundary
 
