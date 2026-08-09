@@ -21,7 +21,7 @@ Calling Git, selecting another Magit buffer, resolving a repository, reading sec
 :END:
 Advance the Emacs agent protocol to version 8. Add =magit= as a sixth optional =context.snapshot= section and identify it on the existing Magit capability.
 
-The section returns JSON null unless =magit-status= is already callable and the current buffer derives from =magit-mode=. Snapshotting does not load or search for Magit. A recognized current Magit buffer returns one deterministic field, =major_mode=, containing the exact bounded symbol name of the current major mode. A non-symbol mode or a name longer than 8,192 characters fails closed.
+The section returns JSON null unless =magit-status= is already callable and the current buffer derives from =magit-mode=. Snapshotting does not load or search for Magit. It traverses at most 32 unique symbols from the native primary and extra mode-parent metadata, terminates cycles, and fails closed on malformed or over-limit ancestry. A recognized current Magit buffer returns one deterministic field, =major_mode=, containing the exact bounded symbol name of the current major mode. A non-symbol mode or a name longer than 8,192 characters fails closed.
 
 The existing 1,048,576-character source-buffer limit, unique-section validation, deterministic response encoder, and editor-owner-thread boundary remain in force. Requests accept at most six sections, and the response-node bound admits the complete legal six-section response.
 
@@ -62,7 +62,7 @@ Rejected because selecting or creating another buffer crosses the caller-selecte
 :PROPERTIES:
 :CUSTOM_ID: verification
 :END:
-RED→GREEN ERT coverage pins protocol version 8, capability metadata, recognized and null section shapes, oversized mode rejection, six-section cardinality before copying, complete-response encoding, and preservation of editor state. Batch byte compilation rejects warnings, and the complete repository quality gate must remain green.
+RED→GREEN ERT coverage pins protocol version 8, capability metadata, recognized and null section shapes, oversized mode rejection, malformed and over-limit parent rejection, cyclic-parent termination, six-section cardinality before copying, complete-response encoding, and preservation of editor state. Batch byte compilation rejects warnings, and the complete repository quality gate must remain green.
 
 ** Revisit when
 :PROPERTIES:

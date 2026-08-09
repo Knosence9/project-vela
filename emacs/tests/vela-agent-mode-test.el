@@ -60,7 +60,7 @@
     (setq mark-active t)
     (set-buffer-modified-p nil)
     (string-match "b\\(c\\)" "abcd")
-    (let ((major-mode 'magit-status-mode)
+    (let ((major-mode (make-symbol "magit-status-mode"))
           (point-before (point))
           (mark-before (mark t))
           (mark-active-before mark-active)
@@ -72,11 +72,8 @@
           (modified-before (buffer-modified-p))
           (undo-before buffer-undo-list)
           (match-before (match-data t)))
-      (cl-letf (((symbol-function 'magit-status) (lambda (&rest _)))
-                ((symbol-function 'derived-mode-p)
-                 (lambda (mode)
-                   (should (eq mode 'magit-mode))
-                   t)))
+      (put major-mode 'derived-mode-parent 'magit-mode)
+      (cl-letf (((symbol-function 'magit-status) (lambda (&rest _))))
         (let* ((response
                 (vela-agent-handle-request
                  '(("operation" . "context.snapshot")
@@ -101,11 +98,7 @@
 
 (ert-deftest vela-agent-context-snapshot-reports-non-magit-as-null ()
   (with-temp-buffer
-    (cl-letf (((symbol-function 'magit-status) (lambda (&rest _)))
-              ((symbol-function 'derived-mode-p)
-               (lambda (mode)
-                 (should (eq mode 'magit-mode))
-                 nil)))
+    (cl-letf (((symbol-function 'magit-status) (lambda (&rest _))))
       (let* ((response
               (vela-agent-handle-request
                '(("operation" . "context.snapshot")
@@ -115,11 +108,12 @@
 
 (ert-deftest vela-agent-context-snapshot-rejects-oversized-magit-mode ()
   (with-temp-buffer
-    (let ((major-mode (intern (make-string
-                               (1+ vela-agent-max-metadata-string-characters)
-                               ?m))))
-      (cl-letf (((symbol-function 'magit-status) (lambda (&rest _)))
-                ((symbol-function 'derived-mode-p) (lambda (_) t)))
+    (let ((major-mode (make-symbol
+                       (make-string
+                        (1+ vela-agent-max-metadata-string-characters)
+                        ?m))))
+      (put major-mode 'derived-mode-parent 'magit-mode)
+      (cl-letf (((symbol-function 'magit-status) (lambda (&rest _))))
         (should-error
          (vela-agent-handle-request
           '(("operation" . "context.snapshot")
@@ -133,6 +127,52 @@
   (should-error
    (vela-agent--magit-mode-context "magit-status-mode")
    :type 'vela-agent-protocol-error))
+
+(ert-deftest vela-agent-context-snapshot-rejects-malformed-magit-parent ()
+  (let ((mode (make-symbol "vela-test-magit-mode")))
+    (put mode 'derived-mode-parent "not-a-mode")
+    (should-error
+     (vela-agent--magit-mode-context mode)
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-context-snapshot-bounds-magit-parent-traversal ()
+  (let ((modes nil))
+    (dotimes (index (1+ vela-agent-max-mode-ancestry-nodes))
+      (push (make-symbol (format "vela-test-magit-mode-%d" index)) modes))
+    (setq modes (nreverse modes))
+    (cl-loop for (mode parent) on modes
+             when parent do (put mode 'derived-mode-parent parent))
+    (put (car (last modes)) 'derived-mode-parent 'magit-mode)
+    (should-error
+     (vela-agent--magit-mode-context (car modes))
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-context-snapshot-terminates-cyclic-magit-parents ()
+  (let ((first (make-symbol "vela-test-first-mode"))
+        (second (make-symbol "vela-test-second-mode")))
+    (put first 'derived-mode-parent second)
+    (put second 'derived-mode-extra-parents (list first))
+    (should (eq (vela-agent--magit-mode-context first) :null))))
+
+(ert-deftest vela-agent-context-snapshot-recognizes-extra-magit-parent ()
+  (let ((mode (make-symbol "vela-test-extra-magit-mode")))
+    (derived-mode-add-parents mode '(magit-mode))
+    (should (equal (vela-agent--magit-mode-context mode)
+                   '(("major_mode" . "vela-test-extra-magit-mode"))))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-malformed-extra-magit-parents ()
+  (let ((dotted (make-symbol "vela-test-dotted-mode"))
+        (nonsymbol (make-symbol "vela-test-nonsymbol-mode"))
+        (cyclic (make-symbol "vela-test-cyclic-mode"))
+        (cycle (list 'other-mode)))
+    (put dotted 'derived-mode-extra-parents '(other-mode . broken))
+    (put nonsymbol 'derived-mode-extra-parents '("not-a-mode"))
+    (setcdr cycle cycle)
+    (put cyclic 'derived-mode-extra-parents cycle)
+    (dolist (mode (list dotted nonsymbol cyclic))
+      (should-error
+       (vela-agent--magit-mode-context mode)
+       :type 'vela-agent-protocol-error))))
 
 (ert-deftest vela-agent-context-snapshot-reports-native-compilation-state ()
   (with-temp-buffer

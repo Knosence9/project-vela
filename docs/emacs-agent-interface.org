@@ -128,9 +128,11 @@ directories or output, force parsing or fontification, navigate errors, or
 read files.
 
 Magit context is JSON null unless =magit-status= is already callable and the
-current buffer derives from =magit-mode=. A recognized buffer reports only the
-bounded exact =major_mode= symbol name. This classifies already-loaded current
-Magit buffers without loading Magit, calling Git, resolving or selecting a
+current buffer derives from =magit-mode=. Classification traverses at most 32
+unique native mode-parent symbols, terminates cycles, and fails closed on
+malformed or over-limit ancestry. A recognized buffer reports only the bounded
+exact =major_mode= symbol name. This classifies already-loaded current Magit
+buffers without loading Magit, calling Git, resolving or selecting a
 repository or another buffer, reading section values, exposing paths, refs,
 revisions, commands, process state, or buffer text, refreshing status,
 navigating, staging, committing, pushing, or granting mutation authority.

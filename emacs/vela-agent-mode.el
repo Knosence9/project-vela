@@ -48,6 +48,9 @@
 (defconst vela-agent-max-compilation-count (* 1024 1024)
   "Largest native compilation diagnostic count accepted by a snapshot.")
 
+(defconst vela-agent-max-mode-ancestry-nodes 32
+  "Largest native major-mode ancestry inspected by a context snapshot.")
+
 (defconst vela-agent-max-json-string-characters 8192
   "Largest string accepted by the deterministic JSON encoder.")
 
@@ -402,12 +405,48 @@ maximum-size partial frame.")
                           'compilation-num-infos-found))))
       :null)))
 
+(defun vela-agent--mode-derived-p (mode ancestor)
+  "Return non-nil when MODE has bounded, valid ANCESTOR metadata."
+  (let ((pending (list mode))
+        (seen (make-hash-table :test #'eq))
+        (count 0)
+        found)
+    (while pending
+      (let ((candidate (pop pending)))
+        (unless (symbolp candidate)
+          (signal 'vela-agent-protocol-error
+                  '("native major-mode ancestry must contain symbols")))
+        (unless (gethash candidate seen)
+          (setq count (1+ count))
+          (when (> count vela-agent-max-mode-ancestry-nodes)
+            (signal 'vela-agent-protocol-error
+                    '("native major-mode ancestry exceeds the traversal bound")))
+          (puthash candidate t seen)
+          (when (eq candidate ancestor)
+            (setq found t))
+          (let ((parent (get candidate 'derived-mode-parent)))
+            (when parent
+              (push parent pending)))
+          (let ((parents (get candidate 'derived-mode-extra-parents))
+                (extra-count 0))
+            (while (consp parents)
+              (setq extra-count (1+ extra-count))
+              (when (> extra-count vela-agent-max-mode-ancestry-nodes)
+                (signal 'vela-agent-protocol-error
+                        '("native major-mode parents exceed the traversal bound")))
+              (push (car parents) pending)
+              (setq parents (cdr parents)))
+            (unless (null parents)
+              (signal 'vela-agent-protocol-error
+                      '("native major-mode parents must be a proper list")))))))
+    found))
+
 (defun vela-agent--magit-mode-context (mode)
   "Return bounded current Magit metadata after validating exact MODE."
   (unless (symbolp mode)
     (signal 'vela-agent-protocol-error
             '("native Magit major mode must be a symbol")))
-  (if (derived-mode-p 'magit-mode)
+  (if (vela-agent--mode-derived-p mode 'magit-mode)
       `(("major_mode" . ,(vela-agent--bounded-metadata-string
                           (symbol-name mode))))
     :null))
