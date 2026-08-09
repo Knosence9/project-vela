@@ -24,13 +24,19 @@
   (with-temp-buffer
     (vela-agent-interface-mode)
     (should-not (local-variable-p 'line-spacing))
-    (setq-local cursor-type 'box)
-    (vela-workbench-ui-mode 1)
-    (vela-workbench-ui-mode 1)
-    (vela-workbench-ui-mode -1)
-    (should-not (local-variable-p 'line-spacing))
-    (should (local-variable-p 'cursor-type))
-    (should (eq cursor-type 'box))))
+    (let ((font-lock-keywords-before (copy-tree font-lock-keywords))
+          (font-lock-keywords-local-before
+           (local-variable-p 'font-lock-keywords)))
+      (setq-local cursor-type 'box)
+      (vela-workbench-ui-mode 1)
+      (vela-workbench-ui-mode 1)
+      (vela-workbench-ui-mode -1)
+      (should-not (local-variable-p 'line-spacing))
+      (should (local-variable-p 'cursor-type))
+      (should (eq cursor-type 'box))
+      (should (equal font-lock-keywords font-lock-keywords-before))
+      (should (eq (local-variable-p 'font-lock-keywords)
+                  font-lock-keywords-local-before)))))
 
 (ert-deftest vela-workbench-ui-enable-is-reversible ()
   (let ((initial-menu-bar-mode menu-bar-mode)
@@ -74,10 +80,31 @@
       (remove-hook 'vela-agent-interface-mode-hook #'vela-workbench-ui-mode)
       (disable-theme 'vela-doom))))
 
+(ert-deftest vela-workbench-ui-global-hook-ignores-current-local-binding ()
+  (let ((default-hook-before
+         (copy-sequence (default-value 'vela-agent-interface-mode-hook))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local vela-agent-interface-mode-hook nil)
+          (vela-workbench-ui-enable)
+          (should
+           (memq #'vela-workbench-ui--enable-managed-buffer
+                 (default-value 'vela-agent-interface-mode-hook)))
+          (with-temp-buffer
+            (vela-agent-interface-mode)
+            (should vela-workbench-ui-mode))
+          (vela-workbench-ui-disable)
+          (should
+           (equal (default-value 'vela-agent-interface-mode-hook)
+                  default-hook-before)))
+      (vela-workbench-ui-disable)
+      (set-default 'vela-agent-interface-mode-hook default-hook-before))))
+
 (ert-deftest vela-workbench-ui-highlights-structured-protocol-values ()
   (with-temp-buffer
     (insert "{\"operation\\\"name\": \"context\\\"snapshot\", "
-            "\"offset\": -1.25e+2, \"ok\": true}")
+            "\"offset\": -1.25e+2, \"ok\": true, "
+            "\"values\": [1,2,3,4]}")
     (vela-agent-interface-mode)
     (vela-workbench-ui-mode 1)
     (font-lock-ensure)
@@ -90,7 +117,11 @@
                 'vela-workbench-json-constant-face))
     (search-forward "true")
     (should (eq (get-text-property (match-beginning 0) 'face)
-                'vela-workbench-json-constant-face))))
+                'vela-workbench-json-constant-face))
+    (dolist (number '("1" "2" "3" "4"))
+      (search-forward number)
+      (should (eq (get-text-property (match-beginning 0) 'face)
+                  'vela-workbench-json-constant-face)))))
 
 (provide 'vela-workbench-ui-test)
 ;;; vela-workbench-ui-test.el ends here

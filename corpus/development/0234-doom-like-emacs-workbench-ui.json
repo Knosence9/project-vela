@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Add a Doom-like Vela Emacs workbench UI",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1031 with an optional, dependency-light Doom-inspired presentation that remains separate from the trusted Emacs agent protocol.",
+    "acceptance_criteria": [
+      "Provide a coherent dark palette, compact header and modeline, and readable structured-response highlighting.",
+      "Run under emacs -Q without Doom Emacs, GUI-only packages, or icon fonts.",
+      "Preserve the read-only interface contract and all preexisting local and global presentation state.",
+      "Provide explicit reversible enable and disable commands."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Built the optional visual module through focused ERT red and green cycles.",
+      "outcome": "success",
+      "diagnostic": "The first red run failed because vela-workbench-ui did not exist; later focused red runs exposed missing theme activation, syntax highlighting, and chrome management.",
+      "patch": "Added a Doom-inspired theme, local interface presentation, compact Vela header and modeline, structured protocol highlighting, reversible global commands, documentation, and headless verification integration."
+    },
+    {
+      "summary": "Strengthened reversibility and JSON presentation after the first complete verification attempt.",
+      "outcome": "success",
+      "diagnostic": "New regression tests showed repeated local activation could overwrite saved bindings, global disable could remove presentation that it did not own, and simplistic JSON regular expressions mishandled escaped strings and signed fractional exponent numbers.",
+      "patch": "Made local activation idempotent with binding-locality restoration, tracked globally managed buffers and owned theme and hook state, preserved preexisting presentation, and upgraded highlighting for escaped JSON strings and complete JSON number syntax."
+    },
+    {
+      "summary": "Corrected default-hook and adjacent-number behavior after independent review.",
+      "outcome": "success",
+      "diagnostic": "The reviewer proved that global hook installation could accidentally target a current buffer-local hook and that consuming a JSON number's trailing delimiter skipped adjacent array values. A related regression test also showed font-lock setup was not fully restored after local UI disablement.",
+      "patch": "Made hook ownership and mutation explicitly operate on the default hook, changed number highlighting to leave delimiters unconsumed, and included font-lock-keywords in binding-aware local state restoration."
+    }
+  ],
+  "outcome": {
+    "summary": "Vela now offers an optional Doom-inspired interface that is visually coherent, dependency-light, headless-safe, and reversible without changing the semantic protocol or granting additional authority.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix flake check --all-systems --no-build --show-trace",
+        "status": "passed"
+      },
+      {
+        "command": "isolated graphical Emacs daemon smoke test with the demo Org source and live interface buffer",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A visual layer should remain a separate optional module so protocol verification stays deterministic under emacs -Q.",
+    "Reversible UI commands must track ownership instead of disabling themes, hooks, or buffer-local modes that were already active.",
+    "A minor mode invoked repeatedly must snapshot presentation state once and restore both values and buffer-local binding semantics.",
+    "Structured response highlighting must understand JSON escapes and complete number syntax rather than relying on naive quoted-string and integer patterns.",
+    "A native palette and compact modeline can provide Doom-like coherence without importing Doom Emacs or icon-font dependencies."
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-workbench-ui.el",
+    "url": "https://github.com/Knosence9/project-vela/issues/1031"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

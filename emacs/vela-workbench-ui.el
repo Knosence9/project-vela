@@ -96,12 +96,13 @@
      1 'vela-workbench-json-key-face t)
     ("\\_<\\(?:true\\|false\\|null\\)\\_>"
      . 'vela-workbench-json-constant-face)
-    ("\\(?:\\`\\|[][,:{][[:space:]]*\\)\\(-?\\(?:0\\|[1-9][0-9]*\\)\\(?:\\.[0-9]+\\)?\\(?:[eE][+-]?[0-9]+\\)?\\)\\(?:[[:space:]]*[]},]\\|\\'\\)"
+    ("\\(?:\\`\\|[][,:{][[:space:]]*\\)\\(-?\\(?:0\\|[1-9][0-9]*\\)\\(?:\\.[0-9]+\\)?\\(?:[eE][+-]?[0-9]+\\)?\\)\\_>"
      1 'vela-workbench-json-constant-face))
   "Additional font-lock rules for the structured interface response.")
 
 (defconst vela-workbench-ui--local-variables
-  '(header-line-format mode-line-format line-spacing cursor-type truncate-lines)
+  '(header-line-format mode-line-format line-spacing cursor-type truncate-lines
+    font-lock-keywords)
   "Buffer-local presentation variables managed by the workbench UI.")
 
 (defvar-local vela-workbench-ui--saved-local-state nil
@@ -185,14 +186,33 @@
     (vela-workbench-ui-mode 1)
     (push (current-buffer) vela-workbench-ui--managed-buffers)))
 
+(defun vela-workbench-ui--default-hook-contains-p ()
+  "Return non-nil when the Vela UI is on the default interface hook."
+  (memq #'vela-workbench-ui--enable-managed-buffer
+        (default-value 'vela-agent-interface-mode-hook)))
+
+(defun vela-workbench-ui--add-default-hook ()
+  "Add the managed-buffer callback to the default interface hook."
+  (unless (vela-workbench-ui--default-hook-contains-p)
+    (set-default
+     'vela-agent-interface-mode-hook
+     (cons #'vela-workbench-ui--enable-managed-buffer
+           (default-value 'vela-agent-interface-mode-hook)))))
+
+(defun vela-workbench-ui--remove-default-hook ()
+  "Remove the managed-buffer callback from the default interface hook."
+  (set-default
+   'vela-agent-interface-mode-hook
+   (delq #'vela-workbench-ui--enable-managed-buffer
+         (copy-sequence (default-value 'vela-agent-interface-mode-hook)))))
+
 ;;;###autoload
 (defun vela-workbench-ui-enable ()
   "Enable the Doom-inspired theme and presentation for Vela interfaces."
   (interactive)
   (unless vela-workbench-ui--saved-global-state
     (let ((theme-owned (not (memq 'vela-doom custom-enabled-themes)))
-          (hook-owned (not (memq #'vela-workbench-ui--enable-managed-buffer
-                                 vela-agent-interface-mode-hook))))
+          (hook-owned (not (vela-workbench-ui--default-hook-contains-p))))
       (setq vela-workbench-ui--saved-global-state
             (list :menu-bar menu-bar-mode
                   :tool-bar tool-bar-mode
@@ -201,8 +221,7 @@
     (menu-bar-mode -1)
     (tool-bar-mode -1)
     (enable-theme 'vela-doom)
-    (add-hook 'vela-agent-interface-mode-hook
-              #'vela-workbench-ui--enable-managed-buffer)
+    (vela-workbench-ui--add-default-hook)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when (derived-mode-p 'vela-agent-interface-mode)
@@ -214,8 +233,7 @@
   (interactive)
   (when vela-workbench-ui--saved-global-state
     (when (plist-get vela-workbench-ui--saved-global-state :hook-owned)
-      (remove-hook 'vela-agent-interface-mode-hook
-                   #'vela-workbench-ui--enable-managed-buffer))
+      (vela-workbench-ui--remove-default-hook))
     (dolist (buffer vela-workbench-ui--managed-buffers)
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
