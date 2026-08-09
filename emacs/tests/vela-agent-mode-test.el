@@ -126,6 +126,14 @@
             ("include" . ["magit"])))
          :type 'vela-agent-protocol-error)))))
 
+(ert-deftest vela-agent-context-snapshot-rejects-nonsymbol-magit-mode ()
+  ;; Emacs itself rejects dynamically binding `major-mode' to a non-symbol.
+  ;; Exercise the validation boundary directly while leaving the real
+  ;; `derived-mode-p' in place, so it cannot preempt the protocol error.
+  (should-error
+   (vela-agent--magit-mode-context "magit-status-mode")
+   :type 'vela-agent-protocol-error))
+
 (ert-deftest vela-agent-context-snapshot-reports-native-compilation-state ()
   (with-temp-buffer
     (insert "error: broken\nwarning: careful\n")

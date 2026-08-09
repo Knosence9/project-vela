@@ -402,17 +402,21 @@ maximum-size partial frame.")
                           'compilation-num-infos-found))))
       :null)))
 
+(defun vela-agent--magit-mode-context (mode)
+  "Return bounded current Magit metadata after validating exact MODE."
+  (unless (symbolp mode)
+    (signal 'vela-agent-protocol-error
+            '("native Magit major mode must be a symbol")))
+  (if (derived-mode-p 'magit-mode)
+      `(("major_mode" . ,(vela-agent--bounded-metadata-string
+                          (symbol-name mode))))
+    :null))
+
 (defun vela-agent--magit-context ()
   "Snapshot bounded mode metadata for the current loaded Magit buffer."
   (save-match-data
-    (if (and (fboundp 'magit-status)
-             (derived-mode-p 'magit-mode))
-        (progn
-          (unless (symbolp major-mode)
-            (signal 'vela-agent-protocol-error
-                    '("native Magit major mode must be a symbol")))
-          `(("major_mode" . ,(vela-agent--bounded-metadata-string
-                              (symbol-name major-mode)))))
+    (if (fboundp 'magit-status)
+        (vela-agent--magit-mode-context major-mode)
       :null)))
 
 (defun vela-agent--record-unique-section (section seen)
