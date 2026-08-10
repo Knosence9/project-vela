@@ -638,7 +638,9 @@
              (process-put process 'request request)
              (when (string-match-p "\r\n\r\n" request)
                (set-process-filter process #'ignore)
-               (let ((body "event: final\ndata: done\n\n"))
+               (let ((body
+                      (concat "event: final\ndata: done\n\n"
+                              "event: ignored\ndata: after-cancel\n\n")))
                  (process-send-string
                   process
                   (format (concat "HTTP/1.1 200 OK\r\n"
@@ -674,8 +676,8 @@
                 (while (and (not finished) (< (float-time) deadline))
                   (accept-process-output nil 0.05)))
               (should (eq finished t))
-              (should (= (length events) 1))
-              (should-not errors))
+              (should-not errors)
+              (should (= (length events) 1)))
           (dolist (client clients)
             (when (process-live-p client) (delete-process client)))
           (when (process-live-p server) (delete-process server)))))))

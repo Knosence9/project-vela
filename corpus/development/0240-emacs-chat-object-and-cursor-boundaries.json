@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Harden Emacs chat gateway object and stream cursor boundaries",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1063 by rejecting absent required gateway objects at their field boundary and tracking decoded SSE consumption with a live marker that follows URL decoder buffer mutations.",
+    "acceptance_criteria": [
+      "An absent required object field fails immediately with vela-chat-error while a present empty JSON object remains valid.",
+      "The SSE decoded-body cursor follows insertions and deletions before the consumed point.",
+      "Transport teardown detaches the cursor marker without changing existing transport, event, origin, or transcript bounds.",
+      "Focused and complete repository verification pass."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Reproduced absent required-object acceptance with a focused RED regression.",
+      "outcome": "failure",
+      "diagnostic": "vela-chat--required-object delegated to vela-chat--field and then used listp. Because listp accepts nil, an absent field was indistinguishable from a present empty object at this boundary.",
+      "patch": "Resolve the association itself with assoc-string, require its presence, then validate and return its cdr. Added separate regressions for absent, JSON-null, and present-empty objects."
+    },
+    {
+      "summary": "Reproduced decoded stream cursor drift with a mutation between polling passes.",
+      "outcome": "failure",
+      "diagnostic": "The SSE transport retained the consumed body position as an integer. A decoder-owned deletion before that position left the integer stale and could skip or duplicate later decoded bytes.",
+      "patch": "Store the decoded-body position as a marker, advance it with set-marker, and detach it during transport teardown. The production-adapter regression mutates the retrieval buffer between chunks and still receives exactly one complete final event."
+    },
+    {
+      "summary": "Closed cancellation during SSE event dispatch without dereferencing a detached marker.",
+      "outcome": "success",
+      "diagnostic": "A production-adapter regression cancelled the stream from inside on-event and initially failed with Marker does not point anywhere when polling continued after teardown detached the cursor.",
+      "patch": "Dispatch event batches only while the transport is live, guard final cursor checks with done state plus marker-buffer presence, and suppress error callbacks once cancellation has made teardown authoritative. The exact cancellation regression then passed without post-cancel dispatch or error."
+    },
+    {
+      "summary": "Verified the corrected follow-up candidate through focused and repository-wide gates.",
+      "outcome": "success",
+      "diagnostic": "All 36 focused chat ERT tests passed; the complete Emacs suite passed 120/120; just verify and the all-system no-build flake evaluation passed.",
+      "patch": "No further implementation change was required after the strict object and marker corrections."
+    }
+  ],
+  "outcome": {
+    "summary": "Required gateway objects now preserve field presence semantics, and the asynchronous SSE consumer follows decoder-owned buffer movement without retaining killed retrieval buffers.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command emacs --batch -Q -L emacs -L emacs/tests -l vela-chat-mode-test -f ert-run-tests-batch-and-exit",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix flake check --all-systems --no-build --show-trace",
+        "status": "passed"
+      },
+      {
+        "command": "git diff --check",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "A decoded nil value cannot by itself prove that a required JSON field was present; validate association presence before validating the field value.",
+    "Long-lived consumers of decoder-owned buffers need markers rather than integer positions whenever the decoder may insert or delete text before the cursor.",
+    "Markers tied to temporary network buffers must be detached during teardown to avoid retaining killed buffers."
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/issues/1063"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
