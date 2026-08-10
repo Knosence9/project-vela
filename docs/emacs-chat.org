@@ -57,19 +57,25 @@ For a send, the mode asynchronously performs these operations in order:
 2. =POST /api/client/turns= with the resolved =sessionId= and =input.text=;
 3. =GET= the returned =turn.streamUrl= as =text/event-stream=.
 
+Each resolve and turn response must supply exactly one syntactically valid
+=Content-Type= whose case-insensitive media-type essence is =application/json=.
+Valid parameters are accepted; missing, malformed, folded, duplicate, or other
+media types fail closed before JSON body dispatch.
+
 The stream URL must be an HTTP(S) URL or an absolute path on exactly the
 configured gateway origin.  Credentials and cross-origin stream URLs are
 rejected, as are control characters, backslashes, and URL fragments.  Redirect
 following is disabled.  Before any body event is dispatched, the response must
 supply exactly one syntactically valid =Content-Type= whose case-insensitive
-media-type essence is =text/event-stream=; valid parameters are accepted, while
-missing, malformed, duplicate, or other media types fail closed.  SSE may arrive
-in arbitrary chunks; multiline data is joined before bounded JSON decoding.  The
-transcript supports =thinking= and =tool= status entries, cumulative =assistant=
-replacement by message identity, and terminal =final= or =error= entries.  A
-stream that closes without a terminal event is reported as degraded rather than
-successful.  No SSE body is dispatched until the decoded HTTP status is known
-to be 2xx and the raw headers satisfy the media-type boundary.
+media-type essence is =text/event-stream=; valid parameters are accepted,
+while missing, malformed, folded, duplicate, or other media types fail closed.
+SSE may arrive in arbitrary chunks; multiline data is joined before bounded
+JSON decoding.  The transcript supports =thinking= and =tool= status entries,
+cumulative =assistant= replacement by message identity, and terminal =final= or
+=error= entries.  A stream that closes without a terminal event is reported as
+degraded rather than successful.  No SSE body is dispatched until the decoded
+HTTP status is known to be 2xx and the raw headers satisfy the media-type
+boundary.
 
 ** Bounds and failure behavior
 :PROPERTIES:

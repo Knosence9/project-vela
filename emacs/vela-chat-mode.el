@@ -393,8 +393,8 @@ persists or displays the returned value."
       (and (<= ?a character) (<= character ?z))
       (memq character '(?! ?# ?$ ?% ?& ?' ?* ?+ ?- ?. ?^ ?_ ?` ?| ?~))))
 
-(defun vela-chat--valid-sse-media-type-p (value)
-  "Return non-nil when VALUE is an event-stream media type."
+(defun vela-chat--valid-media-type-p (value expected)
+  "Return non-nil when VALUE has media-type essence EXPECTED."
   (let ((position 0)
         (size (length value))
         valid)
@@ -440,13 +440,13 @@ persists or displays the returned value."
                     (t (setq invalid t)))))
                (and closed (not invalid))))))
       (skip-ows)
-      (when (and (<= (+ position (length "text/event-stream")) size)
+      (when (and (<= (+ position (length expected)) size)
                  (string=
                   (downcase
                    (substring value position
-                              (+ position (length "text/event-stream"))))
-                  "text/event-stream"))
-        (setq position (+ position (length "text/event-stream")))
+                              (+ position (length expected))))
+                  expected))
+        (setq position (+ position (length expected)))
         (skip-ows)
         (setq valid t)
         (while (and valid (< position size))
@@ -456,18 +456,16 @@ persists or displays the returned value."
             (skip-ows)
             (unless (consume-token) (setq valid nil))
             (when valid
-              (skip-ows)
               (if (or (>= position size) (/= (aref value position) ?=))
                   (setq valid nil)
                 (setq position (1+ position))
-                (skip-ows)
                 (unless (or (consume-token) (consume-quoted-string))
                   (setq valid nil))
                 (skip-ows)))))
         (and valid (= position size))))))
 
-(defun vela-chat--valid-sse-content-type-p (headers)
-  "Return non-nil for one event-stream Content-Type in raw HTTP HEADERS."
+(defun vela-chat--valid-content-type-p (headers expected)
+  "Return non-nil for one EXPECTED Content-Type in raw HTTP HEADERS."
   (let ((case-fold-search t)
         content-types
         folded
@@ -483,7 +481,11 @@ persists or displays the returned value."
     (and (not folded)
          (not malformed-content-type)
          (= (length content-types) 1)
-         (vela-chat--valid-sse-media-type-p (car content-types)))))
+         (vela-chat--valid-media-type-p (car content-types) expected))))
+
+(defun vela-chat--valid-sse-content-type-p (headers)
+  "Return non-nil for one event-stream Content-Type in raw HTTP HEADERS."
+  (vela-chat--valid-content-type-p headers "text/event-stream"))
 
 (defun vela-chat--url-post-json (url payload on-success on-error)
   "POST PAYLOAD to URL and call ON-SUCCESS or ON-ERROR asynchronously."
@@ -577,6 +579,10 @@ persists or displays the returned value."
                                   ((vela-chat--content-encoding-present-p headers)
                                    (setq rejection
                                          "gateway content encoding is unsupported"))
+                                  ((not (vela-chat--valid-content-type-p
+                                         headers "application/json"))
+                                   (setq rejection
+                                         "gateway JSON content type is unsupported"))
                                   (t
                                    (setq headers-complete t
                                          header-probe "")))))
