@@ -59,8 +59,21 @@ persists or displays the returned value."
   :type '(choice (const :tag "No bearer token" nil) function)
   :group 'vela-chat)
 
+(defcustom vela-chat-operation-timeout-seconds 30
+  "Maximum seconds allowed for one resolve or turn HTTP operation."
+  :type 'number
+  :group 'vela-chat)
+
+(defcustom vela-chat-sse-idle-timeout-seconds 60
+  "Maximum seconds an open gateway stream may receive no transport bytes."
+  :type 'number
+  :group 'vela-chat)
+
 (defconst vela-chat-max-input-characters 32768
   "Largest user message accepted by `vela-chat-send'.")
+
+(defconst vela-chat-max-timeout-seconds 86400
+  "Largest configurable chat operation or idle timeout.")
 
 (defconst vela-chat-max-http-response-bytes (* 256 1024)
   "Largest HTTP JSON response body accepted by Vela chat.")
@@ -145,6 +158,8 @@ persists or displays the returned value."
 (defvar-local vela-chat--event-count 0)
 (defvar-local vela-chat--active-handle nil)
 (defvar-local vela-chat--transport-stage nil)
+(defvar-local vela-chat--timeout-timer nil)
+(defvar-local vela-chat--timeout-serial 0)
 (defvar-local vela-chat--input-start nil)
 (defvar-local vela-chat--assistant-message-id nil)
 (defvar-local vela-chat--assistant-start nil)
@@ -663,12 +678,13 @@ data as the SSE end-of-stream rule requires."
       (setq events (vela-chat--sse-flush parser events)))
     (vconcat (nreverse events))))
 
-(defun vela-chat--url-stream (url on-event on-complete on-error)
+(defun vela-chat--url-stream (url on-event on-complete on-error &optional on-activity)
   "Retrieve SSE URL and invoke ON-EVENT, ON-COMPLETE, or ON-ERROR.
 
 The URL package owns HTTP decoding.  A bounded wrapper rejects oversized raw
 transport input before delegating to URL's filter, while a timer consumes the
-decoded body incrementally."
+decoded body incrementally.  Invoke ON-ACTIVITY for every received transport
+chunk when that optional callback is non-nil."
   (let ((parser (vela-chat--sse-parser-create))
         (header-probe "")
         (received-bytes 0)
@@ -773,6 +789,7 @@ decoded body incrementally."
                  (lambda (source chunk)
                    (setq received-bytes
                          (+ received-bytes (string-bytes chunk)))
+                   (when on-activity (funcall on-activity))
                    (cond
                     ((> received-bytes
                         (+ vela-chat-max-http-header-bytes
@@ -973,12 +990,51 @@ decoded body incrementally."
   (let ((cancel (plist-get handle :cancel)))
     (when (functionp cancel) (funcall cancel))))
 
+(defun vela-chat--cancel-timeout ()
+  "Invalidate and cancel the active lifecycle timeout, when present."
+  (setq vela-chat--timeout-serial (1+ vela-chat--timeout-serial))
+  (let ((timer vela-chat--timeout-timer))
+    (setq vela-chat--timeout-timer nil)
+    (when (timerp timer) (cancel-timer timer))))
+
+(defun vela-chat--arm-timeout (generation stage seconds message)
+  "Arm a GENERATION- and STAGE-safe timeout after SECONDS with MESSAGE."
+  (vela-chat--cancel-timeout)
+  (let ((buffer (current-buffer))
+        (serial vela-chat--timeout-serial))
+    (setq vela-chat--timeout-timer
+          (run-at-time
+           seconds nil
+           (lambda ()
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (when (and vela-chat--busy
+                            (= generation vela-chat--generation)
+                            (= serial vela-chat--timeout-serial)
+                            (eq stage vela-chat--transport-stage))
+                   (setq vela-chat--timeout-timer nil)
+                   (vela-chat--fail-turn "Timeout" message)))))))))
+
+(defun vela-chat--validate-timeouts ()
+  "Reject non-positive, non-numeric, or unbounded timeout configuration."
+  (unless (and (numberp vela-chat-operation-timeout-seconds)
+               (> vela-chat-operation-timeout-seconds 0)
+               (<= vela-chat-operation-timeout-seconds
+                   vela-chat-max-timeout-seconds)
+               (numberp vela-chat-sse-idle-timeout-seconds)
+               (> vela-chat-sse-idle-timeout-seconds 0)
+               (<= vela-chat-sse-idle-timeout-seconds
+                   vela-chat-max-timeout-seconds))
+    (signal 'vela-chat-error
+            '("chat timeout values must be positive numbers no greater than 86400"))))
+
 (defun vela-chat--finish-turn ()
   "Complete the current turn and restore an editable prompt."
   (let ((handle vela-chat--active-handle))
     (setq vela-chat--busy nil
           vela-chat--active-handle nil
           vela-chat--transport-stage nil)
+    (vela-chat--cancel-timeout)
     (vela-chat--call-cancel handle)
     (vela-chat--append-prompt)))
 
@@ -990,6 +1046,7 @@ decoded body incrementally."
             vela-chat--active-handle nil
             vela-chat--transport-stage nil
             vela-chat--terminal t)
+      (vela-chat--cancel-timeout)
       (vela-chat--call-cancel handle)
       (condition-case nil
           (vela-chat--append-entry label message 'vela-chat-error-face)
@@ -1021,6 +1078,9 @@ decoded body incrementally."
   "Start SSE STREAM-URL for active GENERATION."
   (setq vela-chat--transport-stage 'stream
         vela-chat--active-handle nil)
+  (vela-chat--arm-timeout generation 'stream
+                          vela-chat-sse-idle-timeout-seconds
+                          "Gateway stream became idle")
   (let* ((buffer (current-buffer))
          (url (vela-chat--resolve-stream-url stream-url))
          (handle
@@ -1043,13 +1103,23 @@ decoded body incrementally."
            (vela-chat--guarded
             buffer generation
             (lambda (message)
-              (vela-chat--fail-turn "Error" message))))))
+              (vela-chat--fail-turn "Error" message)))
+           (vela-chat--guarded
+            buffer generation
+            (lambda ()
+              (when (eq vela-chat--transport-stage 'stream)
+                (vela-chat--arm-timeout
+                 generation 'stream vela-chat-sse-idle-timeout-seconds
+                 "Gateway stream became idle")))))))
     (vela-chat--set-active-handle generation 'stream handle)))
 
 (defun vela-chat--start-turn (generation session-id message)
   "Submit MESSAGE in SESSION-ID for active GENERATION."
   (setq vela-chat--transport-stage 'turn
         vela-chat--active-handle nil)
+  (vela-chat--arm-timeout generation 'turn
+                          vela-chat-operation-timeout-seconds
+                          "Turn submission timed out")
   (let* ((buffer (current-buffer))
          (url (concat (vela-chat--origin-string) "/api/client/turns"))
          (payload `(("sessionId" . ,session-id)
@@ -1075,6 +1145,9 @@ decoded body incrementally."
   "Resolve a session before sending MESSAGE for active GENERATION."
   (setq vela-chat--transport-stage 'resolve
         vela-chat--active-handle nil)
+  (vela-chat--arm-timeout generation 'resolve
+                          vela-chat-operation-timeout-seconds
+                          "Session resolution timed out")
   (let* ((buffer (current-buffer))
          (url (concat (vela-chat--origin-string)
                       "/api/client/sessions/resolve"))
@@ -1121,6 +1194,7 @@ decoded body incrementally."
     ;; Validate configuration and runtime credential before mutating transcript.
     (vela-chat--origin-string)
     (vela-chat--runtime-token)
+    (vela-chat--validate-timeouts)
     (vela-chat--freeze-composer message)
     (setq vela-chat--busy t
           vela-chat--terminal nil
@@ -1146,6 +1220,7 @@ decoded body incrementally."
             vela-chat--active-handle nil
             vela-chat--transport-stage nil
             vela-chat--terminal t)
+      (vela-chat--cancel-timeout)
       (vela-chat--call-cancel handle)
       (condition-case nil
           (vela-chat--append-entry
@@ -1162,6 +1237,7 @@ decoded body incrementally."
             vela-chat--active-handle nil
             vela-chat--transport-stage nil
             vela-chat--terminal t)
+      (vela-chat--cancel-timeout)
       (vela-chat--call-cancel handle))))
 
 (defun vela-chat-new-session ()
@@ -1170,6 +1246,7 @@ decoded body incrementally."
   (vela-chat--ensure-owner-thread)
   (when vela-chat--busy
     (signal 'vela-chat-error '("cancel the active turn before resetting the session")))
+  (vela-chat--cancel-timeout)
   (setq vela-chat--session-id nil
         vela-chat--turn-id nil
         vela-chat--terminal nil

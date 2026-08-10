@@ -5,6 +5,7 @@
 - *Status:* accepted
 - *Date:* 2026-08-09
 - *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/1061][#1061]]
+- *Timeout hardening issue:* [[https://github.com/Knosence9/project-vela/issues/1067][#1067]]
 - *Related:* [[file:0108-main-thread-authoritative-emacs-agent-interface.org][ADR-0108]], [[../emacs-agent-interface.org][Emacs agent interface]]
 
 ** Context
@@ -44,6 +45,15 @@ unsupported values fail the active turn closed.  A terminal =final= event is
 required for success; transport completion without one is degraded.
 Cancellation increments the generation before stopping the current handle, so
 late asynchronous callbacks are inert.
+
+Each resolve and turn HTTP stage has a finite operation deadline.  The SSE stage
+has a finite idle deadline that is rearmed only when transport bytes arrive.
+Configured deadlines must be positive and no greater than one day, excluding
+infinite and unrepresentable timer values before transcript mutation.
+One lifecycle timeout timer is generation-, stage-, and serial-bound; every
+transition or rearm invalidates the prior callback.  Terminal completion,
+failure, cancellation, reset, and buffer teardown cancel it.  Expiry fails the
+turn closed and restores the composer without retrying or reconnecting.
 
 The mode renders only bounded =thinking=, =tool=, cumulative =assistant=,
 =final=, and =error= content.  It does not call the read-only semantic protocol,
