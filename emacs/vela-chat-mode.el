@@ -371,6 +371,101 @@ persists or displays the returned value."
      "\\(?:\\`\\|[\r\n]\\)content-encoding[ \t]*:"
      headers)))
 
+(defun vela-chat--http-token-character-p (character)
+  "Return non-nil when CHARACTER is valid in an HTTP token."
+  (or (and (<= ?0 character) (<= character ?9))
+      (and (<= ?A character) (<= character ?Z))
+      (and (<= ?a character) (<= character ?z))
+      (memq character '(?! ?# ?$ ?% ?& ?' ?* ?+ ?- ?. ?^ ?_ ?` ?| ?~))))
+
+(defun vela-chat--valid-sse-media-type-p (value)
+  "Return non-nil when VALUE is an event-stream media type."
+  (let ((position 0)
+        (size (length value))
+        valid)
+    (cl-labels
+        ((skip-ows ()
+           (while (and (< position size)
+                       (memq (aref value position) '(?\s ?\t)))
+             (setq position (1+ position))))
+         (consume-token ()
+           (let ((start position))
+             (while (and (< position size)
+                         (vela-chat--http-token-character-p
+                          (aref value position)))
+               (setq position (1+ position)))
+             (> position start)))
+         (consume-quoted-string ()
+           (when (and (< position size) (= (aref value position) ?\"))
+             (setq position (1+ position))
+             (let (closed invalid)
+               (while (and (< position size) (not closed) (not invalid))
+                 (let ((character (aref value position)))
+                   (cond
+                    ((= character ?\")
+                     (setq closed t
+                           position (1+ position)))
+                    ((= character ?\\)
+                     (setq position (1+ position))
+                     (if (>= position size)
+                         (setq invalid t)
+                       (let ((quoted (aref value position)))
+                         (unless (or (= quoted ?\t)
+                                     (<= 32 quoted 126)
+                                     (<= 128 quoted 255))
+                           (setq invalid t))
+                         (setq position (1+ position)))))
+                    ((or (= character ?\t)
+                         (= character 32)
+                         (= character 33)
+                         (<= 35 character 91)
+                         (<= 93 character 126)
+                         (<= 128 character 255))
+                     (setq position (1+ position)))
+                    (t (setq invalid t)))))
+               (and closed (not invalid))))))
+      (skip-ows)
+      (when (and (<= (+ position (length "text/event-stream")) size)
+                 (string=
+                  (downcase
+                   (substring value position
+                              (+ position (length "text/event-stream"))))
+                  "text/event-stream"))
+        (setq position (+ position (length "text/event-stream")))
+        (skip-ows)
+        (setq valid t)
+        (while (and valid (< position size))
+          (if (/= (aref value position) ?\;)
+              (setq valid nil)
+            (setq position (1+ position))
+            (skip-ows)
+            (unless (consume-token) (setq valid nil))
+            (when valid
+              (skip-ows)
+              (if (or (>= position size) (/= (aref value position) ?=))
+                  (setq valid nil)
+                (setq position (1+ position))
+                (skip-ows)
+                (unless (or (consume-token) (consume-quoted-string))
+                  (setq valid nil))
+                (skip-ows)))))
+        (and valid (= position size))))))
+
+(defun vela-chat--valid-sse-content-type-p (headers)
+  "Return non-nil for one event-stream Content-Type in raw HTTP HEADERS."
+  (let ((case-fold-search t)
+        content-types
+        folded)
+    (dolist (line (cdr (split-string headers "\r?\n")))
+      (when (and (not (string-empty-p line))
+                 (memq (aref line 0) '(?\s ?\t)))
+        (setq folded t))
+      (when (string-match "\\`content-type:[ \t]*\\(.*\\)\\'" line)
+        (push (match-string 1 line) content-types)))
+    (and (not folded)
+         (= (length content-types) 1)
+         (vela-chat--valid-sse-media-type-p (car content-types)))))
+
 (defun vela-chat--url-post-json (url payload on-success on-error)
   "POST PAYLOAD to URL and call ON-SUCCESS or ON-ERROR asynchronously."
   (let ((url-request-method "POST")
@@ -700,6 +795,10 @@ decoded body incrementally."
                              (stop)
                              (funcall on-error
                                       "gateway content encoding is unsupported"))
+                            ((not (vela-chat--valid-sse-content-type-p headers))
+                             (stop)
+                             (funcall on-error
+                                      "gateway SSE content type is unsupported"))
                             (t
                              (setq headers-complete t
                                    header-probe "")
