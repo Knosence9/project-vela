@@ -170,10 +170,10 @@ persists or displays the returned value."
 
 (defun vela-chat--required-object (name object)
   "Return required alist field NAME from OBJECT."
-  (let ((value (vela-chat--field name object)))
-    (unless (listp value)
+  (let ((entry (and (listp object) (assoc-string name object))))
+    (unless (and entry (listp (cdr entry)))
       (signal 'vela-chat-error (list (format "missing gateway object: %s" name))))
-    value))
+    (cdr entry)))
 
 (defun vela-chat--required-string (name object)
   "Return required non-empty string field NAME from OBJECT."
@@ -545,11 +545,12 @@ data as the SSE end-of-stream rule requires."
          (start 0)
          events)
     (while (string-match "\n" text start)
-      (let ((line (substring text start (match-beginning 0))))
+      (let ((line (substring text start (match-beginning 0)))
+            (next-start (match-end 0)))
         (when (string-suffix-p "\r" line)
           (setq line (substring line 0 -1)))
         (setq events (vela-chat--sse-line parser line events)
-              start (match-end 0))))
+              start next-start)))
     (let ((pending (substring text start)))
       (when (> (string-bytes pending) vela-chat-max-sse-pending-bytes)
         (signal 'vela-chat-error '("gateway SSE line exceeds pending byte bound")))
@@ -578,6 +579,7 @@ decoded body incrementally."
            (unless done
              (setq done t)
              (when (timerp timer) (cancel-timer timer))
+             (when (markerp cursor) (set-marker cursor nil))
              (when (buffer-live-p buffer)
                (let ((process (get-buffer-process buffer)))
                  (when (process-live-p process)
@@ -585,6 +587,11 @@ decoded body incrementally."
                    (set-process-sentinel process #'ignore)
                    (delete-process process)))
                (kill-buffer buffer))))
+         (dispatch (events)
+           (let ((index 0))
+             (while (and (not done) (< index (length events)))
+               (funcall on-event (aref events index))
+               (setq index (1+ index)))))
          (poll (&optional final)
            (unless done
              (condition-case err
@@ -602,7 +609,8 @@ decoded body incrementally."
                                    (list (format "gateway stream returned HTTP %s"
                                                  url-http-response-status))))
                          (unless cursor
-                           (setq cursor (vela-chat--http-body-start)))
+                           (setq cursor
+                                 (copy-marker (vela-chat--http-body-start))))
                          (when (< cursor (point-max))
                            (let* ((end (point-max))
                                   (events
@@ -610,16 +618,18 @@ decoded body incrementally."
                                     parser
                                     (buffer-substring-no-properties cursor end)
                                     final)))
-                             (setq cursor end)
-                             (dotimes (index (length events))
-                               (funcall on-event (aref events index)))))
-                         (when (and final (= cursor (point-max)))
+                             (set-marker cursor end)
+                             (dispatch events)))
+                         (when (and (not done)
+                                    final
+                                    (marker-buffer cursor)
+                                    (= cursor (point-max)))
                            (let ((events (vela-chat--sse-feed parser "" t)))
-                             (dotimes (index (length events))
-                               (funcall on-event (aref events index)))))))))
+                             (dispatch events)))))))
                (error
-                (stop)
-                (funcall on-error (error-message-string err)))))))
+                (unless done
+                  (stop)
+                  (funcall on-error (error-message-string err))))))))
       (let ((url-request-method "GET")
             (url-request-extra-headers (vela-chat--request-headers t))
             (url-max-redirections 0))

@@ -94,6 +94,10 @@ stream transport, and killing an active chat buffer cancels its process and
 polling timer.  A resolved session whose mode differs from the requested mode is
 rejected before a turn is created.
 
+Required gateway object fields must be present and non-null; an absent field or
+JSON =null= is rejected at that field boundary rather than surfacing as a later,
+unrelated diagnostic.  Present empty JSON objects remain valid objects.
+
 Transcript growth is preflighted before mutation and reserves room for the next
 composer.  An event that would cross the 1 MiB boundary cancels the turn and
 restores an editable prompt without retaining oversized text.
@@ -103,7 +107,9 @@ Emacs's URL decoder, so an unterminated or oversized header cannot accumulate
 without limit.  Content-encoded responses are rejected from their raw headers
 before URL's decoder can expand them beyond the configured bounds.  Decoded
 SSE remains in URL's retrieval buffer for transfer correctness, within the
-aggregate 8 MiB response bound.
+aggregate 8 MiB response bound.  A marker tracks the consumed decoded-body
+position so URL decoder insertions or deletions before that position cannot
+skip or duplicate streamed bytes.
 
 ** Verification
 :PROPERTIES:
