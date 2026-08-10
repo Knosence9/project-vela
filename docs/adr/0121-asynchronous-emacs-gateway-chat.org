@@ -1,0 +1,120 @@
+* ADR-0121: Asynchronous Emacs gateway chat
+:PROPERTIES:
+:CUSTOM_ID: adr-0121-asynchronous-emacs-gateway-chat
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-09
+- *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/1061][#1061]]
+- *Related:* [[file:0108-main-thread-authoritative-emacs-agent-interface.org][ADR-0108]], [[../emacs-agent-interface.org][Emacs agent interface]]
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+Vela has a client gateway contract shared with other human-facing surfaces, but
+its Emacs integration only exposes a bounded read-only semantic protocol.  An
+Emacs user needs a responsive transcript and composer without giving that
+protocol transport, credential, provider, tool-approval, or editor-mutation
+authority.  Gateway responses and event streams are untrusted and potentially
+fragmented, malformed, oversized, redirected, cross-origin, or incomplete.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+Add a separate =vela-chat-mode= presentation module.  One process-local chat
+buffer owns one optional resolved session ID, one active-turn generation, a
+read-only transcript, and one editable composer.  Explicit commands send,
+cancel, reset session state, and quit.  Session and transcript state are never
+persisted.
+
+Each send asynchronously resolves or reuses a gateway session through
+=POST /api/client/sessions/resolve=, submits exact user text through
+=POST /api/client/turns=, then consumes the returned same-origin SSE URL.  Emacs's
+URL package owns HTTP retrieval; short owner-thread callbacks perform bounded
+JSON/SSE parsing and display updates.  A caller-supplied function provides an
+optional bearer token separately for every HTTP operation.  The mode validates
+but never retains or renders that token.
+
+Request, response, JSON shape, SSE event, pending line, event count, input,
+token, and transcript limits are explicit constants.  Redirect following is
+disabled; base and stream URLs reject embedded credentials; stream URLs must
+remain on the configured scheme, host, and effective port.  Malformed or
+unsupported values fail the active turn closed.  A terminal =final= event is
+required for success; transport completion without one is degraded.
+Cancellation increments the generation before stopping the current handle, so
+late asynchronous callbacks are inert.
+
+The mode renders only bounded =thinking=, =tool=, cumulative =assistant=,
+=final=, and =error= content.  It does not call the read-only semantic protocol,
+inspect editor state, approve tools, invoke a provider directly, or add any
+editor mutation API.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Add chat operations to the semantic Emacs protocol
+:PROPERTIES:
+:CUSTOM_ID: add-chat-operations-to-the-semantic-emacs-protocol
+:END:
+Rejected because it would mix a small read-only observation boundary with
+credentials, remote transport, mutable session lifecycle, and human-facing
+presentation.
+
+*** Use synchronous HTTP requests
+:PROPERTIES:
+:CUSTOM_ID: use-synchronous-http-requests
+:END:
+Rejected because session resolution, turn submission, and streaming can block
+Emacs's editor thread for unbounded network time.
+
+*** Accept the gateway's returned stream URL without origin checks
+:PROPERTIES:
+:CUSTOM_ID: accept-the-returned-stream-url-without-origin-checks
+:END:
+Rejected because bearer headers could be sent to an attacker-controlled origin.
+A configured gateway does not authorize credential delegation to another
+scheme, host, or port.
+
+*** Persist tokens, transcripts, or session IDs
+:PROPERTIES:
+:CUSTOM_ID: persist-tokens-transcripts-or-session-ids
+:END:
+Rejected because the first surface needs only live continuity.  Persistence
+would require separate storage, redaction, retention, replay, and identity
+contracts.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Emacs receives a usable asynchronous Vela chat surface while the semantic
+  protocol remains read-only and transport-neutral.
+- One live buffer maintains canonical session continuity and deterministic
+  cancellation without creating history or multi-session management.
+- Gateway data is bounded and fail-closed before it can grow parser or transcript
+  state without limit.
+- Emacs's built-in URL implementation and timer lifecycle become part of the
+  surface's tested integration boundary.
+- Tool approval, editor mutation, transcript persistence, history, replay,
+  retries, reconnect cursors, and multiple simultaneous turns remain absent.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+RED→GREEN ERT coverage pins transcript/composer permissions, exact gateway
+requests, session reuse, fragmented SSE parsing, cumulative assistant updates,
+terminal/error/degraded states, cancellation and stale callbacks, origin checks,
+and input/JSON bounds.  Warnings-as-errors batch compilation and the complete
+repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Revisit before persisting sessions or transcripts, adding history or replay,
+authorizing tools or editor mutations, following cross-origin streams, adding
+automatic retries or reconnects, supporting concurrent turns, or sharing chat
+state across Emacs processes.

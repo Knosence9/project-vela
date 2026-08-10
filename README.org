@@ -157,6 +157,10 @@ observational sections. The interface does not drive the UI,
 evaluate arbitrary Emacs Lisp, or provide mutation or transport authority.
 See [[file:docs/emacs-agent-interface.org][=docs/emacs-agent-interface.org=]] for the
 protocol, execution boundary, and batch verification contract.
+A separate asynchronous human-facing chat buffer uses the existing Vela client
+gateway without granting transport or mutation authority to that semantic
+protocol. See [[file:docs/emacs-chat.org][=docs/emacs-chat.org=]] for setup,
+commands, runtime-only authentication, gateway requests, and failure bounds.
 An optional dependency-light Doom-inspired presentation is available through
 =vela-workbench-ui-enable= and is fully reversible.
 

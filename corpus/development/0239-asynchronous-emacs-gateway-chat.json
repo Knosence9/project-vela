@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Add an asynchronous Vela chat mode for Emacs",
+    "objective": "Complete issue https://github.com/Knosence9/project-vela/issues/1061 with a responsive human-facing Emacs chat surface over the existing Prano-compatible client gateway contract without expanding the read-only semantic protocol's authority.",
+    "acceptance_criteria": [
+      "Provide a read-only transcript and editable in-buffer composer with send, cancel, new-session, and quit commands.",
+      "Resolve sessions, create turns, and consume same-origin Server-Sent Events asynchronously through bounded gateway adapters.",
+      "Keep bearer tokens runtime-only and fail closed on redirects, cross-origin stream URLs, malformed lifecycle data, incomplete streams, stale callbacks, and exceeded bounds.",
+      "Preserve the semantic Emacs protocol as a separate read-only module and pass the complete repository verification boundary."
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Pinned the first chat UI behavior with RED ERT coverage before adding the mode.",
+      "outcome": "failure",
+      "diagnostic": "The wired Emacs gate failed because vela-chat-mode did not exist; the initial tests specified transcript protection, composer editing, exact resolve and turn requests, session reuse, SSE fragmentation, cancellation, same-origin enforcement, input bounds, and degraded completion.",
+      "patch": "Added emacs/tests/vela-chat-mode-test.el and wired it into warnings-as-errors byte compilation and the shared ERT gate."
+    },
+    {
+      "summary": "Implemented the isolated asynchronous gateway chat surface and bounded lifecycle adapters.",
+      "outcome": "success",
+      "diagnostic": "The injected-adapter tests passed with an editable composer, immutable transcript, exact Prano-compatible request payloads, cumulative assistant replacement, final/error termination, generation-based cancellation, and no credential text in the transcript.",
+      "patch": "Added emacs/vela-chat-mode.el with built-in asynchronous URL retrieval, bounded incremental SSE parsing, same-origin URL enforcement, auth-source token lookup, main-thread checks, transcript rendering, and explicit cancellation."
+    },
+    {
+      "summary": "Exercised the real HTTP and SSE path and corrected transport-boundary defects with regressions.",
+      "outcome": "success",
+      "diagnostic": "The first live local gateway probe exposed string-key JSON request encoding, Emacs json-parse array-type selection, URL header-boundary newline handling, and cumulative-message trailing-newline defects. Each defect received a focused RED regression before correction. The in-process local mock gateway then completed resolve, turn, and SSE operations with the final assistant text and session continuity intact.",
+      "patch": "Use bounded json-encode request bytes, normalize decoded object keys, select the supported array representation, advance past url-http-end-of-headers, preserve assistant entry separators, and retain an actual asynchronous local HTTP/SSE ERT round trip."
+    },
+    {
+      "summary": "Closed aggregate-stream and transport-lifecycle gaps with adversarial RED regressions.",
+      "outcome": "success",
+      "diagnostic": "A follow-up adversarial lifecycle pass first failed four of sixteen focused tests: aggregate SSE bytes were not bounded directly, final events and killed chat buffers left active transports open, resolved session modes were not compared with the request, and synchronous callback chaining could overwrite the newest transport handle. Local-server regressions then showed that JSON responses plus unterminated HTTP and SSE headers needed incremental transport rejection rather than checks only after URL decoding, and stale synchronous handles needed explicit cancellation.",
+      "patch": "Added aggregate SSE and incremental HTTP/SSE body and header bounds, safe URL process teardown, terminal and kill-buffer cancellation, exact session-mode validation, and transport-stage ownership with stale-handle cancellation; all twenty focused tests then passed."
+    },
+    {
+      "summary": "Resolved final review findings at the URL and command-recovery boundaries.",
+      "outcome": "success",
+      "diagnostic": "Review identified that deleting consumed text from url-http's active retrieval buffer could violate transfer-decoding assumptions, a synchronously signaling first-stage adapter could leave the composer frozen, and origin rendering included implicit default ports.",
+      "patch": "Retained decoded SSE within the aggregate bound, added a real chunked-transfer regression, restored the composer through normal failure handling on synchronous startup errors, preserved only explicit URL ports, and added reset-session and JSON-null coverage; all twenty-five focused tests then passed."
+    },
+    {
+      "summary": "Closed independent-review blockers for pre-status events and transcript integrity.",
+      "outcome": "success",
+      "diagnostic": "Independent review reproduced three fail-open sequences: a 302 SSE body dispatched a forged final event before status validation, the trailing transcript boundary accepted user insertion while a turn was active, and post-insertion transcript checks retained oversized text while error recovery lost the composer. Three exact regressions failed before correction.",
+      "patch": "Validate 2xx status before polling SSE bodies, make the buffer read-only for the active interval, preflight transcript mutations with prompt reserve, and degrade oversized error/cancellation entries to a bounded prompt-only recovery; all twenty-eight focused tests then passed."
+    },
+    {
+      "summary": "Closed final command-map, undo, URL-token, and parser-batch review boundaries.",
+      "outcome": "success",
+      "diagnostic": "Review probes showed that plain q was captured by quit-window, undo could erase protected transcript content, control-bearing or fragmented stream URLs were accepted, and event count was enforced only after a parser feed had accumulated the complete batch. Earlier token-backend review also required an exact second-lookup recovery regression.",
+      "patch": "Moved quit to C-c C-q, disabled undo recording in chat buffers, rejected control characters, backslashes, and fragments before URL retrieval, enforced the 1,024-event limit during parser flush, and added exact regressions for the runtime-token recovery path; all thirty-two focused tests then passed."
+    },
+    {
+      "summary": "Rejected compressed responses before URL decoding could exceed memory bounds.",
+      "outcome": "success",
+      "diagnostic": "A final hostile probe delivered a roughly 12 KiB gzip body that expanded to more than 12 MiB in URL's decoder before the 8 MiB decoded SSE check rejected it. A production-adapter RED test also showed an encoded response body could dispatch a forged final event while the connection remained open.",
+      "patch": "Inspect each bounded raw header block before delegating it to URL.el and reject any Content-Encoding field for both POST and SSE retrieval. The exact production SSE regression now fails before URL's decoder receives the response body; all thirty-three focused tests then passed."
+    },
+    {
+      "summary": "Documented the authority boundary, setup, lifecycle, security limits, and architectural decision.",
+      "outcome": "success",
+      "diagnostic": "README and Emacs interface links resolve through the canonical Org gate, while the chat guide and ADR distinguish human gateway transport from the read-only semantic editor protocol.",
+      "patch": "Added docs/emacs-chat.org and ADR-0121, then linked the new surface from README.org and docs/emacs-agent-interface.org."
+    }
+  ],
+  "outcome": {
+    "summary": "Emacs now has a functional asynchronous Vela chat mode that shares the Prano client gateway contract, renders bounded live lifecycle events, cancels completed or abandoned transports, preserves validated session continuity within one buffer, and keeps editor semantic authority read-only and separate.",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command emacs --batch -Q -L emacs -L emacs/tests -l vela-chat-mode-test -f ert-run-tests-batch-and-exit",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just emacs-test",
+        "status": "passed"
+      },
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "nix flake check --all-systems --no-build --show-trace",
+        "status": "passed"
+      },
+      {
+        "command": "git diff --check",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Human chat transport and agent-facing editor semantics need separate modules and authority contracts even when both are presented in Emacs.",
+    "An injected asynchronous adapter suite is not a substitute for one real local HTTP and SSE round trip; exercising Emacs URL buffers exposed several integration-only boundary defects.",
+    "Returned stream URLs are authorization redirects in practice and must remain same-origin before a bearer header is reused.",
+    "Transport completion without an explicit terminal event is degraded state, not successful chat completion.",
+    "Generation invalidation before transport cancellation keeps late asynchronous callbacks from mutating a newer composer state.",
+    "Transport-stage ownership is required in addition to generation ownership because a synchronous adapter callback can advance the lifecycle before its caller records the older handle.",
+    "Decoded transfer buffers must remain owned by Emacs's URL implementation; memory stays bounded at the raw transport and aggregate decoded-response boundaries instead of deleting decoder-owned text.",
+    "Streaming response status must be accepted before any body event is allowed to mutate authoritative UI lifecycle state.",
+    "A transcript bound is fail-closed only when growth is rejected before mutation and enough capacity remains to restore a usable composer.",
+    "Read-only text properties are not an immutable-history boundary when undo remains enabled or a printable character is captured by a mode-wide command binding.",
+    "A parser-owned event counter must reject before the callback batch is built; enforcing only while rendering is too late for owner-thread memory and latency bounds.",
+    "Raw transport bounds do not constrain decoded expansion; unsupported content encoding must be rejected before decoder-owned buffers can grow."
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/issues/1061"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "untrusted",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
