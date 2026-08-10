@@ -172,6 +172,33 @@
   (let ((vela-chat-base-url "http://127.0.0.1:80"))
     (should (equal (vela-chat--origin-string) "http://127.0.0.1:80"))))
 
+(ert-deftest vela-chat-sse-content-type-accepts-case-and-valid-parameters ()
+  (dolist (headers
+           '("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nCONTENT-TYPE: TEXT/EVENT-STREAM; charset=utf-8\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=\"utf-8\"; profile=live\r\n\r\n"))
+    (should (vela-chat--valid-sse-content-type-p headers))))
+
+(ert-deftest vela-chat-sse-content-type-rejects-missing-malformed-and-duplicate ()
+  (dolist (headers
+           (list
+            "HTTP/1.1 200 OK\r\nServer: test\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type : text/event-stream\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=\"utf-8\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Type: text/event-stream\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Type: text/plain\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Type : text/plain\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n , text/plain\r\n\r\n"
+            (concat "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; note=\""
+                    (string 0) "\"\r\n\r\n")
+            (concat "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; note=\""
+                    (string 127) "\"\r\n\r\n")
+            (concat "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; note=\"\\"
+                    (string 1) "\"\r\n\r\n")))
+    (should-not (vela-chat--valid-sse-content-type-p headers))))
+
 (ert-deftest vela-chat-assistant-events-replace-cumulative-message-by-id ()
   (vela-chat-test--with-buffer
     (setq-local vela-chat--busy t)
@@ -720,6 +747,51 @@
                   (accept-process-output nil 0.05)))
               (should-not events)
               (should (string-match-p "HTTP 302" result)))
+          (dolist (client clients)
+            (when (process-live-p client) (delete-process client)))
+          (when (process-live-p server) (delete-process server)))))))
+
+(ert-deftest vela-chat-sse-rejects-non-event-stream-content-type-before-dispatch ()
+  (let (clients events result)
+    (cl-labels
+        ((filter (process chunk)
+           (let ((request (concat (or (process-get process 'request) "") chunk)))
+             (process-put process 'request request)
+             (when (string-match-p "\r\n\r\n" request)
+               (set-process-filter process #'ignore)
+               (let ((body
+                      "event: final\ndata: {\"kind\":\"final\",\"payload\":{\"messageId\":\"m\",\"text\":\"forged\"}}\n\n"))
+                 (process-send-string
+                  process
+                  (format (concat "HTTP/1.1 200 OK\r\n"
+                                  "Content-Type: text/plain\r\n"
+                                  " , text/event-stream\r\n"
+                                  "Content-Length: %d\r\n"
+                                  "Connection: close\r\n\r\n%s")
+                          (string-bytes body) body))
+                 (process-send-eof process)))))
+         (log-client (_server client _message)
+           (push client clients)
+           (set-process-query-on-exit-flag client nil)
+           (set-process-filter client #'filter)))
+      (let ((server
+             (make-network-process
+              :name "vela-chat-test-invalid-sse-content-type"
+              :server t :host "127.0.0.1" :service t :family 'ipv4
+              :noquery t :log #'log-client)))
+        (unwind-protect
+            (let ((vela-chat-auth-token-function nil))
+              (vela-chat--url-stream
+               (format "http://127.0.0.1:%d/stream"
+                       (process-contact server :service))
+               (lambda (event) (push event events))
+               (lambda () (setq result 'unexpected-completion))
+               (lambda (message) (setq result message)))
+              (let ((deadline (+ (float-time) 5.0)))
+                (while (and (not result) (< (float-time) deadline))
+                  (accept-process-output nil 0.05)))
+              (should-not events)
+              (should (equal result "gateway SSE content type is unsupported")))
           (dolist (client clients)
             (when (process-live-p client) (delete-process client)))
           (when (process-live-p server) (delete-process server)))))))
