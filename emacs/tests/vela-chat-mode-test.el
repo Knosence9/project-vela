@@ -111,8 +111,12 @@
 
 (ert-deftest vela-chat-json-requires-canonical-utf8-before-decoding ()
   (let ((canonical
-         (encode-coding-string "{\"text\":\"café\"}" 'utf-8 t)))
+         (encode-coding-string "{\"text\":\"café\"}" 'utf-8 t))
+        (crlf
+         (encode-coding-string "{\r\n\"text\":\"café\"\r\n}" 'utf-8-unix t)))
     (should (equal (vela-chat--parse-json canonical)
+                   '(("text" . "café"))))
+    (should (equal (vela-chat--parse-json crlf)
                    '(("text" . "café"))))
     (should (equal (vela-chat--parse-json "{\"text\":\"café\"}")
                    '(("text" . "café")))))
@@ -122,7 +126,9 @@
                          (string-make-unibyte "\"}"))
                  (concat (string-make-unibyte "{\"text\":\"")
                          (unibyte-string #xed #xa0 #x80)
-                         (string-make-unibyte "\"}"))))
+                         (string-make-unibyte "\"}"))
+                 (concat "{\"text\":\"" (string #x3fff80) "\"}")
+                 (concat "{\"text\":\"" (string #x110000) "\"}")))
     (should-error (vela-chat--parse-json malformed) :type 'vela-chat-error)))
 
 (ert-deftest vela-chat-required-object-rejects-json-null ()

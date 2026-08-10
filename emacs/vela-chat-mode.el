@@ -308,7 +308,7 @@ exact UTF-8 decode/encode round trip."
   (condition-case nil
       (let ((decoded (if (multibyte-string-p text)
                          text
-                       (decode-coding-string text 'utf-8 t))))
+                       (decode-coding-string text 'utf-8-unix t))))
         (dotimes (index (length decoded))
           (let ((character (aref decoded index)))
             (when (or (eq (char-charset character) 'eight-bit)
@@ -317,7 +317,8 @@ exact UTF-8 decode/encode round trip."
               (signal 'vela-chat-error
                       '("gateway input is not valid Unicode UTF-8")))))
         (when (and (not (multibyte-string-p text))
-                   (not (equal (encode-coding-string decoded 'utf-8 t) text)))
+                   (not (equal (encode-coding-string decoded 'utf-8-unix t)
+                               text)))
           (signal 'vela-chat-error
                   '("gateway input is not canonical UTF-8")))
         decoded)
