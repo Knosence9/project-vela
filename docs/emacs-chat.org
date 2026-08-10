@@ -70,7 +70,10 @@ supply exactly one syntactically valid =Content-Type= whose case-insensitive
 media-type essence is =text/event-stream=; valid parameters are accepted,
 while missing, malformed, folded, duplicate, or other media types fail closed.
 SSE may arrive in arbitrary chunks; multiline data is joined before bounded
-JSON decoding.  The transcript supports =thinking= and =tool= status entries,
+JSON decoding.  A present JSON =kind= must be a non-empty string and must agree
+with any explicit non-default SSE =event:= name.  A non-default SSE event name
+remains the bounded fallback only when JSON omits =kind=; malformed or conflicting
+identities fail closed before transcript dispatch.  The transcript supports =thinking= and =tool= status entries,
 cumulative =assistant= replacement by message identity, and terminal =final= or
 =error= entries.  A stream that closes without a terminal event is reported as
 degraded rather than successful.  No SSE body is dispatched until the decoded
