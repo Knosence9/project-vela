@@ -79,6 +79,8 @@ All gateway parsing and transcript updates occur in short owner-thread
 callbacks; network retrieval uses Emacs's asynchronous URL facilities and a
 bounded polling timer.  The mode rejects malformed responses and enforces:
 
+- 30 seconds for each session-resolution or turn-submission HTTP operation and
+  60 seconds without received transport bytes for an open SSE stream;
 - 32,768 characters per composer message;
 - 64 KiB encoded JSON requests, 64 KiB HTTP header allowances, and 256 KiB JSON
   response bodies;
@@ -97,6 +99,17 @@ cannot change the new UI state.  An explicit terminal event closes the active
 stream transport, and killing an active chat buffer cancels its process and
 polling timer.  A resolved session whose mode differs from the requested mode is
 rejected before a turn is created.
+
+The timeout values are configurable through
+=vela-chat-operation-timeout-seconds= and
+=vela-chat-sse-idle-timeout-seconds= and must remain positive numbers no greater
+than 86,400 seconds.  One
+generation- and stage-bound lifecycle timer is replaced at each HTTP stage and
+whenever the SSE transport receives bytes.  Completion, failure, cancellation,
+session reset, and buffer teardown invalidate that timer, so an already queued
+stale callback cannot affect a later stage or turn.  A timeout cancels the live
+transport, reports the bounded failure in the transcript, and restores the
+composer; it does not retry or reconnect.
 
 Required gateway object fields must be present and non-null; an absent field or
 JSON =null= is rejected at that field boundary rather than surfacing as a later,
@@ -133,5 +146,7 @@ the editable/read-only boundary, exact resolve and turn requests, session reuse,
 fragmented SSE, cumulative assistant rendering, terminal and degraded states,
 cancellation and buffer teardown, same-origin enforcement, JSON
 encoding/decoding, stale synchronous handles, and configured input, header, and
-stream bounds.  Hostile regressions also cover non-2xx SSE bodies, trailing-edge
-insertion during an active turn, and bounded recovery from transcript overflow.
+stream bounds.  Deterministic timer coverage pins stalled operations, mid-stream
+idle expiry, activity rearming, terminal cleanup, and stale callback isolation.
+Hostile regressions also cover non-2xx SSE bodies, trailing-edge insertion during
+an active turn, and bounded recovery from transcript overflow.

@@ -61,7 +61,7 @@
                                   ("streamUrl" . "/api/client/turns/turn-1/stream"))))))
          '(:cancel ignore))
        vela-chat-stream-function
-       (lambda (url on-event on-complete _on-error)
+       (lambda (url on-event on-complete _on-error _on-activity)
          (setq stream-url url)
          (funcall on-event
                   '(("kind" . "final")
@@ -256,6 +256,7 @@
       (vela-chat-cancel)
       (should cancelled)
       (should-not vela-chat--busy)
+      (should-not vela-chat--timeout-timer)
       (funcall resolve-success
                '(("session" . (("id" . "late") ("mode" . "canonical")))))
       (should-not vela-chat--session-id)
@@ -274,7 +275,7 @@
                     '(("turn" . (("id" . "t") ("streamUrl" . "/stream"))))))
          '(:cancel ignore))
        vela-chat-stream-function
-       (lambda (_url on-event _on-complete _on-error)
+       (lambda (_url on-event _on-complete _on-error _on-activity)
          (setq stream-event on-event)
          (list :cancel (lambda () (setq cancelled t)))))
       (goto-char (point-max))
@@ -286,6 +287,154 @@
                  ("payload" . (("messageId" . "m") ("text" . "done")))))
       (should cancelled)
       (should-not vela-chat--busy))))
+
+(ert-deftest vela-chat-operation-timeout-cancels-stalled-resolve-and-recovers ()
+  (vela-chat-test--with-buffer
+    (let (timeout-callback transport-cancelled cancelled-timers)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest arguments)
+                   (setq timeout-callback
+                         (lambda () (apply function arguments)))
+                   'fake-timer))
+                ((symbol-function 'timerp) (lambda (value) (eq value 'fake-timer)))
+                ((symbol-function 'cancel-timer)
+                 (lambda (timer) (push timer cancelled-timers))))
+        (setq-local
+         vela-chat-post-json-function
+         (lambda (_url _payload _on-success _on-error)
+           (list :cancel (lambda () (setq transport-cancelled t)))))
+        (goto-char (point-max))
+        (insert "stall")
+        (vela-chat-send)
+        (should (functionp timeout-callback))
+        (funcall timeout-callback)
+        (should transport-cancelled)
+        (should-not vela-chat--busy)
+        (should (string-match-p "Timeout> Session resolution timed out"
+                                (buffer-string)))
+        (goto-char (point-max))
+        (insert "retry")
+        (should (equal (vela-chat--composer-text) "retry"))))))
+
+(ert-deftest vela-chat-turn-operation-timeout-cancels-stalled-submit ()
+  (vela-chat-test--with-buffer
+    (let (timeout-callback transport-cancelled)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest arguments)
+                   (setq timeout-callback
+                         (lambda () (apply function arguments)))
+                   'fake-timer))
+                ((symbol-function 'timerp) (lambda (value) (eq value 'fake-timer)))
+                ((symbol-function 'cancel-timer) #'ignore))
+        (setq-local
+         vela-chat-post-json-function
+         (lambda (url _payload on-success _on-error)
+           (if (string-suffix-p "/sessions/resolve" url)
+               (funcall on-success
+                        '(("session" . (("id" . "s") ("mode" . "canonical")))))
+             (setq transport-cancelled nil))
+           (list :cancel (lambda () (setq transport-cancelled t)))))
+        (goto-char (point-max))
+        (insert "stall submit")
+        (vela-chat-send)
+        (should (eq vela-chat--transport-stage 'turn))
+        (funcall timeout-callback)
+        (should transport-cancelled)
+        (should-not vela-chat--busy)
+        (should (string-match-p "Timeout> Turn submission timed out"
+                                (buffer-string)))))))
+
+(ert-deftest vela-chat-rejects-unbounded-timeouts-before-freezing-composer ()
+  (dolist (settings
+           `((,(read "1.0e+INF") 60)
+             (,(1+ vela-chat-max-timeout-seconds) 60)
+             (30 ,(1+ vela-chat-max-timeout-seconds))))
+    (vela-chat-test--with-buffer
+      (let ((vela-chat-operation-timeout-seconds (car settings))
+            (vela-chat-sse-idle-timeout-seconds (cadr settings))
+            called)
+        (setq-local vela-chat-post-json-function
+                    (lambda (&rest _) (setq called t)))
+        (goto-char (point-max))
+        (insert "remain editable")
+        (should-error (vela-chat-send) :type 'vela-chat-error)
+        (should-not called)
+        (should-not vela-chat--busy)
+        (should (equal (vela-chat--composer-text) "remain editable"))))))
+
+(ert-deftest vela-chat-stream-activity-rearms-idle-timeout-and-stale-timer-is-inert ()
+  (vela-chat-test--with-buffer
+    (let (activity timeout-callbacks cancelled-timers)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest arguments)
+                   (let ((callback (lambda () (apply function arguments))))
+                     (push callback timeout-callbacks)
+                     callback)))
+                ((symbol-function 'timerp) #'functionp)
+                ((symbol-function 'cancel-timer)
+                 (lambda (timer) (push timer cancelled-timers))))
+        (setq-local
+         vela-chat-post-json-function
+         (lambda (url _payload on-success _on-error)
+           (funcall on-success
+                    (if (string-suffix-p "/sessions/resolve" url)
+                        '(("session" . (("id" . "s") ("mode" . "canonical"))))
+                      '(("turn" . (("id" . "t") ("streamUrl" . "/stream"))))))
+           '(:cancel ignore))
+         vela-chat-stream-function
+         (lambda (_url _on-event _on-complete _on-error on-activity)
+           (setq activity on-activity)
+           '(:cancel ignore)))
+        (goto-char (point-max))
+        (insert "stream")
+        (vela-chat-send)
+        (should (eq vela-chat--transport-stage 'stream))
+        (let ((first-idle-timer (car timeout-callbacks)))
+          (funcall activity)
+          (should (= (length timeout-callbacks) 4))
+          (should (member first-idle-timer cancelled-timers))
+          (funcall first-idle-timer)
+          (should vela-chat--busy)
+          (funcall (car timeout-callbacks))
+          (should-not vela-chat--busy)
+          (should (string-match-p "Timeout> Gateway stream became idle"
+                                  (buffer-string))))))))
+
+(ert-deftest vela-chat-terminal-completion-cancels-timeout-and-stale-callback-is-inert ()
+  (vela-chat-test--with-buffer
+    (let (stream-event timeout-callbacks cancelled-timers)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest arguments)
+                   (let ((callback (lambda () (apply function arguments))))
+                     (push callback timeout-callbacks)
+                     callback)))
+                ((symbol-function 'timerp) #'functionp)
+                ((symbol-function 'cancel-timer)
+                 (lambda (timer) (push timer cancelled-timers))))
+        (setq-local
+         vela-chat-post-json-function
+         (lambda (url _payload on-success _on-error)
+           (funcall on-success
+                    (if (string-suffix-p "/sessions/resolve" url)
+                        '(("session" . (("id" . "s") ("mode" . "canonical"))))
+                      '(("turn" . (("id" . "t") ("streamUrl" . "/stream"))))))
+           '(:cancel ignore))
+         vela-chat-stream-function
+         (lambda (_url on-event _on-complete _on-error _on-activity)
+           (setq stream-event on-event)
+           '(:cancel ignore)))
+        (goto-char (point-max))
+        (insert "finish")
+        (vela-chat-send)
+        (let ((idle-timer (car timeout-callbacks)))
+          (funcall stream-event
+                   '(("kind" . "final")
+                     ("payload" . (("messageId" . "m") ("text" . "done")))))
+          (should-not vela-chat--busy)
+          (should (member idle-timer cancelled-timers))
+          (funcall idle-timer)
+          (should-not vela-chat--busy)
+          (should-not (string-match-p "Timeout>" (buffer-string))))))))
 
 (ert-deftest vela-chat-synchronous-stage-handles-are-cancelled-as-stale ()
   (vela-chat-test--with-buffer
@@ -302,7 +451,7 @@
                         'turn)))
            (list :cancel (lambda () (push stage cancelled)))))
        vela-chat-stream-function
-       (lambda (_url _on-event _on-complete _on-error)
+       (lambda (_url _on-event _on-complete _on-error _on-activity)
          '(:cancel ignore)))
       (goto-char (point-max))
       (insert "synchronous")
@@ -424,6 +573,7 @@
                 vela-chat--turn-id "turn"
                 vela-chat--assistant-message-id "message")
     (vela-chat-new-session)
+    (should-not vela-chat--timeout-timer)
     (should-not vela-chat--session-id)
     (should-not vela-chat--turn-id)
     (should-not vela-chat--assistant-message-id)
@@ -459,7 +609,7 @@
                     '(("turn" . (("id" . "t") ("streamUrl" . "/stream"))))))
          '(:cancel ignore))
        vela-chat-stream-function
-       (lambda (_url on-event on-complete _on-error)
+       (lambda (_url on-event on-complete _on-error _on-activity)
          (funcall on-event
                   '(("kind" . "assistant")
                     ("payload" . (("messageId" . "m")
