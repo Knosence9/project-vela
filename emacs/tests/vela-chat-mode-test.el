@@ -115,6 +115,14 @@
     "session" (vela-chat--parse-json "{\"session\":null}"))
    :type 'vela-chat-error))
 
+(ert-deftest vela-chat-required-object-rejects-absent-field ()
+  (should-error
+   (vela-chat--required-object "session" '(("other" . ())))
+   :type 'vela-chat-error))
+
+(ert-deftest vela-chat-required-object-accepts-present-empty-object ()
+  (should-not (vela-chat--required-object "session" '(("session" . nil)))))
+
 (ert-deftest vela-chat-json-request-encoding-preserves-string-keyed-contract ()
   (should
    (equal
@@ -558,8 +566,8 @@
             (when (process-live-p client) (delete-process client)))
           (when (process-live-p server) (delete-process server)))))))
 
-(ert-deftest vela-chat-sse-retrieval-preserves-chunked-transfer-decoding ()
-  (let (clients events result)
+(ert-deftest vela-chat-sse-retrieval-tracks-decoder-buffer-mutations ()
+  (let (clients events result handle)
     (cl-labels
         ((send-chunk (process text)
            (process-send-string
@@ -575,12 +583,7 @@
                         "Content-Type: text/event-stream\r\n"
                         "Transfer-Encoding: chunked\r\n"
                         "Connection: close\r\n\r\n"))
-               (send-chunk process "event: final\n")
-               (send-chunk
-                process
-                "data: {\"kind\":\"final\",\"payload\":{\"messageId\":\"m\",\"text\":\"chunked\"}}\n\n")
-               (process-send-string process "0\r\n\r\n")
-               (process-send-eof process))))
+               (send-chunk process "event: primer\ndata: ready\n\n"))))
          (log-client (_server client _message)
            (push client clients)
            (set-process-query-on-exit-flag client nil)
@@ -592,20 +595,87 @@
               :noquery t :log #'log-client)))
         (unwind-protect
             (let ((vela-chat-auth-token-function nil))
-              (vela-chat--url-stream
-               (format "http://127.0.0.1:%d/stream"
-                       (process-contact server :service))
-               (lambda (event) (push event events))
-               (lambda () (setq result 'complete))
-               (lambda (message) (setq result (list 'error message))))
+              (setq handle
+                    (vela-chat--url-stream
+                     (format "http://127.0.0.1:%d/stream"
+                             (process-contact server :service))
+                     (lambda (event)
+                       (push event events)
+                       (when (= (length events) 1)
+                         ;; The primer callback runs only after poll advanced its
+                         ;; cursor.  Model url-http removing transfer framing
+                         ;; before that consumed point between polling passes.
+                         (let ((retrieval (plist-get handle :buffer)))
+                           (with-current-buffer retrieval
+                             (let ((inhibit-read-only t)
+                                   (start (vela-chat--http-body-start)))
+                               (delete-region start (1+ start)))))
+                         (let ((process (car clients)))
+                           (send-chunk
+                            process
+                            "event: final\ndata: {\"kind\":\"final\",\"payload\":{\"messageId\":\"m\",\"text\":\"chunked\"}}\n\n")
+                           (process-send-string process "0\r\n\r\n")
+                           (process-send-eof process))))
+                     (lambda () (setq result 'complete))
+                     (lambda (message) (setq result (list 'error message)))))
               (let ((deadline (+ (float-time) 5.0)))
                 (while (and (not result) (< (float-time) deadline))
                   (accept-process-output nil 0.05)))
               (should (eq result 'complete))
-              (should (= (length events) 1))
+              (should (= (length events) 2))
               (should (string-match-p "chunked"
                                       (vela-chat-test--field
                                        "data" (car events)))))
+          (dolist (client clients)
+            (when (process-live-p client) (delete-process client)))
+          (when (process-live-p server) (delete-process server)))))))
+
+(ert-deftest vela-chat-sse-event-cancellation-stops-poll-without-error ()
+  (let (clients events errors finished handle)
+    (cl-labels
+        ((filter (process chunk)
+           (let ((request (concat (or (process-get process 'request) "") chunk)))
+             (process-put process 'request request)
+             (when (string-match-p "\r\n\r\n" request)
+               (set-process-filter process #'ignore)
+               (let ((body "event: final\ndata: done\n\n"))
+                 (process-send-string
+                  process
+                  (format (concat "HTTP/1.1 200 OK\r\n"
+                                  "Content-Type: text/event-stream\r\n"
+                                  "Content-Length: %d\r\n"
+                                  "Connection: close\r\n\r\n%s")
+                          (string-bytes body) body))
+                 (process-send-eof process)))))
+         (log-client (_server client _message)
+           (push client clients)
+           (set-process-query-on-exit-flag client nil)
+           (set-process-filter client #'filter)))
+      (let ((server
+             (make-network-process
+              :name "vela-chat-test-cancel-on-event"
+              :server t :host "127.0.0.1" :service t :family 'ipv4
+              :noquery t :log #'log-client)))
+        (unwind-protect
+            (let ((vela-chat-auth-token-function nil))
+              (setq handle
+                    (vela-chat--url-stream
+                     (format "http://127.0.0.1:%d/stream"
+                             (process-contact server :service))
+                     (lambda (event)
+                       (push event events)
+                       (vela-chat--call-cancel handle)
+                       (setq finished t))
+                     (lambda () (setq finished 'unexpected-completion))
+                     (lambda (message)
+                       (push message errors)
+                       (setq finished t))))
+              (let ((deadline (+ (float-time) 5.0)))
+                (while (and (not finished) (< (float-time) deadline))
+                  (accept-process-output nil 0.05)))
+              (should (eq finished t))
+              (should (= (length events) 1))
+              (should-not errors))
           (dolist (client clients)
             (when (process-live-p client) (delete-process client)))
           (when (process-live-p server) (delete-process server)))))))
