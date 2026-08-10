@@ -984,11 +984,20 @@ chunk when that optional callback is non-nil."
   "Decode one raw SSE EVENT into the gateway event object."
   (let* ((data (vela-chat--required-string "data" event))
          (decoded (vela-chat--parse-json data))
-         (kind (vela-chat--field "kind" decoded)))
-    (unless (stringp kind)
-      (let ((fallback (vela-chat--field "event" event)))
-        (when (and (stringp fallback) (not (string= fallback "message")))
-          (setq decoded (cons (cons "kind" fallback) decoded)))))
+         (kind-entry (and (listp decoded) (assoc-string "kind" decoded)))
+         (kind (and kind-entry (cdr kind-entry)))
+         (fallback (vela-chat--field "event" event))
+         (explicit-fallback
+          (and (stringp fallback)
+               (not (string-empty-p fallback))
+               (not (string= fallback "message")))))
+    (when (and kind-entry
+               (not (and (stringp kind) (not (string-empty-p kind)))))
+      (signal 'vela-chat-error '("gateway event kind is malformed")))
+    (when (and kind-entry explicit-fallback (not (string= kind fallback)))
+      (signal 'vela-chat-error '("gateway SSE event identity conflicts with JSON kind")))
+    (when (and (not kind-entry) explicit-fallback)
+      (setq decoded (cons (cons "kind" fallback) decoded)))
     decoded))
 
 (defun vela-chat--call-cancel (handle)

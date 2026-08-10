@@ -146,6 +146,33 @@
         ("data" . "{\"kind\":\"assistant\",\n\"payload\":{\"text\":\"hi\"}}"))]))
     (should (equal (vela-chat--sse-feed parser "" t) []))))
 
+(ert-deftest vela-chat-sse-event-identities-must-be-coherent ()
+  (should
+   (equal
+    (vela-chat--decode-stream-event
+     '(("event" . "assistant")
+       ("data" . "{\"kind\":\"assistant\",\"payload\":{}}")))
+    '(("kind" . "assistant") ("payload"))))
+  (should
+   (equal
+    (vela-chat--field
+     "kind"
+     (vela-chat--decode-stream-event
+      '(("event" . "assistant")
+        ("data" . "{\"payload\":{}}"))))
+    "assistant"))
+  (should-error
+   (vela-chat--decode-stream-event
+    '(("event" . "tool")
+      ("data" . "{\"kind\":\"assistant\",\"payload\":{}}")))
+   :type 'vela-chat-error)
+  (dolist (kind '("null" "false" "\"\""))
+    (should-error
+     (vela-chat--decode-stream-event
+      `(("event" . "assistant")
+        ("data" . ,(format "{\"kind\":%s,\"payload\":{}}" kind))))
+     :type 'vela-chat-error)))
+
 (ert-deftest vela-chat-sse-parser-enforces-total-stream-byte-bound ()
   (let ((parser (vela-chat--sse-parser-create)))
     (should-error
