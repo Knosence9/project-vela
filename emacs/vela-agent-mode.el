@@ -24,7 +24,7 @@
 
 (define-error 'vela-agent-protocol-error "Invalid Vela agent request")
 
-(defconst vela-agent-protocol-version 7
+(defconst vela-agent-protocol-version 8
   "Version of the model-neutral Vela Emacs protocol.")
 
 (defconst vela-agent-max-buffer-characters (* 1024 1024)
@@ -39,6 +39,10 @@
 (defconst vela-agent-max-operation-characters 64
   "Largest operation or context-section name accepted by the protocol.")
 
+(defconst vela-agent-context-sections
+  '("buffer" "org" "project" "diagnostics" "compilation" "magit")
+  "Context section names accepted by `context.snapshot'.")
+
 (defconst vela-agent-max-metadata-string-characters 8192
   "Largest live editor metadata string accepted by a context snapshot.")
 
@@ -47,6 +51,9 @@
 
 (defconst vela-agent-max-compilation-count (* 1024 1024)
   "Largest native compilation diagnostic count accepted by a snapshot.")
+
+(defconst vela-agent-max-mode-ancestry-nodes 32
+  "Largest native major-mode ancestry inspected by a context snapshot.")
 
 (defconst vela-agent-max-json-string-characters 8192
   "Largest string accepted by the deterministic JSON encoder.")
@@ -64,10 +71,11 @@
      2                         ; complete project section
      1                         ; diagnostics vector
      (* vela-agent-max-json-collection-items 5)
-     5)                        ; complete compilation section
+     5                         ; complete compilation section
+     2)                        ; complete Magit section
   "Largest value-node count accepted by the deterministic JSON encoder.
 
-This admits one complete five-section snapshot with the maximum collection of
+This admits one complete six-section snapshot with the maximum collection of
 four-field diagnostics while retaining a finite traversal bound.")
 
 (defconst vela-agent-max-json-output-characters (* 256 1024)
@@ -143,7 +151,7 @@ maximum-size partial frame.")
     "compilation" 'compilation-start
     "read-only current-buffer compilation progress counts" "compilation")
    (vela-agent--emacs-feature
-    "magit" 'magit-status "loaded Magit facility metadata" nil)))
+    "magit" 'magit-status "read-only current-buffer Magit mode metadata" "magit")))
 
 (defun vela-agent--success (operation result)
   "Return a successful envelope for OPERATION containing RESULT."
@@ -401,6 +409,59 @@ maximum-size partial frame.")
                           'compilation-num-infos-found))))
       :null)))
 
+(defun vela-agent--mode-derived-p (mode ancestor)
+  "Return non-nil when MODE has bounded, valid ANCESTOR metadata."
+  (let ((pending (list mode))
+        (seen (make-hash-table :test #'eq))
+        (count 0)
+        found)
+    (while pending
+      (let ((candidate (pop pending)))
+        (unless (symbolp candidate)
+          (signal 'vela-agent-protocol-error
+                  '("native major-mode ancestry must contain symbols")))
+        (unless (gethash candidate seen)
+          (setq count (1+ count))
+          (when (> count vela-agent-max-mode-ancestry-nodes)
+            (signal 'vela-agent-protocol-error
+                    '("native major-mode ancestry exceeds the traversal bound")))
+          (puthash candidate t seen)
+          (when (eq candidate ancestor)
+            (setq found t))
+          (let ((parent (get candidate 'derived-mode-parent)))
+            (when parent
+              (push parent pending)))
+          (let ((parents (get candidate 'derived-mode-extra-parents))
+                (extra-count 0))
+            (while (consp parents)
+              (setq extra-count (1+ extra-count))
+              (when (> extra-count vela-agent-max-mode-ancestry-nodes)
+                (signal 'vela-agent-protocol-error
+                        '("native major-mode parents exceed the traversal bound")))
+              (push (car parents) pending)
+              (setq parents (cdr parents)))
+            (unless (null parents)
+              (signal 'vela-agent-protocol-error
+                      '("native major-mode parents must be a proper list")))))))
+    found))
+
+(defun vela-agent--magit-mode-context (mode)
+  "Return bounded current Magit metadata after validating exact MODE."
+  (unless (symbolp mode)
+    (signal 'vela-agent-protocol-error
+            '("native Magit major mode must be a symbol")))
+  (if (vela-agent--mode-derived-p mode 'magit-mode)
+      `(("major_mode" . ,(vela-agent--bounded-metadata-string
+                          (symbol-name mode))))
+    :null))
+
+(defun vela-agent--magit-context ()
+  "Snapshot bounded mode metadata for the current loaded Magit buffer."
+  (save-match-data
+    (if (fboundp 'magit-status)
+        (vela-agent--magit-mode-context major-mode)
+      :null)))
+
 (defun vela-agent--record-unique-section (section seen)
   "Record bounded SECTION in SEEN, or reject an existing entry."
   (when (gethash section seen)
@@ -414,17 +475,15 @@ maximum-size partial frame.")
     (unless (vectorp include)
       (signal 'vela-agent-protocol-error
               '("context.snapshot requires an include vector")))
-    (when (> (length include) 5)
+    (when (> (length include) (length vela-agent-context-sections))
       (signal 'vela-agent-protocol-error
-              '("context.snapshot accepts at most five sections")))
+              '("context.snapshot accepts at most six sections")))
     (let ((sections (append include nil)))
       (let ((seen (make-hash-table :test #'equal)))
         (dolist (section sections)
           (unless (and (stringp section)
                        (<= (length section) vela-agent-max-operation-characters)
-                       (member section
-                               '("buffer" "org" "project" "diagnostics"
-                                 "compilation")))
+                       (member section vela-agent-context-sections))
             (signal 'vela-agent-protocol-error
                     '("unsupported context section")))
           (vela-agent--record-unique-section section seen)))
@@ -443,6 +502,8 @@ maximum-size partial frame.")
           (push (cons "diagnostics" (vela-agent--diagnostics-context)) result))
         (when (member "compilation" sections)
           (push (cons "compilation" (vela-agent--compilation-context)) result))
+        (when (member "magit" sections)
+          (push (cons "magit" (vela-agent--magit-context)) result))
         (nreverse result)))))
 
 (defun vela-agent--validate-request-object (request)
@@ -806,7 +867,7 @@ Any framing, request, dispatch, or response error rejects the complete feed."
            (vela-agent-handle-request
             '(("operation" . "context.snapshot")
               ("include" . ["buffer" "org" "project" "diagnostics"
-                            "compilation"]))))))
+                            "compilation" "magit"]))))))
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (vela-agent-encode-response response))

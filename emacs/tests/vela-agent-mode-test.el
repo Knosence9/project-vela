@@ -11,7 +11,7 @@
          (result (alist-get "result" response nil nil #'string=))
          (capabilities (alist-get "capabilities" result nil nil #'string=))
          (features (alist-get "emacs_features" result nil nil #'string=)))
-    (should (equal (alist-get "protocol_version" response nil nil #'string=) 7))
+    (should (equal (alist-get "protocol_version" response nil nil #'string=) 8))
     (should (eq (alist-get "ok" response nil nil #'string=) t))
     (should
      (equal capabilities
@@ -49,7 +49,130 @@
     (should (equal (mapcar (lambda (feature)
                              (alist-get "context_section" feature nil nil #'string=))
                            (append features nil))
-                   '("buffer" "org" "project" "diagnostics" "compilation" :null)))))
+                   '("buffer" "org" "project" "diagnostics" "compilation" "magit")))))
+
+(ert-deftest vela-agent-context-snapshot-reports-current-magit-buffer-kind ()
+  (with-temp-buffer
+    (insert "status")
+    (goto-char 3)
+    (narrow-to-region 2 6)
+    (set-mark 5)
+    (setq mark-active t)
+    (set-buffer-modified-p nil)
+    (string-match "b\\(c\\)" "abcd")
+    (let ((major-mode (make-symbol "magit-status-mode"))
+          (point-before (point))
+          (mark-before (mark t))
+          (mark-active-before mark-active)
+          (restriction-before (cons (point-min) (point-max)))
+          (text-before (save-restriction
+                         (widen)
+                         (buffer-substring (point-min) (point-max))))
+          (tick-before (buffer-chars-modified-tick))
+          (modified-before (buffer-modified-p))
+          (undo-before buffer-undo-list)
+          (match-before (match-data t)))
+      (put major-mode 'derived-mode-parent 'magit-mode)
+      (cl-letf (((symbol-function 'magit-status) (lambda (&rest _))))
+        (let* ((response
+                (vela-agent-handle-request
+                 '(("operation" . "context.snapshot")
+                   ("include" . ["magit"]))))
+               (result (alist-get "result" response nil nil #'string=)))
+          (should (equal result
+                         '(("magit" . (("major_mode" . "magit-status-mode"))))))))
+      (should (= (point) point-before))
+      (should (equal (mark t) mark-before))
+      (should (eq mark-active mark-active-before))
+      (should (equal (cons (point-min) (point-max)) restriction-before))
+      (should
+       (equal-including-properties
+        (save-restriction
+          (widen)
+          (buffer-substring (point-min) (point-max)))
+        text-before))
+      (should (= (buffer-chars-modified-tick) tick-before))
+      (should (eq (buffer-modified-p) modified-before))
+      (should (equal buffer-undo-list undo-before))
+      (should (equal (match-data t) match-before)))))
+
+(ert-deftest vela-agent-context-snapshot-reports-non-magit-as-null ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'magit-status) (lambda (&rest _))))
+      (let* ((response
+              (vela-agent-handle-request
+               '(("operation" . "context.snapshot")
+                 ("include" . ["magit"]))))
+             (result (alist-get "result" response nil nil #'string=)))
+        (should (equal result '(("magit" . :null))))))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-oversized-magit-mode ()
+  (with-temp-buffer
+    (let ((major-mode (make-symbol
+                       (make-string
+                        (1+ vela-agent-max-metadata-string-characters)
+                        ?m))))
+      (put major-mode 'derived-mode-parent 'magit-mode)
+      (cl-letf (((symbol-function 'magit-status) (lambda (&rest _))))
+        (should-error
+         (vela-agent-handle-request
+          '(("operation" . "context.snapshot")
+            ("include" . ["magit"])))
+         :type 'vela-agent-protocol-error)))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-nonsymbol-magit-mode ()
+  ;; Emacs itself rejects dynamically binding `major-mode' to a non-symbol.
+  ;; Exercise the validation boundary directly while leaving the real
+  ;; `derived-mode-p' in place, so it cannot preempt the protocol error.
+  (should-error
+   (vela-agent--magit-mode-context "magit-status-mode")
+   :type 'vela-agent-protocol-error))
+
+(ert-deftest vela-agent-context-snapshot-rejects-malformed-magit-parent ()
+  (let ((mode (make-symbol "vela-test-magit-mode")))
+    (put mode 'derived-mode-parent "not-a-mode")
+    (should-error
+     (vela-agent--magit-mode-context mode)
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-context-snapshot-bounds-magit-parent-traversal ()
+  (let ((modes nil))
+    (dotimes (index (1+ vela-agent-max-mode-ancestry-nodes))
+      (push (make-symbol (format "vela-test-magit-mode-%d" index)) modes))
+    (setq modes (nreverse modes))
+    (cl-loop for (mode parent) on modes
+             when parent do (put mode 'derived-mode-parent parent))
+    (put (car (last modes)) 'derived-mode-parent 'magit-mode)
+    (should-error
+     (vela-agent--magit-mode-context (car modes))
+     :type 'vela-agent-protocol-error)))
+
+(ert-deftest vela-agent-context-snapshot-terminates-cyclic-magit-parents ()
+  (let ((first (make-symbol "vela-test-first-mode"))
+        (second (make-symbol "vela-test-second-mode")))
+    (put first 'derived-mode-parent second)
+    (put second 'derived-mode-extra-parents (list first))
+    (should (eq (vela-agent--magit-mode-context first) :null))))
+
+(ert-deftest vela-agent-context-snapshot-recognizes-extra-magit-parent ()
+  (let ((mode (make-symbol "vela-test-extra-magit-mode")))
+    (derived-mode-add-parents mode '(magit-mode))
+    (should (equal (vela-agent--magit-mode-context mode)
+                   '(("major_mode" . "vela-test-extra-magit-mode"))))))
+
+(ert-deftest vela-agent-context-snapshot-rejects-malformed-extra-magit-parents ()
+  (let ((dotted (make-symbol "vela-test-dotted-mode"))
+        (nonsymbol (make-symbol "vela-test-nonsymbol-mode"))
+        (cyclic (make-symbol "vela-test-cyclic-mode"))
+        (cycle (list 'other-mode)))
+    (put dotted 'derived-mode-extra-parents '(other-mode . broken))
+    (put nonsymbol 'derived-mode-extra-parents '("not-a-mode"))
+    (setcdr cycle cycle)
+    (put cyclic 'derived-mode-extra-parents cycle)
+    (dolist (mode (list dotted nonsymbol cyclic))
+      (should-error
+       (vela-agent--magit-mode-context mode)
+       :type 'vela-agent-protocol-error))))
 
 (ert-deftest vela-agent-context-snapshot-reports-native-compilation-state ()
   (with-temp-buffer
@@ -325,12 +448,20 @@
             (make-list vela-agent-max-json-collection-items diagnostic)))
       (cl-letf (((symbol-function 'flymake-diagnostics)
                  (lambda (&rest _) diagnostics))
-                ((symbol-function 'project-current) (lambda (&rest _) nil)))
-        (let ((response
+                ((symbol-function 'project-current) (lambda (&rest _) nil))
+                ((symbol-function 'magit-status) (lambda (&rest _))))
+        (let* ((major-mode (make-symbol "vela-test-aggregate-magit-mode"))
+               (_ (put major-mode 'derived-mode-parent 'magit-mode))
+               (response
                (vela-agent-handle-request
                 '(("operation" . "context.snapshot")
                   ("include" . ["buffer" "org" "project" "diagnostics"
-                                "compilation"])))))
+                                "compilation" "magit"])))))
+          (should
+           (equal (alist-get
+                   "magit" (alist-get "result" response nil nil #'string=)
+                   nil nil #'string=)
+                  '(("major_mode" . "vela-test-aggregate-magit-mode"))))
           (should (stringp (vela-agent-encode-response response))))))))
 
 (ert-deftest vela-agent-context-snapshot-bounds-aggregate-diagnostic-json ()
@@ -809,18 +940,24 @@
     (rename-buffer " *vela-agent-source*")
     (insert "durable context")
     (text-mode)
-    (let ((interface (vela-agent-interface-open)))
-      (unwind-protect
-          (with-current-buffer interface
-            (should (eq major-mode 'vela-agent-interface-mode))
-            (should buffer-read-only)
-            (should (string-match-p
-                     "context\\.snapshot"
-                     (buffer-substring-no-properties (point-min) (point-max))))
-            (should (string-match-p
-                     "vela-agent-source"
-                     (buffer-substring-no-properties (point-min) (point-max)))))
-        (kill-buffer interface)))))
+    (let ((major-mode (make-symbol "vela-test-interface-magit-mode")))
+      (put major-mode 'derived-mode-parent 'magit-mode)
+      (cl-letf (((symbol-function 'magit-status) (lambda (&rest _))))
+        (let ((interface (vela-agent-interface-open)))
+          (unwind-protect
+              (with-current-buffer interface
+                (should (eq major-mode 'vela-agent-interface-mode))
+                (should buffer-read-only)
+                (should (string-match-p
+                         "context\\.snapshot"
+                         (buffer-substring-no-properties (point-min) (point-max))))
+                (should (string-match-p
+                         "vela-agent-source"
+                         (buffer-substring-no-properties (point-min) (point-max))))
+                (should (string-match-p
+                         "\\\"magit\\\"[[:space:]]*:[[:space:]]*{"
+                         (buffer-substring-no-properties (point-min) (point-max)))))
+            (kill-buffer interface)))))))
 
 (ert-deftest vela-agent-unsupported-operation-fails-closed ()
   (should-error
@@ -1180,7 +1317,7 @@
      (vela-agent-handle-request
       '(("operation" . "context.snapshot")
         ("include" . ["buffer" "org" "project" "diagnostics" "compilation"
-                      "buffer"])))
+                      "magit" "buffer"])))
      :type 'vela-agent-protocol-error)))
 
 (ert-deftest vela-agent-context-snapshot-rejects-duplicate-sections ()

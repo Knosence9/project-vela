@@ -1,0 +1,71 @@
+* ADR-0120: Bounded current-buffer Magit metadata
+:PROPERTIES:
+:CUSTOM_ID: adr-0120-bounded-current-buffer-magit-metadata
+:END:
+- *Status:* accepted
+- *Date:* 2026-08-09
+- *Decision and execution issue:* [[https://github.com/Knosence9/project-vela/issues/1057][#1057]]
+- *Related:* [[file:0108-main-thread-authoritative-emacs-agent-interface.org][ADR-0108]], [[file:0114-bounded-native-emacs-compilation-context.org][ADR-0114]]
+
+** Context
+:PROPERTIES:
+:CUSTOM_ID: context
+:END:
+ADR-0108 catalogs loaded Magit as an intended model-neutral Emacs facility, but it is the only advertised facility without a structured context section. An agent therefore cannot distinguish a current Magit buffer from an ordinary buffer without package-specific evaluation or UI scraping.
+
+Calling Git, selecting another Magit buffer, resolving a repository, reading section values, or exposing revision, ref, path, or buffer text would cross process, global-selection, filesystem, sensitivity, or unbounded-value boundaries. Current-buffer mode classification is useful without those authorities.
+
+** Decision
+:PROPERTIES:
+:CUSTOM_ID: decision
+:END:
+Advance the Emacs agent protocol to version 8. Add =magit= as a sixth optional =context.snapshot= section and identify it on the existing Magit capability.
+
+The section returns JSON null unless =magit-status= is already callable and the current buffer derives from =magit-mode=. Snapshotting does not load or search for Magit. It traverses at most 32 unique symbols from the native primary and extra mode-parent metadata, terminates cycles, and fails closed on malformed or over-limit ancestry. A recognized current Magit buffer returns one deterministic field, =major_mode=, containing the exact bounded symbol name of the current major mode. A non-symbol mode or a name longer than 8,192 characters fails closed.
+
+The existing 1,048,576-character source-buffer limit, unique-section validation, deterministic response encoder, and editor-owner-thread boundary remain in force. Requests accept at most six sections, and the response-node bound admits the complete legal six-section response.
+
+Snapshotting preserves point, mark, narrowing, buffer text and properties, modification state and tick, undo state, and match data. It does not call Git or any Magit repository or section resolver; choose another, global, or status buffer; expose repository roots, paths, revisions, refs, section values, commands, process state, or buffer text; refresh status; navigate; stage; commit; push; or grant transport, queue, approval, filesystem, process, or mutation authority.
+
+** Alternatives considered
+:PROPERTIES:
+:CUSTOM_ID: alternatives-considered
+:END:
+*** Resolve and return the repository root
+:PROPERTIES:
+:CUSTOM_ID: resolve-and-return-the-repository-root
+:END:
+Rejected because Magit repository discovery may invoke Git or inspect filesystem state. The existing project section already provides separately bounded native project metadata when explicitly requested.
+
+*** Return the current Magit section type and value
+:PROPERTIES:
+:CUSTOM_ID: return-the-current-magit-section-type-and-value
+:END:
+Rejected because section values are package-internal, shape-dependent, potentially sensitive, and not independently bounded. Traversal and stable semantic interpretation need a separate contract.
+
+*** Inspect the global Magit status buffer
+:PROPERTIES:
+:CUSTOM_ID: inspect-the-global-magit-status-buffer
+:END:
+Rejected because selecting or creating another buffer crosses the caller-selected current-buffer scope and may trigger repository discovery or refresh work.
+
+** Consequences
+:PROPERTIES:
+:CUSTOM_ID: consequences
+:END:
+- Agents can classify an already-loaded current Magit buffer without package-specific evaluation or UI scraping.
+- Exact modes such as status, diff, log, and revision buffers remain distinguishable when their bounded mode symbols derive from =magit-mode=.
+- The section says nothing about repository identity, freshness, Git status, selected sections, or operation authority.
+- Context requests may include each of =buffer=, =org=, =project=, =diagnostics=, =compilation=, and =magit= at most once.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+RED→GREEN ERT coverage pins protocol version 8, capability metadata, recognized and null section shapes, oversized mode rejection, malformed and over-limit parent rejection, cyclic-parent termination, six-section cardinality before copying, complete-response encoding, and preservation of editor state. Batch byte compilation rejects warnings, and the complete repository quality gate must remain green.
+
+** Revisit when
+:PROPERTIES:
+:CUSTOM_ID: revisit-when
+:END:
+Revisit before exposing repository identity, paths, revisions, refs, section metadata or values, status freshness, buffer selection, repository discovery, Git execution, navigation, transport, jobs, queues, cancellation, approval, or mutation.
