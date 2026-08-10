@@ -199,6 +199,25 @@
                     (string 1) "\"\r\n\r\n")))
     (should-not (vela-chat--valid-sse-content-type-p headers))))
 
+(ert-deftest vela-chat-json-content-type-accepts-case-and-valid-parameters ()
+  (dolist (headers
+           '("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nCONTENT-TYPE: APPLICATION/JSON; charset=utf-8\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type: application/json; profile=\"gateway\"\r\n\r\n"))
+    (should (vela-chat--valid-content-type-p headers "application/json"))))
+
+(ert-deftest vela-chat-json-content-type-rejects-missing-malformed-and-duplicate ()
+  (dolist (headers
+           '("HTTP/1.1 200 OK\r\nServer: test\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type : application/json\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset =utf-8\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset= utf-8\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Type: application/json\r\n\r\n"
+             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n text/plain\r\n\r\n"))
+    (should-not (vela-chat--valid-content-type-p headers "application/json"))))
+
 (ert-deftest vela-chat-assistant-events-replace-cumulative-message-by-id ()
   (vela-chat-test--with-buffer
     (setq-local vela-chat--busy t)
@@ -663,6 +682,49 @@
                 (while (and (not result) (< (float-time) deadline))
                   (accept-process-output nil 0.05)))
               (should (string-match-p "byte bound" result)))
+          (dolist (client clients)
+            (when (process-live-p client) (delete-process client)))
+          (when (process-live-p server) (delete-process server)))))))
+
+(ert-deftest vela-chat-http-rejects-non-json-content-type-before-dispatch ()
+  (let (clients success result)
+    (cl-labels
+        ((filter (process chunk)
+           (let ((request (concat (or (process-get process 'request) "") chunk)))
+             (process-put process 'request request)
+             (when (string-match-p "\r\n\r\n" request)
+               (set-process-filter process #'ignore)
+               (let ((body "{\"session\":{\"id\":\"forged\",\"mode\":\"canonical\"}}"))
+                 (process-send-string
+                  process
+                  (format (concat "HTTP/1.1 200 OK\r\n"
+                                  "Content-Type: text/plain\r\n"
+                                  "Content-Length: %d\r\n"
+                                  "Connection: close\r\n\r\n%s")
+                          (string-bytes body) body))
+                 (process-send-eof process)))))
+         (log-client (_server client _message)
+           (push client clients)
+           (set-process-query-on-exit-flag client nil)
+           (set-process-filter client #'filter)))
+      (let ((server
+             (make-network-process
+              :name "vela-chat-test-invalid-json-content-type"
+              :server t :host "127.0.0.1" :service t :family 'ipv4
+              :noquery t :log #'log-client)))
+        (unwind-protect
+            (let ((vela-chat-auth-token-function nil))
+              (vela-chat--url-post-json
+               (format "http://127.0.0.1:%d/json"
+                       (process-contact server :service))
+               '(("probe" . t))
+               (lambda (_) (setq success t result 'unexpected-success))
+               (lambda (message) (setq result message)))
+              (let ((deadline (+ (float-time) 5.0)))
+                (while (and (not result) (< (float-time) deadline))
+                  (accept-process-output nil 0.05)))
+              (should-not success)
+              (should (equal result "gateway JSON content type is unsupported")))
           (dolist (client clients)
             (when (process-live-p client) (delete-process client)))
           (when (process-live-p server) (delete-process server)))))))
