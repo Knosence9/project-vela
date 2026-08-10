@@ -46,6 +46,17 @@ additional capability. Undo all visual changes with:
 (vela-workbench-ui-disable)
 #+end_src
 
+*** Human chat is a separate surface
+:PROPERTIES:
+:CUSTOM_ID: human-chat-is-a-separate-surface
+:END:
+
+The asynchronous [[file:emacs-chat.org][Vela Emacs chat mode]] is a human-facing gateway client. It does
+not call this semantic dispatcher, change this protocol version, or grant an
+agent editor authority. Keeping chat presentation and semantic editor access in
+separate modules prevents a bearer-authenticated conversation transport from
+silently becoming a raw Emacs mutation channel.
+
 ** Protocol version 8
 :PROPERTIES:
 :CUSTOM_ID: protocol-version-8

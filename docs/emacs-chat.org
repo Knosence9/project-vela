@@ -1,0 +1,133 @@
+* Emacs gateway chat
+:PROPERTIES:
+:CUSTOM_ID: emacs-gateway-chat
+:END:
+=vela-chat-mode= is a human-facing transcript and composer for Vela's existing
+client gateway.  It is intentionally separate from the read-only semantic
+protocol in [[file:emacs-agent-interface.org][the Emacs agent interface]].  Chat can submit user text to the
+gateway, but it cannot read or mutate editor buffers, approve tools, or bypass
+the gateway's policy boundary.  The decision is recorded in
+[[file:adr/0121-asynchronous-emacs-gateway-chat.org][ADR-0121]].
+
+** Load and open
+:PROPERTIES:
+:CUSTOM_ID: load-and-open
+:END:
+Start the Vela gateway separately, then load the mode from the repository root:
+
+#+begin_src elisp
+(add-to-list 'load-path (expand-file-name "emacs" default-directory))
+(require 'vela-chat-mode)
+(setq vela-chat-base-url "http://127.0.0.1:3847")
+(setq vela-chat-auth-token-function
+      (lambda () (auth-source-pick-first-password
+                  :host "127.0.0.1" :port "3847" :user "vela")))
+#+end_src
+
+The token function is optional.  When configured, it is called immediately
+before each HTTP operation.  The returned token stays runtime-only: the mode
+does not persist it in the transcript, request JSON, history, or customization.
+The function must return a non-empty single-line string of at most 8,192
+characters, or nil when the gateway does not require a bearer token.
+
+Run =M-x vela-chat-open=.  The live composer follows =You> =.  Its commands are:
+
+- =RET= or =C-c C-c=: send the current non-empty message;
+- =C-c C-k=: cancel the active resolve, turn, or stream operation;
+- =C-c C-n=: clear the transcript and resolve a new session on the next send;
+- =C-c C-q=: quit the chat window without persisting the transcript.
+
+Only the composer is editable.  Sent input and gateway output become read-only.
+The entire buffer is read-only while a turn is active, preventing insertion at
+the transcript's trailing boundary before the next composer exists.  Undo is
+disabled in chat buffers so it cannot erase protected transcript history.
+One live chat buffer reuses its resolved session ID, including after a cancelled
+turn.  Resetting clears that continuity.  Neither sessions nor transcripts are
+restored after the buffer or Emacs process is destroyed.
+
+** Gateway contract
+:PROPERTIES:
+:CUSTOM_ID: gateway-contract
+:END:
+For a send, the mode asynchronously performs these operations in order:
+
+1. =POST /api/client/sessions/resolve= with =clientKind= =emacs=,
+   =surfaceId= =vela-emacs=, configured =sessionMode=, and the prior =sessionId=
+   when one exists;
+2. =POST /api/client/turns= with the resolved =sessionId= and =input.text=;
+3. =GET= the returned =turn.streamUrl= as =text/event-stream=.
+
+The stream URL must be an HTTP(S) URL or an absolute path on exactly the
+configured gateway origin.  Credentials and cross-origin stream URLs are
+rejected, as are control characters, backslashes, and URL fragments.  Redirect
+following is disabled.  SSE may arrive in arbitrary chunks;
+multiline data is joined before bounded JSON decoding.  The transcript supports
+=thinking= and =tool= status entries, cumulative =assistant= replacement by
+message identity, and terminal =final= or =error= entries.  A stream that closes
+without a terminal event is reported as degraded rather than successful.
+No SSE body is dispatched until the decoded HTTP status is known to be 2xx.
+
+** Bounds and failure behavior
+:PROPERTIES:
+:CUSTOM_ID: bounds-and-failure-behavior
+:END:
+All gateway parsing and transcript updates occur in short owner-thread
+callbacks; network retrieval uses Emacs's asynchronous URL facilities and a
+bounded polling timer.  The mode rejects malformed responses and enforces:
+
+- 32,768 characters per composer message;
+- 64 KiB encoded JSON requests, 64 KiB HTTP header allowances, and 256 KiB JSON
+  response bodies;
+- 16 JSON levels, 1,024 JSON value nodes, and no duplicate object keys;
+- 8 MiB per SSE response, 256 KiB per SSE event, 64 KiB per pending
+  unterminated line, and 1,024 events per turn enforced while parsing rather
+  than after constructing a larger callback batch;
+- 1 MiB for the live transcript; and
+- 8,192 characters for a runtime bearer token.
+
+Malformed JSON or SSE, invalid URLs or credentials, unsupported events,
+oversized values, transport errors, and invalid lifecycle transitions fail the
+active turn closed and restore an editable composer.  Cancellation invalidates
+the callback generation before stopping the active transport, so late callbacks
+cannot change the new UI state.  An explicit terminal event closes the active
+stream transport, and killing an active chat buffer cancels its process and
+polling timer.  A resolved session whose mode differs from the requested mode is
+rejected before a turn is created.
+
+Required gateway object fields must be present and non-null; an absent field or
+JSON =null= is rejected at that field boundary rather than surfacing as a later,
+unrelated diagnostic.  Present empty JSON objects remain valid objects.
+
+Transcript growth is preflighted before mutation and reserves room for the next
+composer.  An event that would cross the 1 MiB boundary cancels the turn and
+restores an editable prompt without retaining oversized text.
+
+Raw HTTP and SSE input is bounded incrementally before it is delegated to
+Emacs's URL decoder, so an unterminated or oversized header cannot accumulate
+without limit.  Content-encoded responses are rejected from their raw headers
+before URL's decoder can expand them beyond the configured bounds.  Decoded
+SSE remains in URL's retrieval buffer for transfer correctness, within the
+aggregate 8 MiB response bound.  A marker tracks the consumed decoded-body
+position so URL decoder insertions or deletions before that position cannot
+skip or duplicate streamed bytes.
+
+** Verification
+:PROPERTIES:
+:CUSTOM_ID: verification
+:END:
+From the repository root, warnings-as-errors byte compilation and deterministic
+ERT coverage run as part of:
+
+#+begin_src sh
+nix develop --command just emacs-test
+nix develop --command just verify
+#+end_src
+
+The tests use injected asynchronous adapters plus an in-process local HTTP/SSE
+gateway and require no developer credentials or external service.  They cover
+the editable/read-only boundary, exact resolve and turn requests, session reuse,
+fragmented SSE, cumulative assistant rendering, terminal and degraded states,
+cancellation and buffer teardown, same-origin enforcement, JSON
+encoding/decoding, stale synchronous handles, and configured input, header, and
+stream bounds.  Hostile regressions also cover non-2xx SSE bodies, trailing-edge
+insertion during an active turn, and bounded recovery from transcript overflow.
