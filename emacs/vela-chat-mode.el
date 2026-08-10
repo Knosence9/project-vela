@@ -455,14 +455,18 @@ persists or displays the returned value."
   "Return non-nil for one event-stream Content-Type in raw HTTP HEADERS."
   (let ((case-fold-search t)
         content-types
-        folded)
+        folded
+        malformed-content-type)
     (dolist (line (cdr (split-string headers "\r?\n")))
       (when (and (not (string-empty-p line))
                  (memq (aref line 0) '(?\s ?\t)))
         (setq folded t))
+      (when (string-match-p "\\`content-type[ \t]+:" line)
+        (setq malformed-content-type t))
       (when (string-match "\\`content-type:[ \t]*\\(.*\\)\\'" line)
         (push (match-string 1 line) content-types)))
     (and (not folded)
+         (not malformed-content-type)
          (= (length content-types) 1)
          (vela-chat--valid-sse-media-type-p (car content-types)))))
 

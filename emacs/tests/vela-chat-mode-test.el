@@ -189,6 +189,7 @@
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=\"utf-8\r\n\r\n"
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Type: text/event-stream\r\n\r\n"
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Type: text/plain\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Type : text/plain\r\n\r\n"
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n , text/plain\r\n\r\n"
             (concat "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; note=\""
                     (string 0) "\"\r\n\r\n")
