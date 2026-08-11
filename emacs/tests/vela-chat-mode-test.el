@@ -168,6 +168,43 @@
         ("data" . "{\"kind\":\"assistant\",\n\"payload\":{\"text\":\"hi\"}}"))]))
     (should (equal (vela-chat--sse-feed parser "" t) []))))
 
+(ert-deftest vela-chat-sse-parser-supports-lone-cr-line-endings ()
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should
+     (equal
+      (vela-chat--sse-feed
+       parser
+       "event: final\rdata: {\"kind\":\"final\",\"payload\":{}}\r\r"
+       nil)
+      [(("event" . "final")
+        ("data" . "{\"kind\":\"final\",\"payload\":{}}"))]))))
+
+(ert-deftest vela-chat-sse-parser-treats-split-crlf-as-one-line-ending ()
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should (equal (vela-chat--sse-feed parser "event: final\r" nil) []))
+    (should
+     (equal
+      (vela-chat--sse-feed
+       parser
+       "\ndata: {\"kind\":\"final\",\"payload\":{}}\r\n\r\n"
+       nil)
+      [(("event" . "final")
+        ("data" . "{\"kind\":\"final\",\"payload\":{}}"))]))))
+
+(ert-deftest vela-chat-sse-parser-dispatches-before-split-crlf-lf-arrives ()
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should
+     (equal (vela-chat--sse-feed parser "data: payload\r\r" nil)
+            [(("event" . "message") ("data" . "payload"))]))
+    (should (equal (vela-chat--sse-feed parser "\n" nil) []))))
+
+(ert-deftest vela-chat-sse-parser-preserves-lf-after-complete-crlf-chunk ()
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should (equal (vela-chat--sse-feed parser "data: payload\r\n" nil) []))
+    (should
+     (equal (vela-chat--sse-feed parser "\n" nil)
+            [(("event" . "message") ("data" . "payload"))]))))
+
 (ert-deftest vela-chat-sse-event-field-removes-only-one-leading-space ()
   (dolist (case '(("event:  final" . " final")
                   ("event:\tfinal" . "\tfinal")))
