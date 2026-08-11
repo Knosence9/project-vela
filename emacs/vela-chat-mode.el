@@ -297,6 +297,36 @@ persists or displays the returned value."
       (push (cons "Authorization" (concat "Bearer " token)) headers))
     headers))
 
+(defun vela-chat--canonical-utf8 (text)
+  "Return gateway TEXT as canonical decoded UTF-8.
+
+Accept already decoded multibyte text, but reject Emacs-preserved raw bytes,
+surrogates, out-of-range characters, and unibyte input that does not survive an
+exact UTF-8 decode/encode round trip."
+  (unless (stringp text)
+    (signal 'vela-chat-error '("gateway input is not a string")))
+  (condition-case nil
+      (let ((decoded (if (multibyte-string-p text)
+                         text
+                       (decode-coding-string text 'utf-8-unix t))))
+        (dotimes (index (length decoded))
+          (let ((character (aref decoded index)))
+            (when (or (eq (char-charset character) 'eight-bit)
+                      (> character #x10ffff)
+                      (<= #xd800 character #xdfff))
+              (signal 'vela-chat-error
+                      '("gateway input is not valid Unicode UTF-8")))))
+        (when (and (not (multibyte-string-p text))
+                   (not (equal (encode-coding-string decoded 'utf-8-unix t)
+                               text)))
+          (signal 'vela-chat-error
+                  '("gateway input is not canonical UTF-8")))
+        decoded)
+    (vela-chat-error
+     (signal 'vela-chat-error '("gateway input is not canonical UTF-8")))
+    (error
+     (signal 'vela-chat-error '("gateway input is not valid UTF-8")))))
+
 (defun vela-chat--validate-json (value depth nodes)
   "Validate decoded JSON VALUE within DEPTH and mutable NODES bounds."
   (when (> depth vela-chat-max-json-depth)
@@ -324,7 +354,7 @@ persists or displays the returned value."
 (defun vela-chat--parse-json (text)
   "Decode and validate bounded gateway JSON TEXT."
   (condition-case err
-      (let ((value (json-parse-string text
+      (let ((value (json-parse-string (vela-chat--canonical-utf8 text)
                                       :object-type 'alist
                                       :array-type 'array
                                       :null-object :null
@@ -628,6 +658,7 @@ persists or displays the returned value."
 
 (defun vela-chat--sse-line (parser line events)
   "Consume one SSE LINE into PARSER and EVENTS."
+  (setq line (vela-chat--canonical-utf8 line))
   (cond
    ((string-empty-p line)
     (vela-chat--sse-flush parser events))

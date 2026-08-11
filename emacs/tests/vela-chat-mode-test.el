@@ -109,6 +109,28 @@
      "{\"session\":{\"id\":\"s1\",\"mode\":\"canonical\"}}")
     '(("session" . (("id" . "s1") ("mode" . "canonical")))))))
 
+(ert-deftest vela-chat-json-requires-canonical-utf8-before-decoding ()
+  (let ((canonical
+         (encode-coding-string "{\"text\":\"café\"}" 'utf-8 t))
+        (crlf
+         (encode-coding-string "{\r\n\"text\":\"café\"\r\n}" 'utf-8-unix t)))
+    (should (equal (vela-chat--parse-json canonical)
+                   '(("text" . "café"))))
+    (should (equal (vela-chat--parse-json crlf)
+                   '(("text" . "café"))))
+    (should (equal (vela-chat--parse-json "{\"text\":\"café\"}")
+                   '(("text" . "café")))))
+  (dolist (malformed
+           (list (concat (string-make-unibyte "{\"text\":\"")
+                         (unibyte-string #xc0 #xaf)
+                         (string-make-unibyte "\"}"))
+                 (concat (string-make-unibyte "{\"text\":\"")
+                         (unibyte-string #xed #xa0 #x80)
+                         (string-make-unibyte "\"}"))
+                 (concat "{\"text\":\"" (string #x3fff80) "\"}")
+                 (concat "{\"text\":\"" (string #x110000) "\"}")))
+    (should-error (vela-chat--parse-json malformed) :type 'vela-chat-error)))
+
 (ert-deftest vela-chat-required-object-rejects-json-null ()
   (should-error
    (vela-chat--required-object
@@ -145,6 +167,26 @@
       [(("event" . "assistant")
         ("data" . "{\"kind\":\"assistant\",\n\"payload\":{\"text\":\"hi\"}}"))]))
     (should (equal (vela-chat--sse-feed parser "" t) []))))
+
+(ert-deftest vela-chat-sse-validates-complete-lines-as-canonical-utf8 ()
+  (let* ((parser (vela-chat--sse-parser-create))
+         (bytes
+          (encode-coding-string
+           "data: {\"kind\":\"thinking\",\"payload\":{\"text\":\"café\"}}\n\n"
+           'utf-8 t))
+         (split (string-match (unibyte-string #xc3) bytes)))
+    (should (equal (vela-chat--sse-feed parser (substring bytes 0 (1+ split)) nil)
+                   []))
+    (let* ((events (vela-chat--sse-feed parser (substring bytes (1+ split)) nil))
+           (decoded (vela-chat--decode-stream-event (aref events 0))))
+      (should (equal (vela-chat--field
+                      "text" (vela-chat--required-object "payload" decoded))
+                     "café"))))
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should-error
+     (vela-chat--sse-feed
+      parser (concat "ignored: " (unibyte-string #xc0 #xaf) "\n\n") nil)
+     :type 'vela-chat-error)))
 
 (ert-deftest vela-chat-sse-event-identities-must-be-coherent ()
   (should
