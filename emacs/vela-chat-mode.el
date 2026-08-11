@@ -665,7 +665,7 @@ exact UTF-8 decode/encode round trip."
    ((string-prefix-p ":" line) events)
    ((string-prefix-p "event:" line)
     (setf (vela-chat--sse-parser-event parser)
-          (string-trim-left (substring line 6)))
+          (string-remove-prefix " " (substring line 6)))
     events)
    ((string-prefix-p "data:" line)
     (let* ((data (string-remove-prefix " " (substring line 5)))
