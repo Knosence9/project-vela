@@ -77,7 +77,9 @@ transport chunks until its SSE line is complete.  Already decoded valid Emacs
 text is accepted, while malformed, non-canonical, surrogate, or raw
 eight-bit-preserved input fails closed.  A present JSON =kind= must be a
 non-empty string and must agree
-with any explicit non-default SSE =event:= name.  A non-default SSE event name
+with any explicit non-default SSE =event:= name.  Parsing an =event:= field
+removes at most the protocol's one optional U+0020 space after the field colon;
+additional spaces and tabs remain part of its exact identity.  The event name
 remains the bounded fallback only when JSON omits =kind=; malformed or conflicting
 identities fail closed before transcript dispatch.  The transcript supports =thinking= and =tool= status entries,
 cumulative =assistant= replacement by message identity, and terminal =final= or

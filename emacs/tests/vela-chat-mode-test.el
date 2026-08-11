@@ -168,6 +168,22 @@
         ("data" . "{\"kind\":\"assistant\",\n\"payload\":{\"text\":\"hi\"}}"))]))
     (should (equal (vela-chat--sse-feed parser "" t) []))))
 
+(ert-deftest vela-chat-sse-event-field-removes-only-one-leading-space ()
+  (dolist (case '(("event:  final" . " final")
+                  ("event:\tfinal" . "\tfinal")))
+    (let* ((parser (vela-chat--sse-parser-create))
+           (events
+            (vela-chat--sse-feed
+             parser
+             (concat (car case) "\n"
+                     "data: {\"kind\":\"final\",\"payload\":{}}\n\n")
+             nil)))
+      (should (= (length events) 1))
+      (should (equal (vela-chat--field "event" (aref events 0)) (cdr case)))
+      (should-error
+       (vela-chat--decode-stream-event (aref events 0))
+       :type 'vela-chat-error))))
+
 (ert-deftest vela-chat-sse-validates-complete-lines-as-canonical-utf8 ()
   (let* ((parser (vela-chat--sse-parser-create))
          (bytes
