@@ -168,6 +168,45 @@
         ("data" . "{\"kind\":\"assistant\",\n\"payload\":{\"text\":\"hi\"}}"))]))
     (should (equal (vela-chat--sse-feed parser "" t) []))))
 
+(ert-deftest vela-chat-sse-parser-ignores-one-leading-bom-across-fragments ()
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should
+     (equal
+      (vela-chat--sse-feed
+       parser (string-make-unibyte (unibyte-string #xef)) nil)
+      []))
+    (should
+     (equal
+      (vela-chat--sse-feed
+       parser
+       (string-make-unibyte
+        (concat
+         (unibyte-string #xbb #xbf)
+         (encode-coding-string
+          "event: final\ndata: {\"kind\":\"final\",\"payload\":{}}\n\n"
+          'utf-8 t)))
+       nil)
+      [(("event" . "final")
+        ("data" . "{\"kind\":\"final\",\"payload\":{}}"))]))))
+
+(ert-deftest vela-chat-sse-parser-ignores-one-decoded-leading-bom ()
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should
+     (equal
+      (vela-chat--sse-feed
+       parser
+       "\ufeffevent: final\ndata: {\"kind\":\"final\",\"payload\":{}}\n\n"
+       nil)
+      [(("event" . "final")
+        ("data" . "{\"kind\":\"final\",\"payload\":{}}"))]))))
+
+(ert-deftest vela-chat-sse-parser-preserves-bom-after-stream-start ()
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should
+     (equal
+      (vela-chat--sse-feed parser "data: first\ndata: \ufefflater\n\n" nil)
+      [(("event" . "message") ("data" . "first\n\ufefflater"))]))))
+
 (ert-deftest vela-chat-sse-parser-discards-unterminated-event-at-eof ()
   (let ((parser (vela-chat--sse-parser-create)))
     (should
