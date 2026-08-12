@@ -168,6 +168,20 @@
         ("data" . "{\"kind\":\"assistant\",\n\"payload\":{\"text\":\"hi\"}}"))]))
     (should (equal (vela-chat--sse-feed parser "" t) []))))
 
+(ert-deftest vela-chat-sse-parser-discards-unterminated-event-at-eof ()
+  (let ((parser (vela-chat--sse-parser-create)))
+    (should
+     (equal
+      (vela-chat--sse-feed
+       parser
+       "event: final\ndata: {\"kind\":\"final\",\"payload\":{}}"
+       t)
+      []))
+    (should (string-empty-p (vela-chat--sse-parser-pending parser)))
+    (should-not (vela-chat--sse-parser-event parser))
+    (should-not (vela-chat--sse-parser-data-lines parser))
+    (should (= (vela-chat--sse-parser-data-characters parser) 0))))
+
 (ert-deftest vela-chat-sse-parser-supports-lone-cr-line-endings ()
   (let ((parser (vela-chat--sse-parser-create)))
     (should
@@ -762,6 +776,37 @@
       (vela-chat-send)
       (funcall complete)
       (should-not vela-chat--busy)
+      (should (string-match-p "Degraded> Stream ended before a terminal event"
+                              (buffer-string))))))
+
+(ert-deftest vela-chat-unterminated-final-stream-completion-is-degraded ()
+  (vela-chat-test--with-buffer
+    (let ((parser (vela-chat--sse-parser-create)))
+      (setq-local
+       vela-chat-post-json-function
+       (lambda (url _payload on-success _on-error)
+         (if (string-suffix-p "/sessions/resolve" url)
+             (funcall on-success
+                      '(("session" . (("id" . "s") ("mode" . "canonical")))))
+           (funcall on-success
+                    '(("turn" . (("id" . "t") ("streamUrl" . "/stream"))))))
+         '(:cancel ignore))
+       vela-chat-stream-function
+       (lambda (_url on-event on-complete _on-error _on-activity)
+         (mapc on-event
+               (append
+                (vela-chat--sse-feed
+                 parser
+                 "event: final\ndata: {\"kind\":\"final\",\"payload\":{\"messageId\":\"m\",\"text\":\"incomplete\"}}"
+                 t)
+                nil))
+         (funcall on-complete)
+         '(:cancel ignore)))
+      (goto-char (point-max))
+      (insert "go")
+      (vela-chat-send)
+      (should-not vela-chat--busy)
+      (should-not (string-match-p "incomplete" (buffer-string)))
       (should (string-match-p "Degraded> Stream ended before a terminal event"
                               (buffer-string))))))
 

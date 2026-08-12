@@ -683,8 +683,7 @@ exact UTF-8 decode/encode round trip."
 (defun vela-chat--sse-feed (parser chunk final)
   "Feed string CHUNK to PARSER and return complete events as a vector.
 
-When FINAL is non-nil, consume any final unterminated line and dispatch pending
-data as the SSE end-of-stream rule requires."
+When FINAL is non-nil, discard any event not terminated by a blank line."
   (unless (and (vela-chat--sse-parser-p parser) (stringp chunk))
     (signal 'vela-chat-error '("invalid SSE parser input")))
   (setf (vela-chat--sse-parser-response-bytes parser)
@@ -722,12 +721,11 @@ data as the SSE end-of-stream rule requires."
         (signal 'vela-chat-error '("gateway SSE line exceeds pending byte bound")))
       (setf (vela-chat--sse-parser-pending parser) pending))
     (when final
-      (unless (string-empty-p (vela-chat--sse-parser-pending parser))
-        (setq events
-              (vela-chat--sse-line
-               parser (vela-chat--sse-parser-pending parser) events))
-        (setf (vela-chat--sse-parser-pending parser) ""))
-      (setq events (vela-chat--sse-flush parser events)))
+      (setf (vela-chat--sse-parser-pending parser) ""
+            (vela-chat--sse-parser-skip-leading-lf parser) nil
+            (vela-chat--sse-parser-event parser) nil
+            (vela-chat--sse-parser-data-lines parser) nil
+            (vela-chat--sse-parser-data-characters parser) 0))
     (vconcat (nreverse events))))
 
 (defun vela-chat--url-stream (url on-event on-complete on-error &optional on-activity)
