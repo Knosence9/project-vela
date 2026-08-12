@@ -235,6 +235,27 @@
        (vela-chat--decode-stream-event (aref events 0))
        :type 'vela-chat-error))))
 
+(ert-deftest vela-chat-sse-colonless-data-contributes-an-empty-value ()
+  (let* ((parser (vela-chat--sse-parser-create))
+         (events
+          (vela-chat--sse-feed
+           parser
+           "data\ndata: {\"kind\":\"thinking\",\"payload\":{}}\n\n"
+           nil)))
+    (should (= (length events) 1))
+    (should (equal (vela-chat--field "data" (aref events 0))
+                   "\n{\"kind\":\"thinking\",\"payload\":{}}"))))
+
+(ert-deftest vela-chat-sse-colonless-event-resets-the-event-name ()
+  (let* ((parser (vela-chat--sse-parser-create))
+         (events
+          (vela-chat--sse-feed
+           parser
+           "event: tool\nevent\ndata: {\"kind\":\"assistant\",\"payload\":{}}\n\n"
+           nil)))
+    (should (= (length events) 1))
+    (should (equal (vela-chat--field "event" (aref events 0)) ""))))
+
 (ert-deftest vela-chat-sse-validates-complete-lines-as-canonical-utf8 ()
   (let* ((parser (vela-chat--sse-parser-create))
          (bytes
