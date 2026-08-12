@@ -69,9 +69,11 @@ following is disabled.  Before any body event is dispatched, the response must
 supply exactly one syntactically valid =Content-Type= whose case-insensitive
 media-type essence is =text/event-stream=; valid parameters are accepted,
 while missing, malformed, folded, duplicate, or other media types fail closed.
-SSE may arrive in arbitrary chunks; multiline data is joined before bounded
-JSON decoding.  Complete SSE lines and complete JSON response bodies must be
-canonical UTF-8 before field interpretation or JSON decoding; byte validation
+SSE may arrive in arbitrary chunks; CRLF, LF, and lone CR line endings are
+accepted, including when a CRLF pair spans transport chunks.  Multiline data is
+joined before bounded JSON decoding.  Complete SSE lines and complete JSON
+response bodies must be canonical UTF-8 before field interpretation or JSON
+decoding; byte validation
 does not normalize valid JSON CRLF whitespace.  A UTF-8 sequence may span
 transport chunks until its SSE line is complete.  Already decoded valid Emacs
 text is accepted, while malformed, non-canonical, surrogate, or raw
