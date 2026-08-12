@@ -81,7 +81,10 @@ eight-bit-preserved input fails closed.  A present JSON =kind= must be a
 non-empty string and must agree
 with any explicit non-default SSE =event:= name.  Parsing an =event:= field
 removes at most the protocol's one optional U+0020 space after the field colon;
-additional spaces and tabs remain part of its exact identity.  The event name
+additional spaces and tabs remain part of its exact identity.  Colonless =event=
+and =data= fields carry empty values as required by the SSE grammar; empty data
+values still contribute their joining newline.  Unknown fields remain ignored.
+The event name
 remains the bounded fallback only when JSON omits =kind=; malformed or conflicting
 identities fail closed before transcript dispatch.  The transcript supports =thinking= and =tool= status entries,
 cumulative =assistant= replacement by message identity, and terminal =final= or
