@@ -168,6 +168,7 @@ persists or displays the returned value."
 (cl-defstruct
     (vela-chat--sse-parser (:constructor vela-chat--sse-parser-create))
   (pending "")
+  (at-stream-start t)
   (skip-leading-lf nil)
   event
   (data-lines nil)
@@ -704,6 +705,24 @@ When FINAL is non-nil, discard any event not terminated by a blank line."
   (let* ((text (concat (vela-chat--sse-parser-pending parser) chunk))
          (start 0)
          events)
+    (when (and (vela-chat--sse-parser-at-stream-start parser)
+               (not (string-empty-p text)))
+      (cond
+       ((multibyte-string-p text)
+        (setf (vela-chat--sse-parser-at-stream-start parser) nil)
+        (when (= (aref text 0) #xfeff)
+          (setq text (substring text 1))))
+       ((and (< (length text) 3)
+             (= (aref text 0) #xef)
+             (or (= (length text) 1)
+                 (= (aref text 1) #xbb))))
+       (t
+        (setf (vela-chat--sse-parser-at-stream-start parser) nil)
+        (when (and (>= (length text) 3)
+                   (= (aref text 0) #xef)
+                   (= (aref text 1) #xbb)
+                   (= (aref text 2) #xbf))
+          (setq text (substring text 3))))))
     (while (string-match "[\r\n]" text start)
       (let* ((terminator (match-beginning 0))
              (line (substring text start terminator))
