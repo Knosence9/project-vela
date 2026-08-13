@@ -231,8 +231,10 @@ persists or displays the returned value."
             '(Cc Cf Zs Zl Zp))))
 
 (defun vela-chat--unsafe-url-p (url)
-  "Return non-nil when URL contains a control, format, whitespace, or backslash."
-  (cl-some #'vela-chat--unsafe-url-character-p url))
+  "Return non-nil when URL contains unsafe characters or undecoded non-ASCII bytes."
+  (or (and (not (multibyte-string-p url))
+           (cl-some (lambda (byte) (> byte 127)) url))
+      (cl-some #'vela-chat--unsafe-url-character-p url)))
 
 (defun vela-chat--parse-origin (raw)
   "Parse and validate HTTP(S) origin RAW."

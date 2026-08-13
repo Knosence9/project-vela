@@ -69,6 +69,8 @@ Each resolve and turn response must supply exactly one syntactically valid
 Valid parameters are accepted; missing, malformed, folded, duplicate, or other
 media types fail closed before JSON body dispatch.
 
+The configured gateway base URL and returned stream URL reject non-ASCII raw
+byte strings so Unicode safety checks cannot be bypassed with undecoded UTF-8.
 The stream URL must be an HTTP(S) URL or an absolute path on exactly the
 configured gateway origin.  Explicit gateway origin ports must be decimal
 integers in the usable TCP range 1 through 65535; empty and non-numeric ports

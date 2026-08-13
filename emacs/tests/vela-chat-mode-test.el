@@ -443,15 +443,21 @@
         (should (equal (vela-chat--composer-text) "remain editable"))))))
 
 (ert-deftest vela-chat-rejects-format-controls-in-gateway-urls ()
-  (dolist (format-control '(#x200b #x2066))
+  (dolist (format-control
+           (list (string #x200b)
+                 (string #x2066)
+                 (string-make-unibyte
+                  (encode-coding-string (string #xfeff) 'utf-8 t))))
     (let ((vela-chat-base-url "http://127.0.0.1:3847"))
       (should-error
        (vela-chat--resolve-stream-url
-        (concat "/turns/" (string format-control) "1"))
+        (concat (string-make-unibyte "/turns/") format-control
+                (string-make-unibyte "1")))
        :type 'vela-chat-error))
     (vela-chat-test--with-buffer
       (let ((vela-chat-base-url
-             (concat "http://exa" (string format-control) "mple.test"))
+             (concat (string-make-unibyte "http://exa") format-control
+                     (string-make-unibyte "mple.test")))
             token-called
             transport-called)
         (setq-local vela-chat-auth-token-function
