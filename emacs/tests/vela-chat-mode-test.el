@@ -414,6 +414,34 @@
         (should-not vela-chat--busy)
         (should (equal (vela-chat--composer-text) "remain editable"))))))
 
+(ert-deftest vela-chat-rejects-whitespace-bearing-gateway-urls ()
+  (dolist (stream-url (list "/turns/1 2"
+                            "http://127.0.0.1:3847/turns/1 2"
+                            (concat "/turns/1" (string #x1680) "2")
+                            (concat "/turns/1" (string #x2028) "2")))
+    (let ((vela-chat-base-url "http://127.0.0.1:3847"))
+      (should-error (vela-chat--resolve-stream-url stream-url)
+                    :type 'vela-chat-error)))
+  (dolist (base-url (list "http://127.0.0.1 :3847"
+                          "http://exa mple.test"
+                          (concat "http://exa" (string #x1680) "mple.test")
+                          (concat "http://exa" (string #x2029) "mple.test")))
+    (vela-chat-test--with-buffer
+      (let ((vela-chat-base-url base-url)
+            token-called
+            transport-called)
+        (setq-local vela-chat-auth-token-function
+                    (lambda () (setq token-called t) "secret"))
+        (setq-local vela-chat-post-json-function
+                    (lambda (&rest _) (setq transport-called t)))
+        (goto-char (point-max))
+        (insert "remain editable")
+        (should-error (vela-chat-send) :type 'vela-chat-error)
+        (should-not token-called)
+        (should-not transport-called)
+        (should-not vela-chat--busy)
+        (should (equal (vela-chat--composer-text) "remain editable"))))))
+
 (ert-deftest vela-chat-sse-content-type-accepts-case-and-valid-parameters ()
   (dolist (headers
            '("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
