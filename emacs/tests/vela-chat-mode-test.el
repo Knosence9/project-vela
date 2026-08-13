@@ -414,6 +414,69 @@
         (should-not vela-chat--busy)
         (should (equal (vela-chat--composer-text) "remain editable"))))))
 
+(ert-deftest vela-chat-rejects-whitespace-bearing-gateway-urls ()
+  (dolist (stream-url (list "/turns/1 2"
+                            "http://127.0.0.1:3847/turns/1 2"
+                            (concat "/turns/1" (string #x1680) "2")
+                            (concat "/turns/1" (string #x2028) "2")))
+    (let ((vela-chat-base-url "http://127.0.0.1:3847"))
+      (should-error (vela-chat--resolve-stream-url stream-url)
+                    :type 'vela-chat-error)))
+  (dolist (base-url (list "http://127.0.0.1 :3847"
+                          "http://exa mple.test"
+                          (concat "http://exa" (string #x1680) "mple.test")
+                          (concat "http://exa" (string #x2029) "mple.test")))
+    (vela-chat-test--with-buffer
+      (let ((vela-chat-base-url base-url)
+            token-called
+            transport-called)
+        (setq-local vela-chat-auth-token-function
+                    (lambda () (setq token-called t) "secret"))
+        (setq-local vela-chat-post-json-function
+                    (lambda (&rest _) (setq transport-called t)))
+        (goto-char (point-max))
+        (insert "remain editable")
+        (should-error (vela-chat-send) :type 'vela-chat-error)
+        (should-not token-called)
+        (should-not transport-called)
+        (should-not vela-chat--busy)
+        (should (equal (vela-chat--composer-text) "remain editable"))))))
+
+(ert-deftest vela-chat-rejects-whitespace-bearing-stream-url-before-streaming ()
+  (dolist (stream-url (list "/turns/1 2"
+                            "http://127.0.0.1:3847/turns/1 2"
+                            (concat "/turns/1" (string #x1680) "2")
+                            (concat "/turns/1" (string #x2028) "2")))
+    (vela-chat-test--with-buffer
+      (let (stream-called post-count)
+        (setq-local vela-chat-post-json-function
+                    (lambda (_url _payload on-success _on-error)
+                      (setq post-count (1+ (or post-count 0)))
+                      (if (= post-count 1)
+                          (funcall
+                           on-success
+                           '(("session" . (("id" . "session-1")
+                                           ("mode" . "canonical")))))
+                        (funcall
+                         on-success
+                         (list
+                          (cons "turn"
+                                (list (cons "id" "turn-1")
+                                      (cons "streamUrl" stream-url))))))
+                      '(:cancel ignore)))
+        (setq-local vela-chat-stream-function
+                    (lambda (&rest _)
+                      (setq stream-called t)))
+        (goto-char (point-max))
+        (insert "hello")
+        (vela-chat-send)
+        (should-not stream-called)
+        (should-not vela-chat--busy)
+        (should vela-chat--terminal)
+        (should (string-match-p
+                 "Error> Vela chat failed: .*gateway stream URL contains unsafe characters"
+                 (buffer-string)))))))
+
 (ert-deftest vela-chat-sse-content-type-accepts-case-and-valid-parameters ()
   (dolist (headers
            '("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"

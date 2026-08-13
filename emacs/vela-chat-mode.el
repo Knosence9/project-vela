@@ -207,11 +207,22 @@ persists or displays the returned value."
   (or (url-port parsed)
       (if (string= (url-type parsed) "https") 443 80)))
 
+(defun vela-chat--unsafe-url-character-p (character)
+  "Return non-nil when CHARACTER is forbidden in a gateway URL."
+  (or (= character ?\\)
+      (eq (get-char-code-property character 'general-category) 'Cc)
+      (memq (get-char-code-property character 'general-category)
+            '(Zs Zl Zp))))
+
+(defun vela-chat--unsafe-url-p (url)
+  "Return non-nil when URL contains a control, whitespace, or backslash."
+  (cl-some #'vela-chat--unsafe-url-character-p url))
+
 (defun vela-chat--parse-origin (raw)
   "Parse and validate HTTP(S) origin RAW."
   (unless (and (stringp raw) (not (string-empty-p raw)))
     (signal 'vela-chat-error '("gateway base URL must be a non-empty string")))
-  (when (string-match-p "[[:cntrl:]\\\\]" raw)
+  (when (vela-chat--unsafe-url-p raw)
     (signal 'vela-chat-error '("gateway base URL contains unsafe characters")))
   (let* ((case-fold-search t)
          (parsed (url-generic-parse-url raw))
@@ -264,7 +275,7 @@ persists or displays the returned value."
   "Resolve and validate gateway STREAM-URL against the configured origin."
   (unless (and (stringp stream-url) (not (string-empty-p stream-url)))
     (signal 'vela-chat-error '("gateway stream URL must be a non-empty string")))
-  (when (string-match-p "[[:cntrl:]\\\\]" stream-url)
+  (when (vela-chat--unsafe-url-p stream-url)
     (signal 'vela-chat-error '("gateway stream URL contains unsafe characters")))
   (let* ((base (vela-chat--parse-origin vela-chat-base-url))
          (origin (vela-chat--origin-string))
