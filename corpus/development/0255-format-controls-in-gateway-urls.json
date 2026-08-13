@@ -38,6 +38,10 @@
       {
         "command": "GitHub Rust quality gate for PR 1107",
         "status": "passed"
+      },
+      {
+        "command": "Pull request 1107 squash merge fdfaf89f4336fb211aac4598d96de6a303a48df9",
+        "status": "passed"
       }
     ]
   },

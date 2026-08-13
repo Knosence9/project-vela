@@ -38,6 +38,10 @@
       {
         "command": "GitHub Rust quality gate for PR 1094",
         "status": "passed"
+      },
+      {
+        "command": "Pull request 1094 squash merge 3368e1a17a19ee3fdbd364118f3c061ef39f6da0",
+        "status": "passed"
       }
     ]
   },
