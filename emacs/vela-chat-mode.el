@@ -165,6 +165,9 @@ persists or displays the returned value."
 (defvar-local vela-chat--assistant-start nil)
 (defvar-local vela-chat--assistant-end nil)
 
+(defvar vela-chat--runtime-token-override nil
+  "Dynamically bound prevalidated token for one synchronous request setup.")
+
 (cl-defstruct
     (vela-chat--sse-parser (:constructor vela-chat--sse-parser-create))
   (pending "")
@@ -266,13 +269,19 @@ persists or displays the returned value."
 
 (defun vela-chat--runtime-token ()
   "Return a validated runtime token, or nil."
-  (let ((token (and vela-chat-auth-token-function
-                    (funcall vela-chat-auth-token-function))))
+  (let ((token (if (and vela-chat--runtime-token-override
+                        (car vela-chat--runtime-token-override))
+                   (prog1 (cdr vela-chat--runtime-token-override)
+                     (setcar vela-chat--runtime-token-override nil))
+                 (and vela-chat-auth-token-function
+                      (funcall vela-chat-auth-token-function)))))
     (when token
       (unless (and (stringp token)
                    (not (string-empty-p token))
                    (<= (length token) vela-chat-max-token-characters)
-                   (not (string-match-p "[\r\n]" token)))
+                   (not (cl-some (lambda (character)
+                                   (or (< character 32) (= character 127)))
+                                 (string-to-list token))))
         (signal 'vela-chat-error '("runtime bearer token is invalid"))))
     token))
 
@@ -1279,21 +1288,22 @@ chunk when that optional callback is non-nil."
       (signal 'vela-chat-error '("chat session mode is invalid")))
     ;; Validate configuration and runtime credential before mutating transcript.
     (vela-chat--origin-string)
-    (vela-chat--runtime-token)
-    (vela-chat--validate-timeouts)
-    (vela-chat--freeze-composer message)
-    (setq vela-chat--busy t
-          vela-chat--terminal nil
-          vela-chat--event-count 0
-          vela-chat--turn-id nil
-          vela-chat--assistant-message-id nil
-          vela-chat--assistant-start nil
-          vela-chat--assistant-end nil
-          vela-chat--generation (1+ vela-chat--generation))
-    (condition-case err
-        (vela-chat--start-resolve vela-chat--generation message)
-      (error
-       (vela-chat--fail-turn "Error" (error-message-string err))))))
+    (let ((vela-chat--runtime-token-override
+           (cons t (vela-chat--runtime-token))))
+      (vela-chat--validate-timeouts)
+      (vela-chat--freeze-composer message)
+      (setq vela-chat--busy t
+            vela-chat--terminal nil
+            vela-chat--event-count 0
+            vela-chat--turn-id nil
+            vela-chat--assistant-message-id nil
+            vela-chat--assistant-start nil
+            vela-chat--assistant-end nil
+            vela-chat--generation (1+ vela-chat--generation))
+      (condition-case err
+          (vela-chat--start-resolve vela-chat--generation message)
+        (error
+         (vela-chat--fail-turn "Error" (error-message-string err)))))))
 
 (defun vela-chat-cancel ()
   "Cancel the active chat network operation without clearing session continuity."

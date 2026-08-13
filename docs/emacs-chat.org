@@ -27,8 +27,10 @@ Start the Vela gateway separately, then load the mode from the repository root:
 The token function is optional.  When configured, it is called immediately
 before each HTTP operation.  The returned token stays runtime-only: the mode
 does not persist it in the transcript, request JSON, history, or customization.
-The function must return a non-empty single-line string of at most 8,192
-characters, or nil when the gateway does not require a bearer token.
+The function must return a non-empty string of at most 8,192 characters with no
+ASCII control or DEL characters, or nil when the gateway does not require a
+bearer token.  Invalid token material fails before request-header construction
+or transcript mutation.
 
 Run =M-x vela-chat-open=.  The live composer follows =You> =.  Its commands are:
 
