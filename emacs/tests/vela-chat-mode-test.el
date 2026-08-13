@@ -541,6 +541,42 @@
     (should-error (insert "mutate assistant") :type 'text-read-only)
     (should-not (string-match-p "Assistant> Hel\\(?:\n\\|$\\)" (buffer-string)))))
 
+(ert-deftest vela-chat-tool-label-rejects-controls-before-transcript-mutation ()
+  (dolist (invalid-name
+           (append (mapcar (lambda (control)
+                             (concat "safe" (string control) "forged"))
+                           (append (number-sequence 0 31)
+                                   (list 127 #x2028 #x2029)))
+                   (list ""
+                         (make-string (1+ vela-chat-max-label-characters) ?x))))
+    (vela-chat-test--with-buffer
+      (setq-local vela-chat--busy t)
+      (let ((before (buffer-string)))
+        (should-error
+         (vela-chat--apply-stream-event
+          `(("kind" . "tool")
+            ("payload" . (("toolName" . ,invalid-name)
+                           ("summary" . "ran")))))
+         :type 'vela-chat-error)
+        (should (equal (buffer-string) before)))))
+  (vela-chat-test--with-buffer
+    (setq-local vela-chat--busy t)
+    (vela-chat--apply-stream-event
+     '(("kind" . "tool")
+       ("payload" . (("toolName" . "café · search")
+                      ("summary" . "ran")))))
+    (should (string-match-p "Tool · café · search> ran" (buffer-string))))
+  (vela-chat-test--with-buffer
+    (setq-local vela-chat--busy t)
+    (vela-chat--apply-stream-event
+     `(("kind" . "tool")
+       ("payload" . (("toolName" . ,(make-string vela-chat-max-label-characters ?x))
+                      ("summary" . "ran")))))
+    (should (string-match-p
+             (regexp-quote
+              (format "Tool · %s> ran" (make-string vela-chat-max-label-characters ?x)))
+             (buffer-string)))))
+
 (ert-deftest vela-chat-rejects-cross-origin-and-credentialed-stream-urls ()
   (vela-chat-test--with-buffer
     (should-error

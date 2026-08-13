@@ -61,7 +61,10 @@ turn closed and restores the composer without retrying or reconnecting.
 The mode renders only bounded =thinking=, =tool=, cumulative =assistant=,
 =final=, and =error= content.  It does not call the read-only semantic protocol,
 inspect editor state, approve tools, invoke a provider directly, or add any
-editor mutation API.
+editor mutation API.  Gateway-provided tool names are non-empty single-line
+label components of at most 256 characters; control characters and Unicode line
+or paragraph separators fail the turn before transcript mutation so a remote
+value cannot forge transcript labels.
 
 ** Alternatives considered
 :PROPERTIES:
