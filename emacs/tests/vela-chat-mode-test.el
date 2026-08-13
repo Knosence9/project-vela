@@ -777,24 +777,52 @@
     (insert "next")
     (should (equal (vela-chat--composer-text) "next"))))
 
-(ert-deftest vela-chat-second-runtime-token-failure-restores-composer ()
+(ert-deftest vela-chat-prevalidated-token-is-reused-for-request-setup ()
   (vela-chat-test--with-buffer
-    (let ((calls 0))
+    (let ((calls 0) headers)
       (setq-local
        vela-chat-auth-token-function
        (lambda ()
          (setq calls (1+ calls))
          (if (= calls 1)
              "first-token"
-           (error "token backend transient failure"))))
+           (error "token backend changed during request setup")))
+       vela-chat-post-json-function
+       (lambda (_url _payload _on-success _on-error)
+         (setq headers (vela-chat--request-headers))
+         '(:cancel ignore)))
       (goto-char (point-max))
       (insert "hello")
       (vela-chat-send)
-      (should (= calls 2))
+      (should (= calls 1))
+      (should vela-chat--busy)
+      (should (equal (alist-get "Authorization" headers nil nil #'string=)
+                     "Bearer first-token"))
+      (vela-chat-cancel))))
+
+(ert-deftest vela-chat-runtime-token-rejects-ascii-controls-and-del ()
+  (dolist (control (list 0 9 31 127))
+    (let ((vela-chat-auth-token-function
+           (lambda () (concat "prefix" (string control) "suffix"))))
+      (should-error (vela-chat--runtime-token) :type 'vela-chat-error))))
+
+(ert-deftest vela-chat-runtime-token-accepts-printable-unicode ()
+  (let ((vela-chat-auth-token-function (lambda () "café-🔒")))
+    (should (equal (vela-chat--runtime-token) "café-🔒"))))
+
+(ert-deftest vela-chat-control-bearing-token-fails-before-transport-or-mutation ()
+  (vela-chat-test--with-buffer
+    (let (called)
+      (setq-local vela-chat-auth-token-function
+                  (lambda () (concat "token" (string 0)))
+                  vela-chat-post-json-function
+                  (lambda (&rest _) (setq called t)))
+      (goto-char (point-max))
+      (insert "remain editable")
+      (should-error (vela-chat-send) :type 'vela-chat-error)
+      (should-not called)
       (should-not vela-chat--busy)
-      (should (markerp vela-chat--input-start))
-      (should (string-match-p "Error> token backend transient failure"
-                              (buffer-string))))))
+      (should (equal (vela-chat--composer-text) "remain editable")))))
 
 (ert-deftest vela-chat-new-session-resets-state-and-rejects-busy-reset ()
   (vela-chat-test--with-buffer
