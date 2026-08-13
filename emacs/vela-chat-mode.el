@@ -211,12 +211,9 @@ persists or displays the returned value."
   (let ((value (vela-chat--required-string name object)))
     (when (or (> (length value) vela-chat-max-label-characters)
               (cl-some (lambda (character)
-                         (or (eq (get-char-code-property
-                                  character 'general-category)
-                                 'Cc)
-                             (memq (get-char-code-property
-                                    character 'general-category)
-                                   '(Zl Zp))))
+                         (memq (get-char-code-property
+                                character 'general-category)
+                               '(Cc Cf Zl Zp)))
                        (string-to-list value)))
       (signal 'vela-chat-error
               (list (format "gateway label is invalid: %s" name))))

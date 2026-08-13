@@ -546,7 +546,12 @@
            (append (mapcar (lambda (control)
                              (concat "safe" (string control) "forged"))
                            (append (number-sequence 0 31)
-                                   (list 127 #x2028 #x2029)))
+                                   (list 127
+                                         #x200b ; zero-width space
+                                         #x2028 ; line separator
+                                         #x2029 ; paragraph separator
+                                         #x202e ; right-to-left override
+                                         #x2066))) ; left-to-right isolate
                    (list ""
                          (make-string (1+ vela-chat-max-label-characters) ?x))))
     (vela-chat-test--with-buffer

@@ -62,9 +62,10 @@ The mode renders only bounded =thinking=, =tool=, cumulative =assistant=,
 =final=, and =error= content.  It does not call the read-only semantic protocol,
 inspect editor state, approve tools, invoke a provider directly, or add any
 editor mutation API.  Gateway-provided tool names are non-empty single-line
-label components of at most 256 characters; control characters and Unicode line
-or paragraph separators fail the turn before transcript mutation so a remote
-value cannot forge transcript labels.
+label components of at most 256 characters; control and format characters,
+including bidirectional and zero-width controls, plus Unicode line or paragraph
+separators fail the turn before transcript mutation so a remote value cannot
+forge or visually reorder transcript labels.
 
 ** Alternatives considered
 :PROPERTIES:
