@@ -213,9 +213,12 @@ persists or displays the returned value."
     (signal 'vela-chat-error '("gateway base URL must be a non-empty string")))
   (when (string-match-p "[[:cntrl:]\\\\]" raw)
     (signal 'vela-chat-error '("gateway base URL contains unsafe characters")))
-  (let* ((parsed (url-generic-parse-url raw))
+  (let* ((case-fold-search t)
+         (parsed (url-generic-parse-url raw))
          (scheme (url-type parsed))
          (host (url-host parsed))
+         (authority (and (string-match "\\`https?://\\([^/?#]*\\)" raw)
+                         (match-string 1 raw)))
          (path (url-filename parsed)))
     (unless (and (member scheme '("http" "https"))
                  (stringp host)
@@ -223,6 +226,20 @@ persists or displays the returned value."
       (signal 'vela-chat-error '("gateway base URL must be an HTTP(S) origin")))
     (when (or (url-user parsed) (url-password parsed))
       (signal 'vela-chat-error '("gateway URLs must not contain credentials")))
+    (let ((port-text
+           (cond
+            ((and authority
+                  (string-match "\\`\\[[^][]+\\]\\(?::\\([0-9]*\\)\\)?\\'" authority))
+             (match-string 1 authority))
+            ((and authority
+                  (string-match "\\`[^:@]+\\(?::\\([0-9]*\\)\\)?\\'" authority))
+             (match-string 1 authority))
+            (t
+             (signal 'vela-chat-error '("gateway base URL has a malformed authority"))))))
+      (when (and port-text
+                 (or (string-empty-p port-text)
+                     (not (<= 1 (string-to-number port-text) 65535))))
+        (signal 'vela-chat-error '("gateway base URL port must be a decimal integer between 1 and 65535"))))
     (when (or (url-target parsed)
               (and path (not (member path '("" "/")))))
       (signal 'vela-chat-error '("gateway base URL must not contain query, fragment, or path")))
