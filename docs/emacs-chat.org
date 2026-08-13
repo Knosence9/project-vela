@@ -65,8 +65,9 @@ Valid parameters are accepted; missing, malformed, folded, duplicate, or other
 media types fail closed before JSON body dispatch.
 
 The stream URL must be an HTTP(S) URL or an absolute path on exactly the
-configured gateway origin.  Explicit gateway origin ports must be in the usable
-TCP range 1 through 65535.  Credentials and cross-origin stream URLs are
+configured gateway origin.  Explicit gateway origin ports must be decimal
+integers in the usable TCP range 1 through 65535; empty and non-numeric ports
+are rejected.  Credentials and cross-origin stream URLs are
 rejected, as are control characters, backslashes, and URL fragments.  Redirect
 following is disabled.  Before any body event is dispatched, the response must
 supply exactly one syntactically valid =Content-Type= whose case-insensitive

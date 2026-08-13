@@ -40,7 +40,7 @@ but never retains or renders that token.
 Request, response, JSON shape, SSE event, pending line, event count, input,
 token, and transcript limits are explicit constants.  Redirect following is
 disabled; base and stream URLs reject embedded credentials; explicit base URL
-ports must be in the usable TCP range 1 through 65535; stream URLs must remain
+ports must be decimal integers in the usable TCP range 1 through 65535; stream URLs must remain
 on the configured scheme, host, and effective port.  Malformed or
 unsupported values fail the active turn closed.  A terminal =final= event is
 required for success; transport completion without one is degraded.
