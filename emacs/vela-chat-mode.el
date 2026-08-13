@@ -652,7 +652,9 @@ exact UTF-8 decode/encode round trip."
         (when (> next vela-chat-max-events-per-turn)
           (signal 'vela-chat-error '("gateway stream exceeds event-count bound")))
         (setf (vela-chat--sse-parser-event-count parser) next))
-      (push `(("event" . ,(or event "message"))
+      (push `(("event" . ,(if (and event (not (string-empty-p event)))
+                               event
+                             "message"))
               ("data" . ,(string-join lines "\n")))
             events)))
   (setf (vela-chat--sse-parser-event parser) nil

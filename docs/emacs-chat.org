@@ -83,9 +83,10 @@ eight-bit-preserved input fails closed.  A present JSON =kind= must be a
 non-empty string and must agree
 with any explicit non-default SSE =event:= name.  Parsing an =event:= field
 removes at most the protocol's one optional U+0020 space after the field colon;
-additional spaces and tabs remain part of its exact identity.  Colonless =event=
-and =data= fields carry empty values as required by the SSE grammar; empty data
-values still contribute their joining newline.  A complete event whose =event=
+additional spaces and tabs remain part of its exact identity.  Empty and
+colonless =event= fields reset dispatch to the default =message= event type;
+colonless =data= fields carry empty values as required by the SSE grammar, and
+empty data values still contribute their joining newline.  A complete event whose =event=
 value contains U+0000 is dropped before dispatch, without consuming the bounded
 dispatched-event allowance; the next event remains independent.  Unknown fields remain ignored.
 The event name
