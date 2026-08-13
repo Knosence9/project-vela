@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Validate gateway origin ports",
+    "objective": "Reject configured gateway origins with unusable explicit ports before credential, UI, or transport activity",
+    "acceptance_criteria": [
+      "Explicit ports outside 1 through 65535 are rejected",
+      "Ports 1, 80, and 65535 remain valid",
+      "Malformed raw authorities fail before token retrieval, composer mutation, or transport"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added valid-boundary, invalid-port, and preflight side-effect regressions",
+      "outcome": "failure",
+      "diagnostic": "The focused regression accepted explicit port 0",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Validated parsed port specifications and the raw gateway authority before send setup",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el, docs/emacs-chat.org, and docs/adr/0121-asynchronous-emacs-gateway-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Gateway origins now enforce usable explicit port and authority boundaries before any sensitive side effect",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1096",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "URL parsing does not by itself establish that an explicit port is operationally valid",
+    "Validate raw authority syntax as well as parsed components before credentials are consulted"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1096"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

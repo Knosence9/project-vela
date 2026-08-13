@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject unsafe whitespace-bearing gateway URLs",
+    "objective": "Fail closed on configured or returned gateway URLs containing whitespace, controls, backslashes, or credentials",
+    "acceptance_criteria": [
+      "ASCII and Unicode separator whitespace are rejected",
+      "Controls, backslashes, and embedded credentials are rejected through the same URL boundary",
+      "Invalid configured origins fail before token lookup and invalid stream URLs fail before transcript mutation or transport"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added configured-origin and returned-stream URL regressions including Unicode whitespace",
+      "outcome": "failure",
+      "diagnostic": "The focused test accepted a stream path containing an ASCII space",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Introduced one shared forbidden-character predicate for base origins and returned stream URLs",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el, docs/emacs-chat.org, and docs/adr/0121-asynchronous-emacs-gateway-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Gateway URL validation now rejects ambiguous whitespace and unsafe syntax before credentials, transport, or composer changes",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Emacs ERT 161/161 for PR 1098",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1098",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Apply the same URL safety predicate to configured origins and server-returned locations",
+    "Unicode separator categories must be considered alongside visible ASCII whitespace"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1098"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

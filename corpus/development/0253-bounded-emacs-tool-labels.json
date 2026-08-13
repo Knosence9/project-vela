@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Validate bounded Emacs tool labels",
+    "objective": "Treat gateway-provided tool names as required bounded single-line transcript labels",
+    "acceptance_criteria": [
+      "Empty, oversized, C0-control, DEL, line-separator, and paragraph-separator labels are rejected",
+      "Invalid labels fail before transcript mutation",
+      "Printable Unicode and labels exactly 256 characters long remain valid"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added transcript-preservation and label-boundary regressions",
+      "outcome": "failure",
+      "diagnostic": "A control-bearing tool name was inserted into the transcript without error",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Centralized required single-line label validation with an exact 256-character bound",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/adr/0121-asynchronous-emacs-gateway-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Tool names now satisfy a bounded single-line display contract before entering the active transcript",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1103",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Gateway-provided display labels require validation independently of structured transport parsing",
+    "Validate before mutation so rejected display metadata cannot partially alter conversation state"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1103"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

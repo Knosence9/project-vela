@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject Unicode format controls in tool labels",
+    "objective": "Prevent zero-width and bidirectional Unicode format controls from entering gateway-provided transcript labels",
+    "acceptance_criteria": [
+      "Unicode category Cf is rejected in tool labels",
+      "Representative zero-width and bidirectional controls fail before transcript mutation",
+      "Existing printable Unicode and exact-length label behavior remains unchanged"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Extended label regressions with representative zero-width and bidirectional format controls",
+      "outcome": "failure",
+      "diagnostic": "The focused test did not signal an error for a format-control-bearing label",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Added Cf to the centralized rejected Unicode label categories",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/adr/0121-asynchronous-emacs-gateway-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Tool labels now reject invisible and direction-changing format controls before transcript insertion",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Emacs ERT 166/166 for PR 1105",
+        "status": "passed"
+      },
+      {
+        "command": "git diff --check",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1105",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Single-line validation must include invisible formatting categories, not only newline and control characters",
+    "Central Unicode-category predicates reduce gaps between related display-safety checks"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1105"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

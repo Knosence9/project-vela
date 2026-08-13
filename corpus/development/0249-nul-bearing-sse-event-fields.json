@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Ignore NUL-bearing SSE event fields",
+    "objective": "Ignore invalid event fields containing U+0000 while retaining event data and valid parser state",
+    "acceptance_criteria": [
+      "A NUL-bearing event field does not replace the current event identity",
+      "An event with no prior valid identity still dispatches as message",
+      "Delivered data counts normally and following events remain independent"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Exercised default, prior-identity, following-event, and event-count behavior",
+      "outcome": "failure",
+      "diagnostic": "Whole-event rejection dropped events that should have retained the default or prior valid identity",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Moved NUL rejection from completed-event dispatch to event-field consumption",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "NUL-bearing event fields are ignored without discarding valid event data or disturbing event accounting",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Emacs ERT 159/159 for PR 1094",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1094",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Reject malformed protocol fields at field consumption rather than dropping otherwise valid records",
+    "Ignoring an invalid state update preserves the prior valid identity and default behavior"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1094"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
