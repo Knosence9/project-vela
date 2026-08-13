@@ -442,6 +442,36 @@
         (should-not vela-chat--busy)
         (should (equal (vela-chat--composer-text) "remain editable"))))))
 
+(ert-deftest vela-chat-rejects-format-controls-in-gateway-urls ()
+  (dolist (format-control
+           (list (string #x200b)
+                 (string #x2066)
+                 (string-make-unibyte
+                  (encode-coding-string (string #xfeff) 'utf-8 t))))
+    (let ((vela-chat-base-url "http://127.0.0.1:3847"))
+      (should-error
+       (vela-chat--resolve-stream-url
+        (concat (string-make-unibyte "/turns/") format-control
+                (string-make-unibyte "1")))
+       :type 'vela-chat-error))
+    (vela-chat-test--with-buffer
+      (let ((vela-chat-base-url
+             (concat (string-make-unibyte "http://exa") format-control
+                     (string-make-unibyte "mple.test")))
+            token-called
+            transport-called)
+        (setq-local vela-chat-auth-token-function
+                    (lambda () (setq token-called t) "secret"))
+        (setq-local vela-chat-post-json-function
+                    (lambda (&rest _) (setq transport-called t)))
+        (goto-char (point-max))
+        (insert "remain editable")
+        (should-error (vela-chat-send) :type 'vela-chat-error)
+        (should-not token-called)
+        (should-not transport-called)
+        (should-not vela-chat--busy)
+        (should (equal (vela-chat--composer-text) "remain editable"))))))
+
 (ert-deftest vela-chat-rejects-whitespace-bearing-stream-url-before-streaming ()
   (dolist (stream-url (list "/turns/1 2"
                             "http://127.0.0.1:3847/turns/1 2"
