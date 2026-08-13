@@ -655,8 +655,7 @@ exact UTF-8 decode/encode round trip."
   "Flush PARSER into EVENTS and return the resulting list."
   (let ((lines (nreverse (vela-chat--sse-parser-data-lines parser)))
         (event (vela-chat--sse-parser-event parser)))
-    (when (and lines
-               (not (and event (string-match-p "\0" event))))
+    (when lines
       (let ((next (1+ (vela-chat--sse-parser-event-count parser))))
         (when (> next vela-chat-max-events-per-turn)
           (signal 'vela-chat-error '("gateway stream exceeds event-count bound")))
@@ -679,10 +678,11 @@ exact UTF-8 decode/encode round trip."
     (vela-chat--sse-flush parser events))
    ((string-prefix-p ":" line) events)
    ((or (string= line "event") (string-prefix-p "event:" line))
-    (setf (vela-chat--sse-parser-event parser)
-          (if (string= line "event")
-              ""
-            (string-remove-prefix " " (substring line 6))))
+    (let ((event (if (string= line "event")
+                     ""
+                   (string-remove-prefix " " (substring line 6)))))
+      (unless (string-match-p "\0" event)
+        (setf (vela-chat--sse-parser-event parser) event)))
     events)
    ((or (string= line "data") (string-prefix-p "data:" line))
     (let* ((data (if (string= line "data")
