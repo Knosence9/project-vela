@@ -913,6 +913,7 @@
       (should-not auth-source-called))))
 
 (ert-deftest vela-chat-explicit-auth-source-provider-emits-header ()
+  (require 'auth-source)
   (let ((vela-chat-auth-token-function #'vela-chat-auth-source-token)
         auth-source-arguments)
     (cl-letf (((symbol-function 'auth-source-search)
