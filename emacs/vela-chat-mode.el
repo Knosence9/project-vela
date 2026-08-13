@@ -50,11 +50,12 @@ non-root path is accepted."
   :type 'string
   :group 'vela-chat)
 
-(defcustom vela-chat-auth-token-function #'vela-chat-auth-source-token
+(defcustom vela-chat-auth-token-function nil
   "Function returning a runtime bearer token, or nil.
 
-The default reads `vela-chat-auth-source-host' from Emacs auth-source.  The
-token is requested separately for each HTTP operation.  Vela chat never
+The default performs no credential lookup.  Configure this explicitly, for
+example as `vela-chat-auth-source-token', to opt in to bearer authentication.
+The token is requested separately for each HTTP operation.  Vela chat never
 persists or displays the returned value."
   :type '(choice (const :tag "No bearer token" nil) function)
   :group 'vela-chat)
