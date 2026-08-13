@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve exact SSE event field whitespace",
+    "objective": "Apply only the protocol-defined optional-space removal and retain exact event identity",
+    "acceptance_criteria": [
+      "One optional U+0020 after an event field colon is removed",
+      "Additional spaces and tabs remain part of the event value",
+      "Preserved event values participate in fail-closed JSON kind agreement"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added event-field regressions for a second space and a leading tab",
+      "outcome": "failure",
+      "diagnostic": "The parser normalized event:  final to final and accepted it",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Replaced broad whitespace trimming with removal of at most one literal space",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "SSE event identities preserve protocol-significant whitespace and conflicting JSON identities fail closed",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just emacs-test", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1076", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Protocol whitespace rules should be encoded literally rather than delegated to general-purpose trimming",
+    "Assert both parsed identity and downstream rejection to keep syntax and semantic boundaries coupled"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1076"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Drop NUL-bearing SSE event types",
+    "objective": "Discard completed events with U+0000 in their event value without affecting following events",
+    "acceptance_criteria": [
+      "A completed event whose event value contains U+0000 is not dispatched",
+      "The dropped event does not consume the bounded dispatched-event allowance",
+      "Following valid events retain independent parser state and dispatch normally"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a regression containing one NUL-bearing event followed by a valid terminal event",
+      "outcome": "failure",
+      "diagnostic": "The parser emitted both the invalid event and the following valid event",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Guarded completed-event dispatch and event-count increments on a NUL-free event value",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Malformed NUL-bearing event types are dropped while later valid events and resource accounting remain correct",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just emacs-test", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1086", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Apply protocol-mandated dropping before dispatch quotas so rejected input cannot exhaust valid-event capacity",
+    "Reset per-event state regardless of dispatch so one malformed record cannot contaminate its successor"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1086"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

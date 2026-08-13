@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Ignore one leading SSE byte-order mark",
+    "objective": "Remove exactly one U+FEFF at decoded stream start across arbitrary input fragments",
+    "acceptance_criteria": [
+      "One decoded or raw UTF-8 BOM at stream start is ignored",
+      "A raw BOM may span multiple parser feeds",
+      "U+FEFF after stream start is preserved"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added regressions for fragmented raw leading BOM, decoded leading BOM, and later U+FEFF",
+      "outcome": "failure",
+      "diagnostic": "The first event field retained the leading BOM and was not recognized",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Held stream-start state across incomplete raw BOM prefixes and removed one complete leading marker",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "The SSE parser ignores one leading BOM without changing later text or existing fragmentation bounds",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1084", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Stream-start decisions must remain pending while received bytes are still a valid prefix of a distinguished marker",
+    "Limit compatibility exceptions to an exact position and count so ordinary payload text remains lossless"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1084"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

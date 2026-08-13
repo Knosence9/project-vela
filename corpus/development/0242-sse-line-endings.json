@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Support all SSE line endings across chunks",
+    "objective": "Recognize LF, CRLF, and lone CR without delaying valid event dispatch",
+    "acceptance_criteria": [
+      "LF, CRLF, and lone CR terminate SSE lines",
+      "A CRLF pair split across transport chunks is consumed as one terminator",
+      "A trailing blank CR dispatches immediately and a following LF cannot redispatch"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added lone-CR and split-CRLF parser regressions",
+      "outcome": "failure",
+      "diagnostic": "A valid CR-delimited stream returned no events",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Recognized either line-ending byte and retained one-bit state to swallow only a cross-chunk CRLF continuation",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "The bounded SSE parser accepts every specified line ending and preserves immediate dispatch across transport boundaries",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just emacs-test", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1078", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Chunk boundaries require explicit minimal parser state when one delimiter can extend another",
+    "Dispatch complete protocol records immediately instead of waiting for transport bytes that may never arrive"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1078"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
