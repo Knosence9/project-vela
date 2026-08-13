@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Preserve colonless SSE field semantics",
+    "objective": "Treat colonless event and data fields as fields carrying empty values",
+    "acceptance_criteria": [
+      "A colonless data field contributes an empty data value and joining newline",
+      "A colonless event field resets the event name to the empty value",
+      "Unknown fields remain ignored"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added deterministic regressions for colonless data and event fields",
+      "outcome": "failure",
+      "diagnostic": "Both colonless field regressions failed because the parser ignored those lines",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Accepted exact colonless field names and reused existing empty-value handling",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Colonless SSE fields now preserve grammar-defined empty values and multiline joining behavior",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just emacs-test", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1082", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "A missing separator can denote an empty protocol value rather than an unknown or malformed line",
+    "Reuse one field-value path for colonless and explicit-empty forms to avoid semantic drift"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1082"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

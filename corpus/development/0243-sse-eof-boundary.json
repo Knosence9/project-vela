@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Discard unterminated SSE events at end of stream",
+    "objective": "Dispatch SSE events only after their blank-line terminator and preserve degraded completion",
+    "acceptance_criteria": [
+      "An incomplete event at EOF is not dispatched",
+      "Parser-local pending event state is cleared at EOF",
+      "An unterminated terminal event cannot make stream completion successful"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added parser and lifecycle regressions for an unterminated final event",
+      "outcome": "failure",
+      "diagnostic": "The parser returned one final event instead of an empty event vector",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Removed EOF flushing and explicitly cleared incomplete parser state",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Only blank-line-terminated SSE events reach the transcript and incomplete stream closure remains degraded",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just emacs-test", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1080", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Transport EOF is not a protocol record terminator unless the protocol explicitly defines it as one",
+    "Test terminal lifecycle effects as well as parser output when incomplete input could falsely signal success"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1080"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

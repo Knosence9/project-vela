@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Enforce canonical UTF-8 at Emacs gateway boundaries",
+    "objective": "Reject invalid encoded gateway JSON bodies and complete SSE lines before semantic decoding",
+    "acceptance_criteria": [
+      "Complete JSON response bodies are canonical UTF-8 before JSON decoding",
+      "Complete SSE lines are canonical UTF-8 while valid sequences may span chunks",
+      "Malformed, non-canonical, surrogate, out-of-range, and raw preserved bytes fail closed"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added hostile ERT coverage for invalid UTF-8 in gateway JSON and ignored SSE fields",
+      "outcome": "failure",
+      "diagnostic": "An ignored SSE field containing overlong UTF-8 was silently accepted",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Validated canonical UTF-8 at complete JSON-body and complete SSE-line boundaries",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Gateway text now fails closed before field interpretation while preserving valid fragmented UTF-8 and JSON CRLF whitespace",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1074", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Validate bytes at the narrowest complete-text boundary so transport fragmentation remains legal",
+    "Unknown protocol fields must still pass encoding validation because ignoring semantics must not bypass the wire contract"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1074"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
