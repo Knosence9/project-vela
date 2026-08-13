@@ -644,13 +644,15 @@ exact UTF-8 decode/encode round trip."
 
 (defun vela-chat--sse-flush (parser events)
   "Flush PARSER into EVENTS and return the resulting list."
-  (let ((lines (nreverse (vela-chat--sse-parser-data-lines parser))))
-    (when lines
+  (let ((lines (nreverse (vela-chat--sse-parser-data-lines parser)))
+        (event (vela-chat--sse-parser-event parser)))
+    (when (and lines
+               (not (and event (string-match-p "\0" event))))
       (let ((next (1+ (vela-chat--sse-parser-event-count parser))))
         (when (> next vela-chat-max-events-per-turn)
           (signal 'vela-chat-error '("gateway stream exceeds event-count bound")))
         (setf (vela-chat--sse-parser-event-count parser) next))
-      (push `(("event" . ,(or (vela-chat--sse-parser-event parser) "message"))
+      (push `(("event" . ,(or event "message"))
               ("data" . ,(string-join lines "\n")))
             events)))
   (setf (vela-chat--sse-parser-event parser) nil
