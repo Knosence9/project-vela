@@ -40,8 +40,9 @@ retains or renders that token.
 
 Request, response, JSON shape, SSE event, pending line, event count, input,
 token, and transcript limits are explicit constants.  Redirect following is
-disabled; base and stream URLs reject whitespace, control characters,
-backslashes, and embedded credentials; explicit base URL
+disabled; base and stream URLs reject whitespace, control and format characters
+(including zero-width and bidirectional controls), backslashes, and embedded
+credentials; explicit base URL
 ports must be decimal integers in the usable TCP range 1 through 65535; stream URLs must remain
 on the configured scheme, host, and effective port.  Malformed or
 unsupported values fail the active turn closed.  A terminal =final= event is

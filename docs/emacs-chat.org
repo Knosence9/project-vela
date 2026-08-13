@@ -73,7 +73,8 @@ The stream URL must be an HTTP(S) URL or an absolute path on exactly the
 configured gateway origin.  Explicit gateway origin ports must be decimal
 integers in the usable TCP range 1 through 65535; empty and non-numeric ports
 are rejected.  Credentials and cross-origin stream URLs are
-rejected, as are whitespace, control characters, backslashes, and URL fragments.  Redirect
+rejected, as are whitespace, control and format characters (including zero-width
+and bidirectional controls), backslashes, and URL fragments.  Redirect
 following is disabled.  Before any body event is dispatched, the response must
 supply exactly one syntactically valid =Content-Type= whose case-insensitive
 media-type essence is =text/event-stream=; valid parameters are accepted,
