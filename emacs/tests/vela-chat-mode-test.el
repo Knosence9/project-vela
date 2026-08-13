@@ -207,17 +207,20 @@
       (vela-chat--sse-feed parser "data: first\ndata: \ufefflater\n\n" nil)
       [(("event" . "message") ("data" . "first\n\ufefflater"))]))))
 
-(ert-deftest vela-chat-sse-parser-drops-nul-bearing-event-type ()
+(ert-deftest vela-chat-sse-parser-ignores-nul-bearing-event-fields ()
   (let ((parser (vela-chat--sse-parser-create)))
     (should
      (equal
       (vela-chat--sse-feed
        parser
-       (concat "event: invalid" (string 0) "name\ndata: dropped\n\n"
+       (concat "event: invalid" (string 0) "name\ndata: default\n\n"
+               "event: tool\nevent: also" (string 0) "invalid\ndata: prior\n\n"
                "event: final\ndata: kept\n\n")
        nil)
-      [(("event" . "final") ("data" . "kept"))]))
-    (should (= (vela-chat--sse-parser-event-count parser) 1))))
+      [(("event" . "message") ("data" . "default"))
+       (("event" . "tool") ("data" . "prior"))
+       (("event" . "final") ("data" . "kept"))]))
+    (should (= (vela-chat--sse-parser-event-count parser) 3))))
 
 (ert-deftest vela-chat-sse-parser-discards-unterminated-event-at-eof ()
   (let ((parser (vela-chat--sse-parser-create)))
