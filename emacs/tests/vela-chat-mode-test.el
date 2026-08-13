@@ -382,8 +382,28 @@
 (ert-deftest vela-chat-origin-rendering-preserves-only-explicit-ports ()
   (let ((vela-chat-base-url "http://127.0.0.1"))
     (should (equal (vela-chat--origin-string) "http://127.0.0.1")))
-  (let ((vela-chat-base-url "http://127.0.0.1:80"))
-    (should (equal (vela-chat--origin-string) "http://127.0.0.1:80"))))
+  (dolist (port '(1 80 65535))
+    (let ((vela-chat-base-url (format "http://127.0.0.1:%d" port)))
+      (should (equal (vela-chat--origin-string)
+                     (format "http://127.0.0.1:%d" port))))))
+
+(ert-deftest vela-chat-rejects-unusable-origin-ports-before-transport-or-mutation ()
+  (dolist (port '(0 65536))
+    (vela-chat-test--with-buffer
+      (let ((vela-chat-base-url (format "http://127.0.0.1:%d" port))
+            token-called
+            transport-called)
+        (setq-local vela-chat-auth-token-function
+                    (lambda () (setq token-called t) "secret"))
+        (setq-local vela-chat-post-json-function
+                    (lambda (&rest _) (setq transport-called t)))
+        (goto-char (point-max))
+        (insert "remain editable")
+        (should-error (vela-chat-send) :type 'vela-chat-error)
+        (should-not token-called)
+        (should-not transport-called)
+        (should-not vela-chat--busy)
+        (should (equal (vela-chat--composer-text) "remain editable"))))))
 
 (ert-deftest vela-chat-sse-content-type-accepts-case-and-valid-parameters ()
   (dolist (headers
