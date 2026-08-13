@@ -895,6 +895,42 @@
                      "Bearer first-token"))
       (vela-chat-cancel))))
 
+(ert-deftest vela-chat-auth-token-function-defaults-to-no-credential-access ()
+  (should-not (default-value 'vela-chat-auth-token-function)))
+
+(ert-deftest vela-chat-default-auth-does-not-read-or-send-auth-source-secret ()
+  (let ((vela-chat-auth-token-function
+         (default-value 'vela-chat-auth-token-function))
+        auth-source-called)
+    (cl-letf (((symbol-function 'vela-chat-auth-source-token)
+               (lambda ()
+                 (setq auth-source-called t)
+                 "ambient-secret")))
+      (should-not
+       (alist-get "Authorization"
+                  (vela-chat--request-headers)
+                  nil nil #'string=))
+      (should-not auth-source-called))))
+
+(ert-deftest vela-chat-explicit-auth-source-provider-emits-header ()
+  (require 'auth-source)
+  (let ((vela-chat-auth-token-function #'vela-chat-auth-source-token)
+        auth-source-arguments)
+    (cl-letf (((symbol-function 'auth-source-search)
+               (lambda (&rest arguments)
+                 (setq auth-source-arguments arguments)
+                 '((:secret "opt-in-secret")))))
+      (should
+       (equal
+        (alist-get "Authorization"
+                   (vela-chat--request-headers)
+                   nil nil #'string=)
+        "Bearer opt-in-secret"))
+      (should (equal auth-source-arguments
+                     (list :host vela-chat-auth-source-host
+                           :max 1
+                           :require '(:secret)))))))
+
 (ert-deftest vela-chat-runtime-token-rejects-ascii-controls-and-del ()
   (dolist (control (list 0 9 31 127))
     (let ((vela-chat-auth-token-function
