@@ -547,7 +547,8 @@
                              (concat "safe" (string control) "forged"))
                            (append (number-sequence 0 31)
                                    (list 127 #x2028 #x2029)))
-                   (list (make-string (1+ vela-chat-max-label-characters) ?x))))
+                   (list ""
+                         (make-string (1+ vela-chat-max-label-characters) ?x))))
     (vela-chat-test--with-buffer
       (setq-local vela-chat--busy t)
       (let ((before (buffer-string)))
