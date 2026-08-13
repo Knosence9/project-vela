@@ -103,6 +103,9 @@ persists or displays the returned value."
 (defconst vela-chat-max-token-characters 8192
   "Largest runtime bearer token accepted by Vela chat.")
 
+(defconst vela-chat-max-label-characters 256
+  "Largest gateway-provided transcript label component.")
+
 (defconst vela-chat-max-json-depth 16
   "Largest decoded gateway JSON nesting depth.")
 
@@ -201,6 +204,22 @@ persists or displays the returned value."
   (let ((value (vela-chat--field name object)))
     (unless (and (stringp value) (not (string-empty-p value)))
       (signal 'vela-chat-error (list (format "missing gateway string: %s" name))))
+    value))
+
+(defun vela-chat--required-label (name object)
+  "Return required bounded single-line label field NAME from OBJECT."
+  (let ((value (vela-chat--required-string name object)))
+    (when (or (> (length value) vela-chat-max-label-characters)
+              (cl-some (lambda (character)
+                         (or (eq (get-char-code-property
+                                  character 'general-category)
+                                 'Cc)
+                             (memq (get-char-code-property
+                                    character 'general-category)
+                                   '(Zl Zp))))
+                       (string-to-list value)))
+      (signal 'vela-chat-error
+              (list (format "gateway label is invalid: %s" name))))
     value))
 
 (defun vela-chat--effective-port (parsed)
@@ -1071,7 +1090,7 @@ chunk when that optional callback is non-nil."
         "Thinking" (vela-chat--status-text payload "text" nil)
         'vela-chat-status-face))
       ("tool"
-       (let ((name (vela-chat--required-string "toolName" payload))
+       (let ((name (vela-chat--required-label "toolName" payload))
              (summary (vela-chat--status-text payload "summary" nil)))
          (vela-chat--append-entry (format "Tool · %s" name) summary
                                   'vela-chat-status-face)))
