@@ -4040,6 +4040,181 @@ fn corpus_sampling_rejects_non_boolean_attempt_diagnostic_value_before_storage_a
 }
 
 #[test]
+fn corpus_sampling_filters_by_rejection_rationale_presence_after_filtering_and_limiting() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let source_record = fs::read_to_string(source).expect("record source");
+    fs::write(
+        corpus.path().join("a-null.json"),
+        source_record.replace("\"Second\"", "\"Null rationale\""),
+    )
+    .expect("record with null rationale");
+    fs::write(
+        corpus.path().join("a-omitted.json"),
+        source_record
+            .replace("\"Second\"", "\"Omitted rationale\"")
+            .replace(",\"rejection_rationale\":null", ""),
+    )
+    .expect("record with omitted rationale");
+    fs::write(
+        corpus.path().join("b-empty.json"),
+        source_record
+            .replace("\"Second\"", "\"Empty rationale\"")
+            .replace(
+                "\"rejection_rationale\":null",
+                "\"rejection_rationale\":\"\"",
+            ),
+    )
+    .expect("record with empty present rationale");
+    fs::write(
+        corpus.path().join("c-present.json"),
+        source_record
+            .replace("\"Second\"", "\"Present rationale\"")
+            .replace(
+                "\"type\":\"positive\",\"rejection_rationale\":null",
+                "\"type\":\"negative\",\"rejection_rationale\":\"review rejected this example\"",
+            ),
+    )
+    .expect("record with present rationale");
+    fs::write(
+        corpus.path().join("d-curated.json"),
+        source_record
+            .replace("\"Second\"", "\"Curated rationale\"")
+            .replace("\"reviewed\"", "\"curated\"")
+            .replace(
+                "\"type\":\"positive\",\"rejection_rationale\":null",
+                "\"type\":\"negative\",\"rejection_rationale\":\"curator rejected this example\"",
+            ),
+    )
+    .expect("curated record with present rationale");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "2",
+            "--has-rejection-rationale",
+            "false",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    let paths: Vec<_> = sample
+        .as_array()
+        .expect("sample array")
+        .iter()
+        .map(|entry| entry["path"].as_str().expect("sample path"))
+        .collect();
+    assert_eq!(paths, ["a-null.json", "a-omitted.json"]);
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "2",
+            "--has-rejection-rationale",
+            "true",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    let paths: Vec<_> = sample
+        .as_array()
+        .expect("sample array")
+        .iter()
+        .map(|entry| entry["path"].as_str().expect("sample path"))
+        .collect();
+    assert_eq!(paths, ["b-empty.json", "c-present.json"]);
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--trust",
+            "curated",
+            "--example",
+            "negative",
+            "--has-rejection-rationale",
+            "true",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"path\":\"d-curated.json\""))
+        .stderr(predicate::str::is_empty());
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--trust",
+            "curated",
+            "--has-rejection-rationale",
+            "false",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_rejects_non_boolean_rejection_rationale_value_before_storage_access() {
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            "tests/fixtures/missing-corpus",
+            "1",
+            "--has-rejection-rationale",
+            "yes",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("unreadable_corpus").not());
+}
+
+#[test]
+fn corpus_sampling_rejection_rationale_filter_still_rejects_malformed_records() {
+    let corpus = tempdir().expect("sample corpus");
+    fs::write(corpus.path().join("malformed.json"), "{").expect("malformed record");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--has-rejection-rationale",
+            "false",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("malformed_record"));
+}
+
+#[test]
 fn corpus_sampling_filters_by_lesson_presence_after_filtering_and_limiting() {
     let source = format!(
         "{}/tests/fixtures/corpus/valid/second.json",
