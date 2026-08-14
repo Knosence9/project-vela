@@ -3453,7 +3453,7 @@ fn inspect_corpus(root: &Path) -> ExitCode {
 
     let mut valid = 0;
     for path in &paths {
-        let relative = path.strip_prefix(root).unwrap_or(path).display();
+        let relative = render_corpus_path(path.strip_prefix(root).unwrap_or(path));
         match read_corpus_record(path) {
             Ok(_) => {
                 println!("{relative}: valid");
@@ -3537,7 +3537,11 @@ fn read_corpus_input(path: &Path) -> std::io::Result<String> {
     fs::read_to_string(path)
 }
 
-fn report_corpus_record_error(relative: &impl std::fmt::Display, error: CorpusRecordError) {
+fn render_corpus_path(path: &Path) -> String {
+    format!("{path:?}")
+}
+
+fn report_corpus_record_error(relative: &str, error: CorpusRecordError) {
     match error {
         CorpusRecordError::Unreadable(error) => {
             eprintln!("{relative}: unreadable_record: {error}");
@@ -3571,7 +3575,7 @@ fn sample_corpus(root: &Path, limit: usize, trust: Option<Trust>) -> ExitCode {
         let Some(relative_text) = relative.to_str() else {
             eprintln!(
                 "{}: invalid_record_path: path is not UTF-8",
-                relative.display()
+                render_corpus_path(relative)
             );
             invalid = true;
             continue;
@@ -3579,7 +3583,7 @@ fn sample_corpus(root: &Path, limit: usize, trust: Option<Trust>) -> ExitCode {
         let record = match read_corpus_record(path) {
             Ok(record) => record,
             Err(error) => {
-                report_corpus_record_error(&relative_text, error);
+                report_corpus_record_error(&render_corpus_path(relative), error);
                 invalid = true;
                 continue;
             }

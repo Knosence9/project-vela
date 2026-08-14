@@ -2959,7 +2959,7 @@ fn inspects_corpus_in_deterministic_order_and_reports_failures() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "nested/first.json: valid\nsecond.json: valid",
+            "\"nested/first.json\": valid\n\"second.json\": valid",
         ))
         .stdout(predicate::str::contains(
             "inspected 2 records: 2 valid, 0 invalid",
@@ -2973,9 +2973,11 @@ fn inspects_corpus_in_deterministic_order_and_reports_failures() {
         .stdout(predicate::str::contains(
             "inspected 2 records: 0 valid, 2 invalid",
         ))
-        .stderr(predicate::str::contains("malformed.json: malformed_record"))
         .stderr(predicate::str::contains(
-            "semantic.json: task.title: required",
+            "\"malformed.json\": malformed_record",
+        ))
+        .stderr(predicate::str::contains(
+            "\"semantic.json\": task.title: required",
         ));
 }
 
@@ -2987,6 +2989,101 @@ fn corpus_inspection_rejects_an_unreadable_root() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("$: unreadable_corpus"));
+}
+
+#[cfg(unix)]
+#[test]
+fn corpus_inspection_escapes_untrusted_record_paths() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("inspection corpus");
+    fs::copy(source, corpus.path().join("forged\n\r\t\u{1b}[31m.json"))
+        .expect("valid record with untrusted path");
+
+    let output = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "inspect",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+        ])
+        .output()
+        .expect("inspection output");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 escaped output");
+    assert_eq!(stdout.lines().count(), 2);
+    assert!(stdout.starts_with("\"forged\\n\\r\\t\\u{1b}[31m.json\": valid\n"));
+    assert!(!stdout.contains('\r'));
+    assert!(!stdout.contains('\t'));
+    assert!(!stdout.contains('\u{1b}'));
+}
+
+#[cfg(unix)]
+#[test]
+fn corpus_inspection_preserves_non_utf8_record_path_identity() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("inspection corpus");
+    for filename in [b"forged-\xff.json", b"forged-\xfe.json"] {
+        fs::copy(
+            &source,
+            corpus.path().join(OsString::from_vec(filename.to_vec())),
+        )
+        .expect("valid record with non-UTF-8 path");
+    }
+
+    let output = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "inspect",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+        ])
+        .output()
+        .expect("inspection output");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 escaped output");
+    assert!(stdout.contains("\"forged-\\xFF.json\": valid"));
+    assert!(stdout.contains("\"forged-\\xFE.json\": valid"));
+}
+
+#[cfg(unix)]
+#[test]
+fn corpus_sampling_escapes_untrusted_record_paths_in_diagnostics() {
+    let corpus = tempdir().expect("sample corpus");
+    fs::write(corpus.path().join("forged\n\r\t\u{1b}[31m.json"), "{}")
+        .expect("malformed record with untrusted path");
+
+    let output = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+        ])
+        .output()
+        .expect("sampling output");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 escaped diagnostic");
+    assert_eq!(stderr.lines().count(), 1);
+    assert!(stderr.starts_with("\"forged\\n\\r\\t\\u{1b}[31m.json\": malformed_record:"));
+    assert!(!stderr.contains('\r'));
+    assert!(!stderr.contains('\t'));
+    assert!(!stderr.contains('\u{1b}'));
 }
 
 #[test]
@@ -3084,9 +3181,11 @@ fn corpus_sampling_rejects_invalid_records_without_partial_output() {
         .assert()
         .code(1)
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("malformed.json: malformed_record"))
         .stderr(predicate::str::contains(
-            "semantic.json: task.title: required",
+            "\"malformed.json\": malformed_record",
+        ))
+        .stderr(predicate::str::contains(
+            "\"semantic.json\": task.title: required",
         ));
 }
 
