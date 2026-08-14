@@ -1216,6 +1216,7 @@ dependencies = [
  "clap",
  "predicates",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

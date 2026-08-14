@@ -7,8 +7,8 @@ use std::{
     process::ExitCode,
 };
 
-use clap::{Parser, Subcommand};
-use record::DevelopmentRecord;
+use clap::{Parser, Subcommand, ValueEnum};
+use record::{DevelopmentRecord, Trust};
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
@@ -53,7 +53,7 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<RecordCommand>,
     },
-    /// Inspect a directory of Vela development records.
+    /// Work with a directory of Vela development records.
     Corpus {
         #[command(subcommand)]
         command: Option<CorpusCommand>,
@@ -420,6 +420,31 @@ pub enum ExtensionCommand {
 pub enum CorpusCommand {
     /// Recursively validate JSON records and summarize the corpus.
     Inspect { path: PathBuf },
+    /// Emit a bounded deterministic sample of validated records.
+    Sample {
+        path: PathBuf,
+        #[arg(value_parser = parse_sample_limit)]
+        limit: usize,
+        #[arg(long)]
+        trust: Option<CorpusTrust>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CorpusTrust {
+    Untrusted,
+    Reviewed,
+    Curated,
+}
+
+impl From<CorpusTrust> for Trust {
+    fn from(value: CorpusTrust) -> Self {
+        match value {
+            CorpusTrust::Untrusted => Self::Untrusted,
+            CorpusTrust::Reviewed => Self::Reviewed,
+            CorpusTrust::Curated => Self::Curated,
+        }
+    }
 }
 
 /// Development-record workflows.
@@ -455,6 +480,9 @@ impl Cli {
             Some(Command::Corpus {
                 command: Some(CorpusCommand::Inspect { path }),
             }) => inspect_corpus(&path),
+            Some(Command::Corpus {
+                command: Some(CorpusCommand::Sample { path, limit, trust }),
+            }) => sample_corpus(&path, limit, trust.map(Trust::from)),
             Some(Command::Extension {
                 command: Some(ExtensionCommand::Inspect { root }),
             }) => inspect_extensions(&root),
@@ -3426,31 +3454,12 @@ fn inspect_corpus(root: &Path) -> ExitCode {
     let mut valid = 0;
     for path in &paths {
         let relative = path.strip_prefix(root).unwrap_or(path).display();
-        let input = match fs::read_to_string(path) {
-            Ok(input) => input,
-            Err(error) => {
-                eprintln!("{relative}: unreadable_record: {error}");
-                continue;
+        match read_corpus_record(path) {
+            Ok(_) => {
+                println!("{relative}: valid");
+                valid += 1;
             }
-        };
-        let record: DevelopmentRecord = match serde_json::from_str(&input) {
-            Ok(record) => record,
-            Err(error) => {
-                eprintln!("{relative}: malformed_record: {error}");
-                continue;
-            }
-        };
-        let issues = record.validate();
-        if issues.is_empty() {
-            println!("{relative}: valid");
-            valid += 1;
-        } else {
-            for issue in issues {
-                eprintln!(
-                    "{relative}: {}: {}: {}",
-                    issue.path, issue.code, issue.message
-                );
-            }
+            Err(error) => report_corpus_record_error(&relative, error),
         }
     }
 
@@ -3466,15 +3475,145 @@ fn inspect_corpus(root: &Path) -> ExitCode {
     }
 }
 
+fn parse_sample_limit(value: &str) -> Result<usize, String> {
+    let limit = value
+        .parse::<usize>()
+        .map_err(|_| "must be an integer from 1 through 1024".to_owned())?;
+    if (1..=1024).contains(&limit) {
+        Ok(limit)
+    } else {
+        Err("must be from 1 through 1024".to_owned())
+    }
+}
+
+#[derive(Serialize)]
+struct CorpusSampleEntry {
+    path: String,
+    record: DevelopmentRecord,
+}
+
+enum CorpusRecordError {
+    Unreadable(std::io::Error),
+    Malformed(serde_json::Error),
+    Invalid(Vec<record::ValidationIssue>),
+}
+
+fn read_corpus_record(path: &Path) -> Result<DevelopmentRecord, CorpusRecordError> {
+    let input = read_corpus_input(path).map_err(CorpusRecordError::Unreadable)?;
+    let record: DevelopmentRecord =
+        serde_json::from_str(&input).map_err(CorpusRecordError::Malformed)?;
+    let issues = record.validate();
+    if issues.is_empty() {
+        Ok(record)
+    } else {
+        Err(CorpusRecordError::Invalid(issues))
+    }
+}
+
+#[cfg(unix)]
+fn read_corpus_input(path: &Path) -> std::io::Result<String> {
+    use rustix::fs::{Mode, OFlags, open};
+
+    let descriptor = open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    let mut file = fs::File::from(descriptor);
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "record is not a regular file",
+        ));
+    }
+    let mut input = String::new();
+    file.read_to_string(&mut input)?;
+    Ok(input)
+}
+
+#[cfg(not(unix))]
+fn read_corpus_input(path: &Path) -> std::io::Result<String> {
+    fs::read_to_string(path)
+}
+
+fn report_corpus_record_error(relative: &impl std::fmt::Display, error: CorpusRecordError) {
+    match error {
+        CorpusRecordError::Unreadable(error) => {
+            eprintln!("{relative}: unreadable_record: {error}");
+        }
+        CorpusRecordError::Malformed(error) => {
+            eprintln!("{relative}: malformed_record: {error}");
+        }
+        CorpusRecordError::Invalid(issues) => {
+            for issue in issues {
+                eprintln!(
+                    "{relative}: {}: {}: {}",
+                    issue.path, issue.code, issue.message
+                );
+            }
+        }
+    }
+}
+
+fn sample_corpus(root: &Path, limit: usize, trust: Option<Trust>) -> ExitCode {
+    let mut paths = Vec::new();
+    if let Err(error) = collect_json(root, &mut paths) {
+        eprintln!("$: unreadable_corpus: {error}");
+        return ExitCode::from(2);
+    }
+    paths.sort();
+
+    let mut sample = Vec::new();
+    let mut invalid = false;
+    for path in &paths {
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        let Some(relative_text) = relative.to_str() else {
+            eprintln!(
+                "{}: invalid_record_path: path is not UTF-8",
+                relative.display()
+            );
+            invalid = true;
+            continue;
+        };
+        let record = match read_corpus_record(path) {
+            Ok(record) => record,
+            Err(error) => {
+                report_corpus_record_error(&relative_text, error);
+                invalid = true;
+                continue;
+            }
+        };
+        if sample.len() < limit && trust.is_none_or(|expected| record.trust == expected) {
+            sample.push(CorpusSampleEntry {
+                path: relative_text.to_owned(),
+                record,
+            });
+        }
+    }
+
+    if invalid {
+        ExitCode::from(1)
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string(&sample).expect("corpus samples serialize")
+        );
+        ExitCode::SUCCESS
+    }
+}
+
 fn collect_json(directory: &Path, paths: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
             collect_json(&path, paths)?;
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "json")
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "json")
         {
             paths.push(path);
         }

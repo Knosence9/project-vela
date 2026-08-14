@@ -68,3 +68,18 @@ nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/de
 #+end_src
 
 Valid entries are listed on stdout before a final count. Record-level read, deserialization, and semantic failures are prefixed with the record's relative path on stderr; inspection continues so the summary covers the whole corpus. Exit status is =0= when every discovered record is valid, =1= when any record is invalid, and =2= when the corpus root cannot be traversed.
+
+** Deterministic corpus sampling
+:PROPERTIES:
+:CUSTOM_ID: deterministic-corpus-sampling
+:END:
+Select a bounded path-ordered sample only after validating every discovered record:
+
+#+begin_src sh
+nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32
+nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --trust curated
+#+end_src
+
+The required limit is from =1= through =1024=. The optional filter accepts exactly =untrusted=, =reviewed=, or =curated=. Success emits one compact JSON array containing each selected relative =path= and complete =record=; an empty match emits =[]=. Selection uses sorted relative-path order and never reads randomness or ambient state.
+
+Sampling emits no partial stdout. An unreadable corpus root exits with status =2=. An unreadable record, malformed JSON, semantic validation failure, or non-UTF-8 relative record path exits with status =1= after deterministic path-prefixed diagnostics. Discovery neither follows symbolic links nor treats non-regular =.json= entries as records; Unix reads reject candidates replaced by a final symbolic link or non-regular entry while accepting replacements that remain regular files. Sampling is read-only and performs no scoring, indexing, network access, or mutation.
