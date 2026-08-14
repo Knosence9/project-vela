@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter deterministic corpus samples by example type",
+    "objective": "Add an exact positive or negative schema-v1 filter without weakening complete validation, deterministic ordering, or post-filter limits",
+    "acceptance_criteria": [
+      "The example option accepts exactly positive or negative",
+      "Example and trust filters compose conjunctively",
+      "Empty matches emit an empty JSON array",
+      "Invalid records anywhere suppress stdout even when they would not match",
+      "Filtering remains read-only, path ordered, and deterministic"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added focused regressions for positive, negative, conjunctive, empty-match, invalid-value, and fail-closed behavior",
+      "outcome": "failure",
+      "diagnostic": "The focused regression failed because the example option was not recognized",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added a typed CLI value, mapped it to schema ExampleType, and applied the exact predicate after validation",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Added a direct positive-selection assertion after independent review identified a low-severity coverage gap",
+      "outcome": "success",
+      "diagnostic": "The original regressions lacked a direct positive-only match assertion",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    }
+  ],
+  "outcome": {
+    "summary": "Corpus samples can now be filtered by typed example metadata after complete validation and before limiting",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31789543047 for exact head 678a28c57a0abadf6193e312cf64f9dc933e5ee5", "status": "passed"},
+      {"command": "CodeRabbit exact-head review run 8b14e7f2-34e0-4e8f-a80a-b4b178466a35 for PR 1120", "status": "passed"},
+      {"command": "Pull request 1120 squash merge 4ed72bd2a2292380de996d6c81ac594c30d23973", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Typed bounded CLI values keep sampling filters aligned with schema enums",
+    "Filter only after validating every discovered record and apply limits after all predicates",
+    "A successful review status is insufficient when its description says the review was rate limited"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1120"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

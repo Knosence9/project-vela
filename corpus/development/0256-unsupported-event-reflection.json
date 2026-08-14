@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Avoid reflecting unsupported gateway event kinds",
+    "objective": "Fail unsupported gateway events closed without inserting attacker-controlled event-kind text into the Emacs transcript",
+    "acceptance_criteria": [
+      "Unsupported kinds use a fixed local diagnostic",
+      "Hostile kinds cannot forge transcript entries",
+      "Failure cancels transport, clears busy state, and restores an editable composer",
+      "The fixed-diagnostic boundary is documented"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a guarded-callback regression with a newline-bearing kind that attempted to forge an Assistant transcript line",
+      "outcome": "failure",
+      "diagnostic": "The prior implementation reflected the hostile kind and forged line into the transcript",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Replaced formatted remote-kind output with a fixed local unsupported-event diagnostic",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el, emacs/tests/vela-chat-mode-test.el, and docs/emacs-chat.org"
+    },
+    {
+      "summary": "Broadened the documented fixed-diagnostic boundary after review identified omitted malformed and conflicting event identities",
+      "outcome": "success",
+      "diagnostic": "The initial documentation described unsupported kinds but omitted related fixed diagnostics",
+      "patch": "docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Unsupported gateway event kinds now fail closed through a fixed local diagnostic without transcript reflection",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Emacs ERT 168/168 for PR 1112", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1112", "status": "passed"},
+      {"command": "CodeRabbit exact-head review for PR 1112", "status": "passed"},
+      {"command": "Pull request 1112 squash merge ca5f8a864b168dfe525cdf87a4910e6727a48129", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Diagnostics that cross into transcripts should carry only locally controlled text",
+    "Documentation should describe the complete fixed-diagnostic boundary rather than one event class"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1112"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

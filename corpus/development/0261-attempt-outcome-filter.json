@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by attempt outcome",
+    "objective": "Select records containing an exact success, failure, or blocked attempt while preserving complete validation, deterministic ordering, and filter composition",
+    "acceptance_criteria": [
+      "The attempt-outcome option accepts exactly success, failure, or blocked",
+      "A record matches when at least one attempt has the requested outcome",
+      "Records without attempts do not match",
+      "Trust, example, and attempt-outcome filters compose conjunctively",
+      "Limits apply after filtering and invalid records suppress all stdout"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added regressions for every outcome, records without attempts, composed filters, empty matches, invalid values, and invalid records",
+      "outcome": "failure",
+      "diagnostic": "The focused tests failed because the attempt-outcome option was not recognized",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added a typed outcome value and an exact existential predicate over validated record attempts",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Preserved the exact head with auto-merge disabled when automatic review returned a false-green rate-limit status",
+      "outcome": "blocked",
+      "diagnostic": "CodeRabbit reported Review limit reached with a 30-minute cooldown instead of a substantive review",
+      "patch": "No code change; exact head preserved and auto-merge withheld"
+    },
+    {
+      "summary": "Resumed review once after the recorded cooldown, then verified exact-head review evidence before merging",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "No code change; one deliberate review resume after the cooldown"
+    }
+  ],
+  "outcome": {
+    "summary": "Corpus samples now support exact existential attempt-outcome filtering, and the unchanged reviewed head merged only after all quality gates were substantive",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31793537753 for exact head dc0b6170845ad68863572f7b6a93427ac874e91b", "status": "passed"},
+      {"command": "CodeRabbit exact-head review run 885a6893-c7d6-425b-b0d9-d4b3d0244f7e for PR 1122", "status": "passed"},
+      {"command": "Pull request 1122 squash merge 16eeb7cc47d8e2255eec7962a17ac184a00d974b", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Existential matching over typed attempt outcomes naturally excludes records without attempts",
+    "Review status state and description must be evaluated together because rate-limited success is blocked evidence",
+    "Preserve the exact head during a review cooldown, then deliberately resume review once"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1122"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
