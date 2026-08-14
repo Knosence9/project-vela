@@ -437,6 +437,8 @@ pub enum CorpusCommand {
         verified: Option<bool>,
         #[arg(long, action = clap::ArgAction::Set)]
         sanitation_passed: Option<bool>,
+        #[arg(long, action = clap::ArgAction::Set)]
+        has_sanitation_blockers: Option<bool>,
     },
 }
 
@@ -550,6 +552,7 @@ impl Cli {
                         verification_status,
                         verified,
                         sanitation_passed,
+                        has_sanitation_blockers,
                     }),
             }) => sample_corpus(
                 &path,
@@ -561,6 +564,7 @@ impl Cli {
                     verification_status: verification_status.map(VerificationStatus::from),
                     verified,
                     sanitation_passed,
+                    has_sanitation_blockers,
                 },
             ),
             Some(Command::Extension {
@@ -3579,6 +3583,7 @@ struct CorpusSampleFilters {
     verification_status: Option<VerificationStatus>,
     verified: Option<bool>,
     sanitation_passed: Option<bool>,
+    has_sanitation_blockers: Option<bool>,
 }
 
 enum CorpusRecordError {
@@ -3703,6 +3708,9 @@ fn sample_corpus(root: &Path, limit: usize, filters: CorpusSampleFilters) -> Exi
             && filters
                 .sanitation_passed
                 .is_none_or(|expected| record.sanitation.passed == expected)
+            && filters
+                .has_sanitation_blockers
+                .is_none_or(|expected| record.sanitation.blockers.is_empty() != expected)
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
