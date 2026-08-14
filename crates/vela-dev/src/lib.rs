@@ -8,7 +8,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
-use record::{DevelopmentRecord, Trust};
+use record::{DevelopmentRecord, ExampleType, Trust};
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
@@ -427,6 +427,8 @@ pub enum CorpusCommand {
         limit: usize,
         #[arg(long)]
         trust: Option<CorpusTrust>,
+        #[arg(long)]
+        example: Option<CorpusExample>,
     },
 }
 
@@ -443,6 +445,21 @@ impl From<CorpusTrust> for Trust {
             CorpusTrust::Untrusted => Self::Untrusted,
             CorpusTrust::Reviewed => Self::Reviewed,
             CorpusTrust::Curated => Self::Curated,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CorpusExample {
+    Positive,
+    Negative,
+}
+
+impl From<CorpusExample> for ExampleType {
+    fn from(value: CorpusExample) -> Self {
+        match value {
+            CorpusExample::Positive => Self::Positive,
+            CorpusExample::Negative => Self::Negative,
         }
     }
 }
@@ -481,8 +498,19 @@ impl Cli {
                 command: Some(CorpusCommand::Inspect { path }),
             }) => inspect_corpus(&path),
             Some(Command::Corpus {
-                command: Some(CorpusCommand::Sample { path, limit, trust }),
-            }) => sample_corpus(&path, limit, trust.map(Trust::from)),
+                command:
+                    Some(CorpusCommand::Sample {
+                        path,
+                        limit,
+                        trust,
+                        example,
+                    }),
+            }) => sample_corpus(
+                &path,
+                limit,
+                trust.map(Trust::from),
+                example.map(ExampleType::from),
+            ),
             Some(Command::Extension {
                 command: Some(ExtensionCommand::Inspect { root }),
             }) => inspect_extensions(&root),
@@ -3560,7 +3588,12 @@ fn report_corpus_record_error(relative: &str, error: CorpusRecordError) {
     }
 }
 
-fn sample_corpus(root: &Path, limit: usize, trust: Option<Trust>) -> ExitCode {
+fn sample_corpus(
+    root: &Path,
+    limit: usize,
+    trust: Option<Trust>,
+    example: Option<ExampleType>,
+) -> ExitCode {
     let mut paths = Vec::new();
     if let Err(error) = collect_json(root, &mut paths) {
         eprintln!("$: unreadable_corpus: {error}");
@@ -3588,7 +3621,10 @@ fn sample_corpus(root: &Path, limit: usize, trust: Option<Trust>) -> ExitCode {
                 continue;
             }
         };
-        if sample.len() < limit && trust.is_none_or(|expected| record.trust == expected) {
+        if sample.len() < limit
+            && trust.is_none_or(|expected| record.trust == expected)
+            && example.is_none_or(|expected| record.example.kind == expected)
+        {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
                 record,
