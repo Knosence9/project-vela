@@ -1404,7 +1404,7 @@ chunk when that optional callback is non-nil."
   "Return bounded live chat status for `header-line-format'."
   (format " Vela · %s · session %s"
           (if vela-chat--busy "streaming" "ready")
-          (or vela-chat--session-id "new")))
+          (if vela-chat--session-id "active" "new")))
 
 (defun vela-chat--initialize-buffer ()
   "Initialize the current Vela chat transcript and composer."
