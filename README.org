@@ -178,6 +178,14 @@ nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/de
 
 Inspection prints each valid record and an aggregate summary. It continues past malformed, unreadable, or semantically invalid records, emits path-prefixed diagnostics, and exits non-zero when any record is invalid.
 
+Select at most 32 fully validated records in deterministic relative-path order, optionally restricted to one schema-v1 trust level, with:
+
+#+begin_src sh
+nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --trust curated
+#+end_src
+
+Sampling validates the entire discovered corpus before emitting one compact JSON array of relative paths and complete records. Limits must be from 1 through 1024. Empty matches succeed with =[]=; traversal, record, JSON, and semantic failures produce no partial stdout. Sampling is read-only and uses no randomness, ambient state, network access, scoring, or indexing.
+
 Inspect one caller-selected extension root through the same validated, descriptor-anchored discovery boundary used by the extension library:
 
 #+begin_src sh

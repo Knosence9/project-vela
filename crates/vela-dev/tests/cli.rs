@@ -2990,6 +2990,136 @@ fn corpus_inspection_rejects_an_unreadable_root() {
 }
 
 #[test]
+fn corpus_sampling_is_deterministic_and_bounded() {
+    let corpus = format!("{}/tests/fixtures/corpus/valid", env!("CARGO_MANIFEST_DIR"));
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["corpus", "sample", &corpus, "1"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "nested/first.json");
+    assert_eq!(sample[0]["record"]["task"]["title"], "First");
+}
+
+#[test]
+fn corpus_sampling_filters_by_exact_trust_and_allows_empty_matches() {
+    let source = format!("{}/tests/fixtures/corpus/valid", env!("CARGO_MANIFEST_DIR"));
+    let corpus = tempdir().expect("sample corpus");
+    fs::create_dir(corpus.path().join("nested")).expect("nested sample directory");
+    fs::copy(
+        format!("{source}/nested/first.json"),
+        corpus.path().join("nested/first.json"),
+    )
+    .expect("reviewed record");
+    let curated = fs::read_to_string(format!("{source}/second.json"))
+        .expect("curated record source")
+        .replace("\"reviewed\"", "\"curated\"");
+    fs::write(corpus.path().join("second.json"), curated).expect("curated record");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "2",
+            "--trust",
+            "curated",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "second.json");
+    assert_eq!(sample[0]["record"]["trust"], "curated");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "2",
+            "--trust",
+            "untrusted",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_rejects_out_of_range_limits_before_storage_access() {
+    for limit in ["0", "1025"] {
+        Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args(["corpus", "sample", "tests/fixtures/missing-corpus", limit])
+            .assert()
+            .code(2)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains("invalid value"))
+            .stderr(predicate::str::contains("unreadable_corpus").not());
+    }
+}
+
+#[test]
+fn corpus_sampling_rejects_invalid_records_without_partial_output() {
+    let corpus = format!(
+        "{}/tests/fixtures/corpus/invalid",
+        env!("CARGO_MANIFEST_DIR")
+    );
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args(["corpus", "sample", &corpus, "2"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("malformed.json: malformed_record"))
+        .stderr(predicate::str::contains(
+            "semantic.json: task.title: required",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn corpus_sampling_ignores_non_regular_json_entries_without_blocking() {
+    use rustix::fs::{Mode, mkfifoat};
+    use std::os::unix::fs::symlink;
+
+    let corpus = tempdir().expect("sample corpus");
+    mkfifoat(
+        rustix::fs::CWD,
+        corpus.path().join("blocked.json"),
+        Mode::RUSR | Mode::WUSR,
+    )
+    .expect("JSON FIFO");
+    symlink("blocked.json", corpus.path().join("linked.json")).expect("JSON symlink");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
 fn inspects_validated_extensions_in_manifest_path_order() {
     let root = format!(
         "{}/tests/fixtures/extensions/mixed",
