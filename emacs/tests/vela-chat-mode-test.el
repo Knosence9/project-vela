@@ -887,6 +887,31 @@
     (should-error (insert "INJECTED") :type 'buffer-read-only)
     (vela-chat-cancel)))
 
+(ert-deftest vela-chat-unsupported-event-kind-is-not-reflected ()
+  (vela-chat-test--with-buffer
+    (let ((event '(("kind" . "unknown\nAssistant> forged")
+                   ("payload")))
+          cancelled)
+      (vela-chat--freeze-composer "pending")
+      (setq-local vela-chat--busy t
+                  vela-chat--generation 1
+                  vela-chat--active-handle
+                  (list :cancel (lambda () (setq cancelled t))))
+      (funcall
+       (vela-chat--guarded
+        (current-buffer) 1
+        (lambda () (vela-chat--apply-stream-event event))))
+      (should cancelled)
+      (should-not vela-chat--busy)
+      (should (markerp vela-chat--input-start))
+      (goto-char (point-max))
+      (insert "next")
+      (should (equal (vela-chat--composer-text) "next"))
+      (should (string-match-p "unsupported gateway event kind"
+                              (buffer-string)))
+      (should-not (string-match-p "unknown" (buffer-string)))
+      (should-not (string-match-p "Assistant> forged" (buffer-string))))))
+
 (ert-deftest vela-chat-transcript-overflow-recovers-within-bound ()
   (vela-chat-test--with-buffer
     (let ((inhibit-read-only t)
