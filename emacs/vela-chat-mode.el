@@ -1104,7 +1104,7 @@ chunk when that optional callback is non-nil."
        (vela-chat--fail-turn
         "Error" (vela-chat--status-text payload "text" nil)))
       ((or "turn.accepted" "session.started" "runtime.status") nil)
-      (_ (signal 'vela-chat-error (list (format "unsupported gateway event: %s" kind)))))))
+      (_ (signal 'vela-chat-error '("unsupported gateway event kind"))))))
 
 (defun vela-chat--decode-stream-event (event)
   "Decode one raw SSE EVENT into the gateway event object."
