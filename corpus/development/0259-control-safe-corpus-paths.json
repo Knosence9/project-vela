@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Escape untrusted corpus record paths in CLI output",
+    "objective": "Keep untrusted filenames inside one deterministic quoted field without terminal controls, forged lines, or collapsed Unix path identities",
+    "acceptance_criteria": [
+      "Inspector rows and diagnostics share one quoted path representation",
+      "Control-bearing paths do not emit literal newline, carriage return, tab, or escape bytes",
+      "Each row and diagnostic remains one physical line",
+      "Distinct non-UTF-8 Unix paths remain distinguishable",
+      "Sampling preserves no-partial-stdout validation semantics"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added an inspector regression with newline and escape bytes in a filename",
+      "outcome": "failure",
+      "diagnostic": "The prior output produced three physical stdout lines instead of two",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added shared quoted path rendering for inspector rows and corpus diagnostics",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Changed rendering to debug-format Path directly and expanded control-byte coverage after review",
+      "outcome": "success",
+      "diagnostic": "Debug-formatting path.display() was lossy for invalid Unix bytes and could collapse distinct filenames to the same replacement character",
+      "patch": "crates/vela-dev/src/lib.rs and crates/vela-dev/tests/cli.rs"
+    }
+  ],
+  "outcome": {
+    "summary": "Corpus CLI output now quotes untrusted paths without physical-line injection, raw controls, or lossy Unix filename identity",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command cargo test --locked -p vela-dev --test cli corpus_", "status": "passed"},
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1118", "status": "passed"},
+      {"command": "CodeRabbit exact-head review for PR 1118", "status": "passed"},
+      {"command": "Pull request 1118 squash merge 36d088fd925626c40080de1d4c831c72f44f3a0b", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Debug-format Path itself rather than its lossy display adapter when diagnostic identity matters",
+    "Control-safe output tests should assert escaped text and the absence of raw control bytes"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1118"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

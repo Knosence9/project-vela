@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Sample validated development records deterministically",
+    "objective": "Add bounded read-only corpus sampling that validates every discovered record before emitting deterministic output",
+    "acceptance_criteria": [
+      "Limits are parsed in the range 1 through 1024 before storage traversal",
+      "JSON records are recursively discovered and sorted by relative path",
+      "Every discovered record is read, decoded, and semantically validated before stdout",
+      "Exact trust filtering and post-filter limits preserve deterministic output",
+      "Invalid corpus input fails without partial stdout"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added acceptance tests for ordering and limits, exact trust filtering, early limit rejection, and atomic invalid-corpus failure",
+      "outcome": "failure",
+      "diagnostic": "The four focused tests failed because sample was not a recognized corpus subcommand",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Implemented bounded sampling with shared record validation, sorted selection, typed trust mapping, and deferred compact serialization",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, crates/vela-dev/Cargo.toml, Cargo.lock, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Hardened discovery and opening against FIFOs, symlinks, and non-regular replacements",
+      "outcome": "success",
+      "diagnostic": "A FIFO regression timed out with exit 124 before discovery and descriptor checks were added",
+      "patch": "crates/vela-dev/src/lib.rs and crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Corrected replacement-safety documentation after review identified an overstatement",
+      "outcome": "success",
+      "diagnostic": "The docs implied every post-discovery replacement was rejected although regular-file replacements remain valid",
+      "patch": "docs/development-record-v1.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Corpus sampling now returns bounded path-ordered records only after complete fail-closed validation",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Focused FIFO regression for PR 1116", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1116", "status": "passed"},
+      {"command": "CodeRabbit exact-head review for PR 1116", "status": "passed"},
+      {"command": "Pull request 1116 squash merge 3bfe75a1a7a3f991bd53a1765ae7a3421a657d45", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Validate the complete input set before serializing atomic sample output",
+    "Filesystem discovery and opening need separate type and symlink defenses because entries can change between operations"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1116"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

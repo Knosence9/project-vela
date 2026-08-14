@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Keep gateway session IDs out of Emacs header labels",
+    "objective": "Preserve opaque session IDs for transport continuity while exposing only local new or active state in UI presentation",
+    "acceptance_criteria": [
+      "Adversarial session IDs are not reflected in the header",
+      "The header reports new without an ID and active whenever an ID exists",
+      "Transport storage and reuse preserve the exact opaque ID",
+      "The presentation boundary is documented"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added a regression using a newline-bearing remote session ID",
+      "outcome": "failure",
+      "diagnostic": "The prior header rendered the raw remote ID into presentation output",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Mapped session-ID presence to fixed active or new header labels while retaining the exact transport value",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el, emacs/tests/vela-chat-mode-test.el, and docs/emacs-chat.org"
+    },
+    {
+      "summary": "Expanded review coverage to newline-bearing, bidirectional-format-bearing, and oversized opaque IDs",
+      "outcome": "success",
+      "diagnostic": "Review found that the initial regression did not cover format-bearing or oversized identifiers",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    }
+  ],
+  "outcome": {
+    "summary": "Emacs headers expose only local session presence while exact remote identifiers remain transport-only",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Emacs ERT 169/169 for PR 1114", "status": "passed"},
+      {"command": "GitHub Rust quality gate for PR 1114", "status": "passed"},
+      {"command": "CodeRabbit exact-head review for PR 1114", "status": "passed"},
+      {"command": "Pull request 1114 squash merge 91e79805d5aa596e377b7abb551017e135179b0f", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Opaque transport identifiers should cross UI boundaries through state mapping rather than direct rendering",
+    "Boundary tests should include control-bearing, format-bearing, and oversized opaque values"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1114"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
