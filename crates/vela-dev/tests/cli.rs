@@ -3155,6 +3155,126 @@ fn corpus_sampling_filters_by_exact_trust_and_allows_empty_matches() {
 }
 
 #[test]
+fn corpus_sampling_filters_by_example_type_and_composes_with_trust() {
+    let source = format!("{}/tests/fixtures/corpus/valid", env!("CARGO_MANIFEST_DIR"));
+    let corpus = tempdir().expect("sample corpus");
+    fs::create_dir(corpus.path().join("nested")).expect("nested sample directory");
+    fs::copy(
+        format!("{source}/nested/first.json"),
+        corpus.path().join("nested/first.json"),
+    )
+    .expect("positive reviewed record");
+    let negative = fs::read_to_string(format!("{source}/second.json"))
+        .expect("negative record source")
+        .replace(
+            "\"type\":\"positive\",\"rejection_rationale\":null",
+            "\"type\":\"negative\",\"rejection_rationale\":\"rejected example\"",
+        );
+    fs::write(corpus.path().join("second.json"), &negative).expect("negative reviewed record");
+    fs::write(
+        corpus.path().join("third.json"),
+        negative
+            .replace("\"Second\"", "\"Third\"")
+            .replace("\"reviewed\"", "\"curated\""),
+    )
+    .expect("negative curated record");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "2",
+            "--example",
+            "positive",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "nested/first.json");
+    assert_eq!(sample[0]["record"]["example"]["type"], "positive");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--example",
+            "negative",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "second.json");
+    assert_eq!(sample[0]["record"]["example"]["type"], "negative");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "2",
+            "--trust",
+            "curated",
+            "--example",
+            "negative",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "third.json");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "2",
+            "--trust",
+            "curated",
+            "--example",
+            "positive",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_rejects_unknown_example_types_before_storage_access() {
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            "tests/fixtures/missing-corpus",
+            "1",
+            "--example",
+            "mixed",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("unreadable_corpus").not());
+}
+
+#[test]
 fn corpus_sampling_rejects_out_of_range_limits_before_storage_access() {
     for limit in ["0", "1025"] {
         Command::cargo_bin("vela-dev")
@@ -3177,7 +3297,7 @@ fn corpus_sampling_rejects_invalid_records_without_partial_output() {
 
     Command::cargo_bin("vela-dev")
         .expect("vela-dev binary")
-        .args(["corpus", "sample", &corpus, "2"])
+        .args(["corpus", "sample", &corpus, "2", "--example", "negative"])
         .assert()
         .code(1)
         .stdout(predicate::str::is_empty())
