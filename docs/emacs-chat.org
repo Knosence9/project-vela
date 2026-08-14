@@ -136,9 +136,9 @@ bounded polling timer.  The mode rejects malformed responses and enforces:
 
 Malformed JSON or SSE, invalid URLs or credentials, unsupported events,
 oversized values, transport errors, and invalid lifecycle transitions fail the
-active turn closed and restore an editable composer.  Unsupported event-kind
-diagnostics are local constants and do not reflect the untrusted kind into the
-transcript.  Cancellation invalidates
+active turn closed and restore an editable composer.  Malformed, conflicting,
+and unsupported event-kind diagnostics use fixed local text and do not reflect
+untrusted event data into the transcript.  Cancellation invalidates
 the callback generation before stopping the active transport, so late callbacks
 cannot change the new UI state.  An explicit terminal event closes the active
 stream transport, and killing an active chat buffer cancels its process and
