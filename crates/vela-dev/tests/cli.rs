@@ -3882,6 +3882,16 @@ fn corpus_sampling_filters_by_attempt_diagnostic_presence_after_filtering_and_li
     )
     .expect("record with a null diagnostic");
     fs::write(
+        corpus.path().join("c-omitted-diagnostic.json"),
+        source_record
+            .replace("\"Second\"", "\"Omitted diagnostic\"")
+            .replace(
+                "\"attempts\": []",
+                "\"attempts\": [{\"summary\":\"clean pass\",\"outcome\":\"success\",\"patch\":\"second.rs\"}]",
+            ),
+    )
+    .expect("record with an omitted diagnostic");
+    fs::write(
         corpus.path().join("c-present-diagnostic.json"),
         source_record
             .replace("\"Second\"", "\"Present diagnostic\"")
@@ -3910,28 +3920,53 @@ fn corpus_sampling_filters_by_attempt_diagnostic_presence_after_filtering_and_li
     fs::write(corpus.path().join("d-composed.json"), composed)
         .expect("record matching every filter");
 
-    for (has_diagnostic, expected_path) in [
-        ("false", "a-no-attempts.json"),
-        ("true", "c-present-diagnostic.json"),
-    ] {
-        let assertion = Command::cargo_bin("vela-dev")
-            .expect("vela-dev binary")
-            .args([
-                "corpus",
-                "sample",
-                corpus.path().to_str().expect("UTF-8 corpus path"),
-                "1",
-                "--has-attempt-diagnostic",
-                has_diagnostic,
-            ])
-            .assert()
-            .success()
-            .stderr(predicate::str::is_empty());
-        let sample: serde_json::Value =
-            serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
-        assert_eq!(sample.as_array().expect("sample array").len(), 1);
-        assert_eq!(sample[0]["path"], expected_path);
-    }
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "3",
+            "--has-attempt-diagnostic",
+            "false",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    let paths: Vec<_> = sample
+        .as_array()
+        .expect("sample array")
+        .iter()
+        .map(|entry| entry["path"].as_str().expect("sample path"))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "a-no-attempts.json",
+            "b-null-diagnostic.json",
+            "c-omitted-diagnostic.json"
+        ]
+    );
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--has-attempt-diagnostic",
+            "true",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "c-present-diagnostic.json");
 
     let assertion = Command::cargo_bin("vela-dev")
         .expect("vela-dev binary")
