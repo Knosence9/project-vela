@@ -8,7 +8,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
-use record::{AttemptOutcome, DevelopmentRecord, ExampleType, Trust};
+use record::{AttemptOutcome, DevelopmentRecord, ExampleType, Trust, VerificationStatus};
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
@@ -431,6 +431,8 @@ pub enum CorpusCommand {
         example: Option<CorpusExample>,
         #[arg(long)]
         attempt_outcome: Option<CorpusAttemptOutcome>,
+        #[arg(long)]
+        verification_status: Option<CorpusVerificationStatus>,
     },
 }
 
@@ -483,6 +485,23 @@ impl From<CorpusAttemptOutcome> for AttemptOutcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CorpusVerificationStatus {
+    Passed,
+    Failed,
+    NotRun,
+}
+
+impl From<CorpusVerificationStatus> for VerificationStatus {
+    fn from(value: CorpusVerificationStatus) -> Self {
+        match value {
+            CorpusVerificationStatus::Passed => Self::Passed,
+            CorpusVerificationStatus::Failed => Self::Failed,
+            CorpusVerificationStatus::NotRun => Self::NotRun,
+        }
+    }
+}
+
 /// Development-record workflows.
 #[derive(Debug, Subcommand)]
 pub enum RecordCommand {
@@ -524,6 +543,7 @@ impl Cli {
                         trust,
                         example,
                         attempt_outcome,
+                        verification_status,
                     }),
             }) => sample_corpus(
                 &path,
@@ -531,6 +551,7 @@ impl Cli {
                 trust.map(Trust::from),
                 example.map(ExampleType::from),
                 attempt_outcome.map(AttemptOutcome::from),
+                verification_status.map(VerificationStatus::from),
             ),
             Some(Command::Extension {
                 command: Some(ExtensionCommand::Inspect { root }),
@@ -3615,6 +3636,7 @@ fn sample_corpus(
     trust: Option<Trust>,
     example: Option<ExampleType>,
     attempt_outcome: Option<AttemptOutcome>,
+    verification_status: Option<VerificationStatus>,
 ) -> ExitCode {
     let mut paths = Vec::new();
     if let Err(error) = collect_json(root, &mut paths) {
@@ -3651,6 +3673,13 @@ fn sample_corpus(
                     .attempts
                     .iter()
                     .any(|attempt| attempt.outcome == expected)
+            })
+            && verification_status.is_none_or(|expected| {
+                record
+                    .outcome
+                    .verification
+                    .iter()
+                    .any(|verification| verification.status == expected)
             })
         {
             sample.push(CorpusSampleEntry {

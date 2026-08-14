@@ -3386,6 +3386,141 @@ fn corpus_sampling_filters_by_attempt_outcome_after_composing_other_filters() {
 }
 
 #[test]
+fn corpus_sampling_filters_by_verification_status_after_filtering_and_limiting() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let source_record = fs::read_to_string(source).expect("record source");
+    fs::write(
+        corpus.path().join("a-empty.json"),
+        source_record.replace("\"Second\"", "\"Empty\"").replace(
+            "\"verified\":true,\"verification\":[{\"command\":\"test\",\"status\":\"passed\"}]",
+            "\"verified\":false,\"verification\":[]",
+        ),
+    )
+    .expect("record without verification");
+    fs::write(
+        corpus.path().join("b-mixed.json"),
+        source_record.replace(
+            "[{\"command\":\"test\",\"status\":\"passed\"}]",
+            "[{\"command\":\"first\",\"status\":\"failed\"},{\"command\":\"test\",\"status\":\"passed\"}]",
+        ),
+    )
+    .expect("mixed verification record");
+    fs::write(
+        corpus.path().join("c-not-run.json"),
+        source_record.replace("\"Second\"", "\"Not run\"").replace(
+            "\"verified\":true,\"verification\":[{\"command\":\"test\",\"status\":\"passed\"}]",
+            "\"verified\":false,\"verification\":[{\"command\":\"test\",\"status\":\"not_run\"}]",
+        ),
+    )
+    .expect("not-run verification record");
+    let composed = source_record
+        .replace("\"Second\"", "\"Composed\"")
+        .replace("\"reviewed\"", "\"curated\"")
+        .replace(
+            "\"attempts\": []",
+            "\"attempts\": [{\"summary\":\"regression\",\"outcome\":\"failure\",\"diagnostic\":\"failed check\",\"patch\":\"second.rs\"}]",
+        )
+        .replace(
+            "\"type\":\"positive\",\"rejection_rationale\":null",
+            "\"type\":\"negative\",\"rejection_rationale\":\"rejected example\"",
+        )
+        .replace(
+            "[{\"command\":\"test\",\"status\":\"passed\"}]",
+            "[{\"command\":\"first\",\"status\":\"failed\"},{\"command\":\"test\",\"status\":\"passed\"}]",
+        );
+    fs::write(corpus.path().join("d-composed.json"), composed)
+        .expect("record matching every filter");
+
+    for (status, expected_path) in [
+        ("failed", "b-mixed.json"),
+        ("passed", "b-mixed.json"),
+        ("not-run", "c-not-run.json"),
+    ] {
+        let assertion = Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "corpus",
+                "sample",
+                corpus.path().to_str().expect("UTF-8 corpus path"),
+                "1",
+                "--verification-status",
+                status,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::is_empty());
+        let sample: serde_json::Value =
+            serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+        assert_eq!(sample.as_array().expect("sample array").len(), 1);
+        assert_eq!(sample[0]["path"], expected_path);
+    }
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "3",
+            "--trust",
+            "curated",
+            "--example",
+            "negative",
+            "--attempt-outcome",
+            "failure",
+            "--verification-status",
+            "failed",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "d-composed.json");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "3",
+            "--verification-status",
+            "failed",
+            "--trust",
+            "untrusted",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_rejects_unknown_verification_status_before_storage_access() {
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            "tests/fixtures/missing-corpus",
+            "1",
+            "--verification-status",
+            "skipped",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("unreadable_corpus").not());
+}
+
+#[test]
 fn corpus_sampling_rejects_unknown_attempt_outcomes_before_storage_access() {
     Command::cargo_bin("vela-dev")
         .expect("vela-dev binary")
@@ -3453,6 +3588,8 @@ fn corpus_sampling_rejects_invalid_records_without_partial_output() {
             "2",
             "--attempt-outcome",
             "failure",
+            "--verification-status",
+            "failed",
         ])
         .assert()
         .code(1)
