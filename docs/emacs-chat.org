@@ -50,7 +50,9 @@ the transcript's trailing boundary before the next composer exists.  Undo is
 disabled in chat buffers so it cannot erase protected transcript history.
 One live chat buffer reuses its resolved session ID, including after a cancelled
 turn.  Resetting clears that continuity.  Neither sessions nor transcripts are
-restored after the buffer or Emacs process is destroyed.
+restored after the buffer or Emacs process is destroyed.  The remote session ID
+is retained exactly for gateway continuity but never displayed; the header
+reports only whether the local session is =new= or =active=.
 
 ** Gateway contract
 :PROPERTIES:
