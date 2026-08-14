@@ -447,6 +447,8 @@ pub enum CorpusCommand {
         has_rejection_rationale: Option<bool>,
         #[arg(long, action = clap::ArgAction::Set)]
         has_attempts: Option<bool>,
+        #[arg(long, action = clap::ArgAction::Set)]
+        has_verification: Option<bool>,
     },
 }
 
@@ -565,6 +567,7 @@ impl Cli {
                         has_attempt_diagnostic,
                         has_rejection_rationale,
                         has_attempts,
+                        has_verification,
                     }),
             }) => sample_corpus(
                 &path,
@@ -581,6 +584,7 @@ impl Cli {
                     has_attempt_diagnostic,
                     has_rejection_rationale,
                     has_attempts,
+                    has_verification,
                 },
             ),
             Some(Command::Extension {
@@ -3604,6 +3608,7 @@ struct CorpusSampleFilters {
     has_attempt_diagnostic: Option<bool>,
     has_rejection_rationale: Option<bool>,
     has_attempts: Option<bool>,
+    has_verification: Option<bool>,
 }
 
 enum CorpusRecordError {
@@ -3747,6 +3752,9 @@ fn sample_corpus(root: &Path, limit: usize, filters: CorpusSampleFilters) -> Exi
             && filters
                 .has_attempts
                 .is_none_or(|expected| record.attempts.is_empty() != expected)
+            && filters
+                .has_verification
+                .is_none_or(|expected| record.outcome.verification.is_empty() != expected)
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
