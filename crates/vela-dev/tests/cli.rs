@@ -4215,6 +4215,142 @@ fn corpus_sampling_rejection_rationale_filter_still_rejects_malformed_records() 
 }
 
 #[test]
+fn corpus_sampling_filters_by_attempt_presence_after_filtering_and_limiting() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let source_record = fs::read_to_string(source).expect("record source");
+    fs::write(
+        corpus.path().join("a-no-attempts.json"),
+        source_record.replace("\"Second\"", "\"No attempts\""),
+    )
+    .expect("record without attempts");
+    fs::write(
+        corpus.path().join("b-one-attempt.json"),
+        source_record
+            .replace("\"Second\"", "\"One attempt\"")
+            .replace(
+                "\"attempts\": []",
+                "\"attempts\": [{\"summary\":\"implemented\",\"outcome\":\"success\",\"diagnostic\":null,\"patch\":\"second.rs\"}]",
+            ),
+    )
+    .expect("record with one attempt");
+    let composed = source_record
+        .replace("\"Second\"", "\"Composed\"")
+        .replace("\"reviewed\"", "\"curated\"")
+        .replace(
+            "\"attempts\": []",
+            "\"attempts\": [{\"summary\":\"first try\",\"outcome\":\"failure\",\"diagnostic\":\"failed check\",\"patch\":\"first.rs\"},{\"summary\":\"fixed\",\"outcome\":\"success\",\"diagnostic\":null,\"patch\":\"second.rs\"}]",
+        );
+    fs::write(corpus.path().join("c-composed.json"), composed)
+        .expect("record with multiple attempts matching every filter");
+
+    for (has_attempts, expected_path) in [
+        ("false", "a-no-attempts.json"),
+        ("true", "b-one-attempt.json"),
+    ] {
+        let assertion = Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "corpus",
+                "sample",
+                corpus.path().to_str().expect("UTF-8 corpus path"),
+                "1",
+                "--has-attempts",
+                has_attempts,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::is_empty());
+        let sample: serde_json::Value =
+            serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+        assert_eq!(sample.as_array().expect("sample array").len(), 1);
+        assert_eq!(sample[0]["path"], expected_path);
+    }
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "3",
+            "--trust",
+            "curated",
+            "--attempt-outcome",
+            "failure",
+            "--has-attempts",
+            "true",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "c-composed.json");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "3",
+            "--trust",
+            "curated",
+            "--has-attempts",
+            "false",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_rejects_non_boolean_attempt_presence_before_storage_access() {
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            "tests/fixtures/missing-corpus",
+            "1",
+            "--has-attempts",
+            "yes",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("unreadable_corpus").not());
+}
+
+#[test]
+fn corpus_sampling_attempt_presence_filter_still_rejects_malformed_records() {
+    let corpus = tempdir().expect("sample corpus");
+    fs::write(corpus.path().join("malformed.json"), "{").expect("malformed record");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--has-attempts",
+            "false",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("malformed_record"));
+}
+
+#[test]
 fn corpus_sampling_filters_by_lesson_presence_after_filtering_and_limiting() {
     let source = format!(
         "{}/tests/fixtures/corpus/valid/second.json",
