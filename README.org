@@ -178,14 +178,15 @@ nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/de
 
 Inspection prints each valid record with a quoted, debug-escaped relative path and an aggregate summary. The escaped form preserves distinct non-UTF-8 filename bytes on Unix. Inspection continues past malformed, unreadable, or semantically invalid records, emits diagnostics prefixed by the same control-safe path field, and exits non-zero when any record is invalid.
 
-Select at most 32 fully validated records in deterministic relative-path order, optionally restricted to one schema-v1 trust level and example type, with:
+Select at most 32 fully validated records in deterministic relative-path order, optionally restricted to one schema-v1 trust level, example type, and attempt outcome, with:
 
 #+begin_src sh
 nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --trust curated
 nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --example negative
+nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --attempt-outcome failure
 #+end_src
 
-Sampling validates the entire discovered corpus before emitting one compact JSON array of relative paths and complete records. Limits must be from 1 through 1024. The =--example= filter accepts exactly =positive= or =negative= and composes conjunctively with =--trust= without changing path order or limit behavior. Empty matches succeed with =[]=; traversal, record, JSON, and semantic failures produce no partial stdout, and record diagnostics use quoted, debug-escaped relative paths. Sampling is read-only and uses no randomness, ambient state, network access, scoring, or indexing.
+Sampling validates the entire discovered corpus before emitting one compact JSON array of relative paths and complete records. Limits must be from 1 through 1024. The =--example= filter accepts exactly =positive= or =negative=; =--attempt-outcome= accepts exactly =success=, =failure=, or =blocked= and matches a record when any attempt has that outcome. Records without attempts do not match an attempt-outcome filter. All filters compose conjunctively without changing path order or limit behavior. Empty matches succeed with =[]=; traversal, record, JSON, and semantic failures produce no partial stdout, and record diagnostics use quoted, debug-escaped relative paths. Sampling is read-only and uses no randomness, ambient state, network access, scoring, or indexing.
 
 Inspect one caller-selected extension root through the same validated, descriptor-anchored discovery boundary used by the extension library:
 

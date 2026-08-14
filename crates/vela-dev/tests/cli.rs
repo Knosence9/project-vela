@@ -3256,6 +3256,155 @@ fn corpus_sampling_filters_by_example_type_and_composes_with_trust() {
 }
 
 #[test]
+fn corpus_sampling_filters_by_attempt_outcome_after_composing_other_filters() {
+    let source = format!("{}/tests/fixtures/corpus/valid", env!("CARGO_MANIFEST_DIR"));
+    let corpus = tempdir().expect("sample corpus");
+    fs::create_dir(corpus.path().join("nested")).expect("nested sample directory");
+    fs::copy(
+        format!("{source}/nested/first.json"),
+        corpus.path().join("nested/first.json"),
+    )
+    .expect("record without attempts");
+    let source_record = fs::read_to_string(format!("{source}/second.json")).expect("record source");
+    let failure = source_record.replace(
+        "\"attempts\": []",
+        "\"attempts\": [\
+         {\"summary\":\"first try\",\"outcome\":\"success\",\"diagnostic\":null,\"patch\":\"second.rs\"},\
+         {\"summary\":\"regression\",\"outcome\":\"failure\",\"diagnostic\":\"failed check\",\"patch\":\"second.rs\"}]",
+    );
+    fs::write(corpus.path().join("second.json"), &failure).expect("mixed outcome record");
+    let curated_negative = failure
+        .replace("\"Second\"", "\"Third\"")
+        .replace("\"reviewed\"", "\"curated\"")
+        .replace(
+            "\"type\":\"positive\",\"rejection_rationale\":null",
+            "\"type\":\"negative\",\"rejection_rationale\":\"rejected example\"",
+        );
+    fs::write(corpus.path().join("third.json"), curated_negative)
+        .expect("curated negative failure");
+    let blocked = source_record
+        .replace("\"Second\"", "\"Fourth\"")
+        .replace(
+            "\"attempts\": []",
+            "\"attempts\": [{\"summary\":\"waiting\",\"outcome\":\"blocked\",\"diagnostic\":\"dependency unavailable\",\"patch\":\"second.rs\"}]",
+        );
+    fs::write(corpus.path().join("fourth.json"), blocked).expect("blocked record");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--attempt-outcome",
+            "failure",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "second.json");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--trust",
+            "curated",
+            "--example",
+            "negative",
+            "--attempt-outcome",
+            "failure",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "third.json");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--attempt-outcome",
+            "blocked",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "fourth.json");
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--attempt-outcome",
+            "success",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 2);
+    assert_eq!(sample[0]["path"], "second.json");
+    assert_eq!(sample[1]["path"], "third.json");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--attempt-outcome",
+            "success",
+            "--trust",
+            "untrusted",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_rejects_unknown_attempt_outcomes_before_storage_access() {
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            "tests/fixtures/missing-corpus",
+            "1",
+            "--attempt-outcome",
+            "partial",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("unreadable_corpus").not());
+}
+
+#[test]
 fn corpus_sampling_rejects_unknown_example_types_before_storage_access() {
     Command::cargo_bin("vela-dev")
         .expect("vela-dev binary")
@@ -3297,7 +3446,14 @@ fn corpus_sampling_rejects_invalid_records_without_partial_output() {
 
     Command::cargo_bin("vela-dev")
         .expect("vela-dev binary")
-        .args(["corpus", "sample", &corpus, "2", "--example", "negative"])
+        .args([
+            "corpus",
+            "sample",
+            &corpus,
+            "2",
+            "--attempt-outcome",
+            "failure",
+        ])
         .assert()
         .code(1)
         .stdout(predicate::str::is_empty())

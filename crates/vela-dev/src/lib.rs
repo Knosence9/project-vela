@@ -8,7 +8,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
-use record::{DevelopmentRecord, ExampleType, Trust};
+use record::{AttemptOutcome, DevelopmentRecord, ExampleType, Trust};
 use serde::Serialize;
 use vela_extensions::{ExtensionKind, ExtensionRegistry, activate_tool_selection};
 use vela_kernel::scheduler::{
@@ -429,6 +429,8 @@ pub enum CorpusCommand {
         trust: Option<CorpusTrust>,
         #[arg(long)]
         example: Option<CorpusExample>,
+        #[arg(long)]
+        attempt_outcome: Option<CorpusAttemptOutcome>,
     },
 }
 
@@ -460,6 +462,23 @@ impl From<CorpusExample> for ExampleType {
         match value {
             CorpusExample::Positive => Self::Positive,
             CorpusExample::Negative => Self::Negative,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CorpusAttemptOutcome {
+    Success,
+    Failure,
+    Blocked,
+}
+
+impl From<CorpusAttemptOutcome> for AttemptOutcome {
+    fn from(value: CorpusAttemptOutcome) -> Self {
+        match value {
+            CorpusAttemptOutcome::Success => Self::Success,
+            CorpusAttemptOutcome::Failure => Self::Failure,
+            CorpusAttemptOutcome::Blocked => Self::Blocked,
         }
     }
 }
@@ -504,12 +523,14 @@ impl Cli {
                         limit,
                         trust,
                         example,
+                        attempt_outcome,
                     }),
             }) => sample_corpus(
                 &path,
                 limit,
                 trust.map(Trust::from),
                 example.map(ExampleType::from),
+                attempt_outcome.map(AttemptOutcome::from),
             ),
             Some(Command::Extension {
                 command: Some(ExtensionCommand::Inspect { root }),
@@ -3593,6 +3614,7 @@ fn sample_corpus(
     limit: usize,
     trust: Option<Trust>,
     example: Option<ExampleType>,
+    attempt_outcome: Option<AttemptOutcome>,
 ) -> ExitCode {
     let mut paths = Vec::new();
     if let Err(error) = collect_json(root, &mut paths) {
@@ -3624,6 +3646,12 @@ fn sample_corpus(
         if sample.len() < limit
             && trust.is_none_or(|expected| record.trust == expected)
             && example.is_none_or(|expected| record.example.kind == expected)
+            && attempt_outcome.is_none_or(|expected| {
+                record
+                    .attempts
+                    .iter()
+                    .any(|attempt| attempt.outcome == expected)
+            })
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
