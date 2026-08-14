@@ -67,7 +67,7 @@ Curated, project-native records are stored as JSON below =corpus/development/=. 
 nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development
 #+end_src
 
-Valid entries are listed on stdout before a final count. Human-readable relative paths use one quoted, debug-escaped field, so untrusted filename controls cannot create extra output lines or terminal effects. Record-level read, deserialization, and semantic failures are prefixed with that same escaped path field on stderr; inspection continues so the summary covers the whole corpus. Exit status is =0= when every discovered record is valid, =1= when any record is invalid, and =2= when the corpus root cannot be traversed.
+Valid entries are listed on stdout before a final count. Human-readable relative paths use one quoted, debug-escaped field, so untrusted filename controls cannot create extra output lines or terminal effects and distinct non-UTF-8 filename bytes remain distinguishable on Unix. Record-level read, deserialization, and semantic failures are prefixed with that same escaped path field on stderr; inspection continues so the summary covers the whole corpus. Exit status is =0= when every discovered record is valid, =1= when any record is invalid, and =2= when the corpus root cannot be traversed.
 
 ** Deterministic corpus sampling
 :PROPERTIES:

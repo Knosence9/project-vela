@@ -176,7 +176,7 @@ Verified project-native records live under =corpus/development/=. Inspect every 
 nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/development
 #+end_src
 
-Inspection prints each valid record with a quoted, debug-escaped relative path and an aggregate summary. It continues past malformed, unreadable, or semantically invalid records, emits diagnostics prefixed by the same control-safe path field, and exits non-zero when any record is invalid.
+Inspection prints each valid record with a quoted, debug-escaped relative path and an aggregate summary. The escaped form preserves distinct non-UTF-8 filename bytes on Unix. Inspection continues past malformed, unreadable, or semantically invalid records, emits diagnostics prefixed by the same control-safe path field, and exits non-zero when any record is invalid.
 
 Select at most 32 fully validated records in deterministic relative-path order, optionally restricted to one schema-v1 trust level, with:
 

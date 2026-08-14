@@ -3538,7 +3538,7 @@ fn read_corpus_input(path: &Path) -> std::io::Result<String> {
 }
 
 fn render_corpus_path(path: &Path) -> String {
-    format!("{:?}", path.display())
+    format!("{path:?}")
 }
 
 fn report_corpus_record_error(relative: &str, error: CorpusRecordError) {
