@@ -435,6 +435,8 @@ pub enum CorpusCommand {
         verification_status: Option<CorpusVerificationStatus>,
         #[arg(long, action = clap::ArgAction::Set)]
         verified: Option<bool>,
+        #[arg(long, action = clap::ArgAction::Set)]
+        sanitation_passed: Option<bool>,
     },
 }
 
@@ -547,15 +549,19 @@ impl Cli {
                         attempt_outcome,
                         verification_status,
                         verified,
+                        sanitation_passed,
                     }),
             }) => sample_corpus(
                 &path,
                 limit,
-                trust.map(Trust::from),
-                example.map(ExampleType::from),
-                attempt_outcome.map(AttemptOutcome::from),
-                verification_status.map(VerificationStatus::from),
-                verified,
+                CorpusSampleFilters {
+                    trust: trust.map(Trust::from),
+                    example: example.map(ExampleType::from),
+                    attempt_outcome: attempt_outcome.map(AttemptOutcome::from),
+                    verification_status: verification_status.map(VerificationStatus::from),
+                    verified,
+                    sanitation_passed,
+                },
             ),
             Some(Command::Extension {
                 command: Some(ExtensionCommand::Inspect { root }),
@@ -3566,6 +3572,15 @@ struct CorpusSampleEntry {
     record: DevelopmentRecord,
 }
 
+struct CorpusSampleFilters {
+    trust: Option<Trust>,
+    example: Option<ExampleType>,
+    attempt_outcome: Option<AttemptOutcome>,
+    verification_status: Option<VerificationStatus>,
+    verified: Option<bool>,
+    sanitation_passed: Option<bool>,
+}
+
 enum CorpusRecordError {
     Unreadable(std::io::Error),
     Malformed(serde_json::Error),
@@ -3634,15 +3649,7 @@ fn report_corpus_record_error(relative: &str, error: CorpusRecordError) {
     }
 }
 
-fn sample_corpus(
-    root: &Path,
-    limit: usize,
-    trust: Option<Trust>,
-    example: Option<ExampleType>,
-    attempt_outcome: Option<AttemptOutcome>,
-    verification_status: Option<VerificationStatus>,
-    verified: Option<bool>,
-) -> ExitCode {
+fn sample_corpus(root: &Path, limit: usize, filters: CorpusSampleFilters) -> ExitCode {
     let mut paths = Vec::new();
     if let Err(error) = collect_json(root, &mut paths) {
         eprintln!("$: unreadable_corpus: {error}");
@@ -3671,22 +3678,31 @@ fn sample_corpus(
             }
         };
         if sample.len() < limit
-            && trust.is_none_or(|expected| record.trust == expected)
-            && example.is_none_or(|expected| record.example.kind == expected)
-            && attempt_outcome.is_none_or(|expected| {
+            && filters
+                .trust
+                .is_none_or(|expected| record.trust == expected)
+            && filters
+                .example
+                .is_none_or(|expected| record.example.kind == expected)
+            && filters.attempt_outcome.is_none_or(|expected| {
                 record
                     .attempts
                     .iter()
                     .any(|attempt| attempt.outcome == expected)
             })
-            && verification_status.is_none_or(|expected| {
+            && filters.verification_status.is_none_or(|expected| {
                 record
                     .outcome
                     .verification
                     .iter()
                     .any(|verification| verification.status == expected)
             })
-            && verified.is_none_or(|expected| record.outcome.verified == expected)
+            && filters
+                .verified
+                .is_none_or(|expected| record.outcome.verified == expected)
+            && filters
+                .sanitation_passed
+                .is_none_or(|expected| record.sanitation.passed == expected)
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
