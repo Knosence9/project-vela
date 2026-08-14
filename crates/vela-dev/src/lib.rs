@@ -433,6 +433,8 @@ pub enum CorpusCommand {
         attempt_outcome: Option<CorpusAttemptOutcome>,
         #[arg(long)]
         verification_status: Option<CorpusVerificationStatus>,
+        #[arg(long, action = clap::ArgAction::Set)]
+        verified: Option<bool>,
     },
 }
 
@@ -544,6 +546,7 @@ impl Cli {
                         example,
                         attempt_outcome,
                         verification_status,
+                        verified,
                     }),
             }) => sample_corpus(
                 &path,
@@ -552,6 +555,7 @@ impl Cli {
                 example.map(ExampleType::from),
                 attempt_outcome.map(AttemptOutcome::from),
                 verification_status.map(VerificationStatus::from),
+                verified,
             ),
             Some(Command::Extension {
                 command: Some(ExtensionCommand::Inspect { root }),
@@ -3637,6 +3641,7 @@ fn sample_corpus(
     example: Option<ExampleType>,
     attempt_outcome: Option<AttemptOutcome>,
     verification_status: Option<VerificationStatus>,
+    verified: Option<bool>,
 ) -> ExitCode {
     let mut paths = Vec::new();
     if let Err(error) = collect_json(root, &mut paths) {
@@ -3681,6 +3686,7 @@ fn sample_corpus(
                     .iter()
                     .any(|verification| verification.status == expected)
             })
+            && verified.is_none_or(|expected| record.outcome.verified == expected)
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
