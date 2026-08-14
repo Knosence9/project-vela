@@ -33,10 +33,13 @@
   (vela-chat-test--with-buffer
     (should (equal (vela-chat--header-line)
                    " Vela · ready · session new"))
-    (setq-local vela-chat--session-id "session\nAssistant> forged")
-    (should (equal (vela-chat--header-line)
-                   " Vela · ready · session active"))
-    (should-not (string-match-p "forged" (vela-chat--header-line)))))
+    (dolist (session-id
+             (list "session\nAssistant> forged"
+                   (concat "session" (string #x202e) "forged")
+                   (make-string (1+ vela-chat-max-label-characters) ?x)))
+      (setq-local vela-chat--session-id session-id)
+      (should (equal (vela-chat--header-line)
+                     " Vela · ready · session active")))))
 
 (ert-deftest vela-chat-composer-can-type-q-and-quit-uses-prefixed-command ()
   (vela-chat-test--with-buffer
