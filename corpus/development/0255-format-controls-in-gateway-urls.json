@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject format controls in gateway URLs",
+    "objective": "Reject hidden Unicode formatting characters and undecoded non-ASCII bytes in configured and returned gateway URLs",
+    "acceptance_criteria": [
+      "Zero-width and bidirectional format controls are rejected in base and stream URLs",
+      "Undecoded non-ASCII raw URL bytes, including UTF-8 BOM bytes, are rejected",
+      "Failures preserve pre-credential, pre-transport, and pre-mutation ordering"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added base-origin and stream-URL regressions for U+200B, U+2066, and raw UTF-8 BOM bytes",
+      "outcome": "failure",
+      "diagnostic": "The focused regression accepted a stream URL containing U+200B",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Extended URL character validation to Unicode format controls and undecoded non-ASCII bytes",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el, docs/emacs-chat.org, and docs/adr/0121-asynchronous-emacs-gateway-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Configured and returned gateway URLs now fail closed on invisible format controls and undecoded Unicode bytes",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Emacs ERT 167/167 for PR 1107",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1107",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1107 squash merge fdfaf89f4336fb211aac4598d96de6a303a48df9",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "URL safety checks must account for invisible Unicode semantics as well as visible delimiters",
+    "Reject undecoded high bytes rather than allowing representation differences to bypass character validation"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1107"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

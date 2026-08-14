@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Reject control-bearing authentication tokens",
+    "objective": "Reject bearer tokens containing ASCII controls or DEL before transcript or transport side effects",
+    "acceptance_criteria": [
+      "C0 controls and DEL make a runtime token invalid",
+      "Invalid tokens fail before transcript mutation or network setup",
+      "Printable Unicode tokens remain valid and one validated credential value is reused"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added focused control-token and pre-mutation boundary regressions",
+      "outcome": "failure",
+      "diagnostic": "Two focused tests failed because control-bearing bearer tokens were accepted",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Validated one bounded token value and reused it during synchronous request setup",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Bearer credentials now reject control characters before observable side effects while preserving printable Unicode",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "Emacs ERT 159/159 for PR 1092",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1092",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1092 squash merge a3f570b41661942fa5d98e13b62a8a30132f0253",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Credential validation must precede transcript mutation and transport setup",
+    "Reuse the validated credential value to avoid a token-provider time-of-check/time-of-use gap"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1092"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Default empty SSE event names",
+    "objective": "Dispatch absent and empty SSE event values as the standard message event type",
+    "acceptance_criteria": [
+      "An event without an event field dispatches as message",
+      "Both event: and colonless event reset the dispatch type to message",
+      "Non-empty event identities remain exact"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added regressions for explicit-empty and colonless event fields",
+      "outcome": "failure",
+      "diagnostic": "The parser emitted an empty event type instead of message",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Defaulted an empty event value at dispatch while preserving non-empty values",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el and docs/emacs-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Empty or absent SSE event names now dispatch as message without changing named-event identity",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1090",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1090 squash merge 8e70568b7a3295befa516c5d0cc051623537488a",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Apply protocol defaults at dispatch so all empty-value syntaxes share one result",
+    "Keep empty-value defaulting separate from preservation of explicit non-empty identities"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1090"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}

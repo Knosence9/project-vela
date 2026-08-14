@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Require explicit Emacs authentication opt-in",
+    "objective": "Prevent ambient auth-source credential discovery or transmission unless the user explicitly configures a token provider",
+    "acceptance_criteria": [
+      "The default token provider is nil",
+      "Default requests neither query auth-source nor include an Authorization header",
+      "Explicit token providers and auth-source opt-in continue to work"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added regressions asserting unauthenticated default lookup and header behavior",
+      "outcome": "failure",
+      "diagnostic": "Two tests failed because the default provider performed ambient auth-source lookup",
+      "patch": "emacs/tests/vela-chat-mode-test.el"
+    },
+    {
+      "summary": "Defaulted the provider to nil while retaining explicit provider and auth-source paths",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "emacs/vela-chat-mode.el, docs/emacs-chat.org, and docs/adr/0121-asynchronous-emacs-gateway-chat.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Emacs gateway requests are unauthenticated by default and access credentials only through explicit configuration",
+    "verified": true,
+    "verification": [
+      {
+        "command": "nix develop --command just verify",
+        "status": "passed"
+      },
+      {
+        "command": "GitHub Rust quality gate for PR 1100",
+        "status": "passed"
+      },
+      {
+        "command": "Pull request 1100 squash merge d41af5818811aec87f70a068ea066b6c1d0a8ede",
+        "status": "passed"
+      }
+    ]
+  },
+  "lessons": [
+    "Credential discovery is a permission boundary and should require affirmative configuration",
+    "Preserve one runtime token path while changing only the authority that enables it"
+  ],
+  "provenance": {
+    "repository_path": "emacs/vela-chat-mode.el",
+    "url": "https://github.com/Knosence9/project-vela/pull/1100"
+  },
+  "sanitation": {
+    "passed": true,
+    "blockers": []
+  },
+  "trust": "curated",
+  "example": {
+    "type": "positive",
+    "rejection_rationale": null
+  }
+}
