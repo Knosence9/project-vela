@@ -441,6 +441,8 @@ pub enum CorpusCommand {
         has_sanitation_blockers: Option<bool>,
         #[arg(long, action = clap::ArgAction::Set)]
         has_lessons: Option<bool>,
+        #[arg(long, action = clap::ArgAction::Set)]
+        has_attempt_diagnostic: Option<bool>,
     },
 }
 
@@ -556,6 +558,7 @@ impl Cli {
                         sanitation_passed,
                         has_sanitation_blockers,
                         has_lessons,
+                        has_attempt_diagnostic,
                     }),
             }) => sample_corpus(
                 &path,
@@ -569,6 +572,7 @@ impl Cli {
                     sanitation_passed,
                     has_sanitation_blockers,
                     has_lessons,
+                    has_attempt_diagnostic,
                 },
             ),
             Some(Command::Extension {
@@ -3589,6 +3593,7 @@ struct CorpusSampleFilters {
     sanitation_passed: Option<bool>,
     has_sanitation_blockers: Option<bool>,
     has_lessons: Option<bool>,
+    has_attempt_diagnostic: Option<bool>,
 }
 
 enum CorpusRecordError {
@@ -3719,6 +3724,13 @@ fn sample_corpus(root: &Path, limit: usize, filters: CorpusSampleFilters) -> Exi
             && filters
                 .has_lessons
                 .is_none_or(|expected| record.lessons.is_empty() != expected)
+            && filters.has_attempt_diagnostic.is_none_or(|expected| {
+                record
+                    .attempts
+                    .iter()
+                    .any(|attempt| attempt.diagnostic.is_some())
+                    == expected
+            })
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),

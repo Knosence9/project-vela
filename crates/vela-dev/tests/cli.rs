@@ -3859,6 +3859,152 @@ fn corpus_sampling_rejects_non_boolean_sanitation_blocker_value_before_storage_a
 }
 
 #[test]
+fn corpus_sampling_filters_by_attempt_diagnostic_presence_after_filtering_and_limiting() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let source_record = fs::read_to_string(source).expect("record source");
+    fs::write(
+        corpus.path().join("a-no-attempts.json"),
+        source_record.replace("\"Second\"", "\"No attempts\""),
+    )
+    .expect("record without attempts");
+    fs::write(
+        corpus.path().join("b-null-diagnostic.json"),
+        source_record
+            .replace("\"Second\"", "\"Null diagnostic\"")
+            .replace(
+                "\"attempts\": []",
+                "\"attempts\": [{\"summary\":\"clean pass\",\"outcome\":\"success\",\"diagnostic\":null,\"patch\":\"second.rs\"}]",
+            ),
+    )
+    .expect("record with a null diagnostic");
+    fs::write(
+        corpus.path().join("c-present-diagnostic.json"),
+        source_record
+            .replace("\"Second\"", "\"Present diagnostic\"")
+            .replace(
+                "\"attempts\": []",
+                "\"attempts\": [{\"summary\":\"clean pass\",\"outcome\":\"success\",\"diagnostic\":null,\"patch\":\"second.rs\"},{\"summary\":\"observed evidence\",\"outcome\":\"success\",\"diagnostic\":\"\",\"patch\":\"second.rs\"}]",
+            ),
+    )
+    .expect("record with null and present diagnostics");
+    let composed = source_record
+        .replace("\"Second\"", "\"Composed\"")
+        .replace("\"reviewed\"", "\"curated\"")
+        .replace(
+            "\"attempts\": []",
+            "\"attempts\": [{\"summary\":\"regression\",\"outcome\":\"failure\",\"diagnostic\":\"failed check\",\"patch\":\"second.rs\"}]",
+        )
+        .replace(
+            "\"type\":\"positive\",\"rejection_rationale\":null",
+            "\"type\":\"negative\",\"rejection_rationale\":\"rejected example\"",
+        )
+        .replace(
+            "\"passed\":true,\"blockers\":[]",
+            "\"passed\":false,\"blockers\":[\"review finding\"]",
+        )
+        .replace("\"lessons\": []", "\"lessons\": [\"correct the boundary\"]");
+    fs::write(corpus.path().join("d-composed.json"), composed)
+        .expect("record matching every filter");
+
+    for (has_diagnostic, expected_path) in [
+        ("false", "a-no-attempts.json"),
+        ("true", "c-present-diagnostic.json"),
+    ] {
+        let assertion = Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "corpus",
+                "sample",
+                corpus.path().to_str().expect("UTF-8 corpus path"),
+                "1",
+                "--has-attempt-diagnostic",
+                has_diagnostic,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::is_empty());
+        let sample: serde_json::Value =
+            serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+        assert_eq!(sample.as_array().expect("sample array").len(), 1);
+        assert_eq!(sample[0]["path"], expected_path);
+    }
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--trust",
+            "curated",
+            "--example",
+            "negative",
+            "--attempt-outcome",
+            "failure",
+            "--verification-status",
+            "passed",
+            "--verified",
+            "true",
+            "--sanitation-passed",
+            "false",
+            "--has-sanitation-blockers",
+            "true",
+            "--has-lessons",
+            "true",
+            "--has-attempt-diagnostic",
+            "true",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "d-composed.json");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--trust",
+            "curated",
+            "--has-attempt-diagnostic",
+            "false",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_rejects_non_boolean_attempt_diagnostic_value_before_storage_access() {
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            "tests/fixtures/missing-corpus",
+            "1",
+            "--has-attempt-diagnostic",
+            "yes",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("unreadable_corpus").not());
+}
+
+#[test]
 fn corpus_sampling_filters_by_lesson_presence_after_filtering_and_limiting() {
     let source = format!(
         "{}/tests/fixtures/corpus/valid/second.json",
@@ -4083,6 +4229,8 @@ fn corpus_sampling_rejects_invalid_records_without_partial_output() {
             "--has-sanitation-blockers",
             "true",
             "--has-lessons",
+            "true",
+            "--has-attempt-diagnostic",
             "true",
         ])
         .assert()
