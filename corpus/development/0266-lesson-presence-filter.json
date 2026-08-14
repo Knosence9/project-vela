@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by lesson presence",
+    "objective": "Select records by structural lesson-list presence without inspecting, normalizing, or inferring lesson content",
+    "acceptance_criteria": [
+      "True matches a non-empty lessons list",
+      "False matches an empty lessons list",
+      "Lesson text does not affect the structural predicate",
+      "The option composes with every existing sample filter"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added focused tests for present and absent lessons, composition, limits, invalid input, and malformed records",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected the unknown has-lessons option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added strict boolean parsing and exact lesson-list emptiness matching",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Deterministic sampling supports inference-free selection by lesson-list presence",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Pull request 1134 squash merge c9199120909ea7863248349b2a02b07b05f287a9", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Presence filters should preserve authored text exactly and inspect only schema structure",
+    "The same full-corpus failure boundary applies even when a record would not match"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1134"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

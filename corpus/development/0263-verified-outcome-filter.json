@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by verified outcome",
+    "objective": "Select records by the exact aggregate outcome.verified decision without inferring it from individual verification checks",
+    "acceptance_criteria": [
+      "The verified option accepts exactly true or false",
+      "Matching uses the aggregate outcome.verified boolean",
+      "Per-check status does not override the aggregate predicate",
+      "The predicate composes with existing filters before the limit"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added behavior coverage for true, false, composition, invalid input, and malformed corpus records",
+      "outcome": "failure",
+      "diagnostic": "Clap rejected the unimplemented verified option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added strict boolean parsing and exact aggregate outcome matching",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Corpus samples can be filtered by the explicit aggregate verification decision independently of per-check status",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Pull request 1128 squash merge 06fe9e16f052d3fbc6541da2b9da3987fb6ee9b6", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Aggregate decisions and component evidence require separate explicit predicates",
+    "Boolean filters should reject non-boolean values before corpus access"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1128"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by attempt diagnostic presence",
+    "objective": "Select records by whether any attempt carries a non-null diagnostic while preserving optional-field semantics",
+    "acceptance_criteria": [
+      "True matches when any attempt diagnostic is non-null",
+      "False matches when every diagnostic is null, including records without attempts",
+      "An empty string remains structurally present",
+      "Diagnostic text and attempt outcomes do not affect matching"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added regressions for no attempts, null, present, empty-string, composition, parser failure, and invalid corpus behavior",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected the unknown has-attempt-diagnostic option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added existential optional-field matching without text normalization or outcome inference",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Added a mixed null and present attempt case identified during independent review",
+      "outcome": "success",
+      "diagnostic": "The initial coverage did not directly prove existential matching across mixed attempts",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added explicit-null and omitted-diagnostic false cases after actionable pull-request review",
+      "outcome": "success",
+      "diagnostic": "Review found that absent diagnostics were not directly covered in both accepted JSON shapes",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling can select records by exact attempt-diagnostic optional-field presence",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Pull request 1136 squash merge 0bb443dfe167ea94d5dcf0005bb6808fe2e5471c", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Optional-field presence is distinct from non-empty text",
+    "Mixed-entry tests are necessary to prove existential predicates rather than first-entry matching"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1136"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

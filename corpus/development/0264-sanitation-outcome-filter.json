@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by sanitation outcome",
+    "objective": "Select records by the exact aggregate sanitation.passed decision while preserving full validation and deterministic sampling",
+    "acceptance_criteria": [
+      "The sanitation-passed option accepts exactly true or false",
+      "Matching does not infer the aggregate decision from blocker presence",
+      "The predicate composes conjunctively with every existing filter",
+      "Invalid records suppress all sample output"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added focused sanitation-filter regressions before implementation",
+      "outcome": "failure",
+      "diagnostic": "The CLI did not recognize sanitation-passed",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added exact aggregate sanitation matching and grouped sample predicates in one filter value",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Fixed the independent review findings by removing an argument-count lint violation and covering invalid-corpus behavior",
+      "outcome": "success",
+      "diagnostic": "Independent review found a blocking Clippy argument-limit violation and missing malformed-record coverage",
+      "patch": "crates/vela-dev/src/lib.rs and crates/vela-dev/tests/cli.rs"
+    }
+  ],
+  "outcome": {
+    "summary": "Corpus sampling supports exact aggregate sanitation selection with a maintainable grouped filter boundary",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Pull request 1130 squash merge 9f135ac4b3fff1739cc4eea54579503a156f9e12", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Group related predicates before a growing function signature violates quality gates",
+    "Aggregate sanitation must remain independent from the blocker list"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1130"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
