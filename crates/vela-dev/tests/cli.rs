@@ -5467,6 +5467,128 @@ fn corpus_sampling_attempt_diagnostic_filter_still_rejects_malformed_records() {
 }
 
 #[test]
+fn corpus_sampling_filters_by_exact_attempt_patch_before_limiting() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let source_record = fs::read_to_string(source).expect("record source");
+    for (name, attempts, trust) in [
+        ("a-empty.json", "[]", "reviewed"),
+        (
+            "b-collision.json",
+            r#"[{"summary":"Exact.rs","outcome":"failure","diagnostic":"Exact.rs","patch":"other.rs"}]"#,
+            "reviewed",
+        ),
+        (
+            "c-case.json",
+            r#"[{"summary":"case","outcome":"success","diagnostic":null,"patch":"exact.rs"}]"#,
+            "reviewed",
+        ),
+        (
+            "d-exact.json",
+            r#"[{"summary":"other","outcome":"success","diagnostic":null,"patch":"other.rs"},{"summary":"match","outcome":"success","diagnostic":null,"patch":"Exact.rs"}]"#,
+            "reviewed",
+        ),
+        (
+            "e-leading.json",
+            r#"[{"summary":"leading","outcome":"success","diagnostic":null,"patch":" Exact.rs"}]"#,
+            "reviewed",
+        ),
+        (
+            "f-composed.json",
+            r#"[{"summary":"composed","outcome":"success","diagnostic":null,"patch":"Exact.rs"}]"#,
+            "curated",
+        ),
+    ] {
+        fs::write(
+            corpus.path().join(name),
+            source_record
+                .replace("\"attempts\": []", &format!("\"attempts\": {attempts}"))
+                .replace("\"reviewed\"", &format!("\"{trust}\"")),
+        )
+        .expect("attempt-patch record");
+    }
+
+    for (attempt_patch, expected_path) in [
+        ("Exact.rs", "d-exact.json"),
+        ("exact.rs", "c-case.json"),
+        (" Exact.rs", "e-leading.json"),
+    ] {
+        let assertion = Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "corpus",
+                "sample",
+                corpus.path().to_str().expect("UTF-8 corpus path"),
+                "1",
+                "--attempt-patch",
+                attempt_patch,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::is_empty());
+        let sample: serde_json::Value =
+            serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+        assert_eq!(sample.as_array().expect("sample array").len(), 1);
+        assert_eq!(sample[0]["path"], expected_path);
+    }
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "6",
+            "--trust",
+            "curated",
+            "--attempt-patch",
+            "Exact.rs",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "f-composed.json");
+}
+
+#[test]
+fn corpus_sampling_attempt_patch_filter_still_rejects_malformed_records() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let matching = fs::read_to_string(source)
+        .expect("record source")
+        .replace(
+            "\"attempts\": []",
+            r#""attempts": [{"summary":"match","outcome":"success","diagnostic":null,"patch":"Exact.rs"}]"#,
+        );
+    fs::write(corpus.path().join("a-match.json"), matching).expect("early matching record");
+    fs::write(corpus.path().join("z-malformed.json"), "{").expect("late malformed record");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--attempt-patch",
+            "Exact.rs",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("malformed_record"));
+}
+
+#[test]
 fn corpus_sampling_filters_by_verification_presence_before_limiting() {
     let source = format!(
         "{}/tests/fixtures/corpus/valid/second.json",
