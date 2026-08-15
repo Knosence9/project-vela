@@ -461,6 +461,8 @@ pub enum CorpusCommand {
         acceptance_criterion: Option<String>,
         #[arg(long)]
         attempt_summary: Option<String>,
+        #[arg(long)]
+        outcome_summary: Option<String>,
     },
 }
 
@@ -586,6 +588,7 @@ impl Cli {
                         task_objective,
                         acceptance_criterion,
                         attempt_summary,
+                        outcome_summary,
                     }),
             }) => sample_corpus(
                 &path,
@@ -609,6 +612,7 @@ impl Cli {
                     task_objective,
                     acceptance_criterion,
                     attempt_summary,
+                    outcome_summary,
                 },
             ),
             Some(Command::Extension {
@@ -3639,6 +3643,7 @@ struct CorpusSampleFilters {
     task_objective: Option<String>,
     acceptance_criterion: Option<String>,
     attempt_summary: Option<String>,
+    outcome_summary: Option<String>,
 }
 
 enum CorpusRecordError {
@@ -3817,6 +3822,10 @@ fn sample_corpus(root: &Path, limit: usize, filters: CorpusSampleFilters) -> Exi
                     .iter()
                     .any(|attempt| attempt.summary == expected)
             })
+            && filters
+                .outcome_summary
+                .as_deref()
+                .is_none_or(|expected| record.outcome.summary == expected)
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
