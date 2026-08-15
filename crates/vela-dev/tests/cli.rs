@@ -4459,6 +4459,141 @@ fn corpus_sampling_repository_path_filter_still_rejects_malformed_records() {
 }
 
 #[test]
+fn corpus_sampling_filters_by_exact_provenance_url_before_limiting() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let source_record = fs::read_to_string(source).expect("record source");
+    for (name, title, provenance_url, trust) in [
+        (
+            "a-case.json",
+            "Case",
+            "https://example.com/Second",
+            "reviewed",
+        ),
+        (
+            "b-exact.json",
+            "Exact",
+            "https://example.com/second",
+            "reviewed",
+        ),
+        (
+            "c-trailing.json",
+            "Trailing",
+            "https://example.com/second/",
+            "reviewed",
+        ),
+        (
+            "d-whitespace.json",
+            "Whitespace",
+            "https://example.com/second ",
+            "reviewed",
+        ),
+        (
+            "e-composed.json",
+            "Composed",
+            "https://example.com/second",
+            "curated",
+        ),
+    ] {
+        fs::write(
+            corpus.path().join(name),
+            source_record
+                .replace("\"Second\"", &format!("\"{title}\""))
+                .replace(
+                    "\"url\":\"https://example.com/second\"",
+                    &format!("\"url\":\"{provenance_url}\""),
+                )
+                .replace("\"reviewed\"", &format!("\"{trust}\"")),
+        )
+        .expect("provenance-URL record");
+    }
+
+    for (provenance_url, expected_path) in [
+        ("https://example.com/second", "b-exact.json"),
+        ("https://example.com/Second", "a-case.json"),
+        ("https://example.com/second/", "c-trailing.json"),
+        ("https://example.com/second ", "d-whitespace.json"),
+    ] {
+        let assertion = Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "corpus",
+                "sample",
+                corpus.path().to_str().expect("UTF-8 corpus path"),
+                "1",
+                "--provenance-url",
+                provenance_url,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::is_empty());
+        let sample: serde_json::Value =
+            serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+        assert_eq!(sample.as_array().expect("sample array").len(), 1);
+        assert_eq!(sample[0]["path"], expected_path);
+    }
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--trust",
+            "curated",
+            "--provenance-url",
+            "https://example.com/second",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "e-composed.json");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "4",
+            "--provenance-url",
+            "https://example.com/missing",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_provenance_url_filter_still_rejects_malformed_records() {
+    let corpus = tempdir().expect("sample corpus");
+    fs::write(corpus.path().join("malformed.json"), "{").expect("malformed record");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--provenance-url",
+            "https://example.com/second",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("malformed_record"));
+}
+
+#[test]
 fn corpus_sampling_filters_by_verification_presence_before_limiting() {
     let source = format!(
         "{}/tests/fixtures/corpus/valid/second.json",
