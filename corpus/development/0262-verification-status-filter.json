@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by verification status",
+    "objective": "Select records containing an exact passed, failed, or not-run verification while preserving complete validation and deterministic sampling",
+    "acceptance_criteria": [
+      "The option accepts exactly passed, failed, or not-run",
+      "A record matches when at least one verification has the requested status",
+      "Records without verification entries do not match",
+      "Filters compose conjunctively and limits apply after filtering"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added focused regressions for every status, empty verification lists, composition, and failure semantics",
+      "outcome": "failure",
+      "diagnostic": "Clap rejected the unimplemented verification-status option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added a typed CLI value and exact existential matching over validated verification entries",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Deterministic corpus sampling supports exact per-check verification-status selection",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Pull request 1126 squash merge c0a6a646866dc7ea2960538cb87bf68096a1038c", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Typed CLI values keep schema enums and command spelling aligned",
+    "Existential status matching naturally excludes records without verification entries"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1126"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

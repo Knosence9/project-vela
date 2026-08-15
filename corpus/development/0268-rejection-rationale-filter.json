@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by rejection rationale presence",
+    "objective": "Select records by exact optional rejection-rationale presence without normalizing or inferring rationale content",
+    "acceptance_criteria": [
+      "True matches a non-null rejection rationale, including an empty string",
+      "False matches null or an omitted optional field",
+      "Rationale text and example type do not alter presence semantics",
+      "Filtering preserves deterministic validation and post-filter limits"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added integration tests for present, null, omitted, empty-string, composition, and failure boundaries",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected the unknown has-rejection-rationale option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added strict boolean parsing and direct Option presence matching",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    }
+  ],
+  "outcome": {
+    "summary": "Corpus samples support structural rejection-rationale selection with exact null and omission semantics",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Pull request 1139 squash merge 2ce8ee687bf0594b87fe38f4f9010d796ab7568b", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Schema defaults make omitted optional fields equivalent to explicit null",
+    "Empty authored text is still structurally present and should not be normalized away"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1139"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

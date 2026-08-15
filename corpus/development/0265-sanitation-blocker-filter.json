@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by sanitation blocker presence",
+    "objective": "Select records by structural blocker-list presence without inferring or rewriting the aggregate sanitation decision",
+    "acceptance_criteria": [
+      "True matches a non-empty sanitation.blockers list",
+      "False matches an empty blocker list",
+      "Blocker presence and sanitation.passed remain independent predicates",
+      "Complete validation and post-filter limits remain unchanged"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added regressions for present and absent blockers, composition, empty results, invalid values, and invalid records",
+      "outcome": "failure",
+      "diagnostic": "The CLI did not recognize has-sanitation-blockers",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added strict boolean parsing and exact empty versus non-empty blocker-list matching",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Simplified the predicate after independent review exposed a blocking boolean-style lint",
+      "outcome": "success",
+      "diagnostic": "Clippy rejected an unnecessarily indirect boolean comparison",
+      "patch": "crates/vela-dev/src/lib.rs"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling can distinguish records with sanitation blockers from records without them while retaining aggregate-decision independence",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Pull request 1132 squash merge a9c749a32682c5a4d588b18678466f1ddde4d1b2", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Structural presence should compare only emptiness and preserve authored aggregate state",
+    "Run strict linting during review because equivalent boolean forms are not equally clear"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1132"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

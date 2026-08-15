@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by attempt presence",
+    "objective": "Select records by structural attempt-list presence without inspecting attempt outcomes, diagnostics, patches, or text",
+    "acceptance_criteria": [
+      "True matches a non-empty attempts list",
+      "False matches an empty attempts list",
+      "One or multiple attempts have the same presence state",
+      "The predicate composes conjunctively before applying the limit"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added coverage for empty, single, and multiple attempts plus composition and failure semantics",
+      "outcome": "failure",
+      "diagnostic": "Clap rejected the unimplemented has-attempts option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added strict boolean parsing and direct structural attempt-list matching",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Applied the formatting correction found during independent review and reran the full gate",
+      "outcome": "success",
+      "diagnostic": "Independent review found formatting that did not match the repository gate",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling can distinguish records with execution-attempt evidence from valid records without attempts",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "Pull request 1141 squash merge 9fb77a1b2891a0a3ff4fb86b2c9f245ae1e9e9f3", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Structural list presence avoids coupling selection to the meaning of individual entries",
+    "Formatting findings are blocking when the repository quality gate enforces them"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1141"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

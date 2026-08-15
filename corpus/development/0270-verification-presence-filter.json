@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by verification presence",
+    "objective": "Select records by structural verification-list presence without inferring status or aggregate verification",
+    "acceptance_criteria": [
+      "True matches a non-empty outcome.verification list",
+      "False matches an empty verification list",
+      "Commands, statuses, and outcome.verified do not alter presence semantics",
+      "The exact head merges only after substantive review and successful quality gates"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added focused tests for true, false, composition, limits, invalid values, and malformed records",
+      "outcome": "failure",
+      "diagnostic": "Clap rejected the unimplemented has-verification option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added strict boolean parsing and direct structural verification-list matching",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Preserved the exact head with auto-merge disabled when automatic review was rate limited",
+      "outcome": "blocked",
+      "diagnostic": "CodeRabbit reported Review limit reached with a 51-minute cooldown instead of a substantive review",
+      "patch": "No code change; exact head preserved and auto-merge withheld"
+    },
+    {
+      "summary": "Resumed review once after cooldown and verified the substantive exact-head result before merging",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "No code change; one deliberate review resume after cooldown"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling supports inference-free verification-presence selection and the unchanged head merged after substantive review",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31846104288 for exact head 5b6c889065287067e2857bcec8a60b3673eb12f6", "status": "passed"},
+      {"command": "CodeRabbit exact-head review run 9979960e-6d5b-4377-ab07-8e7df5165d53 for PR 1143", "status": "passed"},
+      {"command": "Pull request 1143 squash merge 43f1e4e0bee6ea4d5126c3b7d141bd25a2805924", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Verification presence is independent from per-check status and aggregate verification",
+    "A green rate-limited status is not review evidence",
+    "Preserve the exact head through cooldown and resume review only when capacity is available"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1143"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
