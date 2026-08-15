@@ -5467,6 +5467,120 @@ fn corpus_sampling_attempt_diagnostic_filter_still_rejects_malformed_records() {
 }
 
 #[test]
+fn corpus_sampling_filters_by_exact_lesson_before_limiting() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let source_record = fs::read_to_string(source).expect("record source");
+    for (name, title, lessons, trust) in [
+        ("a-empty.json", "Exact lesson", "[]", "reviewed"),
+        ("b-case.json", "case", r#"["exact lesson"]"#, "reviewed"),
+        (
+            "c-exact.json",
+            "other",
+            r#"["other", "Exact lesson"]"#,
+            "reviewed",
+        ),
+        (
+            "d-leading.json",
+            "leading",
+            r#"[" Exact lesson"]"#,
+            "reviewed",
+        ),
+        (
+            "e-composed.json",
+            "composed",
+            r#"["Exact lesson"]"#,
+            "curated",
+        ),
+    ] {
+        fs::write(
+            corpus.path().join(name),
+            source_record
+                .replace("\"Second\"", &format!("\"{title}\""))
+                .replace("\"lessons\": []", &format!("\"lessons\": {lessons}"))
+                .replace("\"reviewed\"", &format!("\"{trust}\"")),
+        )
+        .expect("lesson record");
+    }
+
+    for (lesson, expected_path) in [
+        ("Exact lesson", "c-exact.json"),
+        ("exact lesson", "b-case.json"),
+        (" Exact lesson", "d-leading.json"),
+    ] {
+        let assertion = Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "corpus",
+                "sample",
+                corpus.path().to_str().expect("UTF-8 corpus path"),
+                "1",
+                "--lesson",
+                lesson,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::is_empty());
+        let sample: serde_json::Value =
+            serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+        assert_eq!(sample.as_array().expect("sample array").len(), 1);
+        assert_eq!(sample[0]["path"], expected_path);
+    }
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "5",
+            "--trust",
+            "curated",
+            "--lesson",
+            "Exact lesson",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "e-composed.json");
+}
+
+#[test]
+fn corpus_sampling_lesson_filter_still_rejects_malformed_records() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let matching = fs::read_to_string(source)
+        .expect("record source")
+        .replace("\"lessons\": []", r#""lessons": ["Exact lesson"]"#);
+    fs::write(corpus.path().join("a-match.json"), matching).expect("early matching record");
+    fs::write(corpus.path().join("z-malformed.json"), "{").expect("late malformed record");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--lesson",
+            "Exact lesson",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("malformed_record"));
+}
+
+#[test]
 fn corpus_sampling_filters_by_exact_attempt_patch_before_limiting() {
     let source = format!(
         "{}/tests/fixtures/corpus/valid/second.json",

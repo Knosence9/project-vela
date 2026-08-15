@@ -41,6 +41,8 @@ pub struct Cli {
 }
 
 /// Top-level developer workflows.
+// The CLI is parsed once and never retained; keeping direct subcommand fields avoids indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Execute ordinary Python in one explicitly selected live notebook.
@@ -471,6 +473,8 @@ pub enum CorpusCommand {
         attempt_diagnostic: Option<String>,
         #[arg(long)]
         attempt_patch: Option<String>,
+        #[arg(long)]
+        lesson: Option<String>,
     },
 }
 
@@ -600,6 +604,7 @@ impl Cli {
                         verification_command,
                         attempt_diagnostic,
                         attempt_patch,
+                        lesson,
                     }),
             }) => sample_corpus(
                 &path,
@@ -627,6 +632,7 @@ impl Cli {
                     verification_command,
                     attempt_diagnostic,
                     attempt_patch,
+                    lesson,
                 },
             ),
             Some(Command::Extension {
@@ -3661,6 +3667,7 @@ struct CorpusSampleFilters {
     verification_command: Option<String>,
     attempt_diagnostic: Option<String>,
     attempt_patch: Option<String>,
+    lesson: Option<String>,
 }
 
 enum CorpusRecordError {
@@ -3868,6 +3875,10 @@ fn sample_corpus(root: &Path, limit: usize, filters: CorpusSampleFilters) -> Exi
                     .iter()
                     .any(|attempt| attempt.patch == expected)
             })
+            && filters
+                .lesson
+                .as_deref()
+                .is_none_or(|expected| record.lessons.iter().any(|lesson| lesson == expected))
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
