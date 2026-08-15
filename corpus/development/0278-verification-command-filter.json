@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by verification command",
+    "objective": "Select validated records when a verification command exactly matches text without executing it",
+    "acceptance_criteria": [
+      "Any exact verification-command match selects the record",
+      "Records without verification entries do not match",
+      "Matching never executes or interprets command text",
+      "The predicate composes before limiting and preserves complete validation"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added red tests for exact existential command matching, composition, absent checks, and malformed records",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected verification-command before implementation",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added direct equality across verification commands and documented the no-execution permission boundary",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Preserved the exact head when CodeRabbit was rate limited, then deliberately resumed review after cooldown",
+      "outcome": "blocked",
+      "diagnostic": "The first green CodeRabbit status said Review limit reached and was rejected as false-green evidence",
+      "patch": "No code change; auto-merge remained disabled until substantive review completed"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling treats verification commands as inert exact-match evidence and merged after substantive review",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31875448837 for exact head dfdeb36e19e617c339b074ba6cd192c3bb3777a4", "status": "passed"},
+      {"command": "CodeRabbit substantive exact-head review for pull request 1161 generated no actionable comments", "status": "passed"},
+      {"command": "Pull request 1161 squash merge da46e9e2b639e58ef68fba4d48075c193b81c825", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Stored command text is evidence and grants no process authority",
+    "Existential matching remains independent from verification status and aggregate state",
+    "A rate-limited green status must be replaced by substantive exact-head review"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1161"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

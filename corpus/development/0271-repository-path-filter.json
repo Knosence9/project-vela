@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by provenance repository path",
+    "objective": "Select validated records by exact repository-path equality without resolving or inspecting the path",
+    "acceptance_criteria": [
+      "Matching is exact and case-sensitive",
+      "The predicate composes before the sample limit",
+      "Malformed records still reject the complete sample",
+      "The exact head merges only after substantive review and successful quality gates"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added focused exact-match, composition, limit, empty-result, and malformed-record tests",
+      "outcome": "failure",
+      "diagnostic": "Clap rejected the unimplemented repository-path option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Threaded repository-path input into sampling and compared provenance text directly",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Preserved the exact head while automatic review capacity was unavailable, then resumed review after cooldown",
+      "outcome": "blocked",
+      "diagnostic": "The initial CodeRabbit result was rate limited and therefore was not accepted as substantive review evidence",
+      "patch": "No code change; auto-merge remained disabled until exact-head review completed"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling supports authority-neutral exact repository-path filtering and merged after exact-head review",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31854974440 for exact head dc882b97f8e79b07ee6b43c8b4a009fed2e45a4b", "status": "passed"},
+      {"command": "CodeRabbit substantive exact-head review for pull request 1147 generated no actionable comments", "status": "passed"},
+      {"command": "Pull request 1147 squash merge 6fcc5c891601b27c1954027274b8d9beb8d4bd08", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Treat repository paths as inert corpus metadata unless separate authority is explicitly granted",
+    "Validate the full corpus before filtering and limiting",
+    "A rate-limited green status is not substantive review evidence"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1147"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

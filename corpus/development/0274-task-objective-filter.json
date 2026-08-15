@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by task objective",
+    "objective": "Select validated records by exact task objective equality without tokenization, scoring, or interpretation",
+    "acceptance_criteria": [
+      "Matching is exact and case-sensitive",
+      "Case and surrounding whitespace remain significant",
+      "The predicate composes before limiting",
+      "Malformed records still fail the whole sample"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added objective matching and safety-contract integration tests before implementation",
+      "outcome": "failure",
+      "diagnostic": "The CLI did not recognize task objective before the filter was implemented",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added exact objective comparison and documented its inference-free boundary",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Kept the merge gate closed until CodeRabbit completed substantive exact-head review",
+      "outcome": "blocked",
+      "diagnostic": "Automatic review was temporarily rate limited and could not satisfy the review requirement",
+      "patch": "No code change; auto-merge stayed disabled during cooldown"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling supports exact task objective selection while preserving validation and deterministic ordering",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31863866345 for exact head 48a59864bee4291d6b1ff4fee398a70f4293941a", "status": "passed"},
+      {"command": "CodeRabbit substantive exact-head review for pull request 1153 generated no actionable comments", "status": "passed"},
+      {"command": "Pull request 1153 squash merge 470168125f762ddec60e47aa0ae8a11b90f5cda6", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Keep deterministic corpus predicates separate from future semantic retrieval",
+    "Compose predicates before the limit without changing path order",
+    "Exact-head review evidence is part of the merge contract"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1153"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

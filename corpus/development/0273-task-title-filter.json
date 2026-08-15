@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by task title",
+    "objective": "Select validated records by exact task title equality without fuzzy or semantic interpretation",
+    "acceptance_criteria": [
+      "Matching is exact and case-sensitive",
+      "Whitespace and case variants remain distinct",
+      "The predicate composes before the sample limit",
+      "Validation failures emit no partial sample"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added title matching, composition, limit, empty-result, and malformed-record tests",
+      "outcome": "failure",
+      "diagnostic": "Clap rejected the unimplemented task title option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Threaded task title input through the CLI and added direct equality to the sampling predicate",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Withheld auto-merge until the rate-limited review was replaced by substantive exact-head review",
+      "outcome": "blocked",
+      "diagnostic": "The initial CodeRabbit status lacked substantive review content",
+      "patch": "No code change; exact head preserved during cooldown"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling supports deterministic exact task title selection without semantic inference",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31861139137 for exact head e198deabdf395aa1a545caff56ee83778b327cc8", "status": "passed"},
+      {"command": "CodeRabbit substantive exact-head review for pull request 1151 generated no actionable comments", "status": "passed"},
+      {"command": "Pull request 1151 squash merge 69451c46edcdfc12a40fd3985fea08e5de7adafa", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Exact text predicates are a bounded retrieval primitive rather than a relevance model",
+    "Apply every predicate only after complete corpus validation",
+    "Do not treat rate-limited automation as review"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1151"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
