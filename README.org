@@ -178,7 +178,7 @@ nix develop --command cargo run --locked -p vela-dev -- corpus inspect corpus/de
 
 Inspection prints each valid record with a quoted, debug-escaped relative path and an aggregate summary. The escaped form preserves distinct non-UTF-8 filename bytes on Unix. Inspection continues past malformed, unreadable, or semantically invalid records, emits diagnostics prefixed by the same control-safe path field, and exits non-zero when any record is invalid.
 
-Select at most 32 fully validated records in deterministic relative-path order, optionally restricted to one schema-v1 trust level, example type, attempt outcome, and verification status, with:
+Select at most 32 fully validated records in deterministic relative-path order, optionally restricted by schema-v1 metadata and exact authored evidence, with:
 
 #+begin_src sh
 nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --trust curated
@@ -198,9 +198,17 @@ nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/dev
 nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --task-title "Validate records"
 nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --task-objective "Check every record"
 nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --acceptance-criterion "valid records pass"
+nix develop --command cargo run --locked -p vela-dev -- corpus sample corpus/development 32 --attempt-summary "Implemented validation"
 #+end_src
 
 Sampling validates the entire discovered corpus before emitting one compact JSON array of relative paths and complete records. Limits must be from 1 through 1024. The =--example= filter accepts exactly =positive= or =negative=; =--attempt-outcome= accepts exactly =success=, =failure=, or =blocked= and matches a record when any attempt has that outcome; =--verification-status= accepts exactly =passed=, =failed=, or =not-run= and matches when any =outcome.verification[]= check has that status; and =--verified=, =--sanitation-passed=, =--has-sanitation-blockers=, =--has-lessons=, =--has-attempt-diagnostic=, =--has-rejection-rationale=, =--has-attempts=, and =--has-verification= each accept exactly =true= or =false=. The first two boolean filters match the aggregate =outcome.verified= and =sanitation.passed= decisions; the blocker, lesson, attempt-presence, and verification-presence filters match whether =sanitation.blockers=, =lessons=, =attempts=, and =outcome.verification= respectively are non-empty; the diagnostic filter matches whether any =attempts[].diagnostic= field is non-null; and the rationale filter matches whether =example.rejection_rationale= is non-null. These predicates are independent: aggregate decisions are not inferred from individual checks or blocker presence, blocker presence is not inferred from =sanitation.passed=, lesson, attempt, and verification presence do not inspect or infer entry contents, diagnostic presence does not inspect, trim, normalize, or infer diagnostic text or attempt outcomes, and rationale presence does not inspect, trim, normalize, or infer rationale text or example type. Records without the corresponding entries do not match existential attempt or verification filters; a record without attempts has neither attempt presence nor an attempt diagnostic. The optional =--repository-path= filter matches =provenance.repository_path= by exact, case-sensitive UTF-8 equality; it does not trim, normalize separators, resolve paths, inspect the filesystem, or infer related files. The optional =--provenance-url= filter likewise matches =provenance.url= by exact, case-sensitive UTF-8 equality; it does not trim, normalize, parse, fetch, or otherwise dereference the URL. The optional =--task-title= filter matches =task.title= by exact, case-sensitive UTF-8 equality; it does not trim, normalize, tokenize, score, or interpret title text. The optional =--task-objective= filter likewise matches =task.objective= exactly and does not trim, normalize, tokenize, score, or interpret objective text. The optional =--acceptance-criterion= filter matches when any =task.acceptance_criteria[]= entry equals the caller's UTF-8 value exactly and case-sensitively; it does not trim, normalize, perform fuzzy matching, or infer related criteria. All filters compose conjunctively before the limit without changing path order. Empty matches succeed with =[]=; traversal, record, JSON, and semantic failures produce no partial stdout, and record diagnostics use quoted, debug-escaped relative paths. Sampling is read-only and uses no randomness, ambient state, network access, scoring, indexing, or filesystem authority beyond reading discovered records.
+
+The optional =--attempt-summary= filter matches when any =attempts[].summary=
+equals the caller's UTF-8 value exactly and case-sensitively. It does not trim,
+normalize, perform fuzzy matching, or infer from diagnostics, patches, outcomes,
+or other fields. Records without attempts do not match. The predicate composes
+conjunctively before the limit and grants no additional filesystem or network
+access.
 
 Inspect one caller-selected extension root through the same validated, descriptor-anchored discovery boundary used by the extension library:
 
