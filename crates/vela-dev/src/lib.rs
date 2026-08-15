@@ -417,6 +417,8 @@ pub enum ExtensionCommand {
 
 /// Corpus workflows.
 #[derive(Debug, Subcommand)]
+// Sample owns explicit clap fields; this command is parsed once and never retained.
+#[allow(clippy::large_enum_variant)]
 pub enum CorpusCommand {
     /// Recursively validate JSON records and summarize the corpus.
     Inspect { path: PathBuf },
@@ -463,6 +465,8 @@ pub enum CorpusCommand {
         attempt_summary: Option<String>,
         #[arg(long)]
         outcome_summary: Option<String>,
+        #[arg(long)]
+        verification_command: Option<String>,
     },
 }
 
@@ -589,6 +593,7 @@ impl Cli {
                         acceptance_criterion,
                         attempt_summary,
                         outcome_summary,
+                        verification_command,
                     }),
             }) => sample_corpus(
                 &path,
@@ -613,6 +618,7 @@ impl Cli {
                     acceptance_criterion,
                     attempt_summary,
                     outcome_summary,
+                    verification_command,
                 },
             ),
             Some(Command::Extension {
@@ -3644,6 +3650,7 @@ struct CorpusSampleFilters {
     acceptance_criterion: Option<String>,
     attempt_summary: Option<String>,
     outcome_summary: Option<String>,
+    verification_command: Option<String>,
 }
 
 enum CorpusRecordError {
@@ -3826,6 +3833,16 @@ fn sample_corpus(root: &Path, limit: usize, filters: CorpusSampleFilters) -> Exi
                 .outcome_summary
                 .as_deref()
                 .is_none_or(|expected| record.outcome.summary == expected)
+            && filters
+                .verification_command
+                .as_deref()
+                .is_none_or(|expected| {
+                    record
+                        .outcome
+                        .verification
+                        .iter()
+                        .any(|verification| verification.command == expected)
+                })
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
