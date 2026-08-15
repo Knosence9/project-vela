@@ -4700,6 +4700,112 @@ fn corpus_sampling_task_title_filter_still_rejects_malformed_records() {
 }
 
 #[test]
+fn corpus_sampling_filters_by_exact_task_objective_before_limiting() {
+    let source = format!(
+        "{}/tests/fixtures/corpus/valid/second.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let corpus = tempdir().expect("sample corpus");
+    let source_record = fs::read_to_string(source).expect("record source");
+    for (name, objective, trust) in [
+        ("a-case.json", "exact", "reviewed"),
+        ("b-exact.json", "Exact", "reviewed"),
+        ("c-leading.json", " Exact", "reviewed"),
+        ("d-trailing.json", "Exact ", "reviewed"),
+        ("e-composed.json", "Exact", "curated"),
+    ] {
+        fs::write(
+            corpus.path().join(name),
+            source_record
+                .replace("\"Inspect second\"", &format!("\"{objective}\""))
+                .replace("\"reviewed\"", &format!("\"{trust}\"")),
+        )
+        .expect("task-objective record");
+    }
+
+    for (task_objective, expected_path) in [
+        ("Exact", "b-exact.json"),
+        ("exact", "a-case.json"),
+        (" Exact", "c-leading.json"),
+        ("Exact ", "d-trailing.json"),
+    ] {
+        let assertion = Command::cargo_bin("vela-dev")
+            .expect("vela-dev binary")
+            .args([
+                "corpus",
+                "sample",
+                corpus.path().to_str().expect("UTF-8 corpus path"),
+                "1",
+                "--task-objective",
+                task_objective,
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::is_empty());
+        let sample: serde_json::Value =
+            serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+        assert_eq!(sample.as_array().expect("sample array").len(), 1);
+        assert_eq!(sample[0]["path"], expected_path);
+    }
+
+    let assertion = Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "5",
+            "--trust",
+            "curated",
+            "--task-objective",
+            "Exact",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let sample: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).expect("sample JSON");
+    assert_eq!(sample.as_array().expect("sample array").len(), 1);
+    assert_eq!(sample[0]["path"], "e-composed.json");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "5",
+            "--task-objective",
+            "Missing",
+        ])
+        .assert()
+        .success()
+        .stdout("[]\n")
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn corpus_sampling_task_objective_filter_still_rejects_malformed_records() {
+    let corpus = tempdir().expect("sample corpus");
+    fs::write(corpus.path().join("malformed.json"), "{").expect("malformed record");
+
+    Command::cargo_bin("vela-dev")
+        .expect("vela-dev binary")
+        .args([
+            "corpus",
+            "sample",
+            corpus.path().to_str().expect("UTF-8 corpus path"),
+            "1",
+            "--task-objective",
+            "Exact",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("malformed_record"));
+}
+
+#[test]
 fn corpus_sampling_filters_by_verification_presence_before_limiting() {
     let source = format!(
         "{}/tests/fixtures/corpus/valid/second.json",
