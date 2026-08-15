@@ -455,6 +455,8 @@ pub enum CorpusCommand {
         provenance_url: Option<String>,
         #[arg(long)]
         task_title: Option<String>,
+        #[arg(long)]
+        task_objective: Option<String>,
     },
 }
 
@@ -577,6 +579,7 @@ impl Cli {
                         repository_path,
                         provenance_url,
                         task_title,
+                        task_objective,
                     }),
             }) => sample_corpus(
                 &path,
@@ -597,6 +600,7 @@ impl Cli {
                     repository_path,
                     provenance_url,
                     task_title,
+                    task_objective,
                 },
             ),
             Some(Command::Extension {
@@ -3624,6 +3628,7 @@ struct CorpusSampleFilters {
     repository_path: Option<String>,
     provenance_url: Option<String>,
     task_title: Option<String>,
+    task_objective: Option<String>,
 }
 
 enum CorpusRecordError {
@@ -3782,6 +3787,10 @@ fn sample_corpus(root: &Path, limit: usize, filters: CorpusSampleFilters) -> Exi
                 .task_title
                 .as_deref()
                 .is_none_or(|expected| record.task.title == expected)
+            && filters
+                .task_objective
+                .as_deref()
+                .is_none_or(|expected| record.task.objective == expected)
         {
             sample.push(CorpusSampleEntry {
                 path: relative_text.to_owned(),
