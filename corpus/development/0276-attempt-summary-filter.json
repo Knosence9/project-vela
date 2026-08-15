@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by attempt summary",
+    "objective": "Select validated records when an attempt summary exactly matches caller-provided text",
+    "acceptance_criteria": [
+      "Any exact attempt-summary match selects the record",
+      "Records without attempts do not match",
+      "Diagnostics, patches, and outcomes do not influence summary matching",
+      "The filter composes before limiting and retains whole-corpus validation"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added red tests for exact existential matching, absent attempts, composition, and malformed records",
+      "outcome": "failure",
+      "diagnostic": "The CLI rejected attempt-summary before the filter existed",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added direct equality across attempt summaries and documented field independence",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Delayed merge through external review cooldown while retaining the exact verified head",
+      "outcome": "blocked",
+      "diagnostic": "CodeRabbit review capacity was temporarily unavailable",
+      "patch": "No code change; auto-merge remained unarmed"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling supports exact attempt-summary retrieval without inference from neighboring attempt fields",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31869334465 for exact head 839c75cf81f20ff82c50dba72d42f56f14e0d17f", "status": "passed"},
+      {"command": "CodeRabbit substantive exact-head review for pull request 1157 generated no actionable comments", "status": "passed"},
+      {"command": "Pull request 1157 squash merge 528f1400c5967f881ce8b28470c5a2a6b6dcb56f", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Filter one schema field without inferring meaning from adjacent evidence",
+    "Empty attempt lists have no existential summary match",
+    "External-review cooldowns should not cause code churn"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1157"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

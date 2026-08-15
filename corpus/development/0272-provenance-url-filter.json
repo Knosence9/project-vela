@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by provenance URL",
+    "objective": "Select validated records by exact provenance-URL equality without parsing, fetching, or dereferencing URLs",
+    "acceptance_criteria": [
+      "Matching is exact and case-sensitive",
+      "Whitespace and trailing-slash differences remain distinct",
+      "The predicate composes before the sample limit",
+      "Malformed records still reject the complete sample"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added exact URL, composition, limit, empty-result, and malformed-record tests",
+      "outcome": "failure",
+      "diagnostic": "Clap rejected the unimplemented provenance-url option",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Added direct provenance URL equality to the validated sampling predicate and documented the non-network boundary",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Held the exact head through the review cooldown and resumed one substantive review",
+      "outcome": "blocked",
+      "diagnostic": "CodeRabbit initially reported Review limit reached, so auto-merge remained disabled",
+      "patch": "No code change; exact head preserved until review capacity returned"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling supports exact inert provenance-URL filtering without network authority",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31858601587 for exact head c8d17f61884032097e3fa648dc60590296b4df68", "status": "passed"},
+      {"command": "CodeRabbit substantive exact-head review for pull request 1149 generated no actionable comments", "status": "passed"},
+      {"command": "Pull request 1149 squash merge 2ba3607d4a7952ccd9ebcddbd28da68544b4a673", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Metadata selection must not silently confer URL parsing or network authority",
+    "Exact matching keeps corpus retrieval deterministic and explainable",
+    "Preserve the reviewed head while external review capacity is unavailable"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1149"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by acceptance criterion",
+    "objective": "Select validated records when any acceptance criterion exactly equals caller-provided text",
+    "acceptance_criteria": [
+      "Any exact criterion match selects the record",
+      "Matching is case-sensitive and does not normalize text",
+      "Records with no matching criterion are excluded",
+      "The predicate composes before limiting and preserves full validation"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added existential criterion matching, composition, limit, and malformed-corpus tests",
+      "outcome": "failure",
+      "diagnostic": "The acceptance-criterion argument was rejected before implementation",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Applied exact equality across acceptance-criteria entries and documented the non-fuzzy contract",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Preserved the passing exact head until substantive external review became available",
+      "outcome": "blocked",
+      "diagnostic": "The first CodeRabbit attempt was rate limited and was not sufficient to arm merge",
+      "patch": "No code change; exact head and disabled auto-merge were preserved"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling supports exact existential acceptance-criterion filtering with deterministic composition",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31866529828 for exact head d99c0a50a2ac4e65a371a10563f8f4ba916e05a3", "status": "passed"},
+      {"command": "CodeRabbit substantive exact-head review for pull request 1155 generated no actionable comments", "status": "passed"},
+      {"command": "Pull request 1155 squash merge 7f8ce053fd4b98caabdca9e89e8d6a77f5bb705a", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Existential list matching should remain explicit and independent from text interpretation",
+    "A sample limit must never bypass later malformed records",
+    "Wait for substantive review rather than accepting a false-green status"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1155"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}

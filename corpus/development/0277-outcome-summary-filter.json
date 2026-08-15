@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": {
+    "title": "Filter corpus samples by outcome summary",
+    "objective": "Select validated records by exact aggregate outcome-summary equality without inferring verification state",
+    "acceptance_criteria": [
+      "Matching is exact and case-sensitive",
+      "Attempt summaries and verification data do not affect the match",
+      "The predicate composes before limiting",
+      "Malformed records prevent partial output"
+    ]
+  },
+  "attempts": [
+    {
+      "summary": "Added exact outcome-summary, composition, limit, empty-result, and malformed-record tests",
+      "outcome": "failure",
+      "diagnostic": "Clap rejected outcome-summary before implementation",
+      "patch": "crates/vela-dev/tests/cli.rs"
+    },
+    {
+      "summary": "Compared the aggregate outcome summary directly and documented its independence from verification",
+      "outcome": "success",
+      "diagnostic": null,
+      "patch": "crates/vela-dev/src/lib.rs, crates/vela-dev/tests/cli.rs, README.org, and docs/development-record-v1.org"
+    },
+    {
+      "summary": "Kept auto-merge disabled until the exact head obtained substantive review",
+      "outcome": "blocked",
+      "diagnostic": "The automatic CodeRabbit attempt reached a temporary review limit",
+      "patch": "No code change; the passing head was preserved through cooldown"
+    }
+  ],
+  "outcome": {
+    "summary": "Sampling supports exact outcome-summary selection without deriving aggregate or check status",
+    "verified": true,
+    "verification": [
+      {"command": "nix develop --command just verify", "status": "passed"},
+      {"command": "GitHub Rust quality gate run 31872248218 for exact head 9c6431f801a3d7a5afb29b8660cd41a99daece76", "status": "passed"},
+      {"command": "CodeRabbit substantive exact-head review for pull request 1159 generated no actionable comments", "status": "passed"},
+      {"command": "Pull request 1159 squash merge 7a70277eea05dacd20f03328567a229b6a88f551", "status": "passed"}
+    ]
+  },
+  "lessons": [
+    "Aggregate summary text is a retrieval field, not evidence of verification",
+    "Exact predicates compose cleanly while remaining individually explainable",
+    "Merge only after the external review result contains substantive content"
+  ],
+  "provenance": {
+    "repository_path": "crates/vela-dev/src/lib.rs",
+    "url": "https://github.com/Knosence9/project-vela/pull/1159"
+  },
+  "sanitation": {"passed": true, "blockers": []},
+  "trust": "curated",
+  "example": {"type": "positive", "rejection_rationale": null}
+}
